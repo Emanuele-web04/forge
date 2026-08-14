@@ -39,6 +39,9 @@ import type {
   InstanceInfo,
   HostsEnrollmentResult,
   UsageSummary,
+  ConfirmSyncKeyPairingRequest,
+  SyncKeyPairingCode,
+  SyncKeyPairingRequest,
 } from "@synara/contracts";
 import {
   AccountApiError,
@@ -74,6 +77,10 @@ import {
   type SsoCallbackListener,
 } from "./accountSsoCallback";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
+import { Effect, Path as EffectPath } from "effect";
+import { deriveServerPaths } from "./config";
+import { HostSecretsCoordinator } from "./hostSecrets/coordinator";
+import { hostSecretsSyncKeyPath } from "./hostSecrets/syncKeyStore";
 
 const SIGNED_OUT: AccountStatus = { state: "signed-out" };
 
@@ -203,6 +210,10 @@ export interface HostsAccountSession {
   requestGrant(input: { readonly hostId: string }): Promise<{ readonly grant: string }>;
   enrollment(): Promise<HostsEnrollmentResult>;
   unlinkLocalHost(): Promise<void>;
+  beginSyncKeyPairing(): Promise<SyncKeyPairingRequest>;
+  offerSyncKey(input: SyncKeyPairingRequest): Promise<SyncKeyPairingCode>;
+  receiveSyncKey(): Promise<SyncKeyPairingCode>;
+  confirmSyncKey(input: ConfirmSyncKeyPairingRequest): Promise<void>;
 }
 
 /**
@@ -226,6 +237,9 @@ export function createAccountSession(
         readonly sessionKey: string;
         readonly promise: Promise<RegisteredAccountDeviceIdentity>;
       }
+    | undefined;
+  let hostSecretsCoordinator:
+    | { readonly sessionKey: string; readonly value: HostSecretsCoordinator }
     | undefined;
 
   /**
@@ -335,6 +349,40 @@ export function createAccountSession(
       if (deviceRegistrationAttempt?.promise === promise) deviceRegistrationAttempt = undefined;
       throw error;
     }
+  }
+
+  async function currentHostSecretsCoordinator(): Promise<HostSecretsCoordinator> {
+    const registration = await ensureShellDevice();
+    const stored = await readAccountCredentials(baseDir);
+    if (!stored?.userId) throw new SessionExpiredError();
+    const sessionKey = `${stored.accountUrl}\0${stored.userId}\0${registration.deviceId}`;
+    if (hostSecretsCoordinator?.sessionKey === sessionKey) return hostSecretsCoordinator.value;
+
+    const { secretsDir } = await Effect.runPromise(
+      deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
+    );
+    const value = new HostSecretsCoordinator({
+      accountUrl: stored.accountUrl,
+      userId: stored.userId,
+      deviceId: registration.deviceId,
+      syncKeyFilePath: hostSecretsSyncKeyPath(secretsDir),
+      api: {
+        listHosts: () => withSession((token, client) => client.listHosts(token)),
+        listDevices: () => withSession((token, client) => client.listDevices(token)),
+        getHostSecret: (hostId) =>
+          withSession((token, client) => client.getHostSecret(token, hostId)),
+        putHostSecret: (hostId, request) =>
+          withSession((token, client) => client.putHostSecret(token, hostId, request)),
+        putSyncKeyWrap: (request) =>
+          withSession((token, client) => client.putSyncKeyWrap(token, request)),
+        takeSyncKeyWrap: (deviceId) =>
+          withSession((token, client) => client.takeSyncKeyWrap(token, deviceId)),
+        revokeDevice: (deviceId) =>
+          withSession((token, client) => client.revokeDevice(token, deviceId)),
+      },
+    });
+    hostSecretsCoordinator = { sessionKey, value };
+    return value;
   }
 
   /** Enrollment is additive to sign-in: local use survives an account outage. */
@@ -726,7 +774,7 @@ export function createAccountSession(
     },
 
     async revokeDevice(input) {
-      await withSession((token, client) => client.revokeDevice(token, input.deviceId));
+      await (await currentHostSecretsCoordinator()).revokeDevice(input.deviceId);
       await withLockedAccountFile(baseDir, async () => {
         const stored = await readAccountFile(baseDir);
         if (!stored || stored.deviceId !== input.deviceId) return;
@@ -794,9 +842,26 @@ export function createAccountSession(
       return unlinkLocalAccountHost({ baseDir, client: clientFor(configuredUrl) });
     },
 
+    async beginSyncKeyPairing() {
+      return (await currentHostSecretsCoordinator()).beginPairing();
+    },
+
+    async offerSyncKey(input) {
+      return (await currentHostSecretsCoordinator()).offerSyncKey(input);
+    },
+
+    async receiveSyncKey() {
+      return (await currentHostSecretsCoordinator()).receiveSyncKey();
+    },
+
+    async confirmSyncKey(input) {
+      await (await currentHostSecretsCoordinator()).confirmSyncKey(input);
+    },
+
     async signOut() {
       await runAuthLogout({ baseDir, client: clientFor(configuredUrl), stdout: () => {} });
       deviceRegistrationAttempt = undefined;
+      hostSecretsCoordinator = undefined;
     },
 
     isVerificationUrlAllowed(url) {

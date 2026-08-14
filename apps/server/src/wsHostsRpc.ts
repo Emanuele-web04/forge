@@ -15,9 +15,11 @@ import { Effect } from "effect";
 import { toAccountWsRpcError, toSensitiveWsRpcError } from "./accountRpcErrors";
 import type { HostsAccountSession } from "./accountSession";
 import { requireOwnerRole } from "./wsOwnerOnly";
+import type { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
 
 export interface HostsRpcHandlerDeps {
   readonly accountSession: HostsAccountSession;
+  readonly remoteSessions: Pick<RemoteSessionRegistry, "list" | "end">;
 }
 
 const ownerHostsRpc = <A, E, R>(make: () => Effect.Effect<A, E, R>, fallbackMessage: string) =>
@@ -37,7 +39,7 @@ const ownerSensitiveHostsRpc = <A, E, R>(
     ),
   );
 
-export function makeHostsRpcHandlers({ accountSession }: HostsRpcHandlerDeps) {
+export function makeHostsRpcHandlers({ accountSession, remoteSessions }: HostsRpcHandlerDeps) {
   return {
     [WS_METHODS.hostsList]: () =>
       ownerHostsRpc(
@@ -87,6 +89,38 @@ export function makeHostsRpcHandlers({ accountSession }: HostsRpcHandlerDeps) {
       ownerHostsRpc(
         () => Effect.tryPromise(() => accountSession.unlinkLocalHost()),
         "Failed to unlink the local host",
+      ),
+    [WS_METHODS.hostsListSessions]: () =>
+      ownerHostsRpc(
+        () => Effect.sync(() => ({ sessions: remoteSessions.list() })),
+        "Failed to list sessions",
+      ),
+    [WS_METHODS.hostsEndSession]: (input: { readonly sessionId: string }) =>
+      ownerHostsRpc(
+        () => Effect.sync(() => void remoteSessions.end(input.sessionId)),
+        "Failed to end the session",
+      ),
+    [WS_METHODS.hostsBeginSyncKeyPairing]: () =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => accountSession.beginSyncKeyPairing()),
+        "Failed to start Sync-Key pairing",
+      ),
+    [WS_METHODS.hostsOfferSyncKey]: (input: Parameters<HostsAccountSession["offerSyncKey"]>[0]) =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => accountSession.offerSyncKey(input)),
+        "Failed to offer the Sync Key",
+      ),
+    [WS_METHODS.hostsReceiveSyncKey]: () =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => accountSession.receiveSyncKey()),
+        "Failed to receive the Sync Key",
+      ),
+    [WS_METHODS.hostsConfirmSyncKey]: (
+      input: Parameters<HostsAccountSession["confirmSyncKey"]>[0],
+    ) =>
+      ownerSensitiveHostsRpc(
+        () => Effect.tryPromise(() => accountSession.confirmSyncKey(input)),
+        "Failed to confirm Sync-Key pairing",
       ),
   };
 }

@@ -45,11 +45,13 @@ describe("WS RPC contracts", () => {
   });
 
   it("exports every hosts namespace RPC", () => {
+    // The property is "every declared hosts method has a request schema", not
+    // a head count: a hardcoded number only fails later, when someone adds an
+    // RPC and edits the number rather than noticing the schema is missing.
     const hostsMethods = Object.values(WS_METHODS).filter((method) => method.startsWith("hosts."));
-    expect(hostsMethods).toHaveLength(9);
-    for (const method of hostsMethods) {
-      expect(WsFeatureRpcGroup.requests.has(method)).toBe(true);
-    }
+    expect(hostsMethods.length).toBeGreaterThan(0);
+    const missing = hostsMethods.filter((method) => !WsFeatureRpcGroup.requests.has(method));
+    expect(missing).toEqual([]);
   });
 
   it("exports the count-only pull request review RPC", () => {

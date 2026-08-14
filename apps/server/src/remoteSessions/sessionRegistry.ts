@@ -1,10 +1,12 @@
 import { HOST_SESSION_CLOSE_REVOKED } from "@synara/relay-protocol";
-import type { HostAuthorizationSnapshot, RevocationEvent } from "@synara/contracts";
+import type { HostAuthorizationSnapshot, HostSession, RevocationEvent } from "@synara/contracts";
+import { Layer, ServiceMap } from "effect";
 
 export interface RemoteSession {
   readonly id: string;
   readonly userId: string;
   readonly deviceJkt: string;
+  readonly startedAt: string;
   readonly expiresAtSeconds: number;
   readonly via: "direct" | "relay" | "ssh-forward";
   readonly close: (code: number, reason: string) => void;
@@ -22,6 +24,26 @@ export class RemoteSessionRegistry {
 
   get size(): number {
     return this.#sessions.size;
+  }
+
+  list(): readonly HostSession[] {
+    return [...this.#sessions.values()]
+      .map(({ id, userId, deviceJkt, via, startedAt }) => ({
+        id,
+        userId,
+        deviceJkt,
+        transport: via,
+        startedAt,
+      }))
+      .toSorted((left, right) => left.startedAt.localeCompare(right.startedAt));
+  }
+
+  end(sessionId: string): boolean {
+    const session = this.#sessions.get(sessionId);
+    if (!session) return false;
+    this.#sessions.delete(sessionId);
+    session.close(REMOTE_SESSION_REVOKED_CLOSE_CODE, "ended by host owner");
+    return true;
   }
 
   private dropWhere(predicate: (session: RemoteSession) => boolean, reason: string): void {
@@ -62,3 +84,14 @@ export class RemoteSessionRegistry {
     this.dropWhere((session) => session.expiresAtSeconds <= nowSeconds, "credential expired");
   }
 }
+
+/** One registry per server process, shared by host connectivity and owner RPCs. */
+export class RemoteSessionRegistryService extends ServiceMap.Service<
+  RemoteSessionRegistryService,
+  RemoteSessionRegistry
+>()("synara/RemoteSessionRegistry") {}
+
+export const RemoteSessionRegistryLive = Layer.sync(
+  RemoteSessionRegistryService,
+  () => new RemoteSessionRegistry(),
+);

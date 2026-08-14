@@ -33,13 +33,28 @@ These are implemented and unit-tested but have no path a user can reach:
    key's real JKT and re-registers after revocation, so the returned grant is
    bound to a key this shell can prove. Sign-out continues to unlink the
    bundled host before removing the local account session.
-3. **mDNS** (slice D §5) is unimplemented. `buildHostCandidates` accepts a
-   `discovered` list, so Desktop can supply results without touching the race.
-4. **Slice E's client half.** `packages/shared/src/hostSecrets.ts` is complete
-   and tested but has no consumer outside API tests: no pairing UI, no Sync-Key
-   handoff, and nothing triggers rotation when `DELETE /devices/:id` fires.
-5. **No host-side session UI.** `RemoteSessionRegistry` tracks live sessions
-   but nothing surfaces them, so a user cannot see who is connected.
+3. **mDNS** (slice D §5) is unimplemented — and deliberately left so. No
+   Bonjour/DNS-SD/Zeroconf dependency exists in the repo, and picking a
+   cross-platform one is a real choice with maintenance and packaging
+   consequences, not an implementation detail to slip into a follow-up.
+   `buildHostCandidates` already accepts a `discovered` list, so whoever
+   chooses the dependency can feed it without touching the transport race.
+   **This is the only remaining item, and it needs a decision, not code.**
+4. ~~**Slice E's client half.**~~ **DONE** — owner-only pairing RPCs (begin,
+   offer, receive, confirm) carry the Sync-Key handoff; both devices derive the
+   six-character verification code and the recipient does not unwrap or persist
+   the key until the codes are confirmed to match. Device revocation now
+   triggers surviving-device rotation, using CAS writes plus a durable journal
+   so a partial upload or a process restart recovers safely; self-revocation is
+   refused because a revoked device cannot be the surviving rotator.
+   **Still missing:** no screen renders the verification codes, and the
+   out-of-band transfer UX (QR? paste?) is undefined by the spec — the
+   mechanism is built and tested, the presentation is not.
+5. ~~**No host-side session UI.**~~ **DONE** — owner-only `hosts.listSessions`
+   and `hosts.endSession`, with an "Active sessions" section in the Connections
+   panel showing user, device, transport and start time, and a confirmed
+   disconnect through the registry's existing revocation path. This closes the
+   third leg of ADR 0011's threat model: access is no longer invisible.
 
 ## Known gaps worth fixing before external users
 

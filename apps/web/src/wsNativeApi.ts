@@ -828,6 +828,12 @@ export function createWsNativeApi(): NativeApi {
       requestGrant: (input) => transport.request(WS_METHODS.hostsRequestGrant, input),
       enrollment: () => transport.request(WS_METHODS.hostsEnrollment),
       unlinkLocalHost: () => transport.request(WS_METHODS.hostsUnlinkLocalHost),
+      listSessions: () => transport.request(WS_METHODS.hostsListSessions),
+      endSession: (input) => transport.request(WS_METHODS.hostsEndSession, input),
+      beginSyncKeyPairing: () => transport.request(WS_METHODS.hostsBeginSyncKeyPairing),
+      offerSyncKey: (input) => transport.request(WS_METHODS.hostsOfferSyncKey, input),
+      receiveSyncKey: () => transport.request(WS_METHODS.hostsReceiveSyncKey),
+      confirmSyncKey: (input) => transport.request(WS_METHODS.hostsConfirmSyncKey, input),
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),

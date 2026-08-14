@@ -4,7 +4,15 @@
 // Layer: Web remote-access feature port.
 // Exports: HostsApi and the capability probe that produces one.
 
-import type { AccountDevice, AccountHost, AccountHostPlatform } from "@synara/contracts";
+import type {
+  AccountDevice,
+  AccountHost,
+  AccountHostPlatform,
+  HostSession,
+  ConfirmSyncKeyPairingRequest,
+  SyncKeyPairingCode,
+  SyncKeyPairingRequest,
+} from "@synara/contracts";
 
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import type { HostReachability } from "./reachability";
@@ -60,6 +68,14 @@ export interface HostsApi {
   enrollment: () => Promise<HostEnrollment>;
   /** Sign-out's counterpart: removes this machine's key from the directory. */
   unlinkLocalHost: () => Promise<void>;
+  /** Live sessions served by this host process; owner-only. */
+  listSessions: () => Promise<{ readonly sessions: readonly HostSession[] }>;
+  /** Ends one live session. Missing/already-closed ids are idempotent. */
+  endSession: (input: { readonly sessionId: string }) => Promise<void>;
+  beginSyncKeyPairing: () => Promise<SyncKeyPairingRequest>;
+  offerSyncKey: (input: SyncKeyPairingRequest) => Promise<SyncKeyPairingCode>;
+  receiveSyncKey: () => Promise<SyncKeyPairingCode>;
+  confirmSyncKey: (input: ConfirmSyncKeyPairingRequest) => Promise<void>;
   /**
    * Runs the transport race against one host and answers what it found.
    *
@@ -94,6 +110,12 @@ function readHostsNamespace(api: unknown): HostsApi | null {
     "requestGrant",
     "enrollment",
     "unlinkLocalHost",
+    "listSessions",
+    "endSession",
+    "beginSyncKeyPairing",
+    "offerSyncKey",
+    "receiveSyncKey",
+    "confirmSyncKey",
   ];
   const namespace = candidate as Record<string, unknown>;
   for (const method of required) {

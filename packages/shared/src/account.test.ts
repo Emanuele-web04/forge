@@ -100,6 +100,87 @@ describe("createAccountClient", () => {
         expect.objectContaining({ method: "GET" }),
       );
     });
+
+    it("reads and CAS-writes opaque host secrets and relays Sync-Key wraps", async () => {
+      const envelope = { ciphertext: "Y2lwaGVydGV4dA", iv: "AAAAAAAAAAAAAAAA", version: 4 };
+      const point = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const wrap = {
+        ephemeralPublicJwk: { kty: "EC" as const, crv: "P-256" as const, x: point, y: point },
+        recipientPublicJwk: { kty: "EC" as const, crv: "P-256" as const, x: point, y: point },
+        wrapped: "d3JhcHBlZA",
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ secret: { ...envelope, updatedAt: "2026-08-14T12:00:00.000Z" } }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({ secret: { ...envelope, updatedAt: "2026-08-14T12:01:00.000Z" } }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse(
+            {
+              recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+              createdAt: "2026-08-14T12:00:00.000Z",
+              expiresAt: "2026-08-14T12:10:00.000Z",
+            },
+            { status: 201 },
+          ),
+        )
+        .mockResolvedValueOnce(jsonResponse({ wrap, createdAt: "2026-08-14T12:00:00.000Z" }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.getHostSecret("access-token", "host / one")).resolves.toMatchObject({
+        secret: envelope,
+      });
+      await expect(
+        client.putHostSecret("access-token", "host / one", {
+          expectedVersion: 3,
+          envelope,
+        }),
+      ).resolves.toMatchObject({ secret: envelope });
+      await expect(
+        client.putSyncKeyWrap("access-token", {
+          recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+          wrap,
+        }),
+      ).resolves.toMatchObject({
+        recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+      });
+      await expect(
+        client.takeSyncKeyWrap("access-token", "00000000-0000-4000-8000-000000000001"),
+      ).resolves.toMatchObject({ wrap });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        `${BASE_URL}/api/v1/hosts/host%20%2F%20one/secrets`,
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        `${BASE_URL}/api/v1/hosts/host%20%2F%20one/secrets`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ expectedVersion: 3, envelope }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        3,
+        `${BASE_URL}/api/v1/sync-key-wraps`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+            wrap,
+          }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        4,
+        `${BASE_URL}/api/v1/sync-key-wraps/00000000-0000-4000-8000-000000000001`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
   });
 
   describe("instance", () => {

@@ -123,6 +123,7 @@ export class RemoteConnectionGateway {
           const remove = this.options.sessions.add({
             id,
             ...peer,
+            startedAt: new Date().toISOString(),
             via,
             close: (code, reason) => socket.close(code, reason),
           });

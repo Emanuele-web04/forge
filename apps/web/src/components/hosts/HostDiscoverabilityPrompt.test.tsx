@@ -30,6 +30,12 @@ const hostsApiMock = {
   requestGrant: vi.fn(),
   enrollment: vi.fn(),
   unlinkLocalHost: vi.fn(),
+  listSessions: vi.fn(),
+  endSession: vi.fn(),
+  beginSyncKeyPairing: vi.fn(),
+  offerSyncKey: vi.fn(),
+  receiveSyncKey: vi.fn(),
+  confirmSyncKey: vi.fn(),
 };
 
 vi.mock("~/nativeApi", () => ({

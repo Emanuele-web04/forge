@@ -59,6 +59,16 @@ import {
   type UpdateHostRequest,
   type UpdateOrganizationRequest,
   type UpdateProfileRequest,
+  type GetHostSecretResponse,
+  GetHostSecretResponse as GetHostSecretResponseSchema,
+  type PutHostSecretRequest,
+  type PutHostSecretResponse,
+  PutHostSecretResponse as PutHostSecretResponseSchema,
+  type PutSyncKeyWrapRequest,
+  type PutSyncKeyWrapResponse,
+  PutSyncKeyWrapResponse as PutSyncKeyWrapResponseSchema,
+  type GetSyncKeyWrapResponse,
+  GetSyncKeyWrapResponse as GetSyncKeyWrapResponseSchema,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
 
@@ -252,6 +262,14 @@ export interface AccountClient {
   updateHost(token: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
   requestGrant(token: string, hostId: string, deviceJkt: string): Promise<GrantResponse>;
+  getHostSecret(token: string, hostId: string): Promise<GetHostSecretResponse>;
+  putHostSecret(
+    token: string,
+    hostId: string,
+    request: PutHostSecretRequest,
+  ): Promise<PutHostSecretResponse>;
+  putSyncKeyWrap(token: string, request: PutSyncKeyWrapRequest): Promise<PutSyncKeyWrapResponse>;
+  takeSyncKeyWrap(token: string, deviceId: string): Promise<GetSyncKeyWrapResponse>;
   /**
    * Pushes a batch of per-minute usage buckets. Buckets carry ABSOLUTE
    * values and the service upserts, so re-pushing a bucket — a retry, or the
@@ -686,6 +704,46 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           body: JSON.stringify({ deviceJkt }),
         },
         GrantResponseSchema,
+      );
+    },
+
+    async getHostSecret(token, hostId) {
+      return requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/secrets`,
+        { method: "GET", headers: authHeaders(token) },
+        GetHostSecretResponseSchema,
+      );
+    },
+
+    async putHostSecret(token, hostId, request) {
+      return requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/secrets`,
+        {
+          method: "PUT",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        PutHostSecretResponseSchema,
+      );
+    },
+
+    async putSyncKeyWrap(token, request) {
+      return requestJson(
+        "/api/v1/sync-key-wraps",
+        {
+          method: "PUT",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        PutSyncKeyWrapResponseSchema,
+      );
+    },
+
+    async takeSyncKeyWrap(token, deviceId) {
+      return requestJson(
+        `/api/v1/sync-key-wraps/${encodeURIComponent(deviceId)}`,
+        { method: "GET", headers: authHeaders(token) },
+        GetSyncKeyWrapResponseSchema,
       );
     },
 

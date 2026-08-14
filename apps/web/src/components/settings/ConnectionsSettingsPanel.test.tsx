@@ -8,8 +8,10 @@ import type { AccountDevice, AccountHost, EnvironmentId } from "@synara/contract
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { DeviceRow, HostRow } from "./ConnectionsSettingsPanel";
+import * as ConnectionsSettingsPanelModule from "./ConnectionsSettingsPanel";
 import type { HostReachability } from "~/lib/hosts/reachability";
+
+const { DeviceRow, HostRow } = ConnectionsSettingsPanelModule;
 
 function makeHost(overrides: Partial<AccountHost> = {}): AccountHost {
   return {
@@ -196,5 +198,52 @@ describe("DeviceRow", () => {
 
   it("disables revoke while one is in flight", () => {
     expect(renderDeviceRow(makeDevice(), true)).toContain("disabled");
+  });
+});
+
+describe("SessionRow", () => {
+  it("shows the user, device, transport, start time, and an end action", () => {
+    const SessionRow = (
+      ConnectionsSettingsPanelModule as unknown as {
+        SessionRow?: (props: {
+          session: {
+            id: string;
+            userId: string;
+            deviceJkt: string;
+            transport: "relay";
+            startedAt: string;
+          };
+          userLabel: string;
+          deviceLabel: string;
+          busy: boolean;
+          onEnd: () => void;
+        }) => React.ReactNode;
+      }
+    ).SessionRow;
+    expect(SessionRow, "SessionRow export").toBeTypeOf("function");
+    if (!SessionRow) return;
+
+    const html = renderToStaticMarkup(
+      <SessionRow
+        session={{
+          id: "session-1",
+          userId: "user-1",
+          deviceJkt: "device-thumbprint",
+          transport: "relay",
+          startedAt: "2026-08-14T10:00:00.000Z",
+        }}
+        userLabel="Ada Lovelace"
+        deviceLabel="Ada's MacBook"
+        busy={false}
+        onEnd={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Ada Lovelace");
+    expect(html).toContain("Ada&#x27;s MacBook");
+    expect(html).toContain("Relay");
+    expect(html).toContain("Started");
+    expect(html).toContain("End session");
+    expect(html).toContain("destructive");
   });
 });

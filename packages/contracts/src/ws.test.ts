@@ -164,6 +164,18 @@ it.effect("accepts every hosts namespace request", () =>
       [WS_METHODS.hostsRequestGrant, { hostId: "host_1" }],
       [WS_METHODS.hostsEnrollment, {}],
       [WS_METHODS.hostsUnlinkLocalHost, {}],
+      [WS_METHODS.hostsListSessions, {}],
+      [WS_METHODS.hostsEndSession, { sessionId: "session_1" }],
+      [WS_METHODS.hostsBeginSyncKeyPairing, {}],
+      [
+        WS_METHODS.hostsOfferSyncKey,
+        {
+          recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+          recipientPublicJwk: { kty: "EC", crv: "P-256", x: "eA", y: "eQ" },
+        },
+      ],
+      [WS_METHODS.hostsReceiveSyncKey, {}],
+      [WS_METHODS.hostsConfirmSyncKey, { verificationCode: "ABC234" }],
     ] as const;
 
     for (const [method, input] of requests) {

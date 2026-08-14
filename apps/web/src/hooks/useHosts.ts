@@ -13,6 +13,8 @@ import {
   devicesQueryOptions,
   remoteHostEnrollmentQueryOptions,
   hostsQueryOptions,
+  invalidateHostSessions,
+  sessionsQueryOptions,
 } from "~/lib/hosts/queries";
 
 /**
@@ -123,5 +125,23 @@ export function useDevices(input: { enabled: boolean }) {
     devicesQuery,
     devices: devicesQuery.data ?? [],
     revokeDevice,
+  } as const;
+}
+
+/** Live sessions currently served by this host process and the owner's kill switch. */
+export function useHostSessions(input: { enabled: boolean }) {
+  const queryClient = useQueryClient();
+  const sessionsQuery = useQuery(sessionsQueryOptions({ enabled: input.enabled }));
+  const endSession = useMutation({
+    mutationFn: async (variables: { sessionId: string }) => {
+      await ensureHostsApi().endSession({ sessionId: variables.sessionId });
+    },
+    onSettled: () => invalidateHostSessions(queryClient),
+  });
+
+  return {
+    sessionsQuery,
+    sessions: sessionsQuery.data ?? [],
+    endSession,
   } as const;
 }

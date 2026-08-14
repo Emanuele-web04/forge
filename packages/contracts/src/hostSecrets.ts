@@ -168,3 +168,24 @@ export const GetSyncKeyWrapResponse = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type GetSyncKeyWrapResponse = typeof GetSyncKeyWrapResponse.Type;
+
+/** New-device request transferred out-of-band to an existing paired device. */
+export const SyncKeyPairingRequest = Schema.Struct({
+  recipientDeviceId: Schema.String.check(Schema.isUUID(undefined)),
+  recipientPublicJwk: Es256PublicKeyJwk,
+});
+export type SyncKeyPairingRequest = typeof SyncKeyPairingRequest.Type;
+
+/** Six unambiguous characters shown independently on both pairing devices. */
+export const SyncKeyPairingVerificationCode = Schema.String.check(
+  Schema.isPattern(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/),
+);
+
+export const SyncKeyPairingCode = Schema.Struct({
+  verificationCode: SyncKeyPairingVerificationCode,
+});
+export type SyncKeyPairingCode = typeof SyncKeyPairingCode.Type;
+
+/** The user enters the code shown by the other device to confirm the MITM check. */
+export const ConfirmSyncKeyPairingRequest = SyncKeyPairingCode;
+export type ConfirmSyncKeyPairingRequest = typeof ConfirmSyncKeyPairingRequest.Type;

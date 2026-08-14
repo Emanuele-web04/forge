@@ -19,6 +19,8 @@ import {
   AccountUploadAvatarInput,
 } from "./account";
 import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput } from "./hostSessions";
+import { ConfirmSyncKeyPairingRequest, SyncKeyPairingRequest } from "./hostSecrets";
 import { AccountUsageSummaryInput } from "./accountUsage";
 import {
   AutomationCancelRunInput,
@@ -337,6 +339,12 @@ export const WS_METHODS = {
   hostsRequestGrant: "hosts.requestGrant",
   hostsEnrollment: "hosts.enrollment",
   hostsUnlinkLocalHost: "hosts.unlinkLocalHost",
+  hostsListSessions: "hosts.listSessions",
+  hostsEndSession: "hosts.endSession",
+  hostsBeginSyncKeyPairing: "hosts.beginSyncKeyPairing",
+  hostsOfferSyncKey: "hosts.offerSyncKey",
+  hostsReceiveSyncKey: "hosts.receiveSyncKey",
+  hostsConfirmSyncKey: "hosts.confirmSyncKey",
 
   // Automation methods
   automationList: "automation.list",
@@ -558,6 +566,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.hostsRequestGrant, HostsHostInput),
   tagRequestBody(WS_METHODS.hostsEnrollment, Schema.Struct({})),
   tagRequestBody(WS_METHODS.hostsUnlinkLocalHost, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsListSessions, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsEndSession, EndHostSessionInput),
+  tagRequestBody(WS_METHODS.hostsBeginSyncKeyPairing, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsOfferSyncKey, SyncKeyPairingRequest),
+  tagRequestBody(WS_METHODS.hostsReceiveSyncKey, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsConfirmSyncKey, ConfirmSyncKeyPairingRequest),
 
   // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),

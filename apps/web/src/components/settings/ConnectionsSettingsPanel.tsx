@@ -4,7 +4,7 @@
 // Layer: Settings UI components
 // Exports: ConnectionsSettingsPanel
 
-import type { AccountDevice, AccountHost } from "@synara/contracts";
+import type { AccountDevice, AccountHost, HostSession } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 
@@ -13,7 +13,7 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { useAccount } from "~/hooks/useAccount";
-import { useDevices, useHosts } from "~/hooks/useHosts";
+import { useDevices, useHosts, useHostSessions } from "~/hooks/useHosts";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import {
   canManageHost,
@@ -56,6 +56,7 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
   const signedIn = account.me !== null;
   const remote = useHosts({ enabled: active && signedIn });
   const devices = useDevices({ enabled: active && signedIn });
+  const sessions = useHostSessions({ enabled: active && signedIn });
   const navigate = useNavigate();
   // Reachability is attempt-based (ADR 0010): the map holds what the LAST
   // probe said, per host, and a host nobody probed simply is not in it.
@@ -153,6 +154,35 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
       });
     }
   }, [remote.unlinkLocalHost]);
+
+  const endSession = useCallback(
+    async (session: HostSession) => {
+      const api = readNativeApi() ?? ensureNativeApi();
+      const confirmed = await api.dialogs.confirm(
+        [
+          "End this session?",
+          "",
+          `User ${session.userId} will be disconnected from this machine immediately.`,
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+      try {
+        await sessions.endSession.mutateAsync({ sessionId: session.id });
+        toastManager.add({
+          type: "success",
+          title: "Session ended",
+          description: "The remote connection was closed.",
+        });
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not end session",
+          description: accountErrorMessage(cause, "Try again in a moment."),
+        });
+      }
+    },
+    [sessions.endSession],
+  );
 
   if (!active) return null;
 
@@ -275,6 +305,40 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
           ))
         )}
       </SettingsSection>
+
+      <SettingsSection title="Active sessions">
+        {sessions.sessionsQuery.isPending ? (
+          <SettingsListRow title="Loading sessions..." />
+        ) : sessions.sessionsQuery.error ? (
+          <div className="p-3">
+            <SettingsEmptyState layout="status" tone="destructive">
+              {accountErrorMessage(sessions.sessionsQuery.error, "Could not load active sessions.")}
+            </SettingsEmptyState>
+          </div>
+        ) : sessions.sessions.length === 0 ? (
+          <div className="p-3">
+            <SettingsEmptyState layout="block">
+              Nobody is connected to this machine right now.
+            </SettingsEmptyState>
+          </div>
+        ) : (
+          sessions.sessions.map((session) => {
+            const device = devices.devices.find((candidate) => candidate.jkt === session.deviceJkt);
+            const userLabel =
+              account.me?.id === session.userId ? account.me.name : `User ${session.userId}`;
+            return (
+              <SessionRow
+                key={session.id}
+                session={session}
+                userLabel={userLabel}
+                deviceLabel={device?.displayName ?? `Device ${session.deviceJkt}`}
+                busy={sessions.endSession.isPending}
+                onEnd={() => void endSession(session)}
+              />
+            );
+          })
+        )}
+      </SettingsSection>
     </div>
   );
 }
@@ -376,6 +440,59 @@ export function DeviceRow({
             Revoke
           </Button>
         )
+      }
+    />
+  );
+}
+
+const SESSION_TRANSPORT_LABELS: Record<HostSession["transport"], string> = {
+  direct: "Direct",
+  relay: "Relay",
+  "ssh-forward": "SSH forward",
+};
+
+function sessionStartedLabel(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "Started at an unknown time";
+  const seconds = Math.max(0, Math.round((now - then) / 1_000));
+  if (seconds < 60) return "Started just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `Started ${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Started ${hours}h ago`;
+  return `Started ${Math.round(hours / 24)}d ago`;
+}
+
+export function SessionRow({
+  session,
+  userLabel,
+  deviceLabel,
+  busy,
+  onEnd,
+}: {
+  session: HostSession;
+  userLabel: string;
+  deviceLabel: string;
+  busy: boolean;
+  onEnd: () => void;
+}) {
+  return (
+    <SettingsListRow
+      align="start"
+      title={userLabel}
+      description={
+        <span className="flex flex-col gap-0.5">
+          <span>{deviceLabel}</span>
+          <span>{SESSION_TRANSPORT_LABELS[session.transport]}</span>
+          <time dateTime={session.startedAt}>
+            {sessionStartedLabel(session.startedAt, Date.now())}
+          </time>
+        </span>
+      }
+      actions={
+        <Button size="xs" variant="destructive-outline" disabled={busy} onClick={onEnd}>
+          End session
+        </Button>
       }
     />
   );

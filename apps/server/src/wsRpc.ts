@@ -139,6 +139,7 @@ import {
 } from "./wsConnectionSessions";
 import { makeAccountRpcHandlers } from "./wsAccountRpc";
 import { makeHostsRpcHandlers } from "./wsHostsRpc";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
@@ -369,6 +370,7 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const remoteSessions = yield* RemoteSessionRegistryService;
       // Optional so route-level tests and non-macOS builds can mount the RPC
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
@@ -831,7 +833,7 @@ const makeWsRpcHandlersLayer = () =>
         accountSession,
         openBrowser: (url) => open.openBrowser(url),
       });
-      const hostsRpcHandlers = makeHostsRpcHandlers({ accountSession });
+      const hostsRpcHandlers = makeHostsRpcHandlers({ accountSession, remoteSessions });
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError

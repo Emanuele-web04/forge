@@ -3,7 +3,7 @@
 //          local enrollment state.
 // Layer: Web data-fetching (see accountReactQuery.ts for the conventions).
 
-import type { AccountDevice, AccountHost } from "@synara/contracts";
+import type { AccountDevice, AccountHost, HostSession } from "@synara/contracts";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { readHostsApi, type HostEnrollment } from "./api";
@@ -13,6 +13,7 @@ export const remoteHostQueryKeys = {
   hosts: () => ["remoteHosts", "hosts"] as const,
   devices: () => ["remoteHosts", "devices"] as const,
   enrollment: () => ["remoteHosts", "enrollment"] as const,
+  sessions: () => ["remoteHosts", "sessions"] as const,
 };
 
 /**
@@ -87,6 +88,23 @@ export function remoteHostEnrollmentQueryOptions(input: { enabled?: boolean } = 
   });
 }
 
+/** Host-local live state. Bounded polling keeps a long-open panel honest. */
+export function sessionsQueryOptions(input: { enabled?: boolean } = {}) {
+  return queryOptions({
+    queryKey: remoteHostQueryKeys.sessions(),
+    enabled: input.enabled ?? true,
+    staleTime: 1_000,
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
+    retry: 1,
+    queryFn: async (): Promise<readonly HostSession[]> => {
+      const hosts = readHostsApi();
+      if (!hosts) throw new HostsUnsupportedError();
+      return (await hosts.listSessions()).sessions;
+    },
+  });
+}
+
 /**
  * Re-reads hosts and enrollment together. They are two views of one fact —
  * flipping discoverability changes the row in the list AND answers the
@@ -102,6 +120,10 @@ export async function invalidateRemoteHosts(queryClient: QueryClient): Promise<v
 
 export async function invalidateRemoteDevices(queryClient: QueryClient): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: remoteHostQueryKeys.devices() });
+}
+
+export async function invalidateHostSessions(queryClient: QueryClient): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey: remoteHostQueryKeys.sessions() });
 }
 
 /**

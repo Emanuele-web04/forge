@@ -11,13 +11,14 @@ vi.mock("~/nativeApi", () => ({
   readNativeApi: () => nativeApiMock.current,
 }));
 
+const queriesModule = await import("./queries");
 const {
   HostsUnsupportedError,
   devicesQueryOptions,
   remoteHostEnrollmentQueryOptions,
   remoteHostQueryKeys,
   hostsQueryOptions,
-} = await import("./queries");
+} = queriesModule;
 
 describe("remoteHostQueryKeys", () => {
   it("nests every key under one prefix so an identity change can drop them all", () => {
@@ -42,6 +43,24 @@ describe("remoteHostQueryKeys", () => {
 });
 
 describe("query options", () => {
+  it("exposes a live-session query with bounded polling", () => {
+    const sessionsQueryOptions = (
+      queriesModule as typeof queriesModule & {
+        sessionsQueryOptions?: (input?: { enabled?: boolean }) => {
+          enabled: boolean;
+          refetchInterval: number;
+          queryFn: () => Promise<unknown>;
+        };
+      }
+    ).sessionsQueryOptions;
+    expect(sessionsQueryOptions, "sessionsQueryOptions export").toBeTypeOf("function");
+    if (!sessionsQueryOptions) return;
+
+    expect(sessionsQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(sessionsQueryOptions().refetchInterval).toBeGreaterThanOrEqual(2_000);
+    expect(sessionsQueryOptions().refetchInterval).toBeLessThanOrEqual(10_000);
+  });
+
   it("is disabled when the caller says so (signed out)", () => {
     expect(hostsQueryOptions({ enabled: false }).enabled).toBe(false);
     expect(devicesQueryOptions({ enabled: false }).enabled).toBe(false);
@@ -98,6 +117,12 @@ describe("query options", () => {
         requestGrant: vi.fn(),
         enrollment: vi.fn().mockResolvedValue(enrollment),
         unlinkLocalHost: vi.fn(),
+        listSessions: vi.fn(),
+        endSession: vi.fn(),
+        beginSyncKeyPairing: vi.fn(),
+        offerSyncKey: vi.fn(),
+        receiveSyncKey: vi.fn(),
+        confirmSyncKey: vi.fn(),
       },
     };
 

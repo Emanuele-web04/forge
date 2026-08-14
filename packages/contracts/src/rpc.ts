@@ -252,6 +252,12 @@ import {
   WS_METHODS,
 } from "./ws";
 import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput, ListHostSessionsResponse } from "./hostSessions";
+import {
+  ConfirmSyncKeyPairingRequest,
+  SyncKeyPairingCode,
+  SyncKeyPairingRequest,
+} from "./hostSecrets";
 import { ListHostsResponse } from "./account";
 import {
   WS_BOOTSTRAP_METHOD,
@@ -1294,6 +1300,42 @@ export const WsHostsUnlinkLocalHostRpc = Rpc.make(WS_METHODS.hostsUnlinkLocalHos
   error: WsRpcError,
 });
 
+export const WsHostsListSessionsRpc = Rpc.make(WS_METHODS.hostsListSessions, {
+  payload: Schema.Struct({}),
+  success: ListHostSessionsResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsEndSessionRpc = Rpc.make(WS_METHODS.hostsEndSession, {
+  payload: EndHostSessionInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsBeginSyncKeyPairingRpc = Rpc.make(WS_METHODS.hostsBeginSyncKeyPairing, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingRequest,
+  error: WsRpcError,
+});
+
+export const WsHostsOfferSyncKeyRpc = Rpc.make(WS_METHODS.hostsOfferSyncKey, {
+  payload: SyncKeyPairingRequest,
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsReceiveSyncKeyRpc = Rpc.make(WS_METHODS.hostsReceiveSyncKey, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsConfirmSyncKeyRpc = Rpc.make(WS_METHODS.hostsConfirmSyncKey, {
+  payload: ConfirmSyncKeyPairingRequest,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1492,6 +1534,12 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsHostsRequestGrantRpc,
   WsHostsEnrollmentRpc,
   WsHostsUnlinkLocalHostRpc,
+  WsHostsListSessionsRpc,
+  WsHostsEndSessionRpc,
+  WsHostsBeginSyncKeyPairingRpc,
+  WsHostsOfferSyncKeyRpc,
+  WsHostsReceiveSyncKeyRpc,
+  WsHostsConfirmSyncKeyRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

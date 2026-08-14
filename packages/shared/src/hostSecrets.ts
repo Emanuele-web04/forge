@@ -359,7 +359,12 @@ function canonicalPairingJwk(jwk: PairingPublicJwk, field: string): string {
   return `P-256.${encodeBase64Url(x)}.${encodeBase64Url(y)}`;
 }
 
-function toPairingPublicJwk(jwk: JsonWebKey): PairingPublicJwk {
+function toPairingPublicJwk(jwk: {
+  readonly kty?: string | undefined;
+  readonly crv?: string | undefined;
+  readonly x?: string | undefined;
+  readonly y?: string | undefined;
+}): PairingPublicJwk {
   if (jwk.kty !== "EC" || jwk.crv !== "P-256" || jwk.x === undefined || jwk.y === undefined) {
     throw new HostSecretsError("invalid-input", "Generated pairing key is not EC P-256");
   }
@@ -421,7 +426,7 @@ async function derivePairingKek(input: {
   peerPublicKey: CryptoKey;
   ephemeralPublicJwk: PairingPublicJwk;
   recipientPublicJwk: PairingPublicJwk;
-  usages: readonly KeyUsage[];
+  usages: readonly ("unwrapKey" | "wrapKey")[];
 }): Promise<CryptoKey> {
   const sharedSecret = await subtle().deriveBits(
     { name: "ECDH", public: input.peerPublicKey },

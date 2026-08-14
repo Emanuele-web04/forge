@@ -11,7 +11,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { remoteHostQueryKeys } from "~/lib/hosts/queries";
-import { useDevices, useHosts } from "./useHosts";
+import * as useHostsModule from "./useHosts";
+
+const { useDevices, useHosts } = useHostsModule;
 
 const hostsApiMock = {
   listHosts: vi.fn(),
@@ -23,6 +25,12 @@ const hostsApiMock = {
   requestGrant: vi.fn(),
   enrollment: vi.fn(),
   unlinkLocalHost: vi.fn(),
+  listSessions: vi.fn(),
+  endSession: vi.fn(),
+  beginSyncKeyPairing: vi.fn(),
+  offerSyncKey: vi.fn(),
+  receiveSyncKey: vi.fn(),
+  confirmSyncKey: vi.fn(),
 };
 
 vi.mock("~/nativeApi", () => ({
@@ -244,5 +252,31 @@ describe("useDevices", () => {
     await expect(remote.revokeDevice.mutateAsync({ deviceId: "device_1" })).rejects.toThrow(
       "device_not_registered",
     );
+  });
+});
+
+describe("useHostSessions", () => {
+  it("ends a session and invalidates the live-session projection", async () => {
+    const useHostSessions = (
+      useHostsModule as typeof useHostsModule & {
+        useHostSessions?: (input: { enabled: boolean }) => {
+          endSession: {
+            mutateAsync(input: { sessionId: string }): Promise<void>;
+          };
+        };
+      }
+    ).useHostSessions;
+    expect(useHostSessions, "useHostSessions export").toBeTypeOf("function");
+    if (!useHostSessions) return;
+
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+    hostsApiMock.endSession.mockResolvedValue(undefined);
+    const remote = renderHook(queryClient, () => useHostSessions({ enabled: true }));
+
+    await remote.endSession.mutateAsync({ sessionId: "session-1" });
+
+    expect(hostsApiMock.endSession).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: remoteHostQueryKeys.sessions() });
   });
 });

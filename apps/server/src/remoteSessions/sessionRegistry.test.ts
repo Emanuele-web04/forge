@@ -23,6 +23,7 @@ describe("RemoteSessionRegistry", () => {
       id: "owner-session",
       userId: "owner",
       deviceJkt: "owner-key",
+      startedAt: "2026-08-14T10:00:00.000Z",
       expiresAtSeconds: 2_000_000_000,
       via: "direct",
       close: ownerClose,
@@ -31,6 +32,7 @@ describe("RemoteSessionRegistry", () => {
       id: "member-session",
       userId: "member",
       deviceJkt: "revoked-key",
+      startedAt: "2026-08-14T10:01:00.000Z",
       expiresAtSeconds: 2_000_000_000,
       via: "relay",
       close: memberClose,
@@ -39,6 +41,7 @@ describe("RemoteSessionRegistry", () => {
       id: "other-member-session",
       userId: "other-member",
       deviceJkt: "other-key",
+      startedAt: "2026-08-14T10:02:00.000Z",
       expiresAtSeconds: 2_000_000_000,
       via: "ssh-forward",
       close: otherMemberClose,
@@ -67,6 +70,7 @@ describe("RemoteSessionRegistry", () => {
       id: "session",
       userId: "owner",
       deviceJkt: "key",
+      startedAt: "2026-08-14T10:00:00.000Z",
       expiresAtSeconds: 2_000_000_000,
       via: "relay",
       close,
@@ -86,6 +90,7 @@ describe("RemoteSessionRegistry", () => {
       id: "s1",
       userId: "owner_1",
       deviceJkt: "stolen-device",
+      startedAt: "2026-08-14T10:00:00.000Z",
       expiresAtSeconds: Math.floor(Date.now() / 1_000) + 3_600,
       via: "relay",
       close,
@@ -99,5 +104,55 @@ describe("RemoteSessionRegistry", () => {
     });
     expect(close).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "device revoked");
     expect(registry.size).toBe(0);
+  });
+
+  it("projects live session identity, transport, and start time without exposing close handles", () => {
+    const registry = new RemoteSessionRegistry();
+    registry.add({
+      id: "session-1",
+      userId: "user-1",
+      deviceJkt: "device-thumbprint",
+      startedAt: "2026-08-14T10:00:00.000Z",
+      expiresAtSeconds: 2_000_000_000,
+      via: "ssh-forward",
+      close: vi.fn(),
+    });
+
+    expect(registry.list()).toEqual([
+      {
+        id: "session-1",
+        userId: "user-1",
+        deviceJkt: "device-thumbprint",
+        transport: "ssh-forward",
+        startedAt: "2026-08-14T10:00:00.000Z",
+      },
+    ]);
+    expect(registry.list()[0]).not.toHaveProperty("close");
+  });
+
+  it("lets the owner end one live session through the same close path revocation uses", () => {
+    const registry = new RemoteSessionRegistry();
+    const firstClose = vi.fn();
+    const secondClose = vi.fn();
+    for (const [id, close] of [
+      ["session-1", firstClose],
+      ["session-2", secondClose],
+    ] as const) {
+      registry.add({
+        id,
+        userId: "user-1",
+        deviceJkt: `${id}-device`,
+        startedAt: "2026-08-14T10:00:00.000Z",
+        expiresAtSeconds: 2_000_000_000,
+        via: "relay",
+        close,
+      });
+    }
+
+    expect(registry.end("session-1")).toBe(true);
+    expect(firstClose).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "ended by host owner");
+    expect(secondClose).not.toHaveBeenCalled();
+    expect(registry.list()).toHaveLength(1);
+    expect(registry.end("missing-session")).toBe(false);
   });
 });

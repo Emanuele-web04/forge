@@ -28,6 +28,7 @@ export interface HostConnectivityOptions {
   readonly config: ServerConfigShape;
   readonly listeningPort: number;
   readonly localSessions: SessionCredentialServiceShape;
+  readonly remoteSessions: RemoteSessionRegistry;
 }
 
 export async function startHostConnectivity(options: HostConnectivityOptions): Promise<() => void> {
@@ -65,7 +66,7 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
     authorization = await client.getHostAuthorization(await hostProof(), credentials.hostId!);
     return authorization;
   };
-  const remoteSessions = new RemoteSessionRegistry();
+  const remoteSessions = options.remoteSessions;
   const apiJwks = new ApiJwksCache(() => client.getApiJwks());
   const mintService = new HostMintService({
     identity,

@@ -20,6 +20,7 @@ import { makeBoundedNodeHttpServer } from "../../../server/src/nodeHttpServer";
 import { patchBunWebSocketCloseEventCompatibility } from "../../../server/src/bunWebSocketCompatibility";
 import { SqlitePersistenceMemory } from "../../../server/src/persistence/Layers/Sqlite";
 import { hostRemoteWebSocketRouteLayer } from "../../../server/src/remoteSessions";
+import { RemoteSessionRegistry } from "../../../server/src/remoteSessions/sessionRegistry";
 import { makeWebsocketRpcRouteLayer } from "../../../server/src/wsRpc";
 import {
   makeWsConnectionSessions,
@@ -215,6 +216,7 @@ export async function startRealHost(input: {
       config: started.config,
       listeningPort: address.port,
       localSessions: started.sessions,
+      remoteSessions: new RemoteSessionRegistry(),
     });
     // The relay dial is asynchronous: startHostConnectivity returns before the
     // control socket has connected and sent `ready`. A client that grants and

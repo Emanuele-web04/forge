@@ -1,6 +1,7 @@
 export * from "./account";
 export * from "./hostAuth";
 export * from "./hostSecrets";
+export * from "./hostSessions";
 export * from "./accountUsage";
 export * from "./auth";
 export * from "./automation";
