@@ -1,5 +1,10 @@
 import { HOST_SESSION_CLOSE_REVOKED } from "@synara/relay-protocol";
-import type { HostAuthorizationSnapshot, HostSession, RevocationEvent } from "@synara/contracts";
+import {
+  SESSION_CREDENTIAL_MAX_AGE_SECONDS,
+  type HostAuthorizationSnapshot,
+  type HostSession,
+  type RevocationEvent,
+} from "@synara/contracts";
 import { Layer, ServiceMap } from "effect";
 
 export interface RemoteSession {
@@ -14,7 +19,12 @@ export interface RemoteSession {
 
 export const REMOTE_SESSION_REVOKED_CLOSE_CODE = HOST_SESSION_CLOSE_REVOKED;
 
+/** Matches the session-credential lifetime: past it, the credential is dead anyway. */
+const REVOKED_DEVICE_RETENTION_MS = SESSION_CREDENTIAL_MAX_AGE_SECONDS * 1_000;
+
 export class RemoteSessionRegistry {
+  /** deviceJkt -> when its credentials can no longer be presented. */
+  readonly #revokedDevices = new Map<string, number>();
   readonly #sessions = new Map<string, RemoteSession>();
 
   add(session: RemoteSession): () => void {
@@ -36,6 +46,34 @@ export class RemoteSessionRegistry {
         startedAt,
       }))
       .toSorted((left, right) => left.startedAt.localeCompare(right.startedAt));
+  }
+
+  /**
+   * Whether this device may open a NEW session.
+   *
+   * Killing live sessions was never enough: revocation invalidates the
+   * DEVICE, but a session credential stays cryptographically valid for its
+   * full hour, and minting a fresh DPoP proof is trivial for whoever holds
+   * the device key. Without this check a revoked device simply reconnects
+   * over LAN or an SSH forward — no relay, no cloud, nothing to refuse it —
+   * and re-admits itself with the credential it already had.
+   */
+  isDeviceRevoked(deviceJkt: string, nowMs = Date.now()): boolean {
+    const until = this.#revokedDevices.get(deviceJkt);
+    if (until === undefined) return false;
+    if (until <= nowMs) {
+      this.#revokedDevices.delete(deviceJkt);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Retained for the session-credential lifetime: past that the credential
+   * cannot be presented anyway, so the entry stops earning its memory.
+   */
+  #rememberRevoked(deviceJkt: string, nowMs = Date.now()): void {
+    this.#revokedDevices.set(deviceJkt, nowMs + REVOKED_DEVICE_RETENTION_MS);
   }
 
   end(sessionId: string): boolean {
@@ -63,6 +101,7 @@ export class RemoteSessionRegistry {
       return;
     }
     if (event?.kind === "device_revoked" && event.subject) {
+      this.#rememberRevoked(event.subject);
       this.dropWhere((session) => session.deviceJkt === event.subject, "device revoked");
     }
     // Eventless recovery: on reconnect (or any refresh) the snapshot carries
@@ -70,6 +109,7 @@ export class RemoteSessionRegistry {
     // we never received still dies here rather than living out its TTL.
     if (authorization.revokedDeviceJkts.length > 0) {
       const revoked = new Set(authorization.revokedDeviceJkts);
+      for (const jkt of revoked) this.#rememberRevoked(jkt);
       this.dropWhere((session) => revoked.has(session.deviceJkt), "device revoked");
     }
     if (!authorization.discoverable || !authorization.ownerInOrg) {

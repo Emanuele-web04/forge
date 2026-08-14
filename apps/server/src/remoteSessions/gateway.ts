@@ -118,6 +118,13 @@ export class RemoteConnectionGateway {
           ) {
             throw new Error("session credential does not match relay splice identity");
           }
+          // A credential outlives the device it was minted for. Revocation
+          // kills live sessions, but nothing stopped a revoked device from
+          // opening a NEW one over a direct transport with the credential it
+          // already held — no relay and no cloud in that path to refuse it.
+          if (this.options.sessions.isDeviceRevoked(peer.deviceJkt)) {
+            throw new Error("this device's access was revoked");
+          }
           state = "bridged";
           const id = randomUUID();
           const remove = this.options.sessions.add({

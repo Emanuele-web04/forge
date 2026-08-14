@@ -139,6 +139,16 @@ export class RelayDialSupervisor {
     if (signal.aborted) return;
     const control = this.#socketFactory(this.controlUrl(ticket));
     await openSocket(control, signal);
+    // Attach BEFORE any await. The relay adds a host to its delivery map the
+    // moment its ticket verifies — readiness is not a gate on revocation — so
+    // frames can arrive during the reverify round trip below, and `ws` drops
+    // frames nobody is listening for. A dropped frame here is a revocation
+    // that silently never happens.
+    control.on("message", (raw) => {
+      void this.handleControlMessage(control, raw).catch(() => {
+        control.close(1002, "invalid control message");
+      });
+    });
     try {
       // Best-effort: reverification needs the account API, which needs the
       // identity provider. Letting it throw here would abandon a control
@@ -153,11 +163,6 @@ export class RelayDialSupervisor {
     // supervisor committed to running it. Backoff resets on this signal.
     this.#connected = true;
     control.send(JSON.stringify({ v: 1, type: "ready" }));
-    control.on("message", (raw) => {
-      void this.handleControlMessage(control, raw).catch(() => {
-        control.close(1002, "invalid control message");
-      });
-    });
     try {
       await socketLifetime(control, signal);
     } finally {

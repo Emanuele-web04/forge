@@ -155,4 +155,53 @@ describe("RemoteSessionRegistry", () => {
     expect(registry.list()).toHaveLength(1);
     expect(registry.end("missing-session")).toBe(false);
   });
+
+  it("refuses a revoked device a NEW session, not just its live one", async () => {
+    // Killing the session was never enough: the credential stays valid for
+    // its full hour and a fresh DPoP proof is trivial for whoever holds the
+    // device key, so a revoked device could reconnect over LAN or an SSH
+    // forward — no relay, no cloud — and re-admit itself.
+    const registry = new RemoteSessionRegistry();
+    expect(registry.isDeviceRevoked("stolen")).toBe(false);
+    await registry.reverify(
+      {
+        discoverable: true,
+        ownerUserId: "owner_1",
+        orgId: "org_1",
+        ownerInOrg: true,
+        revokedDeviceJkts: [],
+      },
+      { kind: "device_revoked", subject: "stolen" },
+    );
+    expect(registry.isDeviceRevoked("stolen")).toBe(true);
+    expect(registry.isDeviceRevoked("other-device")).toBe(false);
+  });
+
+  it("remembers revocations learned from the snapshot, not only from events", async () => {
+    const registry = new RemoteSessionRegistry();
+    await registry.reverify({
+      discoverable: true,
+      ownerUserId: "owner_1",
+      orgId: "org_1",
+      ownerInOrg: true,
+      revokedDeviceJkts: ["swept-device"],
+    });
+    expect(registry.isDeviceRevoked("swept-device")).toBe(true);
+  });
+
+  it("stops refusing once the credential could no longer be presented anyway", async () => {
+    const registry = new RemoteSessionRegistry();
+    await registry.reverify(
+      {
+        discoverable: true,
+        ownerUserId: "owner_1",
+        orgId: "org_1",
+        ownerInOrg: true,
+        revokedDeviceJkts: [],
+      },
+      { kind: "device_revoked", subject: "expired-entry" },
+    );
+    const pastCredentialLifetime = Date.now() + 61 * 60 * 1_000;
+    expect(registry.isDeviceRevoked("expired-entry", pastCredentialLifetime)).toBe(false);
+  });
 });

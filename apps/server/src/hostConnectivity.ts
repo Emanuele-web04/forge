@@ -116,10 +116,21 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
       requestTicket: async () =>
         (await client.requestRelayTicket(await hostProof(), credentials.hostId!)).ticket,
       reverifySessions: async (event) => {
-        if (event?.kind === "host_unlinked") {
+        // Kill first with what the event already proves, THEN refresh.
+        //
+        // The frame is self-sufficient for the two kinds that matter most:
+        // `device_revoked` carries the thumbprint in `event.subject`, and
+        // `host_unlinked` drops everything unconditionally. Neither needs to
+        // ask the cloud anything. Refreshing first made revocation fail OPEN
+        // — an account-API 5xx threw before a single session was dropped, so
+        // a revoked device kept its session precisely when the control plane
+        // was unhealthy.
+        if (event?.kind === "host_unlinked" || event?.kind === "device_revoked") {
           await remoteSessions.reverify(authorization, event);
-          return;
         }
+        // Discoverability and org membership genuinely are cloud-governed, so
+        // they still need the snapshot — but a failure here can no longer
+        // suppress the kill above.
         const current = await refreshAuthorization();
         await remoteSessions.reverify(current, event);
       },
