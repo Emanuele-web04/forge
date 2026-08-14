@@ -1,7 +1,6 @@
 import {
   THREAD_GOAL_MAX_CHARS,
   type MessageId,
-  TurnId,
   type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
@@ -370,6 +369,11 @@ export function useComposerSlashCommands(input: {
       const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
         throughMessageId: inputOptions?.throughMessageId ?? null,
       });
+      const throughMessage = inputOptions?.throughMessageId
+        ? (activeThread.messages.find((message) => message.id === inputOptions.throughMessageId) ??
+          null)
+        : null;
+      const sourceTurnId = throughMessage?.turnId ?? undefined;
 
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -385,9 +389,7 @@ export function useComposerSlashCommands(input: {
         commandId: newCommandId(),
         threadId: nextThreadId,
         sourceThreadId: activeThread.id,
-        sourceTurnId: inputOptions?.throughMessageId
-          ? TurnId.makeUnsafe(inputOptions.throughMessageId)
-          : undefined,
+        sourceTurnId,
         projectId: activeProject.id,
         title: activeThread.title,
         modelSelection: selectedModelSelection,
@@ -724,7 +726,7 @@ export function useComposerSlashCommands(input: {
     const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
       url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
-      filename: `synara-thread-${threadId}.zip`,
+      filename: `forkara-thread-${threadId}.zip`,
     }).catch((error: unknown) => {
       toastManager.add({
         type: "error",

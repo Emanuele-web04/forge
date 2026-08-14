@@ -369,7 +369,8 @@ function main(): void {
   const syncBranchState = syncBranchStateRef
     ? tryReadSyncState(syncBranchStateRef, options.base, upstreamRef)
     : null;
-  const hasAnySyncedState = baseHasSyncedState || syncStateRepresentsUpstream(syncBranchState, upstreamHead);
+  const hasAnySyncedState =
+    baseHasSyncedState || syncStateRepresentsUpstream(syncBranchState, upstreamHead);
 
   const hasUpstreamDeltaOnBase = parseDivergence(options.base, upstreamRef).right > 0;
   if (!hasUpstreamDeltaOnBase && hasAnySyncedState) {
