@@ -2190,7 +2190,16 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
   });
 
-  it("replays assistant text when OpenCode sends delta before part snapshot and assistant role", async () => {
+  it.each([
+    [
+      "replays assistant text when OpenCode sends delta before part snapshot and assistant role",
+      "",
+    ],
+    [
+      "does not duplicate pending text when the first part snapshot already contains it",
+      "Hello",
+    ],
+  ] as const)("%s", async (_case, firstSnapshotText) => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
     const client = runtime.runtime.createOpenCodeSdkClient({
@@ -2242,7 +2251,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "part-1",
               messageID: "assistant-message-1",
               type: "text",
-              text: "Hello",
+              text: firstSnapshotText,
               time: {
                 start: 1,
               },
