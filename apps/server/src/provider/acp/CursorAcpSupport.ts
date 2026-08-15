@@ -1279,7 +1279,12 @@ function cursorModelChoiceSupportsRequestedParameters(choice: string, requested:
     if (choiceValue === requestedValue) {
       continue;
     }
-    if ((key === "fast" || key === "thinking") && requestedValue === "false") {
+    // Thinking-off is often omitted from advertised ACP slugs, so a requested
+    // thinking=false still matches the advertised thinking=true default.
+    // Fast mode must not follow that path: Cursor's advertised slugs frequently
+    // bake in fast=true, and substituting that value would keep fast mode on
+    // after the composer lightning bolt is turned off.
+    if (key === "thinking" && requestedValue === "false") {
       continue;
     }
     return false;

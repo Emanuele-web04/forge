@@ -169,14 +169,17 @@ function getProviderStateFromCapabilities(
         rawContextWindow !== defaultContextWindow
           ? rawContextWindow
           : undefined;
-      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      // Cursor advertises many models with fast=true as the ACP default. The
+      // composer lightning bolt is off unless fastMode is explicitly true, so
+      // dispatch false whenever the model supports the toggle.
+      const fastMode = caps.supportsFastMode ? providerOptions?.fastMode === true : undefined;
       const thinking =
         caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
           ? providerOptions.thinking
           : undefined;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(fastMode !== undefined ? { fastMode } : {}),
         ...(thinking !== undefined ? { thinking } : {}),
         ...(contextWindow ? { contextWindow } : {}),
       };

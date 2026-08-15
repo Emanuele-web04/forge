@@ -708,6 +708,65 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("dispatches Cursor fast mode off when the lightning bolt is inactive", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "grok-4.5",
+      prompt: "",
+      modelOptions: {
+        cursor: {
+          reasoningEffort: "medium",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "cursor",
+      promptEffort: "medium",
+      modelOptionsForDispatch: {
+        reasoningEffort: "medium",
+        fastMode: false,
+      },
+    });
+  });
+
+  it("dispatches Cursor fast mode off for runtime Grok models that advertise the toggle", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "grok-4.6",
+      runtimeModel: {
+        slug: "grok-4.6",
+        name: "Grok 4.6",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportsFastMode: true,
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        defaultReasoningEffort: "high",
+      },
+      prompt: "",
+      modelOptions: {
+        cursor: {
+          reasoningEffort: "medium",
+          fastMode: false,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "cursor",
+      promptEffort: "medium",
+      modelOptionsForDispatch: {
+        reasoningEffort: "medium",
+        fastMode: false,
+      },
+    });
+  });
+
   it("drops stale Cursor context options once runtime metadata is authoritative", () => {
     const state = getComposerProviderState({
       provider: "cursor",
