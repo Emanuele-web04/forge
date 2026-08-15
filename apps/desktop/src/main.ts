@@ -86,7 +86,12 @@ import {
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
 } from "./desktopAppIcon";
-import { refreshWindowsTaskbarIcon } from "./windowsTaskbarIcon";
+import {
+  applyWindowsTaskbarIcon,
+  collectWindowsShortcutPaths,
+  syncWindowsShortcutIcons,
+  windowsShellIconCachePath,
+} from "./windowsTaskbarIcon";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -1928,7 +1933,87 @@ function persistDesktopAppIcon(icon: DesktopAppIcon): void {
   FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
 }
 
-function applyDesktopAppIcon(icon: DesktopAppIcon): void {
+function windowsShortcutSearchDirectories(): string[] {
+  const appData = process.env.APPDATA?.trim() ?? "";
+  const programData =
+    process.env.ProgramData?.trim() ?? Path.join(Path.parse(OS.homedir()).root, "ProgramData");
+  return [
+    Path.join(OS.homedir(), "Desktop"),
+    Path.join(OS.homedir(), "OneDrive", "Desktop"),
+    Path.join(programData, "Microsoft", "Windows", "Start Menu", "Programs"),
+    Path.join(OS.homedir(), "..", "Public", "Desktop"),
+    ...(appData.length > 0
+      ? [
+          Path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs"),
+          Path.join(
+            appData,
+            "Microsoft",
+            "Internet Explorer",
+            "Quick Launch",
+            "User Pinned",
+            "TaskBar",
+          ),
+        ]
+      : []),
+  ];
+}
+
+function syncWindowsTaskbarShortcuts(icon: DesktopAppIcon, shellIconPath: string): void {
+  const shortcutIconPath = icon === "default" ? process.execPath : shellIconPath;
+  const shortcutPaths = collectWindowsShortcutPaths({
+    directories: windowsShortcutSearchDirectories(),
+    readdir: (directory) => FS.readdirSync(directory),
+    isDirectory: (path) => {
+      try {
+        return FS.statSync(path).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  });
+  syncWindowsShortcutIcons({
+    iconPath: shortcutIconPath,
+    iconIndex: 0,
+    appId: APP_USER_MODEL_ID,
+    executablePath: process.execPath,
+    shortcutPaths,
+    readShortcut: (shortcutPath) => {
+      try {
+        return shell.readShortcutLink(shortcutPath);
+      } catch {
+        return null;
+      }
+    },
+    updateShortcut: (shortcutPath, iconPath, iconIndex) => {
+      try {
+        const current = shell.readShortcutLink(shortcutPath);
+        return shell.writeShortcutLink(shortcutPath, "update", {
+          ...current,
+          icon: iconPath,
+          iconIndex,
+        });
+      } catch {
+        return false;
+      }
+    },
+  });
+}
+
+function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): string {
+  const cacheDirectory = Path.join(STATE_DIR, "taskbar-icons");
+  FS.mkdirSync(cacheDirectory, { recursive: true });
+  const destinationPath = windowsShellIconCachePath(cacheDirectory, icon);
+  // Explorer cannot load ICOs from asar. Copy to a real path and keep a distinct
+  // file per preference so the shell icon cache cannot keep serving the previous art.
+  FS.writeFileSync(destinationPath, FS.readFileSync(sourcePath));
+  return destinationPath;
+}
+
+function applyDesktopAppIcon(
+  icon: DesktopAppIcon,
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean },
+): void {
   if (
     process.platform !== "darwin" &&
     process.platform !== "linux" &&
@@ -1951,13 +2036,46 @@ function applyDesktopAppIcon(icon: DesktopAppIcon): void {
     app.dock?.setIcon(image);
     return;
   }
-  mainWindow?.setIcon(image);
-  // setIcon updates the window chrome and Alt-Tab artwork, but the Windows
-  // shell caches the taskbar button icon registered for the app identity, so
-  // re-register the live taskbar button to make the new icon take effect.
   if (process.platform === "win32") {
-    refreshWindowsTaskbarIcon(mainWindow);
+    let shellIconPath = iconPath;
+    try {
+      shellIconPath = materializeWindowsShellIcon(icon, iconPath);
+    } catch (error) {
+      console.warn(
+        `[desktop] Failed to materialize Windows taskbar icon: ${formatErrorMessage(error)}`,
+      );
+    }
+    try {
+      syncWindowsTaskbarShortcuts(icon, shellIconPath);
+    } catch (error) {
+      console.warn(`[desktop] Failed to sync Windows shortcut icons: ${formatErrorMessage(error)}`);
+    }
+    try {
+      applyWindowsTaskbarIcon({
+        window,
+        iconPath: shellIconPath,
+        identity: {
+          appId: APP_USER_MODEL_ID,
+          relaunchCommand: `"${process.execPath}"`,
+          relaunchDisplayName: APP_DISPLAY_NAME,
+        },
+        ...(options?.reregisterTaskbarButton === undefined
+          ? {}
+          : { reregisterTaskbarButton: options.reregisterTaskbarButton }),
+      });
+    } catch (error) {
+      console.warn(`[desktop] Failed to apply Windows taskbar icon: ${formatErrorMessage(error)}`);
+      try {
+        window?.setIcon(shellIconPath);
+      } catch (iconError) {
+        console.warn(
+          `[desktop] Failed to set Windows window icon: ${formatErrorMessage(iconError)}`,
+        );
+      }
+    }
+    return;
   }
+  window?.setIcon(image);
 }
 
 function applyInitialMacDockIcon(): void {
@@ -3964,13 +4082,23 @@ function registerIpcHandlers(): void {
 function getIconOption(): { icon: string } | Record<string, never> {
   if (process.platform === "darwin") return {}; // macOS uses .icns from app bundle
   if (process.platform !== "linux" && process.platform !== "win32") return {};
+  const icon = readDesktopAppIcon();
   const resourceName = desktopAppIconResourceName({
-    icon: readDesktopAppIcon(),
+    icon,
     platform: process.platform,
     isDarkAppearance: false,
   });
   const iconPath = resolveResourcePath(resourceName);
-  return iconPath ? { icon: iconPath } : {};
+  if (!iconPath) return {};
+  if (process.platform !== "win32") return { icon: iconPath };
+  try {
+    return { icon: materializeWindowsShellIcon(icon, iconPath) };
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to materialize Windows window icon: ${formatErrorMessage(error)}`,
+    );
+    return { icon: iconPath };
+  }
 }
 
 // macOS backs the translucent shell with window vibrancy, so the window is created
@@ -4130,6 +4258,12 @@ function createWindow(): BrowserWindow {
       window.maximize();
     }
     window.show();
+    if (process.platform === "win32") {
+      const icon = readDesktopAppIcon();
+      applyDesktopAppIcon(icon, window, {
+        reregisterTaskbarButton: icon !== "default",
+      });
+    }
     emitDesktopWindowState(window);
   });
 
@@ -4165,6 +4299,14 @@ function createWindow(): BrowserWindow {
     window.webContents.openDevTools({ mode: "detach" });
   } else {
     void window.loadURL(desktopIdentity.entryUrl);
+  }
+
+  if (process.platform === "linux" || process.platform === "win32") {
+    try {
+      applyDesktopAppIcon(readDesktopAppIcon(), window, { reregisterTaskbarButton: false });
+    } catch (error) {
+      console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
+    }
   }
 
   window.on("closed", () => {
