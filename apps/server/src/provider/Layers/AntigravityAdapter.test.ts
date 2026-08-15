@@ -593,13 +593,17 @@ describe("Antigravity CLI integration helpers", () => {
     );
     expect(
       buildAntigravityCaptureCommand(
-        String.raw`C:\Program Files\Synara\Synara.exe`,
+        String.raw`C:\Users\test\AppData\Local\Programs\Synara\Synara.exe`,
         String.raw`C:\Users\test\.gemini\capture.cjs`,
         "pre-tool",
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
+      // The Antigravity CLI runs hook commands through cmd.exe with JSON
+      // escapes intact, so `"` arrives as `\"` and quoted paths fail to
+      // execute ("not recognized as an internal or external command"). The
+      // win32 command must stay free of double quotes.
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
   });
 

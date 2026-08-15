@@ -196,11 +196,19 @@ export function buildAntigravityCaptureCommand(
   event: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   const fallback = inactiveHookOutput(event);
   if (platform === "win32") {
+    // The Antigravity CLI passes hook command strings to cmd.exe without
+    // decoding JSON escapes, so any `"` in the command arrives as `\"` and
+    // breaks cmd's quote handling: a quoted program path is executed literally
+    // ("...exe" is not recognized as an internal or external command) and the
+    // hook never runs. Keep the invocation free of double quotes; the helper
+    // paths are space-free in every supported install layout (dev bun/electron
+    // binaries and packaged apps under %LOCALAPPDATA%\Programs).
+    const invocation = `${executablePath} ${scriptPath} ${event}`;
     return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
+  const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
 
