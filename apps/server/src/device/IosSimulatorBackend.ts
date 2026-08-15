@@ -654,7 +654,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       // no HID usage for it and no simctl equivalent. Simulator.app posts a
       // Purple event through a category it compiles into its own executable,
       // and that port is not wired on a headless boot — calling it there is a
-      // silent no-op (docs/device-pane-spec.md has the full probe). Refused
+      // silent no-op (docs/archive/device-pane-spec.md has the full probe). Refused
       // explicitly rather than pretending to work; the pane ships no rotate
       // control for the same reason, and this keeps the agent tool honest.
       throw new DeviceBackendError(

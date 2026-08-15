@@ -1,10 +1,22 @@
 # External MCP integrations
 
-Synara can expose a small, user-approved MCP tool surface to another local app such as Codex or
-Claude. This integration is separate from the internal `/mcp` endpoint injected into provider
-sessions.
+External MCP lets another local application—such as Codex, Claude Code, or an MCP-capable desktop
+client—create and inspect restricted Synara tasks through a user-approved integration.
 
-## Guided setup
+It is separate from the internal Agent Gateway injected into supported provider sessions already
+running inside Synara.
+
+## Internal gateway or external integration
+
+| Surface       | Caller                                  | Authority model                                                                            |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Agent Gateway | A provider session inside a Synara task | Thread-scoped capabilities and caller-turn authority                                       |
+| External MCP  | Another paired local application        | User-created integration with selected projects, scopes, limits, and revocable credentials |
+
+Use External MCP when work begins outside Synara but should execute through Synara's durable task
+and worktree pipeline.
+
+## Create the integration
 
 1. Start Synara and open **Settings → Integrations**.
 2. Name the connection and choose whether it may use every current and future project (the default)

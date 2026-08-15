@@ -2,7 +2,7 @@
 
 Phase 5 (paired re-measurement) of the chat-runtime performance pass. Same harness, same
 protocol, same machine as the baseline
-(`docs/performance/2026-08-14-streaming-pipeline-baseline.md`): pipeline-mode harness
+(`docs/archive/performance/2026-08-14-streaming-pipeline-baseline.md`): pipeline-mode harness
 (`apps/web/perf/pipeline.tsx`) driving real domain events through the production
 reducer → store → selectors → derivations → `ChatTranscriptPane`; production build with
 `react-dom/profiling`; 200 seed messages; warm-up run + page reload between samples;

@@ -24,7 +24,7 @@ The goal was to investigate noisy Linux startup notifications and provider routi
 | `apps/web/src/components/ChatView.tsx`                                | Modified | Blocks send attempts when the selected provider is known unavailable. |
 | `apps/web/src/terminalStateStore.ts`                                  | Modified | Removes volatile terminal runtime flags from persisted state.         |
 | `apps/web/src/terminalStateStore.test.ts`                             | Modified | Covers persisted terminal state sanitization.                         |
-| `docs/RECAP-provider-notifications.md`                                | Created  | Captures the implementation recap.                                    |
+| `docs/archive/RECAP-provider-notifications.md`                        | Created  | Captures the implementation recap.                                    |
 
 ---
 
