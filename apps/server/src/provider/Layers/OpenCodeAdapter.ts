@@ -184,6 +184,7 @@ interface OpenCodeSessionContext {
   /** Human replies settled from permission.list while their permission.replied echo is pending. */
   readonly locallyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
+  /** Incremental text received before the provider publishes the corresponding part snapshot. */
   readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
   readonly messageSnapshotKeyById: Map<string, string>;
@@ -575,16 +576,6 @@ function commonPrefixLength(left: string, right: string): number {
   return index;
 }
 
-function suffixPrefixOverlap(text: string, delta: string): number {
-  const maxLength = Math.min(text.length, delta.length);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (text.endsWith(delta.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
-}
-
 function resolveLatestAssistantText(previousText: string | undefined, nextText: string): string {
   if (previousText && previousText.length > nextText.length && previousText.startsWith(nextText)) {
     return previousText;
@@ -607,10 +598,9 @@ function appendOpenCodeAssistantTextDelta(
   previousText: string,
   delta: string,
 ): { readonly nextText: string; readonly deltaToEmit: string } {
-  const deltaToEmit = delta.slice(suffixPrefixOverlap(previousText, delta));
   return {
-    nextText: previousText + deltaToEmit,
-    deltaToEmit,
+    nextText: previousText + delta,
+    deltaToEmit: delta,
   };
 }
 
@@ -622,9 +612,21 @@ function bufferPendingTextDelta(
   if (delta.length === 0) {
     return;
   }
-  const previousText = context.pendingTextDeltasByPartId.get(partId) ?? "";
-  const { nextText } = appendOpenCodeAssistantTextDelta(previousText, delta);
-  context.pendingTextDeltasByPartId.set(partId, nextText);
+  const pendingText = context.pendingTextDeltasByPartId.get(partId) ?? "";
+  context.pendingTextDeltasByPartId.set(partId, pendingText + delta);
+}
+
+function reconcilePendingTextWithPartSnapshot(
+  pendingText: string,
+  snapshotText: string,
+): string {
+  if (pendingText.startsWith(snapshotText)) {
+    return pendingText;
+  }
+  if (snapshotText.startsWith(pendingText)) {
+    return snapshotText;
+  }
+  return snapshotText;
 }
 
 function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part): Part {
@@ -633,12 +635,12 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
     return part;
   }
 
-  const pendingDelta = context.pendingTextDeltasByPartId.get(part.id);
-  if (!pendingDelta || pendingDelta.length === 0) {
+  const pendingText = context.pendingTextDeltasByPartId.get(part.id);
+  if (!pendingText || pendingText.length === 0) {
     return part;
   }
 
-  const { nextText } = appendOpenCodeAssistantTextDelta(part.text, pendingDelta);
+  const nextText = reconcilePendingTextWithPartSnapshot(pendingText, part.text);
   context.pendingTextDeltasByPartId.delete(part.id);
   return nextText === part.text ? part : { ...part, text: nextText };
 }
@@ -2390,8 +2392,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               context.partById.set(event.properties.partID, resolvedPart);
             }
             const role = messageRoleForPart(context, resolvedPart);
-            if (role !== "assistant") {
-              bufferPendingTextDelta(context, event.properties.partID, delta);
+            if (role === undefined) {
+              if (resolvedPart.type === "text" || resolvedPart.type === "reasoning") {
+                const { nextText } = appendOpenCodeAssistantTextDelta(resolvedPart.text, delta);
+                context.partById.set(event.properties.partID, {
+                  ...resolvedPart,
+                  text: nextText,
+                });
+              }
+              break;
+            }
+            if (role === "user") {
               break;
             }
             if (!shouldProjectOpenCodeTextPart(resolvedPart)) {
