@@ -2,6 +2,7 @@ import Path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import type { BrowserWindow } from "electron";
 
 import {
@@ -28,7 +29,7 @@ function makeWindow({ destroyed = false, visible = true }: FakeWindowState = {})
 }
 
 const identity = {
-  appId: "com.synara.app",
+  appId: SYNARA_PRODUCTION_BUNDLE_ID,
   relaunchCommand: "C:\\Program Files\\Synara\\Synara.exe",
   relaunchDisplayName: "Synara",
 } as const;
@@ -81,13 +82,13 @@ describe("syncWindowsShortcutIcons", () => {
 
     const updated = syncWindowsShortcutIcons({
       iconPath: Path.join("cache", "taskbar-icon.ico"),
-      appId: "com.synara.app",
+      appId: SYNARA_PRODUCTION_BUNDLE_ID,
       executablePath: Path.join("Program Files", "Synara", "Synara.exe"),
       shortcutPaths: ["synara.lnk", "other.lnk", "already.lnk"],
       readShortcut: (shortcutPath) => {
         if (shortcutPath === "synara.lnk") {
           return {
-            appUserModelId: "com.synara.app",
+            appUserModelId: SYNARA_PRODUCTION_BUNDLE_ID,
             target: Path.join("Program Files", "Synara", "Synara.exe"),
             icon: Path.join("Program Files", "Synara", "Synara.exe"),
             iconIndex: 0,
@@ -95,7 +96,7 @@ describe("syncWindowsShortcutIcons", () => {
         }
         if (shortcutPath === "already.lnk") {
           return {
-            appUserModelId: "com.synara.app",
+            appUserModelId: SYNARA_PRODUCTION_BUNDLE_ID,
             icon: Path.join("cache", "taskbar-icon.ico"),
             iconIndex: 0,
           };
@@ -119,7 +120,7 @@ describe("syncWindowsShortcutIcons", () => {
 
     const updated = syncWindowsShortcutIcons({
       iconPath: Path.join("cache", "taskbar-icon.ico"),
-      appId: "com.synara.app",
+      appId: SYNARA_PRODUCTION_BUNDLE_ID,
       executablePath: Path.join("node_modules", "electron", "electron.exe"),
       shortcutPaths: ["electron.lnk"],
       readShortcut: () => ({
