@@ -81,8 +81,8 @@ const approvedVisualAssetDigests = new Map<string, string>([
     "0b4be139f13dd08885a1aac26fc1f7c623697db157777d16360e985c93d47bcf",
   ],
   [
-    "assets/prod/readme-screenshot.jpeg",
-    "0b4be139f13dd08885a1aac26fc1f7c623697db157777d16360e985c93d47bcf",
+    "assets/prod/synara-hero.jpeg",
+    "07fbd00bde259b5ed2c69f404c00c1347de2fa46fa4a5e2aa70f016912dc2490",
   ],
 ]);
 

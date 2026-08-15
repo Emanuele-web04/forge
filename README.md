@@ -7,7 +7,7 @@ automations, and pull-request delivery into one application. Synara uses the age
 and accounts you already pay for, keeps your workspace data on your machine, and does not require a
 separate Synara cloud.
 
-![Synara app showing parallel agent threads, terminal output, and project navigation](assets/prod/readme-screenshot.jpeg)
+![Synara workspace with agent task, terminal, and project navigation](assets/prod/synara-hero.jpeg)
 
 ## What it does
 
