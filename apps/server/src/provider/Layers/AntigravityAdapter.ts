@@ -90,6 +90,7 @@ type PendingTool = {
   readonly itemId: RuntimeItemId;
   readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
   readonly name: string;
+  readonly args?: Record<string, unknown>;
 };
 
 type StoredTurn = {
@@ -118,6 +119,14 @@ type AntigravitySessionContext = {
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
   nextToolSequence: number;
+  /**
+   * Tool calls already surfaced as work-log items, keyed by
+   * `${stepIndex}:${toolName}`. Both the capture-hook stream (pre-tool events)
+   * and the transcript body (PLANNER_RESPONSE.tool_calls) feed this set so the
+   * same call is rendered exactly once regardless of which source arrives
+   * first — and a call the hook never reports still appears in the timeline.
+   */
+  surfacedToolCalls: Set<string>;
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
@@ -190,7 +199,7 @@ export function buildAntigravityCaptureCommand(
   const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   const fallback = inactiveHookOutput(event);
   if (platform === "win32") {
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
   return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
@@ -210,26 +219,45 @@ process.stdin.on("end", () => {
     return;
   }
   let capturedPayload = payload.trim();
-  if (event === "pre-tool" || event === "post-tool") {
-    try {
-      const input = JSON.parse(capturedPayload);
-      const sanitized = {};
-      for (const key of ["conversationId", "transcriptPath", "modelName"]) {
-        if (typeof input[key] === "string" && input[key].trim()) sanitized[key] = input[key];
-      }
-      if (Number.isInteger(input.stepIdx) && input.stepIdx >= 0) sanitized.stepIdx = input.stepIdx;
-      if (event === "pre-tool") {
-        const name = input.toolCall && typeof input.toolCall.name === "string"
-          ? input.toolCall.name.trim()
-          : "";
-        if (name) sanitized.toolCall = { name };
-      } else {
-        sanitized.failed = typeof input.error === "string" && input.error.trim().length > 0;
-      }
-      capturedPayload = JSON.stringify(sanitized);
-    } catch {
-      capturedPayload = "{}";
+  try {
+    const input = JSON.parse(capturedPayload);
+    const sanitized = {};
+    for (const key of ["conversationId", "transcriptPath", "modelName"]) {
+      if (typeof input[key] === "string" && input[key].trim()) sanitized[key] = input[key];
     }
+    if (Number.isInteger(input.stepIdx) && input.stepIdx >= 0) sanitized.stepIdx = input.stepIdx;
+    if (event === "pre-tool") {
+      const name = input.toolCall && typeof input.toolCall.name === "string"
+        ? input.toolCall.name.trim()
+        : "";
+      if (name) {
+        sanitized.toolCall = {
+          name,
+          ...(input.toolCall.args && typeof input.toolCall.args === "object"
+            ? { args: input.toolCall.args }
+            : {}),
+        };
+      }
+    } else if (event === "post-tool") {
+      const name = input.toolCall && typeof input.toolCall.name === "string"
+        ? input.toolCall.name.trim()
+        : "";
+      if (name) {
+        sanitized.toolCall = {
+          name,
+          ...(input.toolCall.args && typeof input.toolCall.args === "object"
+            ? { args: input.toolCall.args }
+            : {}),
+        };
+      }
+      sanitized.failed = typeof input.error === "string" && input.error.trim().length > 0;
+      if (typeof input.error === "string" && input.error.trim()) sanitized.error = input.error;
+      if (input.toolOutput !== undefined) sanitized.toolOutput = input.toolOutput;
+      if (input.result !== undefined) sanitized.result = input.result;
+    }
+    capturedPayload = JSON.stringify(sanitized);
+  } catch {
+    capturedPayload = "{}";
   }
   fs.appendFileSync(target, event + "\\t" + capturedPayload + "\\n");
   if (event === "pre-tool") {
@@ -442,11 +470,14 @@ export function buildAntigravityTurnPrompt(
 }
 
 const DEFAULT_EFFORT_BY_MODEL: Readonly<Record<string, string>> = {
+  "Gemini 3.7 Flash": "high",
   "Gemini 3.6 Flash": "medium",
   "Gemini 3.5 Flash": "medium",
   "Gemini 3.1 Pro": "low",
   "Claude Sonnet 4.6": "thinking",
   "Claude Opus 4.6": "thinking",
+  "Claude 3.7 Sonnet": "thinking",
+  "DeepSeek V4 Flash Max": "high",
   "GPT-OSS 120B": "medium",
 };
 
@@ -560,6 +591,66 @@ function toolItemType(name: string): PendingTool["itemType"] {
   }
   if (name === "search_web" || name.startsWith("browser_")) return "web_search";
   return "dynamic_tool_call";
+}
+
+function buildAntigravityToolItemData(
+  name: string,
+  _itemType: PendingTool["itemType"],
+  itemId: RuntimeItemId,
+  args?: Record<string, unknown>,
+  postPayload?: Record<string, unknown>,
+): Record<string, unknown> {
+  const command =
+    typeof args?.CommandLine === "string"
+      ? args.CommandLine
+      : typeof args?.command === "string"
+        ? args.command
+        : typeof args?.cmd === "string"
+          ? args.cmd
+          : undefined;
+  const cwd =
+    typeof args?.Cwd === "string"
+      ? args.Cwd
+      : typeof args?.cwd === "string"
+        ? args.cwd
+        : undefined;
+  const pathValue =
+    typeof args?.TargetFile === "string"
+      ? args.TargetFile
+      : typeof args?.AbsolutePath === "string"
+        ? args.AbsolutePath
+        : typeof args?.DirectoryPath === "string"
+          ? args.DirectoryPath
+          : typeof args?.SearchPath === "string"
+            ? args.SearchPath
+            : typeof args?.path === "string"
+              ? args.path
+              : typeof args?.file === "string"
+                ? args.file
+                : undefined;
+  const query =
+    typeof args?.Query === "string"
+      ? args.Query
+      : typeof args?.query === "string"
+        ? args.query
+        : undefined;
+
+  const rawOutput =
+    postPayload?.toolOutput ??
+    postPayload?.result ??
+    postPayload?.error ??
+    undefined;
+
+  return {
+    toolCallId: itemId,
+    toolName: name,
+    ...(command ? { command } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(pathValue ? { path: pathValue, file: pathValue } : {}),
+    ...(query ? { query } : {}),
+    ...(args ? { arguments: args, input: args, rawInput: args } : {}),
+    ...(rawOutput !== undefined ? { rawOutput } : {}),
+  };
 }
 
 export function makeAntigravityRuntimeEventBase(input: {
@@ -744,8 +835,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       step: TranscriptStep,
       itemType: "assistant_message" | "reasoning",
       streamKind: "assistant_text" | "reasoning_text",
+      explicitContent?: string,
     ) => {
-      const content = trim(step.content);
+      const content = trim(explicitContent ?? step.content);
       if (!content) return;
       const itemId = RuntimeItemId.makeUnsafe(
         `antigravity-${context.activeTurnId ?? "turn"}-${step.step_index ?? crypto.randomUUID()}-${itemType}`,
@@ -781,6 +873,58 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (itemType === "assistant_message") context.sawAssistant = true;
     };
 
+    /**
+     * Surface tool calls recorded in the transcript body as tool lifecycle
+     * items. This is the fallback for calls the capture hook never reported
+     * (plugin not installed this session, hook payload missing stepIdx, ...).
+     * `surfacedToolCalls` dedupes against the hook stream so a call the hook
+     * already rendered — or will render — is not emitted twice.
+     */
+    const emitTranscriptToolCalls = (
+      context: AntigravitySessionContext,
+      stepIndex: number,
+      calls: ReadonlyArray<NonNullable<TranscriptStep["tool_calls"]>[number]>,
+    ) => {
+      for (const call of calls) {
+        const name = typeof call?.name === "string" ? trim(call.name) : undefined;
+        if (!name) continue;
+        const surfaceKey = `${stepIndex}:${name}`;
+        if (context.surfacedToolCalls.has(surfaceKey)) continue;
+        context.surfacedToolCalls.add(surfaceKey);
+        const args =
+          call.args && typeof call.args === "object"
+            ? (call.args as Record<string, unknown>)
+            : undefined;
+        const itemId = RuntimeItemId.makeUnsafe(
+          `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
+        );
+        const itemType = toolItemType(name);
+        const data = buildAntigravityToolItemData(name, itemType, itemId, args);
+        offer({
+          ...base(context, { itemId }),
+          type: "item.started",
+          payload: {
+            itemType,
+            status: "inProgress",
+            title: name,
+            data,
+          },
+          raw: raw("transcript-tool-call", { stepIdx: stepIndex, name, args }),
+        } satisfies ProviderRuntimeEvent);
+        offer({
+          ...base(context, { itemId }),
+          type: "item.completed",
+          payload: {
+            itemType,
+            status: "completed",
+            title: name,
+            data,
+          },
+          raw: raw("transcript-tool-call", { stepIdx: stepIndex, name, args }),
+        } satisfies ProviderRuntimeEvent);
+      }
+    };
+
     const processTranscriptStep = (context: AntigravitySessionContext, step: TranscriptStep) => {
       const stepIndex = step.step_index;
       if (typeof stepIndex !== "number" || context.processedSteps.has(stepIndex)) return;
@@ -790,9 +934,28 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (step.type === "PLANNER_RESPONSE") {
         const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
         if (calls.length > 0) {
-          emitTextItem(context, step, "reasoning", "reasoning_text");
+          const reasoning = trim(
+            typeof step.thinking === "string"
+              ? step.thinking
+              : typeof step.thought === "string"
+                ? step.thought
+                : step.content,
+          );
+          if (reasoning) {
+            emitTextItem(context, step, "reasoning", "reasoning_text", reasoning);
+          }
+          emitTranscriptToolCalls(context, stepIndex, calls);
         } else {
-          emitTextItem(context, step, "assistant_message", "assistant_text");
+          const assistantText = trim(
+            typeof step.content === "string"
+              ? step.content
+              : typeof step.thinking === "string"
+                ? step.thinking
+                : undefined,
+          );
+          if (assistantText) {
+            emitTextItem(context, step, "assistant_message", "assistant_text", assistantText);
+          }
         }
         return;
       }
@@ -905,15 +1068,28 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               ? (payload.toolCall as Record<string, unknown>)
               : undefined;
           const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+          const toolArgs =
+            toolCall?.args && typeof toolCall.args === "object"
+              ? (toolCall.args as Record<string, unknown>)
+              : undefined;
           if (name) {
+            const surfaceKey = `${stepIndex}:${name}`;
+            if (context.surfacedToolCalls.has(surfaceKey)) {
+              // The transcript already surfaced this call as a completed item;
+              // there is no pending lifecycle to open or close for it.
+              continue;
+            }
+            context.surfacedToolCalls.add(surfaceKey);
             const itemId = RuntimeItemId.makeUnsafe(
               `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
             );
+            const itemType = toolItemType(name);
             const pending = {
               stepIndex,
               itemId,
-              itemType: toolItemType(name),
+              itemType,
               name,
+              ...(toolArgs ? { args: toolArgs } : {}),
             } satisfies PendingTool;
             context.pendingTools.push(pending);
             offer({
@@ -923,9 +1099,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 itemType: pending.itemType,
                 status: "inProgress",
                 title: pending.name,
-                data: { toolCallId: pending.itemId, toolName: pending.name },
+                data: buildAntigravityToolItemData(name, itemType, itemId, toolArgs),
               },
-              raw: raw("tool-lifecycle", { eventName, stepIdx: stepIndex, name }),
+              raw: raw("tool-lifecycle", { eventName, stepIdx: stepIndex, name, args: toolArgs }),
             } satisfies ProviderRuntimeEvent);
           }
         } else if (eventName === "post-tool" && stepIndex !== undefined) {
@@ -945,7 +1121,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 itemType: pending.itemType,
                 status: failed ? "failed" : "completed",
                 title: pending.name,
-                data: { toolCallId: pending.itemId, toolName: pending.name },
+                data: buildAntigravityToolItemData(
+                  pending.name,
+                  pending.itemType,
+                  pending.itemId,
+                  pending.args,
+                  payload,
+                ),
               },
               raw: raw("tool-lifecycle", {
                 eventName,
@@ -1038,6 +1220,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           processedSteps: new Set(),
           pendingTools: [],
           nextToolSequence: 0,
+          surfacedToolCalls: new Set(),
           sawAssistant: false,
           interrupted: false,
           stopped: false,
@@ -1158,6 +1341,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
         context.nextToolSequence = 0;
+        context.surfacedToolCalls.clear();
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
