@@ -521,6 +521,23 @@ describe("Antigravity CLI integration helpers", () => {
     expect(postToolResult.error).toBeUndefined();
     expect(postToolResult.status).toBe(0);
     expect(postToolResult.stdout.trim()).toBe("{}");
+
+    // PreInvocation gates the upcoming LLM invocation (the subagent's first
+    // model call when the agent spawns one): an empty object is treated as a
+    // denial that aborts the launch and makes the parent CLI exit with
+    // code 1, so the inactive hook must answer allow.
+    const preInvocationResult = runCaptureCommand(
+      buildAntigravityCaptureCommand(
+        "__synara_gui_must_not_launch__",
+        "__capture_script_must_not_run__",
+        "pre-invocation",
+      ),
+      JSON.stringify({ payload: "x" }),
+      { SYNARA_ANTIGRAVITY_EVENTS: "" },
+    );
+    expect(preInvocationResult.error).toBeUndefined();
+    expect(preInvocationResult.status).toBe(0);
+    expect(preInvocationResult.stdout.trim()).toBe('{"decision":"allow"}');
   });
 
   it("answers pre-tool with a decision from the capture script when capture is inactive", async () => {
@@ -604,6 +621,28 @@ describe("Antigravity CLI integration helpers", () => {
       // execute ("not recognized as an internal or external command"). The
       // win32 command must stay free of double quotes.
       String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
+    );
+    // PreInvocation gates the LLM invocation: answer allow so subagent
+    // launches are not denied (which would make the parent CLI exit 1).
+    expect(
+      buildAntigravityCaptureCommand(
+        String.raw`C:\Users\test\AppData\Local\Programs\Synara\Synara.exe`,
+        String.raw`C:\Users\test\.gemini\capture.cjs`,
+        "pre-invocation",
+        "win32",
+      ),
+    ).toBe(
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
+    );
+    expect(
+      buildAntigravityCaptureCommand(
+        "/Applications/Synara.app/Contents/MacOS/Synara",
+        "/tmp/synara-capture/capture.cjs",
+        "pre-invocation",
+        "darwin",
+      ),
+    ).toBe(
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
     );
   });
 
@@ -870,7 +909,7 @@ describe("Antigravity CLI integration helpers", () => {
                   transcriptPath: transcriptFile,
                 })}`,
                 'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo dedup"}}}',
-                "post-tool\t{\"stepIdx\":1,\"error\":\"\"}",
+                'post-tool\t{"stepIdx":1,"error":""}',
                 "",
               ].join("\n"),
             ),
@@ -927,6 +966,174 @@ describe("Antigravity CLI integration helpers", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-tool-dedup-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("routes subagent hook events to a child thread without rebinding the session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-subagent-events-"));
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.take(9),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-subagent-events");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            resumeCursor: { conversationId: "conv-parent-1" },
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "spawn a subagent",
+            attachments: [],
+          });
+          expect(eventFile).toBeTruthy();
+
+          // The subagent CLI inherits SYNARA_ANTIGRAVITY_EVENTS, so its hooks
+          // land in this session's stream with the subagent's conversation id.
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                `pre-invocation\t${JSON.stringify({
+                  conversationId: "conv-child-1",
+                  transcriptPath: "C:/tmp/child-transcript.jsonl",
+                  modelName: "gemini-3.6-flash-medium",
+                })}`,
+                `pre-tool\t${JSON.stringify({
+                  conversationId: "conv-child-1",
+                  stepIdx: 1,
+                  toolCall: { name: "run_command", args: { CommandLine: "echo child" } },
+                })}`,
+                `post-tool\t${JSON.stringify({
+                  conversationId: "conv-child-1",
+                  stepIdx: 1,
+                  error: "",
+                })}`,
+                `stop\t${JSON.stringify({ conversationId: "conv-child-1" })}`,
+                `pre-tool\t${JSON.stringify({
+                  conversationId: "conv-parent-1",
+                  stepIdx: 2,
+                  toolCall: { name: "run_command", args: { CommandLine: "echo parent" } },
+                })}`,
+                "",
+              ].join("\n"),
+            ),
+          );
+
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          const childRefs = {
+            providerThreadId: "conv-child-1",
+            providerParentThreadId: "conv-parent-1",
+          };
+          const childThreadStarted = events.find(
+            (event) =>
+              event.type === "thread.started" &&
+              event.providerRefs?.providerThreadId === "conv-child-1",
+          );
+          expect(childThreadStarted?.providerRefs).toEqual(childRefs);
+          const childTurnStarted = events.find(
+            (event) =>
+              event.type === "turn.started" &&
+              event.providerRefs?.providerThreadId === "conv-child-1",
+          );
+          expect(childTurnStarted?.turnId).toBe(turn.turnId);
+          expect(childTurnStarted?.payload).toMatchObject({ model: "gemini-3.6-flash-medium" });
+          const childItemStarted = events.find(
+            (event) =>
+              event.type === "item.started" &&
+              event.providerRefs?.providerThreadId === "conv-child-1",
+          );
+          expect(childItemStarted?.providerRefs).toEqual(childRefs);
+          expect(childItemStarted?.payload).toMatchObject({
+            itemType: "command_execution",
+            status: "inProgress",
+            title: "run_command",
+          });
+          const childItemCompleted = events.find(
+            (event) =>
+              event.type === "item.completed" &&
+              event.providerRefs?.providerThreadId === "conv-child-1",
+          );
+          expect(childItemCompleted?.payload).toMatchObject({
+            itemType: "command_execution",
+            status: "completed",
+            title: "run_command",
+          });
+          const childTurnCompleted = events.find(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerThreadId === "conv-child-1",
+          );
+          expect(childTurnCompleted?.payload).toEqual({
+            state: "completed",
+            stopReason: "model_stop",
+          });
+          // The parent thread must not be re-emitted for the subagent, and the
+          // session keeps its own conversation: its own tool events stay bound
+          // to conv-parent-1 without a parent ref.
+          expect(
+            events.filter(
+              (event) =>
+                event.type === "thread.started" &&
+                event.providerRefs?.providerThreadId === "conv-parent-1",
+            ),
+          ).toHaveLength(1);
+          const parentItem = events.find(
+            (event) =>
+              event.type === "item.started" &&
+              event.providerRefs?.providerThreadId === "conv-parent-1",
+          );
+          expect(parentItem?.providerRefs).toEqual({ providerThreadId: "conv-parent-1" });
+          expect(parentItem?.payload).toMatchObject({ title: "run_command" });
+
+          child?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-subagent-events-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
@@ -1135,9 +1342,9 @@ describe("Antigravity turn settle on cancel (#465)", () => {
 
   it("resolves default reasoning effort for Gemini 3.7 Flash and DeepSeek models", () => {
     expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash")).toBe("Gemini 3.7 Flash (High)");
-    expect(
-      resolveAntigravityCliModelLabel("Gemini 3.7 Flash", { reasoningEffort: "medium" }),
-    ).toBe("Gemini 3.7 Flash (Medium)");
+    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash", { reasoningEffort: "medium" })).toBe(
+      "Gemini 3.7 Flash (Medium)",
+    );
     expect(resolveAntigravityCliModelLabel("DeepSeek V4 Flash Max")).toBe(
       "DeepSeek V4 Flash Max (High)",
     );
