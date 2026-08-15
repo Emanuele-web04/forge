@@ -6702,6 +6702,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       ).toBe(false);
 
       await cancelButton.click();
+      await expect.element(page.getByRole("button", { name: /Cancel/i })).toBeDisabled();
+
       releaseAttachmentCancel();
       attachmentCancelBarrier = null;
       releaseAttachmentUpload();
@@ -6709,6 +6711,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
+          expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\.\.\.)/);
+
           expect(
             wsRequests.some(
               (candidate) => readDispatchedCommand(candidate)?.type === "thread.turn.start",
