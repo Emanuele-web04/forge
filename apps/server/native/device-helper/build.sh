@@ -35,7 +35,11 @@ if [ -z "$DEVELOPER_DIR_PATH" ]; then
   echo "error: no active developer directory; run 'sudo xcode-select -s /Applications/Xcode.app'" >&2
   exit 1
 fi
-if [ ! -d "$DEVELOPER_DIR_PATH/Library/PrivateFrameworks/SimulatorKit.framework" ]; then
+# Xcode ≤26 ships SimulatorKit under the developer dir; Xcode 27 beta 4 moved it
+# to Contents/SharedFrameworks. Mirrors simulatorKitCandidatePaths in
+# CoreSimulatorBridge.swift.
+if [ ! -d "$DEVELOPER_DIR_PATH/Library/PrivateFrameworks/SimulatorKit.framework" ] \
+  && [ ! -d "$(dirname "$DEVELOPER_DIR_PATH")/SharedFrameworks/SimulatorKit.framework" ]; then
   echo "error: SimulatorKit not found under $DEVELOPER_DIR_PATH" >&2
   echo "       point xcode-select at a full Xcode install, not the command line tools" >&2
   exit 1
