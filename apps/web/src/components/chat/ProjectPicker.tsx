@@ -561,6 +561,25 @@ export const ProjectPicker = memo(function ProjectPicker({
     );
   };
 
+  const handleValueChange = useCallback(
+    (selectedValue: string | null) => {
+      if (!selectedValue) return;
+      const activeFolder = activeFolderOptions.find((entry) => entry.cwd === selectedValue);
+      if (activeFolder) {
+        handleSelectActiveFolder(activeFolder);
+        return;
+      }
+      const localFolder = localFolderOptions.find((entry) => entry.absolutePath === selectedValue);
+      if (localFolder) {
+        if (onSelectWorkspaceRoot) {
+          onSelectWorkspaceRoot(localFolder.absolutePath);
+        }
+        setOpen(false);
+      }
+    },
+    [activeFolderOptions, handleSelectActiveFolder, localFolderOptions, onSelectWorkspaceRoot],
+  );
+
   return (
     <Combobox
       items={selectableDirectoryPaths}
@@ -568,6 +587,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       autoHighlight
       onOpenChange={handleOpenChange}
       open={open}
+      onValueChange={handleValueChange}
     >
       {renderTrigger ? (
         <ComboboxTrigger render={renderTrigger} />
