@@ -36,7 +36,7 @@
     "build": "turbo run build",
     "build:marketing": "turbo run build --filter=@synara/marketing",
     "build:desktop": "turbo run build --filter=@synara/desktop --filter=@synara/cli",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck --continue=always",
     "lint": "oxlint --report-unused-disable-directives",
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
