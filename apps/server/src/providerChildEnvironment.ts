@@ -8,6 +8,7 @@ export type ProviderChildKind =
   | "claude"
   | "codex"
   | "cursor"
+  | "deepseek"
   | "droid"
   | "grok"
   | "kilo"
@@ -21,6 +22,7 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
+  "DEEPSEEK_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",
@@ -42,6 +44,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
     "GOOGLE_APPLICATION_CREDENTIALS",
   ]),
   cursor: new Set(["CURSOR_API_KEY"]),
+  deepseek: new Set(["DEEPSEEK_API_KEY"]),
   droid: new Set(["FACTORY_API_KEY"]),
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
   // These profiles deliberately support arbitrary upstream model providers.
