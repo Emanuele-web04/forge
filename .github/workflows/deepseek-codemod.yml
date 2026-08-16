@@ -1,0 +1,33 @@
+name: DeepSeek integration codemod
+
+on:
+  push:
+    branches:
+      - feat/deepseek-harness
+
+permissions:
+  contents: write
+
+jobs:
+  codemod:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/deepseek-harness
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply asserted DeepSeek edits
+        run: node scripts/apply-deepseek-integration.mjs
+      - name: Format changed source
+        run: npx --yes oxfmt@0.40.0 apps/server/src/provider/Layers/DeepSeekAdapter.ts apps/server/src/provider/acp/DeepSeekAcpSupport.ts apps/server/src/agentGateway/targetResolver.ts apps/server/src/provider/skillsCatalog.ts apps/web/src/appSettings.ts apps/web/src/components/ProviderIcon.tsx apps/web/src/components/PluginLibrary.tsx packages/contracts/src/model.ts packages/shared/src/model.ts
+      - name: Commit normalized result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(deepseek): complete provider integration" || exit 0
+          git push origin HEAD:feat/deepseek-harness
