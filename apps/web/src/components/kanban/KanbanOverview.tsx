@@ -1,6 +1,7 @@
 // FILE: KanbanOverview.tsx
 // Purpose: Top kanban layer — one column per project (In Progress → Draft → Done cards);
-//          clicking a project drills into its full 3-column board.
+//          clicking a project drills into its full 3-column board. v2 mode threads the
+//          attention-first flatten order and the needs-review filter.
 // Layer: UI component (read-only; drag & drop lives in the project board)
 // Exports: KanbanOverview
 
@@ -8,7 +9,9 @@ import type { ProjectId } from "@synara/contracts";
 import { Button } from "~/components/ui/button";
 import { ChevronRightIcon, PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import type { KanbanViewMode } from "../../kanbanUiStore";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
+import { NeedsReviewFilter } from "./NeedsReviewFilter";
 import {
   overviewVisibleKanbanCards,
   type KanbanBoard,
@@ -24,6 +27,7 @@ const OverviewProjectColumn = function OverviewProjectColumn({
   onNewTask,
   prByThreadId,
   nowMs,
+  viewMode,
 }: {
   projectBoard: KanbanProjectBoard;
   onOpenProject: (projectId: ProjectId) => void;
@@ -32,8 +36,9 @@ const OverviewProjectColumn = function OverviewProjectColumn({
   onNewTask: (projectId: ProjectId) => void;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
+  viewMode: KanbanViewMode;
 }) {
-  const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(projectBoard);
+  const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(projectBoard, viewMode === "v2");
 
   return (
     <section className="flex w-72 shrink-0 flex-col">
@@ -99,6 +104,7 @@ export function KanbanOverview({
   onNewTask,
   prByThreadId,
   nowMs,
+  viewMode,
 }: {
   board: KanbanBoard;
   onOpenProject: (projectId: ProjectId) => void;
@@ -107,6 +113,7 @@ export function KanbanOverview({
   onNewTask: (projectId: ProjectId) => void;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
+  viewMode: KanbanViewMode;
 }) {
   // Projects without any cards are pure noise on the overview; their boards stay
   // reachable through /kanban/$projectId if linked directly.
@@ -126,19 +133,27 @@ export function KanbanOverview({
   }
 
   return (
-    <div className="flex h-full min-h-0 gap-4 overflow-x-auto px-4 pb-4">
-      {visibleProjects.map((projectBoard) => (
-        <OverviewProjectColumn
-          key={projectBoard.projectId}
-          projectBoard={projectBoard}
-          onOpenProject={onOpenProject}
-          onOpenCard={onOpenCard}
-          onCardContextMenu={onCardContextMenu}
-          onNewTask={onNewTask}
-          prByThreadId={prByThreadId}
-          {...(nowMs !== undefined ? { nowMs } : {})}
-        />
-      ))}
+    <div className="flex h-full min-h-0 flex-col">
+      {viewMode === "v2" ? (
+        <div className="flex shrink-0 items-center gap-2 px-4 pb-2">
+          <NeedsReviewFilter />
+        </div>
+      ) : null}
+      <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto px-4 pb-4">
+        {visibleProjects.map((projectBoard) => (
+          <OverviewProjectColumn
+            key={projectBoard.projectId}
+            projectBoard={projectBoard}
+            onOpenProject={onOpenProject}
+            onOpenCard={onOpenCard}
+            onCardContextMenu={onCardContextMenu}
+            onNewTask={onNewTask}
+            prByThreadId={prByThreadId}
+            {...(nowMs !== undefined ? { nowMs } : {})}
+            viewMode={viewMode}
+          />
+        ))}
+      </div>
     </div>
   );
 }

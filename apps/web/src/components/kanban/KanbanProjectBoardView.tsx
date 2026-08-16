@@ -23,6 +23,7 @@ import {
   resolveAssistantDeliveryMode,
   useAppSettings,
 } from "~/appSettings";
+import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -30,8 +31,11 @@ import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvaila
 import { dispatchKanbanDraftCard } from "../../lib/kanbanDispatch";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
+import { NeedsReviewFilter } from "./NeedsReviewFilter";
 import {
   reorderDraftCardIds,
+  resolveReviewFoldToggleLabel,
+  shouldShowReviewFoldToggle,
   type KanbanCard,
   type KanbanColumnKey,
   type KanbanProjectBoard,
@@ -41,6 +45,11 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 function resolveDropColumn(board: KanbanProjectBoard, overId: string): KanbanColumnKey | null {
   const columnDrop = parseKanbanColumnDropId(overId);
   if (columnDrop) {
+    // Awaiting you is derived-only (D1/S1-P6) — the drop is reported so the
+    // board can explain instead of silently no-op (L1), like the Done column.
+    if (columnDrop.column === "awaitingYou") {
+      return "awaitingYou";
+    }
     return columnDrop.projectId === board.projectId ? columnDrop.column : null;
   }
   // Sortable draft cards are the only non-column droppables on this board.
@@ -62,6 +71,7 @@ export function KanbanProjectBoardView({
   onNewTask,
   prByThreadId,
   nowMs,
+  viewMode,
 }: {
   board: KanbanProjectBoard;
   onOpenCard: (card: KanbanCard) => void;
@@ -69,6 +79,8 @@ export function KanbanProjectBoardView({
   onNewTask: () => void;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
+  /** v2 four-column layout vs classic 3-column escape hatch. */
+  viewMode: "classic" | "v2";
 }) {
   const { settings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
@@ -76,6 +88,8 @@ export function KanbanProjectBoardView({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
+  const hasRevealedReviewFold = useKanbanUiStore((state) => state.hasRevealedReviewFold);
+  const setHasRevealedReviewFold = useKanbanUiStore((state) => state.setHasRevealedReviewFold);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
   // A completed drag still emits a click on the source card; swallow exactly that one
   // so dropping a card never also opens its chat.
@@ -215,6 +229,14 @@ export function KanbanProjectBoardView({
         title: "Done is derived automatically",
         description: "Cards move here when their runs complete.",
       });
+      return;
+    }
+    if (targetColumn === "awaitingYou") {
+      toastManager.add({
+        type: "info",
+        title: "Awaiting you is derived automatically",
+        description: "Cards move here when they need your approval, input, or a retry.",
+      });
     }
   };
 
@@ -226,42 +248,77 @@ export function KanbanProjectBoardView({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="flex h-full min-h-0 gap-3 overflow-x-auto px-4 pb-4">
-        <KanbanColumn
-          projectId={board.projectId}
-          columnKey="draft"
-          cards={board.draft}
-          onOpenCard={handleOpenCard}
-          onCardContextMenu={onCardContextMenu}
-          sortable
-          droppable
-          activeCard={activeCard}
-          onNewCard={onNewTask}
-          prByThreadId={prByThreadId}
-          {...(nowMs !== undefined ? { nowMs } : {})}
-        />
-        <KanbanColumn
-          projectId={board.projectId}
-          columnKey="inProgress"
-          cards={board.inProgress}
-          onOpenCard={handleOpenCard}
-          onCardContextMenu={onCardContextMenu}
-          droppable
-          activeCard={activeCard}
-          prByThreadId={prByThreadId}
-          {...(nowMs !== undefined ? { nowMs } : {})}
-        />
-        <KanbanColumn
-          projectId={board.projectId}
-          columnKey="done"
-          cards={board.done}
-          onOpenCard={handleOpenCard}
-          onCardContextMenu={onCardContextMenu}
-          droppable
-          activeCard={activeCard}
-          prByThreadId={prByThreadId}
-          {...(nowMs !== undefined ? { nowMs } : {})}
-        />
+      <div className="flex h-full min-h-0 flex-col">
+        {viewMode === "v2" ? (
+          <div className="flex shrink-0 items-center gap-2 px-4 pb-2">
+            <NeedsReviewFilter />
+            {shouldShowReviewFoldToggle(hasRevealedReviewFold, board.hiddenCount) ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="text-xs text-muted-foreground/80 hover:text-foreground"
+                onClick={() => setHasRevealedReviewFold(!hasRevealedReviewFold)}
+              >
+                {resolveReviewFoldToggleLabel(hasRevealedReviewFold, board.hiddenCount)}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-4 pb-4">
+          <KanbanColumn
+            projectId={board.projectId}
+            columnKey="draft"
+            cards={board.draft}
+            onOpenCard={handleOpenCard}
+            onCardContextMenu={onCardContextMenu}
+            sortable
+            droppable
+            activeCard={activeCard}
+            onNewCard={onNewTask}
+            prByThreadId={prByThreadId}
+            {...(nowMs !== undefined ? { nowMs } : {})}
+          />
+          <KanbanColumn
+            projectId={board.projectId}
+            columnKey="inProgress"
+            cards={board.inProgress}
+            onOpenCard={handleOpenCard}
+            onCardContextMenu={onCardContextMenu}
+            droppable
+            activeCard={activeCard}
+            prByThreadId={prByThreadId}
+            {...(nowMs !== undefined ? { nowMs } : {})}
+          />
+          {viewMode === "v2" ? (
+            <KanbanColumn
+              projectId={board.projectId}
+              columnKey="awaitingYou"
+              cards={board.awaitingYou}
+              onOpenCard={handleOpenCard}
+              onCardContextMenu={onCardContextMenu}
+              // Droppable so a drop onto it produces the explaining toast rather
+              // than silently falling through to empty space (L1).
+              droppable
+              activeCard={activeCard}
+              prByThreadId={prByThreadId}
+              {...(nowMs !== undefined ? { nowMs } : {})}
+            />
+          ) : null}
+          <KanbanColumn
+            projectId={board.projectId}
+            columnKey="done"
+            cards={board.done}
+            onOpenCard={handleOpenCard}
+            onCardContextMenu={onCardContextMenu}
+            droppable
+            activeCard={activeCard}
+            prByThreadId={prByThreadId}
+            {...(nowMs !== undefined ? { nowMs } : {})}
+            // Fold the inner done-column cap under the board-level reveal so a
+            // >30 done column's tail is reachable in one unfold (C2).
+            {...(viewMode === "v2" && hasRevealedReviewFold ? { uncapped: true } : {})}
+          />
+        </div>
       </div>
       <DragOverlay dropAnimation={null}>
         {activeCard ? (

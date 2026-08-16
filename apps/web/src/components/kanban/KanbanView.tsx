@@ -51,6 +51,7 @@ import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
 import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
+import { useKanbanUiStore } from "../../kanbanUiStore";
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate();
@@ -59,6 +60,8 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
+  const kanbanViewMode = useKanbanUiStore((state) => state.kanbanViewMode);
+  const setKanbanViewMode = useKanbanUiStore((state) => state.setKanbanViewMode);
 
   const projectBoard =
     projectId === null
@@ -78,11 +81,19 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     [allProjects],
   );
   const renderedCardThreads = useMemo(() => {
+    const isV2 = kanbanViewMode === "v2";
     const cards = projectBoard
-      ? [...projectBoard.inProgress, ...projectBoard.draft, ...projectBoard.done]
-      : board.projects.flatMap((candidate) => overviewVisibleKanbanCards(candidate).visibleCards);
+      ? [
+          ...projectBoard.inProgress,
+          ...(isV2 ? projectBoard.awaitingYou : []),
+          ...projectBoard.draft,
+          ...projectBoard.done,
+        ]
+      : board.projects.flatMap(
+          (candidate) => overviewVisibleKanbanCards(candidate, isV2).visibleCards,
+        );
     return cards.flatMap((card) => (card.thread ? [card.thread] : []));
-  }, [board.projects, projectBoard]);
+  }, [board.projects, kanbanViewMode, projectBoard]);
   const prByThreadId = useThreadPullRequests({
     threads: renderedCardThreads,
     projectCwdById,
@@ -200,6 +211,28 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               <span className="shrink-0 text-xs text-muted-foreground/70">
                 {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
               </span>
+              <div
+                role="radiogroup"
+                aria-label="Kanban view"
+                className="ml-auto flex shrink-0 items-center gap-1 rounded-lg p-0.5 ring-1 ring-inset ring-border/60"
+              >
+                {(["classic", "v2"] as const).map((mode) => {
+                  const isActive = kanbanViewMode === mode;
+                  return (
+                    <Button
+                      key={mode}
+                      role="radio"
+                      aria-checked={isActive}
+                      size="xs"
+                      variant={isActive ? "secondary" : "ghost"}
+                      className={cn("h-6 px-2 text-[11px]", !isActive && "text-muted-foreground")}
+                      onClick={() => setKanbanViewMode(mode)}
+                    >
+                      {mode === "v2" ? "Attention" : "Classic"}
+                    </Button>
+                  );
+                })}
+              </div>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -239,6 +272,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onNewTask={handleNewDraftInProjectBoard}
               prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           ) : (
             <KanbanOverview
@@ -249,6 +283,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onNewTask={handleNewTask}
               prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           )}
         </div>
