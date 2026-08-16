@@ -180,6 +180,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
       reasoningEffort: providerOptionRule("string", GROK_REASONING_EFFORT_OPTIONS),
     },
   }),
+  deepseek: {
+    primaryOptionKey: "",
+    options: {},
+  } as ProviderTargetOptionConfig,
   droid: defineProviderOptionConfig<"droid">({
     primaryOptionKey: "reasoningEffort",
     options: {

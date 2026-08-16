@@ -32,6 +32,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.grok,
           binaryPath: "",
         },
+        deepseek: {
+          ...DEFAULT_SERVER_SETTINGS.providers.deepseek,
+          binaryPath: "",
+          configPath: "",
+        },
         droid: {
           ...DEFAULT_SERVER_SETTINGS.providers.droid,
           binaryPath: "",
@@ -69,6 +74,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.cursor).toEqual({});
     expect(providerOptions.antigravity).toEqual({});
     expect(providerOptions.grok).toEqual({});
+    expect(providerOptions.deepseek).toEqual({});
     expect(providerOptions.droid).toEqual({});
     expect(providerOptions.kilo).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
@@ -85,6 +91,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
         },
+        deepseek: {
+          ...DEFAULT_SERVER_SETTINGS.providers.deepseek,
+          binaryPath: "/custom/bin/dsh-acp-demo",
+          configPath: "/custom/deepseek.yaml",
+        },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
           binaryPath: "/custom/bin/opencode",
@@ -99,6 +110,10 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.codex).toEqual({
       binaryPath: "/custom/bin/codex",
       homePath: "/custom/codex-home",
+    });
+    expect(providerOptions.deepseek).toEqual({
+      binaryPath: "/custom/bin/dsh-acp-demo",
+      configPath: "/custom/deepseek.yaml",
     });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",

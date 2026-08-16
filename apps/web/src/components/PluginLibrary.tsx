@@ -417,6 +417,7 @@ export function PluginLibrary() {
       plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
     },
+    deepseek: { plugins: false, skills: false },
     droid: {
       plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),

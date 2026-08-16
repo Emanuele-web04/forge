@@ -7,6 +7,7 @@ import { Effect, Layer, Stream } from "effect";
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { DeepSeekAdapter, DeepSeekAdapterShape } from "../Services/DeepSeekAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { KiloAdapter, KiloAdapterShape } from "../Services/KiloAdapter.ts";
@@ -76,6 +77,23 @@ const fakeCursorAdapter: CursorAdapterShape = {
 const fakeGrokAdapter: GrokAdapterShape = {
   provider: "grok",
   capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
+const fakeDeepSeekAdapter: DeepSeekAdapterShape = {
+  provider: "deepseek",
+  capabilities: { sessionModelSwitch: "restart-session", conversationRollback: "restart-session" },
   startSession: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),
@@ -185,6 +203,7 @@ const layer = it.layer(
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
+        Layer.succeed(DeepSeekAdapter, fakeDeepSeekAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(KiloAdapter, fakeKiloAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
@@ -204,6 +223,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const cursor = yield* registry.getByProvider("cursor");
       const antigravity = yield* registry.getByProvider("antigravity");
       const grok = yield* registry.getByProvider("grok");
+      const deepseek = yield* registry.getByProvider("deepseek");
       const droid = yield* registry.getByProvider("droid");
       const kilo = yield* registry.getByProvider("kilo");
       const opencode = yield* registry.getByProvider("opencode");
@@ -213,6 +233,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(cursor, fakeCursorAdapter);
       assert.equal(antigravity, fakeAntigravityAdapter);
       assert.equal(grok, fakeGrokAdapter);
+      assert.equal(deepseek, fakeDeepSeekAdapter);
       assert.equal(droid, fakeDroidAdapter);
       assert.equal(kilo, fakeKiloAdapter);
       assert.equal(opencode, fakeOpenCodeAdapter);
@@ -225,6 +246,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "cursor",
         "antigravity",
         "grok",
+        "deepseek",
         "droid",
         "kilo",
         "opencode",

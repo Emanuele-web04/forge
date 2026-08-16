@@ -140,6 +140,9 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+export const DeepSeekModelOptions = Schema.Struct({});
+export type DeepSeekModelOptions = typeof DeepSeekModelOptions.Type;
+
 export const DroidModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
@@ -151,6 +154,7 @@ export const ProviderModelOptions = Schema.Struct({
   cursor: Schema.optional(CursorModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  deepseek: Schema.optional(DeepSeekModelOptions),
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
@@ -221,6 +225,14 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
     { value: "high", label: "High" },
     { value: "xhigh", label: "Extra High" },
   ],
+};
+
+const DEEPSEEK_HARNESS_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
@@ -613,6 +625,18 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "grok-build",
       name: "Grok 4.3",
       capabilities: GROK_BUILD_CAPABILITIES,
+    },
+  ],
+  deepseek: [
+    {
+      slug: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      capabilities: DEEPSEEK_HARNESS_CAPABILITIES,
+    },
+    {
+      slug: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      capabilities: DEEPSEEK_HARNESS_CAPABILITIES,
     },
   ],
   droid: [
@@ -1026,6 +1050,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
+  deepseek: "deepseek-v4-pro",
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
@@ -1109,6 +1134,13 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     kimi: "kimi-k2.7-code",
   },
   antigravity: {},
+  deepseek: {
+    deepseek: "deepseek-v4-pro",
+    pro: "deepseek-v4-pro",
+    flash: "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-v4-flash": "deepseek-v4-flash",
+  },
   droid: {
     droid: "claude-opus-4-8",
     factory: "claude-opus-4-8",
@@ -1196,6 +1228,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   cursor: "Cursor",
   antigravity: "Antigravity",
   grok: "Grok",
+  deepseek: "DeepSeek Harness",
   droid: "Droid",
   kilo: "Kilo",
   opencode: "OpenCode",

@@ -65,6 +65,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
+      deepseek: { ...provider, binaryPath: "dsh-acp-demo", configPath: "" },
       droid: { ...provider, binaryPath: "droid" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },
       opencode: {

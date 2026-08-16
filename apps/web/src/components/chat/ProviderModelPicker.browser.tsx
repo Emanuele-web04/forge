@@ -25,6 +25,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "grok-build-0.1", name: "Grok Build 0.1" },
     { slug: "grok-build", name: "Grok 4.3" },
   ],
+  deepseek: [
+    { slug: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    { slug: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+  ],
   droid: [
     {
       slug: "gpt-5.6-luna",

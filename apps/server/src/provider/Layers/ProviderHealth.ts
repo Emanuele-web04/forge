@@ -51,6 +51,7 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ServerConfig } from "../../config";
+import { resolveExecutable } from "../../executableLookup.ts";
 import {
   buildProviderChildEnvironment,
   type ProviderChildKind,
@@ -116,6 +117,7 @@ const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
+const DEEPSEEK_PROVIDER = "deepseek" as const;
 const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
@@ -130,6 +132,7 @@ const PROVIDERS = [
   CURSOR_PROVIDER,
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
+  DEEPSEEK_PROVIDER,
   DROID_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
@@ -236,6 +239,13 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       lockKey: "antigravity-native",
       strategy: "always",
     },
+  },
+  deepseek: {
+    provider: DEEPSEEK_PROVIDER,
+    binaryName: "dsh-acp-demo",
+    npmPackageName: "@deepseek-ai/dsh-acp-demo",
+    homebrew: null,
+    nativeUpdate: null,
   },
   droid: {
     provider: DROID_PROVIDER,
@@ -1329,6 +1339,64 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
+// ── DeepSeek Harness health check ───────────────────────────────────
+
+export const makeCheckDeepSeekProviderStatus = (
+  binaryPath?: string,
+  configPath?: string,
+): Effect.Effect<ServerProviderStatus> =>
+  Effect.sync(() => {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "dsh-acp-demo";
+    const env = providerCommandEnv(DEEPSEEK_PROVIDER);
+    const resolvedExecutable = resolveExecutable(executable, { env, platform: process.platform });
+
+    if (!resolvedExecutable) {
+      return {
+        provider: DEEPSEEK_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: "DeepSeek Harness ACP (`dsh-acp-demo`) is not installed or not on PATH.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const hasApiKey = Boolean(env.DEEPSEEK_API_KEY?.trim());
+    const hasCustomConfig = Boolean(nonEmptyTrimmed(configPath));
+    if (hasCustomConfig) {
+      return {
+        provider: DEEPSEEK_PROVIDER,
+        status: "ready",
+        available: true,
+        authStatus: hasApiKey ? "authenticated" : "unknown",
+        checkedAt,
+        ...(hasApiKey
+          ? { authType: "apiKey", authLabel: "DeepSeek API Key" }
+          : {
+              message:
+                "DeepSeek Harness ACP is installed. Authentication will be resolved by the configured Harness composition.",
+            }),
+      } satisfies ServerProviderStatus;
+    }
+
+    return {
+      provider: DEEPSEEK_PROVIDER,
+      status: hasApiKey ? "ready" : "error",
+      available: true,
+      authStatus: hasApiKey ? "authenticated" : "unauthenticated",
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey", authLabel: "DeepSeek API Key" }
+        : {
+            message:
+              "DeepSeek Harness ACP is installed, but DEEPSEEK_API_KEY is not set. Set it before starting a DeepSeek session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDeepSeekProviderStatus = makeCheckDeepSeekProviderStatus();
+
 // ── Droid health check ─────────────────────────────────────────────
 
 const runDroidCommand = (args: ReadonlyArray<string>, executable = "droid") =>
@@ -2197,6 +2265,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.antigravity.binaryPath;
           case "grok":
             return settings.providers.grok.binaryPath;
+          case "deepseek":
+            return settings.providers.deepseek.binaryPath;
           case "droid":
             return settings.providers.droid.binaryPath;
           case "kilo":
@@ -2244,7 +2314,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2394,6 +2464,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   GROK_PROVIDER,
                   makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEEPSEEK_PROVIDER,
+                  makeCheckDeepSeekProviderStatus(
+                    settings.providers.deepseek.binaryPath,
+                    settings.providers.deepseek.configPath,
+                  ),
                 ),
                 checkProviderWhenEnabled(
                   settings,

@@ -438,6 +438,8 @@ export function buildModelSelection(
             options: options as GrokModelOptions,
           }
         : { provider, model };
+    case "deepseek":
+      return { provider, model };
     case "droid":
       return options
         ? {

@@ -67,6 +67,13 @@ export const PROVIDER_DESCRIPTORS = [
     usage: null,
   },
   {
+    kind: "deepseek",
+    displayName: PROVIDER_DISPLAY_NAMES.deepseek,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
+  {
     kind: "droid",
     displayName: PROVIDER_DISPLAY_NAMES.droid,
     available: true,

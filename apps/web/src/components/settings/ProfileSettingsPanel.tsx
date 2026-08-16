@@ -339,6 +339,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Antigravity";
     case "grok":
       return "Grok";
+    case "deepseek":
+      return "DeepSeek";
     case "droid":
       return "Droid";
     case "kilo":
