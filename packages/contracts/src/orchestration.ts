@@ -4,6 +4,7 @@ import {
   ClaudeModelOptions,
   CodexModelOptions,
   CursorModelOptions,
+  DeepSeekModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -59,6 +60,7 @@ export const ProviderKind = Schema.Literals([
   "cursor",
   "antigravity",
   "grok",
+  "deepseek",
   "droid",
   "kilo",
   "opencode",
@@ -116,6 +118,13 @@ export const GrokModelSelection = Schema.Struct({
 });
 export type GrokModelSelection = typeof GrokModelSelection.Type;
 
+export const DeepSeekModelSelection = Schema.Struct({
+  provider: Schema.Literal("deepseek"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(DeepSeekModelOptions),
+});
+export type DeepSeekModelSelection = typeof DeepSeekModelSelection.Type;
+
 export const DroidModelSelection = Schema.Struct({
   provider: Schema.Literal("droid"),
   model: TrimmedNonEmptyString,
@@ -150,6 +159,7 @@ export const ModelSelection = Schema.Union([
   CursorModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
+  DeepSeekModelSelection,
   DroidModelSelection,
   KiloModelSelection,
   OpenCodeModelSelection,
@@ -181,6 +191,11 @@ export const GrokProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const DeepSeekProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  configPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const DroidProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
@@ -207,6 +222,7 @@ export const ProviderStartOptions = Schema.Struct({
   cursor: Schema.optional(CursorProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
+  deepseek: Schema.optional(DeepSeekProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
   kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
