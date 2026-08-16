@@ -46,6 +46,11 @@ import {
   UI_DENSITY_MODES,
   normalizeUiDensity as normalizeUiDensityValue,
 } from "./lib/appDensity";
+import {
+  DEFAULT_CHAT_WIDTH,
+  CHAT_WIDTH_MODES,
+  normalizeChatWidthMode as normalizeChatWidthModeValue,
+} from "./lib/chatWidth";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
@@ -93,6 +98,9 @@ export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+export const ChatWidthMode = Schema.Literals(CHAT_WIDTH_MODES);
+export type ChatWidthMode = typeof ChatWidthMode.Type;
+export { DEFAULT_CHAT_WIDTH };
 
 const AppSnapShortcut = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("both-option-keys") }),
@@ -176,6 +184,7 @@ const PersistedProviderKind = Schema.Literals([
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
+  chatWidth: ChatWidthMode.pipe(withDefaults(() => DEFAULT_CHAT_WIDTH)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
@@ -216,6 +225,10 @@ export const AppSettingsSchema = Schema.Struct({
   // optional Studio tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Whether the per-run threads standalone automations create appear in the sidebar
+  // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
+  // listed on the automation's page and findable via search either way.
+  showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
@@ -534,6 +547,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
+    chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),

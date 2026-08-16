@@ -13,7 +13,7 @@ import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import {
   buildExternalMcpClientConfiguration,
@@ -226,7 +226,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           : pairingExpired
             ? "Pairing code expired"
             : "Waiting for pairing";
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const setupPrompt = setup
     ? buildExternalMcpSetupPrompt({
         setupCommand: paired ? null : setup.setupCommand,

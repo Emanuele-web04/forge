@@ -107,6 +107,7 @@ import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneSt
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
 import {
   collectParentDirectoryPaths,
   resolveFilePreviewWorkspaceRoot,
@@ -293,6 +294,8 @@ export function SingleChatSurface(props: {
   const [editorDiffFilesLoading, setEditorDiffFilesLoading] = useState(false);
   const [editorDiffOptionsControl, setEditorDiffOptionsControl] = useState<ReactNode | null>(null);
   const [editorDiffVisibleFilePath, setEditorDiffVisibleFilePath] = useState<string | null>(null);
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [searchPaletteMode, setSearchPaletteMode] = useState<WorkspaceSearchPaletteMode>("files");
 
   const activePane = resolveActivePane(dockState);
   const {
@@ -344,6 +347,36 @@ export function SingleChatSurface(props: {
       diffFilePath: filePath ?? null,
     });
   };
+
+  const handleOpenWorkspaceSearchFile = (relativePath: string) => {
+    requestImmediateDockHydration("file");
+    openPane(props.threadId, { kind: "file", filePath: relativePath });
+  };
+
+  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
+  // snippet (content) search. Registered with capture so it wins over page-level
+  // defaults (print, browser find) while the chat surface is mounted.
+  useEffect(() => {
+    // Editor view returns before rendering the palette, so leave its shortcuts
+    // available to the editor instead of swallowing them invisibly.
+    if (editorViewActive) return;
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.repeat || event.altKey) return;
+      const isPrimaryModifier = event.ctrlKey || event.metaKey;
+      if (!isPrimaryModifier) return;
+      const key = event.key.toLowerCase();
+      if (key !== "p" && key !== "f") return;
+      if (key === "f" && !event.shiftKey) return;
+      if (key === "p" && event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [editorViewActive]);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -849,6 +882,12 @@ export function SingleChatSurface(props: {
               pane={pane}
               pollingEnabled={context.isVisible}
               onClose={() => closePane(props.threadId, pane.id)}
+              onSelectPullRequest={(number) =>
+                updatePane(props.threadId, pane.id, {
+                  pullRequestNumber: number,
+                  pullRequestInitialTab: "summary",
+                })
+              }
             />
           </Suspense>
         );
@@ -1149,6 +1188,13 @@ export function SingleChatSurface(props: {
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
           renderPane={renderDockPane}
+        />
+        <WorkspaceSearchPalette
+          open={searchPaletteOpen}
+          mode={searchPaletteMode}
+          onOpenChange={setSearchPaletteOpen}
+          cwd={workspaceRoot}
+          onOpenFile={handleOpenWorkspaceSearchFile}
         />
       </div>
     </WorkspaceFileOpenerContext.Provider>

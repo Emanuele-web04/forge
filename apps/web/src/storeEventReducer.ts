@@ -662,9 +662,16 @@ function mergeStreamingMessage(
 
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
-  // Single scan: the previous implementation ran `find` and `findIndex` with the same predicate
-  // over the (up to MAX_THREAD_MESSAGES) message list for every streaming delta.
-  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
+  // Single backward scan: streaming deltas target the newest message, so walking from the tail
+  // finds it in O(1) instead of scanning the (up to MAX_THREAD_MESSAGES) list front-to-back on
+  // every delta. Message ids are unique per thread, so scan direction cannot change the match.
+  let existingIndex = -1;
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    if (thread.messages[index]!.id === payload.messageId) {
+      existingIndex = index;
+      break;
+    }
+  }
   const existingMessage = existingIndex >= 0 ? thread.messages[existingIndex] : undefined;
   const incomingMessage = normalizeChatMessage(
     {
@@ -931,6 +938,13 @@ function applyOrchestrationEvent(
             (event.payload.threadMarkers === undefined ||
               deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
             (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
+            (event.payload.goal === undefined || event.payload.goal === (thread.goal ?? "")) &&
+            (event.payload.goalStartedAt === undefined ||
+              (event.payload.goalStartedAt ?? null) === (thread.goalStartedAt ?? null)) &&
+            (event.payload.goalPausedAt === undefined ||
+              (event.payload.goalPausedAt ?? null) === (thread.goalPausedAt ?? null)) &&
+            (event.payload.goalAchievements === undefined ||
+              deepEqualJson(event.payload.goalAchievements, thread.goalAchievements ?? null)) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -983,6 +997,20 @@ function applyOrchestrationEvent(
                 }
               : {}),
             ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
+            ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
+            ...(event.payload.goalStartedAt !== undefined
+              ? { goalStartedAt: event.payload.goalStartedAt }
+              : {}),
+            ...(event.payload.goalPausedAt !== undefined
+              ? { goalPausedAt: event.payload.goalPausedAt }
+              : {}),
+            ...(event.payload.goalAchievements !== undefined
+              ? {
+                  goalAchievements: event.payload.goalAchievements as NonNullable<
+                    Thread["goalAchievements"]
+                  >,
+                }
+              : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),
           };

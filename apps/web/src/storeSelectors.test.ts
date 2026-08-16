@@ -4,14 +4,18 @@ import type { MessageId, ProjectId, ThreadId } from "@synara/contracts";
 
 import type { AppState } from "./store";
 import {
+  createAccountRateLimitThreadsSelector,
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
   createProjectLastActivityAtSelector,
+  createSidebarDisplayThreadsSelector,
+  createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
+  isSidebarThreadVisible,
 } from "./storeSelectors";
 import type { SidebarThreadSummary, ThreadShell } from "./types";
 
@@ -37,6 +41,8 @@ interface TestStateSlices {
   threadShellById?: Readonly<Record<string, ThreadShell>>;
   sidebarThreadSummaryById?: Readonly<Record<string, SidebarThreadSummary>>;
   messageIdsByThreadId?: Readonly<Record<string, readonly MessageId[]>>;
+  activityIdsByThreadId?: Readonly<Record<string, readonly string[]>>;
+  activityByThreadId?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 
 function makeState(slices: TestStateSlices): AppState {
@@ -45,7 +51,13 @@ function makeState(slices: TestStateSlices): AppState {
     threadShellById: slices.threadShellById ?? {},
     sidebarThreadSummaryById: slices.sidebarThreadSummaryById ?? {},
     messageIdsByThreadId: slices.messageIdsByThreadId ?? {},
+    activityIdsByThreadId: slices.activityIdsByThreadId ?? {},
+    activityByThreadId: slices.activityByThreadId ?? {},
   } as unknown as AppState;
+}
+
+function makeActivity(id: string, kind: string) {
+  return { id, kind, createdAt: "2026-01-01T00:00:00.000Z", payload: {} };
 }
 
 describe("createThreadShellsSelector", () => {
@@ -90,6 +102,176 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createAccountRateLimitThreadsSelector", () => {
+  const rateLimitActivity = makeActivity("activity-rate", "account.rate-limits.updated");
+  const toolActivity = makeActivity("activity-tool", "provider.tool-call");
+
+  it("collects only account rate-limit activities", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      activityIdsByThreadId: {
+        [threadIdA]: [toolActivity.id, rateLimitActivity.id],
+        [threadIdB]: [toolActivity.id],
+      },
+      activityByThreadId: {
+        [threadIdA]: { [toolActivity.id]: toolActivity, [rateLimitActivity.id]: rateLimitActivity },
+        [threadIdB]: { [toolActivity.id]: toolActivity },
+      },
+    });
+
+    const result = selectRateLimitThreads(state);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.activities).toEqual([rateLimitActivity]);
+  });
+
+  it("stays reference-stable when message slices change (streaming deltas)", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+    const activityIdsByThreadId = { [threadIdA]: [rateLimitActivity.id] };
+    const activityByThreadId = { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } };
+
+    const before = selectRateLimitThreads(
+      makeState({ threadIds, activityIdsByThreadId, activityByThreadId }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId,
+        activityByThreadId,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
+
+  it("stays reference-stable when a non-rate-limit activity is appended", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+
+    const before = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
+        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
+      }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id, toolActivity.id] },
+        activityByThreadId: {
+          [threadIdA]: {
+            [rateLimitActivity.id]: rateLimitActivity,
+            [toolActivity.id]: toolActivity,
+          },
+        },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
+
+  it("returns a new result when a rate-limit activity is appended", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+    const laterRateLimitActivity = makeActivity("activity-rate-2", "account.rate-limited");
+
+    const before = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
+        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
+      }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: {
+          [threadIdA]: [rateLimitActivity.id, laterRateLimitActivity.id],
+        },
+        activityByThreadId: {
+          [threadIdA]: {
+            [rateLimitActivity.id]: rateLimitActivity,
+            [laterRateLimitActivity.id]: laterRateLimitActivity,
+          },
+        },
+      }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after[0]?.activities).toEqual([rateLimitActivity, laterRateLimitActivity]);
+  });
+
+  it("returns the empty constant when no thread has rate-limit activities", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const state = makeState({
+      threadIds: [threadIdA],
+      activityIdsByThreadId: { [threadIdA]: [toolActivity.id] },
+      activityByThreadId: { [threadIdA]: { [toolActivity.id]: toolActivity } },
+    });
+
+    expect(selectRateLimitThreads(state)).toEqual([]);
+  });
+});
+
+describe("sidebar thread visibility", () => {
+  const threadIdC = "thread-c" as ThreadId;
+  const runSummary = { ...summaryA, creationSource: "automation_run" } as SidebarThreadSummary;
+  const pinnedRunSummary = {
+    ...summaryA,
+    id: threadIdB,
+    title: "B",
+    creationSource: "automation_run",
+    isPinned: true,
+  } as SidebarThreadSummary;
+  const normalSummary = { ...summaryA, id: threadIdC, title: "C" } as SidebarThreadSummary;
+  const state = makeState({
+    threadIds: [threadIdA, threadIdB, threadIdC],
+    sidebarThreadSummaryById: {
+      [threadIdA]: runSummary,
+      [threadIdB]: pinnedRunSummary,
+      [threadIdC]: normalSummary,
+    },
+  });
+
+  it("keeps every thread when the hide option is off", () => {
+    expect(isSidebarThreadVisible(runSummary)).toBe(true);
+    expect(isSidebarThreadVisible(runSummary, {})).toBe(true);
+    expect(isSidebarThreadVisible(runSummary, { hideAutomationRunThreads: false })).toBe(true);
+  });
+
+  it("hides only unpinned automation-run threads when the option is on", () => {
+    const options = { hideAutomationRunThreads: true };
+    expect(isSidebarThreadVisible(runSummary, options)).toBe(false);
+    expect(isSidebarThreadVisible(pinnedRunSummary, options)).toBe(true);
+    expect(isSidebarThreadVisible(normalSummary, options)).toBe(true);
+  });
+
+  it("filters run threads out of the display and tree selectors", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
+    const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
+
+    expect(selectDisplay(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+    expect(selectTree(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+  });
+
+  it("keeps run threads in the selectors when the option is unset", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector();
+    expect(selectDisplay(state).map((thread) => thread.id)).toEqual([
+      threadIdA,
+      threadIdB,
+      threadIdC,
+    ]);
+  });
+
+  it("stays reference-stable while the underlying summaries do not change", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
+    expect(selectDisplay(state)).toBe(selectDisplay(state));
   });
 });
 

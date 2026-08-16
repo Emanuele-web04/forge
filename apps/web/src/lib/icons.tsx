@@ -178,7 +178,9 @@ export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
 export const GiftIcon: LucideIcon = centralIconWrapper("gift-2");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
-export const GitForkIcon = centralIconWrapper("fork");
+// Forking a thread reuses the branch glyph: the Central "fork" asset reads as a
+// second, unrelated icon next to it, so fork and branch share one visual.
+export const GitForkIcon: LucideIcon = GitBranchIcon;
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
 export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
@@ -239,9 +241,8 @@ export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
-export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-right-wide");
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
-export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
+export const PanelRightCloseIcon = centralIconWrapper("sidebar-simple-right-wide");
 export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
@@ -251,6 +252,14 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
 export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
+// Outline transport glyphs (Central "reversed" set) for surfaces that read as a
+// row of neutral actions rather than playback state — e.g. the composer goal strip.
+export const PauseOutlineIcon: LucideIcon = centralIconWrapper("pause");
+export const PlayOutlineIcon: LucideIcon = centralIconWrapper("play");
+/** Outline trash can from the Central set (Trash2 is the legacy Tabler glyph). */
+export const TrashCanIcon: LucideIcon = centralIconWrapper("trash-can");
+// Persistent thread goal ("Pursuing goal" strip, /goal surfaces).
+export const GoalIcon: LucideIcon = centralIconWrapper("target-arrow");
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
 export const RefreshCwIcon = adaptIcon(IconRefresh);

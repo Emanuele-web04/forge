@@ -16,6 +16,7 @@ import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
@@ -54,6 +55,7 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveSettledThreadBranchMismatch,
   resolveThreadDetailHydration,
   resolveThreadArtifactWorkspaceRoot,
   runWorktreeCreationFlow,
@@ -126,6 +128,49 @@ describe("thread artifact workspace root", () => {
   });
 });
 
+describe("settled thread branch mismatch", () => {
+  it("describes a settled local thread whose branch differs from the checkout", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toEqual({
+      threadBranch: "feature/finished",
+      currentBranch: "feature/current",
+    });
+  });
+
+  it("does not warn when the branch is current or the workspace is not local", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "main",
+        currentBranch: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: false,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: false,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("transcript auto-follow signal", () => {
   it("stays stable when only non-message turn activity changes", () => {
     const before = buildTranscriptAutoFollowSignal({
@@ -160,17 +205,74 @@ describe("transcript auto-follow signal", () => {
     ).not.toBe(streaming);
   });
 
-  it("changes as the streaming assistant tail grows", () => {
+  it("changes when the tail key reports a lifecycle transition", () => {
     const firstChunk = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:120",
+      tailKey: "assistant-3:assistant:streaming:content:",
     });
-    const nextChunk = buildTranscriptAutoFollowSignal({
+    const settled = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:240",
+      tailKey: "assistant-3:assistant:settled:content:2026-01-01T00:00:00Z",
     });
 
-    expect(nextChunk).not.toBe(firstChunk);
+    expect(settled).not.toBe(firstChunk);
+  });
+});
+
+describe("transcript tail key", () => {
+  const streamingTail = {
+    id: "assistant-3",
+    role: "assistant",
+    streaming: true,
+    text: "hello",
+    completedAt: null,
+  };
+
+  it("returns the empty key without a tail message", () => {
+    expect(buildTranscriptTailKey(null)).toBe("empty");
+  });
+
+  it("stays stable while the same streaming message only grows", () => {
+    const before = buildTranscriptTailKey(streamingTail);
+    const after = buildTranscriptTailKey({ ...streamingTail, text: "hello world, more text" });
+
+    expect(after).toBe(before);
+  });
+
+  it("changes when the first content lands on an empty streaming tail", () => {
+    const empty = buildTranscriptTailKey({ ...streamingTail, text: "" });
+
+    expect(buildTranscriptTailKey(streamingTail)).not.toBe(empty);
+  });
+
+  it("changes when the tail message settles or completes", () => {
+    const streaming = buildTranscriptTailKey(streamingTail);
+
+    expect(buildTranscriptTailKey({ ...streamingTail, streaming: false })).not.toBe(streaming);
+    expect(
+      buildTranscriptTailKey({ ...streamingTail, completedAt: "2026-01-01T00:00:00Z" }),
+    ).not.toBe(streaming);
+  });
+
+  it("changes when a different message becomes the tail", () => {
+    const streaming = buildTranscriptTailKey(streamingTail);
+
+    expect(
+      buildTranscriptTailKey({ id: "user-4", role: "user", text: "next", completedAt: null }),
+    ).not.toBe(streaming);
+  });
+
+  it("changes when a settled tail is replaced with different text under the same id", () => {
+    const settledTail = {
+      ...streamingTail,
+      streaming: false,
+      completedAt: "2026-01-01T00:00:00Z",
+    };
+    const before = buildTranscriptTailKey(settledTail);
+
+    // Projection repair can rewrite a settled message in place; the follow
+    // effect must re-stick because maintainScrollAtEnd is off once settled.
+    expect(buildTranscriptTailKey({ ...settledTail, text: "hello, repaired" })).not.toBe(before);
   });
 });
 

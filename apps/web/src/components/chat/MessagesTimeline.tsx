@@ -7,6 +7,7 @@ import {
   type MessageId,
   type ProviderMentionReference,
   ThreadId,
+  type ThreadGoalAchievement,
   type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
@@ -31,6 +32,7 @@ import {
 } from "react";
 import {
   deriveTimelineEntries,
+  formatClockDuration,
   formatClockElapsed,
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
@@ -49,6 +51,8 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  GitForkIcon,
+  GoalIcon,
   LoaderIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -70,6 +74,7 @@ import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
+import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -123,7 +128,7 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
-import { formatShortTimestamp } from "../../timestampFormat";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
   textContainsInlineTerminalContextLabels,
@@ -183,6 +188,8 @@ const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
 const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
+const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
+const EMPTY_GOAL_ACHIEVEMENTS_BY_TURN_ID = new Map<TurnId, ThreadGoalAchievement>();
 const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
 
 // Imperative LegendList access goes through these module-level helpers instead of
@@ -420,8 +427,12 @@ interface MessagesTimelineProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
+  /** Fork the thread from the assistant footer, carrying the transcript up to that turn. */
+  onForkFromMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
+  /** Recorded goal achievements; each renders a footer badge on its turn's terminal assistant message. */
+  goalAchievements?: readonly ThreadGoalAchievement[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
   /**
@@ -515,7 +526,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
+  onForkFromMessage,
   threadMarkers: threadMarkersProp,
+  goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
   tailAnchorMessageId: tailAnchorMessageIdProp,
   tailAnchorScrollInFlightRef,
@@ -709,6 +722,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return byMessageId;
   }, [threadMarkers]);
+  // Index achievements by the turn whose completion achieved the goal, so each
+  // badge anchors to that turn's terminal assistant message. Last one wins per
+  // turn (a turn can only end one goal at a time anyway).
+  const goalAchievements = goalAchievementsProp ?? EMPTY_GOAL_ACHIEVEMENTS;
+  const goalAchievementByTurnId = useMemo<ReadonlyMap<TurnId, ThreadGoalAchievement>>(() => {
+    if (goalAchievements.length === 0) {
+      return EMPTY_GOAL_ACHIEVEMENTS_BY_TURN_ID;
+    }
+    const byTurnId = new Map<TurnId, ThreadGoalAchievement>();
+    for (const achievement of goalAchievements) {
+      if (achievement.turnId !== null) {
+        byTurnId.set(achievement.turnId, achievement);
+      }
+    }
+    return byTurnId;
+  }, [goalAchievements]);
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -1104,18 +1133,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [onTrailHighlightsChange],
   );
+  // Scroll events can fire several times per frame (smooth scrolls, streaming
+  // re-sticks); the trail-highlight derivation is coalesced to one per frame.
+  // At-end ownership stays synchronous: ChatView's auto-follow layout effect
+  // reads it via a ref in the same frame, and a deferred update would let a
+  // scheduled scrollToEnd override a user gesture that just scrolled away.
+  const listScrollFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (listScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(listScrollFrameRef.current);
+        listScrollFrameRef.current = null;
+      }
+    };
+  }, []);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
-      if (state) {
-        tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
-        if (!state.isAtEnd) {
-          clearTailExpansionScrollTimers();
-        }
-        onIsAtEndChange?.(state.isAtEnd);
-        emitTrailHighlightsForViewport(state.start, state.end);
+      if (!state) {
+        return;
       }
+      tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
+      if (!state.isAtEnd) {
+        clearTailExpansionScrollTimers();
+      }
+      onIsAtEndChange?.(state.isAtEnd);
+      if (listScrollFrameRef.current !== null) {
+        return;
+      }
+      listScrollFrameRef.current = window.requestAnimationFrame(() => {
+        listScrollFrameRef.current = null;
+        const frameState = readLegendListState(resolvedListRef);
+        if (frameState) {
+          emitTrailHighlightsForViewport(frameState.start, frameState.end);
+        }
+      });
     },
     [
       clearTailExpansionScrollTimers,
@@ -1261,7 +1314,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ? "pb-1"
           : row.kind === "work" ||
               row.kind === "working-header" ||
-              (row.kind === "message" && row.message.role === "assistant")
+              (row.kind === "message" && row.message.role === "assistant") ||
+              row.kind === "message-segment"
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -1379,6 +1433,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
         })()}
 
+      {row.kind === "message-segment" &&
+        (() => {
+          const segmentText =
+            row.message.textSegments?.[row.segmentIndex]?.text ?? row.message.text;
+          if (segmentText.trim().length === 0) {
+            return null;
+          }
+          return (
+            <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
+              <div className="text-muted-foreground/80">
+                <ChatMarkdown
+                  text={segmentText}
+                  cwd={markdownCwd}
+                  isStreaming={false}
+                  style={chatTypographyStyle}
+                  onImageExpand={onImageExpand}
+                />
+              </div>
+            </div>
+          );
+        })()}
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {
@@ -1588,7 +1663,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatMessageFooterStyle}
                     >
                       <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
                       </p>
                       <div className="flex items-center gap-2">
                         {displayedUserMessage.copyText && (
@@ -1698,6 +1773,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             messageCanPin &&
             Boolean(onTogglePinMessage) &&
             (assistantCopyState.visible || messagePinned);
+          // Fork rides the same "settled, persisted answer" signal as copy: an
+          // ephemeral or still-streaming bubble has no turn to fork from.
+          const showForkAction =
+            messageCanPin && Boolean(onForkFromMessage) && assistantCopyState.visible;
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -1721,9 +1800,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // signal (see deriveTerminalAssistantMessageIds).
           const isTerminalAssistantMessage =
             row.showAssistantCopyButton && !row.assistantTurnInProgress;
+          const goalAchievement =
+            isTerminalAssistantMessage && row.message.turnId
+              ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
+              : null;
           const assistantMeta = [
             isTerminalAssistantMessage
-              ? formatShortTimestamp(row.message.createdAt, timestampFormat)
+              ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
           ]
             .filter((value): value is string => Boolean(value))
@@ -2057,43 +2140,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
-                {(showPinToggle || assistantCopyState.visible || assistantMeta.length > 0) && (
-                  <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
-                    style={chatMessageFooterStyle}
-                  >
-                    {showPinToggle ? (
-                      // Pin sits at the left edge of the footer, before the copy action. It stays
-                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
-                      // unpinned message only reveals it on hover, like the other footer actions.
-                      // Same Central pin glyph in both states — persistence signals the pinned state.
-                      <MessageActionButton
-                        label={pinActionLabel("message", messagePinned)}
-                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
-                        aria-pressed={messagePinned}
-                        className={
-                          messagePinned
-                            ? "text-muted-foreground/80"
-                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
-                        }
-                        onClick={() => onTogglePinMessage?.(row.message.id)}
-                      >
-                        <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                      </MessageActionButton>
-                    ) : null}
-                    {assistantCopyState.visible ? (
-                      <MessageCopyButton
-                        text={assistantCopyState.text ?? ""}
-                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                      />
-                    ) : null}
-                    {assistantMeta.length > 0 ? (
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {assistantMeta}
-                      </p>
-                    ) : null}
-                  </div>
-                )}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
                   ? synaraThreadCreationRecaps.map((creation) => (
                       <div key={creation.operationId} className="mt-2 mb-4">
@@ -2189,7 +2235,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     );
                   };
                   return (
-                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+                    <div className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
@@ -2293,6 +2339,68 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
+                {(showPinToggle ||
+                  showForkAction ||
+                  assistantCopyState.visible ||
+                  assistantMeta.length > 0 ||
+                  goalAchievement !== null) && (
+                  // Turn-end actions read Copy → Fork → Pin → time and stay visible at
+                  // rest: they belong to a settled turn, so hiding them behind hover made
+                  // the whole row feel undiscoverable. The leading button pulls left by
+                  // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
+                  // glyph, not the invisible hit area, aligns with the message text.
+                  <div
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]"
+                    style={chatMessageFooterStyle}
+                  >
+                    {assistantCopyState.visible ? (
+                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                    ) : null}
+                    {showForkAction ? (
+                      <MessageActionButton
+                        label="Fork thread from this turn"
+                        tooltip="Fork from here"
+                        onClick={() => onForkFromMessage?.(row.message.id)}
+                      >
+                        <GitForkIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
+                    {showPinToggle ? (
+                      // Same Central pin glyph in both states — the darker tint is what
+                      // signals "this message is pinned".
+                      <MessageActionButton
+                        label={pinActionLabel("message", messagePinned)}
+                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
+                        aria-pressed={messagePinned}
+                        className={messagePinned ? "text-foreground" : undefined}
+                        onClick={() => onTogglePinMessage?.(row.message.id)}
+                      >
+                        <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
+                    {assistantMeta.length > 0 ? (
+                      <p className="tabular-nums">{assistantMeta}</p>
+                    ) : null}
+                    {goalAchievement !== null ? (
+                      // Divided off from the actions: the achieved goal is a durable fact
+                      // about the turn, not something you can act on.
+                      <>
+                        <div aria-hidden className="h-3 w-px shrink-0 bg-border" />
+                        <p
+                          className="flex min-w-0 items-center gap-1.5 tabular-nums"
+                          title={goalAchievement.goal}
+                        >
+                          <GoalIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          <span className="truncate">
+                            {goalAchievement.elapsedMs !== null
+                              ? `Goal achieved in ${formatClockDuration(goalAchievement.elapsedMs)}`
+                              : "Goal achieved"}
+                          </span>
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </>
           );
@@ -2933,6 +3041,9 @@ function renderUserMessageInlineText(
     }
     if (segment.type === "link") {
       return [<InlineLinkChip key={`${key}:link`} url={segment.url} interactive />];
+    }
+    if (segment.type === "slash-command") {
+      return [<InlineSlashCommandChip key={`${key}:command`} command={segment.command} />];
     }
     return [];
   });

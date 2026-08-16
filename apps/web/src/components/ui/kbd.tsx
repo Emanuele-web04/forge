@@ -1,6 +1,6 @@
 import type * as React from "react";
 
-import { cn } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
   return (
@@ -25,4 +25,9 @@ function KbdGroup({ className, ...props }: React.ComponentProps<"kbd">) {
   );
 }
 
-export { Kbd, KbdGroup };
+/** The "submit this dialog" chord, spelled for the host platform. */
+function SubmitShortcutKbd({ className }: { className?: string }) {
+  return <Kbd className={className}>{isMacNavigatorPlatform() ? "⌘↵" : "Ctrl ↵"}</Kbd>;
+}
+
+export { Kbd, KbdGroup, SubmitShortcutKbd };

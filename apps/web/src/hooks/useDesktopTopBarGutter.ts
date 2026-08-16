@@ -12,7 +12,7 @@ import { useLayoutEffect } from "react";
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
-import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { isMacNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
 
 /**
  * Class name backed by `index.css` (not Tailwind) so the gutter survives zoom
@@ -58,7 +58,7 @@ function applyTrafficLightGutterCssVar(zoomFactor: number): void {
  * Mount once near the app root (see `__root.tsx`).
  */
 export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = isMacNavigatorPlatform();
 
   useLayoutEffect(() => {
     if (!isElectron || !isMacDesktop) {
@@ -91,7 +91,7 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
  */
 export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   const { isMobile, open } = useSidebar();
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = isMacNavigatorPlatform();
   return shouldReserveDesktopTopBarTrafficLightGutter({
     isElectron,
     isMacDesktop,

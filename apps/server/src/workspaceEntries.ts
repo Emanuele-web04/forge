@@ -16,6 +16,8 @@ import {
   ProjectListDirectoriesResult,
   ProjectEntry,
   ProjectLocalSearchEntry,
+  ProjectSearchContentInput,
+  ProjectSearchContentResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
@@ -826,6 +828,159 @@ export async function searchWorkspaceEntries(
   return {
     entries: rankedEntries.map((candidate) => candidate.entry),
     truncated: index.truncated || matchedEntryCount > limit,
+  };
+}
+
+const CONTENT_SEARCH_DEFAULT_LIMIT = 50;
+const CONTENT_SEARCH_MAX_LIMIT = 100;
+const CONTENT_SEARCH_MIN_QUERY_LENGTH = 2;
+const CONTENT_SEARCH_MAX_FILE_BYTES = 512 * 1024;
+const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 5;
+const CONTENT_SEARCH_MAX_FILES_SCANNED = 2_000;
+const CONTENT_SEARCH_TIME_BUDGET_MS = 4_000;
+const CONTENT_SEARCH_LINE_READ_CONCURRENCY = 8;
+const CONTENT_SEARCH_MAX_LINE_LENGTH = 1024;
+
+// A file is treated as binary when its first 8 KiB contains a null byte.
+const CONTENT_SEARCH_BINARY_SNIFF_BYTES = 8 * 1024;
+
+interface ContentSearchMatch {
+  path: string;
+  lineNumber: number;
+  lineText: string;
+}
+
+function buildContentLineText(line: string): string {
+  const trimmed = line.trimEnd();
+  if (trimmed.length <= CONTENT_SEARCH_MAX_LINE_LENGTH) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, CONTENT_SEARCH_MAX_LINE_LENGTH - 1)}…`;
+}
+
+async function searchFileContent(
+  cwd: string,
+  relativePath: string,
+  normalizedQuery: string,
+): Promise<ContentSearchMatch[] | null> {
+  const absolutePath = await resolveRealPathWithinRoot(cwd, path.join(cwd, relativePath)).catch(
+    () => null,
+  );
+  if (!absolutePath) {
+    return null;
+  }
+  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    fileHandle = await fs.open(absolutePath, "r");
+  } catch {
+    return null;
+  }
+
+  try {
+    const stats = await fileHandle.stat();
+    if (!stats.isFile() || stats.size === 0 || stats.size > CONTENT_SEARCH_MAX_FILE_BYTES) {
+      return null;
+    }
+
+    const sniffLength = Math.min(stats.size, CONTENT_SEARCH_BINARY_SNIFF_BYTES);
+    const sniffBuffer = Buffer.alloc(sniffLength);
+    await fileHandle.read(sniffBuffer, 0, sniffLength, 0);
+    if (sniffBuffer.includes(0)) {
+      return null;
+    }
+
+    const contents = await fileHandle.readFile("utf8");
+    const lines = contents.split("\n");
+    const matches: ContentSearchMatch[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!line) continue;
+      if (!line.toLowerCase().includes(normalizedQuery)) continue;
+      matches.push({
+        path: relativePath,
+        lineNumber: index + 1,
+        lineText: buildContentLineText(line),
+      });
+      if (matches.length >= CONTENT_SEARCH_MAX_MATCHES_PER_FILE) {
+        break;
+      }
+    }
+    return matches;
+  } catch {
+    return null;
+  } finally {
+    await fileHandle.close().catch(() => undefined);
+  }
+}
+
+// Grep-style keyword search over the project's tracked workspace files.
+// Reuses the workspace index (git ls-files when available) so the file set
+// respects .gitignore, then scans file contents with a hard time budget and
+// per-file match caps so a query in a large repository stays responsive.
+export async function searchWorkspaceContent(
+  input: ProjectSearchContentInput,
+): Promise<ProjectSearchContentResult> {
+  const normalizedQuery = input.query.trim().toLowerCase();
+  if (normalizedQuery.length < CONTENT_SEARCH_MIN_QUERY_LENGTH) {
+    return { matches: [], truncated: false };
+  }
+
+  const limit = Math.max(
+    1,
+    Math.min(input.limit ?? CONTENT_SEARCH_DEFAULT_LIMIT, CONTENT_SEARCH_MAX_LIMIT),
+  );
+
+  const index = await getWorkspaceIndex(input.cwd);
+  const indexFileEntries = index.entries.filter((entry) => entry.kind === "file");
+  const filePaths = indexFileEntries
+    .map((entry) => entry.path)
+    .slice(0, CONTENT_SEARCH_MAX_FILES_SCANNED);
+
+  const deadline = Date.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
+  const collected: ContentSearchMatch[] = [];
+  let scannedFiles = 0;
+  let truncated = index.truncated || filePaths.length < indexFileEntries.length;
+
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(CONTENT_SEARCH_LINE_READ_CONCURRENCY, filePaths.length)) },
+    async () => {
+      while (nextIndex < filePaths.length) {
+        if (Date.now() > deadline) {
+          truncated = true;
+          break;
+        }
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const fileMatches = await searchFileContent(
+          input.cwd,
+          filePaths[currentIndex] as string,
+          normalizedQuery,
+        );
+        scannedFiles += 1;
+        if (fileMatches && fileMatches.length > 0) {
+          collected.push(...fileMatches);
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+
+  if (Date.now() > deadline) {
+    truncated = true;
+  }
+
+  const orderedMatches = collected
+    .toSorted((left, right) => {
+      const pathDelta = left.path.localeCompare(right.path);
+      if (pathDelta !== 0) return pathDelta;
+      return left.lineNumber - right.lineNumber;
+    })
+    .slice(0, limit);
+
+  return {
+    matches: orderedMatches,
+    truncated: truncated || collected.length > limit || scannedFiles < filePaths.length,
   };
 }
 

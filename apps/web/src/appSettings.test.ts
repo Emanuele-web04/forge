@@ -889,6 +889,7 @@ describe("AppSettingsSchema", () => {
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
       showStudioSection: true,
+      showAutomationRunThreads: true,
       timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
       customCodexModels: [],
       customClaudeModels: [],

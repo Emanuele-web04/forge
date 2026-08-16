@@ -16,9 +16,7 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: synara-desktop-release
@@ -29,6 +27,8 @@ jobs:
     name: Preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
@@ -158,6 +158,8 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -390,6 +392,9 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -424,6 +429,8 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -613,6 +620,8 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
 
       - name: Checkout
         uses: actions/checkout@v6

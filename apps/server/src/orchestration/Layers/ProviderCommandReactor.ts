@@ -12,6 +12,7 @@ import {
   type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
+  type ProviderInteractionMode,
   type ProviderRuntimeEvent,
   ProviderKind,
   type ProviderReviewTarget,
@@ -73,6 +74,16 @@ import {
   ProviderServiceError,
 } from "../../provider/Errors.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
+import {
+  PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
+  withProviderDebugModePrompt,
+} from "../../provider/debugMode.ts";
+import {
+  activeThreadGoal,
+  buildGoalContinuationInput,
+  providerGoalPromptOverheadChars,
+  withProviderGoalPrompt,
+} from "../../provider/goalMode.ts";
 import {
   appendThreadMentionContextBlocks,
   resolveThreadMentionPromptProjection,
@@ -330,21 +341,51 @@ function availableProviderContextChars(input: {
   readonly tag: ProviderContextTag;
   readonly messageText: string;
   readonly wrapLatestUserMessage: boolean;
+  readonly reservedChars?: number;
 }): number {
   return Math.max(
     0,
-    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - wrapProviderContext({ ...input, contextText: "" }).length,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      wrapProviderContext({ ...input, contextText: "" }).length -
+      (input.reservedChars ?? 0),
   );
 }
 
-function availableThreadMentionContextChars(messageText: string): number {
+function availableThreadMentionContextChars(messageText: string, reservedChars = 0): number {
   return Math.max(
     0,
     PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
       messageText.length -
       PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
-      THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS,
+      THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS -
+      reservedChars,
   );
+}
+
+function debugModePromptOverheadChars(
+  interactionMode: ProviderInteractionMode | undefined,
+): number {
+  return interactionMode === "debug" ? PROVIDER_DEBUG_MODE_PROMPT_PREFIX.length + 2 : 0;
+}
+
+function withProviderThreadStatePrompts(input: {
+  readonly text: string;
+  readonly interactionMode?: ProviderInteractionMode | undefined;
+  readonly goal?: string | undefined;
+}): string {
+  return withProviderGoalPrompt({
+    goal: input.goal,
+    text: withProviderDebugModePrompt({
+      interactionMode: input.interactionMode,
+      text: input.text,
+    }),
+  });
+}
+
+function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
+  return goalPromptOverheadChars > 0
+    ? "The latest message is too long to include the persistent thread goal. Shorten the message and retry."
+    : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -593,6 +634,17 @@ const make = Effect.gen(function* () {
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
+  type BlockedGoalContinuation = Pick<
+    Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>["payload"],
+    "goalStartedAt" | "trigger" | "sourceTurnId"
+  >;
+  // A blocked continuation cannot keep its durable delivery open: approval,
+  // input, and queued-work intents behind it may be the only way to clear the
+  // blocker. Retry outside the single delivery lock; startup recovery recreates
+  // the request if the process exits while this transient retry is pending.
+  const blockedGoalContinuations = new Map<string, BlockedGoalContinuation>();
+  const queuedGoalContinuationRetries = new Set<string>();
+  const goalContinuationRetryQueue = yield* Queue.unbounded<ThreadId>();
   // Provider sessions with a drained queued turn whose promotion is in flight.
   // The reservation survives provider startup and binds to the exact turn that
   // must settle before another queue can drain, preventing late terminal events
@@ -911,6 +963,8 @@ const make = Effect.gen(function* () {
         }
       }
       quarantinedThreads.delete(threadId);
+      blockedGoalContinuations.delete(threadId);
+      queuedGoalContinuationRetries.delete(threadId);
       // NOTE: `drainingQueuedTurns` is intentionally NOT cleared here. It is a
       // turn-scoped in-flight guard that each drain self-clears when it settles;
       // deleting it here would let a concurrent second drain start for the same
@@ -1358,18 +1412,25 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly runtimeMode?: RuntimeMode;
-    readonly interactionMode?: "default" | "plan";
+    readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
+    readonly turnKind?: "user" | "goal-continuation";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
+    const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
+    const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
+    const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
-      maxTotalContextChars: availableThreadMentionContextChars(input.messageText),
+      maxTotalContextChars: availableThreadMentionContextChars(
+        input.messageText,
+        providerPromptOverheadChars,
+      ),
     });
     const messageText = appendThreadMentionContextBlocks({
       text: input.messageText,
@@ -1403,7 +1464,8 @@ const make = Effect.gen(function* () {
                   0,
                   PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
                     messageText.length -
-                    PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+                    PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
+                    providerPromptOverheadChars,
                 ),
               }),
             ).pipe(
@@ -1418,13 +1480,26 @@ const make = Effect.gen(function* () {
       const steerMessageWithSkills = steerSkillInlineText
         ? `${messageText}\n\n${steerSkillInlineText}`
         : messageText;
-      const normalizedSteerInput = toNonEmptyProviderInput(
-        normalizeSkillMentionTextForProvider({
+      const composedSteerInput = withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: normalizeSkillMentionTextForProvider({
           provider: steerProvider,
           messageText: steerMessageWithSkills,
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
         }),
-      );
+      });
+      if (
+        providerPromptOverheadChars > 0 &&
+        composedSteerInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+      ) {
+        return yield* new ProviderAdapterValidationError({
+          provider: steerProvider,
+          operation: "thread.turn.start",
+          issue: providerPromptOverflowIssue(goalPromptOverheadChars),
+        });
+      }
+      const normalizedSteerInput = toNonEmptyProviderInput(composedSteerInput);
       const normalizedSteerAttachments = yield* resolveProviderDispatchAttachments({
         attachments: input.attachments,
         attachmentsDir: serverConfig.attachmentsDir,
@@ -1470,13 +1545,16 @@ const make = Effect.gen(function* () {
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
       : input.messageText;
     const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
+    const transcriptBoundaryMessageId =
+      input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
-      !hasNativeAssistantMessagesBefore(thread, input.messageId);
+      !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId);
     const handoffBootstrapAvailableChars = availableProviderContextChars({
       tag: "handoff_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
+      reservedChars: providerPromptOverheadChars,
     });
     const handoffBootstrapText =
       shouldBootstrapHandoff && handoffBootstrapAvailableChars > 0
@@ -1487,19 +1565,34 @@ const make = Effect.gen(function* () {
       threadSessionModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
       thread.modelSelection.provider;
+    if (
+      providerPromptOverheadChars > 0 &&
+      withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: bootstrapBudgetMessageText,
+      }).length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+    ) {
+      return yield* new ProviderAdapterValidationError({
+        provider: selectedProvider as ProviderKind,
+        operation: "thread.turn.start",
+        issue: providerPromptOverflowIssue(goalPromptOverheadChars),
+      });
+    }
     const hasPendingPriorTranscriptBootstrap =
       freshSessionContextBootstrapThreadIds.has(input.threadId) ||
       rollbackContextBootstrapThreadIds.has(input.threadId);
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
-      !hasNativeAssistantMessagesBefore(thread, input.messageId) &&
+      !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
       !hasPendingPriorTranscriptBootstrap;
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: false,
+      reservedChars: providerPromptOverheadChars,
     });
     const sidechatBootstrapText =
       shouldBootstrapSidechatContext && sidechatBootstrapAvailableChars > 0
@@ -1527,11 +1620,12 @@ const make = Effect.gen(function* () {
       !shouldBootstrapSidechatContext;
     const hasPriorTranscriptBootstrapContent =
       shouldBootstrapPriorTranscriptContext &&
-      listPriorTranscriptMessages(thread, input.messageId).length > 0;
+      listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
     const priorTranscriptBootstrapAvailableChars = availableProviderContextChars({
       tag: "thread_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
+      reservedChars: providerPromptOverheadChars,
     });
     if (
       input.reviewTarget === undefined &&
@@ -1551,7 +1645,7 @@ const make = Effect.gen(function* () {
       shouldBootstrapPriorTranscriptContext && priorTranscriptBootstrapAvailableChars > 0
         ? buildPriorTranscriptBootstrapText(
             thread,
-            input.messageId,
+            transcriptBoundaryMessageId,
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
@@ -1577,7 +1671,11 @@ const make = Effect.gen(function* () {
       bootstrap
         ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
         : boundaryMessageText;
-    const providerInputWithMentionContext = `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`;
+    const providerInputWithMentionContext = withProviderThreadStatePrompts({
+      interactionMode: input.interactionMode,
+      goal: activeThreadGoal(thread),
+      text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
+    });
     // Portable skills fallback: providers that cannot load the referenced skill
     // file natively get the skill instructions inlined into the prompt.
     const skillInlineText =
@@ -1608,10 +1706,14 @@ const make = Effect.gen(function* () {
         ? `${withMentionContext}\n\n${skillInlineText}`
         : withMentionContext;
       return toNonEmptyProviderInput(
-        normalizeSkillMentionTextForProvider({
-          provider: selectedProvider as ProviderKind,
-          messageText: withSkills,
-          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        withProviderThreadStatePrompts({
+          interactionMode: input.interactionMode,
+          goal: activeThreadGoal(thread),
+          text: normalizeSkillMentionTextForProvider({
+            provider: selectedProvider as ProviderKind,
+            messageText: withSkills,
+            ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          }),
         }),
       );
     };
@@ -1752,7 +1854,7 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars > 0
               ? buildPriorTranscriptBootstrapText(
                   thread,
-                  input.messageId,
+                  transcriptBoundaryMessageId,
                   priorTranscriptBootstrapAvailableChars,
                 )
               : null;
@@ -2506,6 +2608,284 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const hasPendingQueuedTurnForSession = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    if (pendingQueuedDispatchBySessionThread.has(sessionThreadId)) {
+      return true;
+    }
+    for (const queuedThreadId of yield* queuedTurnPromotions.listPendingThreadIds) {
+      const queuedThread = ThreadId.makeUnsafe(queuedThreadId);
+      const providerThread = yield* resolveProviderSessionThread(queuedThread);
+      if ((providerThread?.id ?? queuedThread) === sessionThreadId) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  const scheduleBlockedGoalContinuationRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
+    if (queuedGoalContinuationRetries.has(threadId)) {
+      return;
+    }
+    queuedGoalContinuationRetries.add(threadId);
+    yield* Queue.offer(goalContinuationRetryQueue, threadId);
+  });
+
+  const deferGoalContinuation = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) {
+    blockedGoalContinuations.set(event.payload.threadId, {
+      goalStartedAt: event.payload.goalStartedAt,
+      trigger: event.payload.trigger,
+      ...(event.payload.sourceTurnId !== undefined
+        ? { sourceTurnId: event.payload.sourceTurnId }
+        : {}),
+    });
+    yield* scheduleBlockedGoalContinuationRetry(event.payload.threadId);
+  });
+
+  const retryBlockedGoalContinuation = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const pending = blockedGoalContinuations.get(threadId);
+    if (!pending) {
+      return;
+    }
+
+    const thread = yield* resolveThread(threadId);
+    if (
+      !thread ||
+      thread.deletedAt != null ||
+      thread.archivedAt != null ||
+      thread.parentThreadId != null ||
+      thread.interactionMode === "plan" ||
+      !activeThreadGoal(thread)?.trim() ||
+      thread.goalPausedAt != null ||
+      (thread.goalStartedAt ?? null) !== pending.goalStartedAt
+    ) {
+      blockedGoalContinuations.delete(threadId);
+      return;
+    }
+
+    const pendingInteractionCounts = yield* pendingInteractions.getPendingCountsByThreadId({
+      threadId,
+    });
+    if (
+      pendingInteractionCounts.pendingApprovalCount > 0 ||
+      pendingInteractionCounts.pendingUserInputCount > 0 ||
+      thread.session?.status === "starting" ||
+      thread.session?.status === "running" ||
+      (yield* hasLiveProviderTurn(threadId))
+    ) {
+      yield* scheduleBlockedGoalContinuationRetry(threadId);
+      return;
+    }
+
+    yield* drainQueuedTurnsForSession(threadId);
+    if (yield* hasPendingQueuedTurnForSession(threadId)) {
+      yield* scheduleBlockedGoalContinuationRetry(threadId);
+      return;
+    }
+
+    if (blockedGoalContinuations.get(threadId) !== pending) {
+      return;
+    }
+    blockedGoalContinuations.delete(threadId);
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.goal.continue",
+        commandId: serverCommandId("goal-blocker-cleared"),
+        threadId,
+        goalStartedAt: pending.goalStartedAt,
+        trigger: pending.trigger,
+        ...(pending.sourceTurnId !== undefined ? { sourceTurnId: pending.sourceTurnId } : {}),
+        createdAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.sync(() => {
+                if (!blockedGoalContinuations.has(threadId)) {
+                  blockedGoalContinuations.set(threadId, pending);
+                }
+              }).pipe(
+                Effect.andThen(scheduleBlockedGoalContinuationRetry(threadId)),
+                Effect.andThen(
+                  Effect.logWarning("provider command reactor failed to retry goal continuation", {
+                    threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
+        ),
+      );
+  });
+
+  const runBlockedGoalContinuationRetries = Stream.fromQueue(goalContinuationRetryQueue).pipe(
+    Stream.runForEach((threadId) =>
+      Effect.sleep(Duration.millis(500)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            queuedGoalContinuationRetries.delete(threadId);
+          }),
+        ),
+        Effect.andThen(retryBlockedGoalContinuation(threadId)),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : scheduleBlockedGoalContinuationRetry(threadId).pipe(
+                Effect.andThen(
+                  Effect.logWarning("provider command reactor goal continuation retry failed", {
+                    threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
+        ),
+      ),
+    ),
+  );
+
+  const pauseActiveThreadGoal = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly expectedGoalStartedAt: string | null;
+  }) {
+    const thread = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (candidate) => candidate.id === input.threadId,
+    );
+    if (
+      !thread ||
+      !activeThreadGoal(thread)?.trim() ||
+      thread.goalPausedAt != null ||
+      (thread.goalStartedAt ?? null) !== input.expectedGoalStartedAt
+    ) {
+      return;
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: serverCommandId("goal-auto-pause"),
+      threadId: input.threadId,
+      goalPaused: true,
+    });
+  });
+
+  const processGoalContinuationRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) =>
+    withProviderSessionLease(
+      event.payload.threadId,
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(event.payload.threadId);
+        if (
+          !thread ||
+          thread.deletedAt != null ||
+          thread.archivedAt != null ||
+          thread.parentThreadId != null ||
+          thread.interactionMode === "plan" ||
+          !activeThreadGoal(thread)?.trim() ||
+          thread.goalPausedAt != null ||
+          (thread.goalStartedAt ?? null) !== event.payload.goalStartedAt
+        ) {
+          blockedGoalContinuations.delete(event.payload.threadId);
+          return;
+        }
+
+        const pendingInteractionCounts = yield* pendingInteractions.getPendingCountsByThreadId({
+          threadId: thread.id,
+        });
+        if (
+          pendingInteractionCounts.pendingApprovalCount > 0 ||
+          pendingInteractionCounts.pendingUserInputCount > 0 ||
+          (yield* hasLiveProviderTurn(thread.id))
+        ) {
+          yield* deferGoalContinuation(event);
+          return;
+        }
+
+        // User-authored queued work always wins. Its terminal event will ask for
+        // the next goal iteration if the goal is still active afterwards.
+        yield* drainQueuedTurnsForSession(thread.id);
+        if (yield* hasPendingQueuedTurnForSession(thread.id)) {
+          yield* deferGoalContinuation(event);
+          return;
+        }
+
+        blockedGoalContinuations.delete(thread.id);
+
+        const createdAt = event.payload.createdAt;
+        const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
+        const turnStartSession = deriveTurnStartSession({
+          threadId: thread.id,
+          currentSession: thread.session,
+          providerName,
+          requestedRuntimeMode: thread.runtimeMode,
+          requestedAt: createdAt,
+        });
+        if (turnStartSession !== null) {
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: turnStartSession,
+            createdAt,
+          });
+        }
+
+        const startedTurn = yield* dispatchTurnForThread({
+          threadId: thread.id,
+          messageId: MessageId.makeUnsafe(`goal-continuation:${event.eventId}`),
+          messageText: buildGoalContinuationInput(),
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          dispatchMode: "queue",
+          turnKind: "goal-continuation",
+          createdAt,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.gen(function* () {
+                  const detail = Cause.pretty(cause);
+                  yield* appendProviderFailureActivity({
+                    threadId: thread.id,
+                    kind: "provider.turn.start.failed",
+                    summary: "Goal continuation failed",
+                    detail,
+                    turnId: null,
+                    createdAt,
+                  });
+                  yield* setThreadSessionError({
+                    threadId: thread.id,
+                    runtimeMode: thread.runtimeMode,
+                    detail,
+                    createdAt,
+                  });
+                  yield* pauseActiveThreadGoal({
+                    threadId: thread.id,
+                    expectedGoalStartedAt: event.payload.goalStartedAt,
+                  });
+                }),
+          ),
+        );
+        const latestThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+          (candidate) => candidate.id === thread.id,
+        );
+        // Stop/pause can commit while provider dispatch is awaiting acceptance.
+        // Fence the accepted turn against the authoritative command model so it
+        // cannot escape the interrupt event that raced it with a stale turn id.
+        if (
+          startedTurn &&
+          (!latestThread ||
+            latestThread.goalPausedAt != null ||
+            !activeThreadGoal(latestThread)?.trim() ||
+            (latestThread.goalStartedAt ?? null) !== event.payload.goalStartedAt)
+        ) {
+          yield* interruptProviderTurn({
+            threadId: thread.id,
+            turnId: startedTurn.turnId,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }),
+    );
+
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     observePendingContextBootstrapTerminalEvent(event);
     const sessionThreadId =
@@ -2598,7 +2978,8 @@ const make = Effect.gen(function* () {
     // Forward the observed turn only as an expectation. ProviderService owns the
     // exact generation-scoped provider turn and rejects a stale mismatch.
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
-    const turnId = input.turnId ?? thread.session?.activeTurnId ?? undefined;
+    const liveTurnId = yield* resolveLiveProviderTurnId(input.threadId);
+    const turnId = liveTurnId ?? input.turnId ?? thread.session?.activeTurnId ?? undefined;
     const result = yield* runBoundedProviderCall({
       label: "The provider interrupt",
       timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
@@ -3354,6 +3735,39 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const surfaceTimedOutGoalContinuation = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+    detail: string,
+  ) {
+    const createdAt = new Date().toISOString();
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (thread?.session?.status === "starting" && thread.session.activeTurnId === null) {
+      yield* setThreadSessionError({
+        threadId: event.payload.threadId,
+        runtimeMode: thread.runtimeMode,
+        detail,
+        expectedSession: {
+          status: thread.session.status,
+          updatedAt: thread.session.updatedAt,
+        },
+        createdAt,
+      });
+    }
+    yield* appendProviderFailureActivity({
+      threadId: event.payload.threadId,
+      kind: "provider.turn.start.failed",
+      summary: "Goal continuation timed out",
+      detail,
+      turnId: null,
+      createdAt,
+      settlementStatus: "uncertain",
+    });
+    yield* pauseActiveThreadGoal({
+      threadId: event.payload.threadId,
+      expectedGoalStartedAt: event.payload.goalStartedAt,
+    });
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -3393,6 +3807,18 @@ const make = Effect.gen(function* () {
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
+          const startsOrResumesGoal =
+            event.payload.goalPausedAt == null && event.payload.goalStartedAt != null;
+          if (event.payload.goalStartBehavior !== "defer" && startsOrResumesGoal) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.goal.continue",
+              commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
+              threadId: event.payload.threadId,
+              goalStartedAt: event.payload.goalStartedAt,
+              trigger: "goal-updated",
+              createdAt: event.payload.updatedAt,
+            });
+          }
           if (event.payload.modelSelection === undefined) {
             return;
           }
@@ -3441,11 +3867,39 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        case "thread.interaction-mode-set": {
+          if (
+            event.payload.previousInteractionMode !== "plan" ||
+            event.payload.interactionMode === "plan"
+          ) {
+            return;
+          }
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (
+            thread &&
+            thread.parentThreadId == null &&
+            activeThreadGoal(thread)?.trim() &&
+            thread.goalPausedAt == null
+          ) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.goal.continue",
+              commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
+              threadId: thread.id,
+              goalStartedAt: thread.goalStartedAt ?? null,
+              trigger: "interaction-mode-updated",
+              createdAt: event.payload.updatedAt,
+            });
+          }
+          return;
+        }
         case "thread.turn-queued":
           yield* processTurnQueued(event);
           return;
         case "thread.turn-start-requested":
           yield* processTurnStartRequested(event);
+          return;
+        case "thread.goal-continuation-requested":
+          yield* processGoalContinuationRequested(event);
           return;
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
@@ -3793,6 +4247,16 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+          } else if (event.type === "thread.goal-continuation-requested") {
+            yield* surfaceTimedOutGoalContinuation(event, workerResult.detail).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("failed to surface timed-out goal continuation", {
+                  eventSequence: event.sequence,
+                  threadId: event.payload.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            );
           }
           yield* settleTerminalFailure({
             event,
@@ -4129,16 +4593,44 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const recoverActiveThreadGoals = Effect.gen(function* () {
+    const snapshot = yield* orchestrationEngine.getReadModel();
+    yield* Effect.forEach(
+      snapshot.threads.filter(
+        (thread) =>
+          thread.deletedAt == null &&
+          thread.archivedAt == null &&
+          thread.parentThreadId == null &&
+          Boolean(activeThreadGoal(thread)?.trim()) &&
+          thread.goalPausedAt == null,
+      ),
+      (thread) =>
+        orchestrationEngine.dispatch({
+          type: "thread.goal.continue",
+          commandId: serverCommandId("goal-startup-recovery"),
+          threadId: thread.id,
+          goalStartedAt: thread.goalStartedAt ?? null,
+          trigger: "startup-recovery",
+          createdAt: new Date().toISOString(),
+        }),
+      { discard: true },
+    );
+  });
+
   const start = seedThreadModelSelections.pipe(
     Effect.andThen(
       Effect.all([
-        startProviderIntentSource.pipe(Effect.andThen(recoverQueuedTurnPromotions)),
+        startProviderIntentSource.pipe(
+          Effect.andThen(recoverQueuedTurnPromotions),
+          Effect.andThen(recoverActiveThreadGoals),
+        ),
         Stream.runForEach(providerService.streamEvents, (event) => {
           if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
             return Effect.void;
           }
           return processQueueDrainEventSafely(event);
         }).pipe(Effect.forkScoped),
+        runBlockedGoalContinuationRetries.pipe(Effect.forkScoped),
       ]).pipe(Effect.asVoid),
     ),
     Effect.orDie,

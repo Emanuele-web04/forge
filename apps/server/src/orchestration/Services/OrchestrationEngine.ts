@@ -30,10 +30,21 @@ export interface OrchestrationDispatchContext {
 }
 
 export interface OrchestrationProjectionCatchUpStatus {
-  readonly state: "healthy" | "degraded";
+  /**
+   * "unknown" means the lag probe itself failed (journal or cursor read
+   * error): the projection may be fine or badly broken, and reporting either
+   * extreme would mislead — a monitor must treat it as not-healthy.
+   */
+  readonly state: "healthy" | "degraded" | "unknown";
   readonly inFlight: boolean;
   readonly retryAttempts: number;
   readonly lastFailure: string | null;
+  /** Journal head the per-projector lag below is measured against. */
+  readonly highWaterSequence: number;
+  /** Events behind the journal head, per projector cursor; only lagging projectors appear. */
+  readonly lagByProjector: Readonly<Record<string, number>>;
+  /** Projector cursors absent from a non-empty projection_state table (interrupted repair). */
+  readonly missingProjectors: ReadonlyArray<string>;
 }
 
 /**

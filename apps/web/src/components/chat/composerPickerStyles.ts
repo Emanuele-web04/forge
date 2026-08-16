@@ -63,7 +63,7 @@ export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
 // sync with dropdown group labels like "Git actions". Picker padding is still
 // tuned via the `--picker-section-py` token on `[data-slot="menu-label"]`.
 
-export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[46rem]";
+export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[var(--app-chat-max-width,46rem)]";
 /** Main chat column background — matches the theme Background setting exactly. */
 export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
 

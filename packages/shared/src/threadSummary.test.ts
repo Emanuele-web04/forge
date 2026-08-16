@@ -197,6 +197,45 @@ describe("deriveThreadSummaryMetadata", () => {
     });
   });
 
+  it("orders unsorted activity arrays by sequence before replaying request lifecycles", () => {
+    // Resolution stored before its request: replayed in array order the request would win and
+    // stay pending; ordering by sequence must close it. Guards the sorted-input fast path.
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("activity-2"),
+        tone: "approval",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        payload: { requestId: "approval-1" },
+        sequence: 2,
+        turnId: TurnId.makeUnsafe("turn-1"),
+        createdAt: "2026-02-27T00:02:00.000Z",
+      },
+      {
+        id: EventId.makeUnsafe("activity-1"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Approval requested",
+        payload: {
+          requestId: "approval-1",
+          requestType: "exec_command_approval",
+        },
+        sequence: 1,
+        turnId: TurnId.makeUnsafe("turn-1"),
+        createdAt: "2026-02-27T00:01:00.000Z",
+      },
+    ];
+
+    expect(
+      deriveThreadSummaryMetadata({
+        messages: [],
+        activities,
+        proposedPlans: [],
+        latestTurn: null,
+      }),
+    ).toMatchObject({ hasPendingApprovals: false });
+  });
+
   it("keeps replacement requests open when an older runtime generation resolves", () => {
     const question = {
       id: "question-1",

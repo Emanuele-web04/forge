@@ -16,6 +16,16 @@ export function isWindowsPlatform(platform: string): boolean {
   return /^win(dows)?/i.test(platform);
 }
 
+/** The host platform string, safe to read where `navigator` may be absent (SSR, node tests). */
+export function getNavigatorPlatform(): string {
+  return typeof navigator === "undefined" ? "" : navigator.platform;
+}
+
+/** Single source of truth for "render the ⌘ affordance instead of the Ctrl one". */
+export function isMacNavigatorPlatform(): boolean {
+  return isMacPlatform(getNavigatorPlatform());
+}
+
 export function randomUUID(): string {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();

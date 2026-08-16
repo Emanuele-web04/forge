@@ -15,12 +15,14 @@ import {
   type AutomationRun,
   type ProviderStartOptions,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyScheduleToForm,
   allVisibleTriageRuns,
   applyAutomationEvent,
+  automationDefinitionUpdateMutationOptions,
   automationAttentionCount,
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
@@ -38,9 +40,9 @@ import {
   isTriageRun,
   maxIterationOptions,
   modelSelectionForProjectChange,
-  providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
   reconcileAutomationFormAutoModeSupport,
+  rollbackAutomationDefinitionPatch,
   runResultSummary,
   runResultTitle,
   scheduleKindFromSchedule,
@@ -49,6 +51,37 @@ import {
   updateWeeklyScheduleTime,
   unresolvedTriageRuns,
 } from "./-automations.shared";
+
+describe("automation definition update ordering", () => {
+  it("serializes successful edits in submission order", async () => {
+    const queryClient = new QueryClient();
+    const calls: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const buildMutation = (name: string, gate?: Promise<void>) =>
+      queryClient.getMutationCache().build(queryClient, {
+        ...automationDefinitionUpdateMutationOptions(async () => {
+          calls.push(`${name}:start`);
+          await gate;
+          calls.push(`${name}:finish`);
+          return {} as AutomationDefinition;
+        }),
+      });
+    const first = buildMutation("first", firstGate);
+    const second = buildMutation("second");
+
+    const input = { id: automationId("automation-ordered-edits") };
+    const firstRequest = first.execute(input);
+    const secondRequest = second.execute(input);
+    await vi.waitFor(() => expect(calls).toEqual(["first:start"]));
+    releaseFirst();
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(calls).toEqual(["first:start", "first:finish", "second:start", "second:finish"]);
+  });
+});
 
 const runId = (value: string) => AutomationRunId.makeUnsafe(value);
 const automationId = (value: string) => AutomationId.makeUnsafe(value);
@@ -154,7 +187,10 @@ const baseDefinition: AutomationDefinition = {
   mode: "standalone",
   targetThreadId: null,
   maxIterations: null,
-  stopOnError: true,
+  stopAfterConsecutiveFailures: 3,
+  consecutiveFailureCount: 0,
+  disabledReason: null,
+  disabledAt: null,
   completionPolicy: { type: "none" },
   completionPolicyVersion: 1,
   completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
@@ -618,9 +654,13 @@ describe("automation shared route helpers", () => {
     });
     const form = formFromDefinition(definition, "project-1");
 
-    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
-      savedProviderOptions,
-    );
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        form.modelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
   });
 
   it("uses current provider options when an automation edit changes models", () => {
@@ -953,5 +993,77 @@ describe("automation shared route helpers", () => {
     );
 
     expect(updated.memories).toEqual([memory]);
+  });
+});
+
+describe("rollbackAutomationDefinitionPatch", () => {
+  it("restores only the failed patch's fields, keeping a concurrent edit's merge intact", () => {
+    // The name patch failed while a prompt patch (still in flight) had already merged
+    // optimistically. Rolling back the name must not also revert the prompt.
+    const current = {
+      definitions: [definitionWith({ name: "Optimistic name", prompt: "Optimistic prompt." })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]).toMatchObject({
+      name: baseDefinition.name,
+      prompt: "Optimistic prompt.",
+    });
+  });
+
+  it("does not overwrite a newer edit to the same field when an older patch fails", () => {
+    const current = {
+      definitions: [definitionWith({ name: "Newest name" })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Older optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]?.name).toBe("Newest name");
+  });
+
+  it("removes input-only keys the definition never had instead of restoring them", () => {
+    const merged = {
+      ...definitionWith({}),
+      stopOnError: true,
+    } as AutomationDefinition;
+    const current = { definitions: [merged], runs: [], memories: [] };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, stopOnError: true },
+      baseDefinition,
+    );
+
+    expect("stopOnError" in rolledBack.definitions[0]!).toBe(false);
+  });
+
+  it("leaves other definitions untouched", () => {
+    const other = definitionWith({ id: automationId("automation-2"), name: "Other" });
+    const current = {
+      definitions: [definitionWith({ name: "Optimistic name" }), other],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[1]).toBe(other);
   });
 });

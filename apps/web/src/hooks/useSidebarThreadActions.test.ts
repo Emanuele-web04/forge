@@ -411,6 +411,15 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  it("restores the saved chat draft when archiving the last thread leaves no fallback", async () => {
+    sidebarThreads = [makeThread(THREAD_ID)];
+
+    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).resolves.toBe(true);
+
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.handleNewChat).toHaveBeenCalledWith();
+  });
+
   it("treats an already-restored invariant as successful Undo", async () => {
     harness.alreadyUnarchived = true;
     harness.unarchiveThread.mockRejectedValue(new Error("already restored"));
@@ -499,7 +508,7 @@ describe("useSidebarThreadActions", () => {
     expect(navigation.search()).toEqual({ splitViewId: "split-actions" });
   });
 
-  it("opens a fresh chat when deleting the last pane leaves no fallback", async () => {
+  it("restores the saved chat draft when deleting the last pane leaves no fallback", async () => {
     sidebarThreads = [makeThread(THREAD_ID)];
     harness.resolveSplitViewPaneIdForThread.mockReturnValue("pane-only");
     harness.resolveSplitViewFocusedThreadId.mockReturnValue(null);
@@ -511,6 +520,6 @@ describe("useSidebarThreadActions", () => {
     }).deleteThread(THREAD_ID);
 
     expect(harness.navigate).not.toHaveBeenCalled();
-    expect(harness.handleNewChat).toHaveBeenCalledWith({ fresh: true });
+    expect(harness.handleNewChat).toHaveBeenCalledWith();
   });
 });

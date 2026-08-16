@@ -10,8 +10,10 @@ export type ProviderIntentEvent = Extract<
       | "thread.meta-updated"
       | "thread.session-set"
       | "thread.runtime-mode-set"
+      | "thread.interaction-mode-set"
       | "thread.turn-queued"
       | "thread.turn-start-requested"
+      | "thread.goal-continuation-requested"
       | "thread.turn-interrupt-requested"
       | "thread.task-stop-requested"
       | "thread.task-background-requested"
@@ -30,8 +32,10 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.meta-updated",
   "thread.session-set",
   "thread.runtime-mode-set",
+  "thread.interaction-mode-set",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
   "thread.task-background-requested",

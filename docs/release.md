@@ -16,7 +16,7 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - Stable 0.5.x releases are GitHub Latest; the 0.4.x compatibility release remains historical.
+  - Stable clean-lane releases are GitHub Latest; the 0.4.x compatibility release remains historical.
 - Publishes default `latest*.yml` metadata plus byte-identical `synara*.yml` aliases on every stable release so existing packaged binaries keep working.
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
 - Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
@@ -33,7 +33,7 @@ This document covers build-only native validation and publishing desktop release
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
 - Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
-- Runtime channel: `synara`. Stable 0.5.x releases publish both `latest` and `synara` metadata; the 0.4.x compatibility release remains available for historical migration.
+- Runtime channel: `synara`. Stable clean-lane releases publish both `latest` and `synara` metadata; the 0.4.x compatibility release remains available for historical migration.
 - Repository slug source:
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
@@ -44,7 +44,7 @@ This document covers build-only native validation and publishing desktop release
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
-  - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a 0.5.x release.
+  - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
   - Clean releases do not mirror payloads onto the historical compatibility release, so the 0.4.x line remains immutable.
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
@@ -79,7 +79,7 @@ Checklist:
 
 ## Synara notes
 
-- The desktop updater expects the pinned compatibility release in this repository to include the generated updater metadata files, not just the installers.
+- Every stable versioned release must include both the default `latest` updater metadata and the dedicated `synara` aliases alongside its installers.
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
@@ -171,14 +171,14 @@ full subject distinguished name.
 1. Ensure `main` is green in CI.
 2. Run the build-only native CI validation for the release-candidate branch and version.
 3. Bump app version as needed.
-4. Confirm `gh api repos/OWNER/REPO/releases/latest --jq .tag_name` returns the compatibility tag configured in `scripts/release-update-policy.json`.
+4. Run `node scripts/resolve-release-update-policy.ts X.Y.Z` and confirm it reports the expected lane, `make_latest`, and `mirror_to_stable_channel` values before creating the tag.
 5. Create release tag: `vX.Y.Z`.
 6. Push tag.
 7. Verify workflow steps:
    - preflight passes
    - all matrix builds pass
    - release job uploads expected files
-8. Confirm the new versioned release is not GitHub Latest and the pinned compatibility release contains the new payloads plus all three `synara` manifests.
+8. For a stable clean-lane release, confirm the new versioned release is GitHub Latest, contains all three default `latest` manifests plus all three `synara` aliases, and left the historical compatibility release unchanged.
 9. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting

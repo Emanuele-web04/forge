@@ -10,7 +10,11 @@ import {
   modelSelection,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
-import { createDeferredPersistStorage, flushStorageBeforePageHide } from "./lib/storage";
+import {
+  createDeferredPersistStorage,
+  flushStorageBeforePageHide,
+  type FlushBeforePageHideEnv,
+} from "./lib/storage";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
@@ -117,6 +121,80 @@ describe("composerDraftStore persisted-state hydration", () => {
 
     expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
+  });
+
+  it("preserves Debug mode in composer and draft-thread state during hydration", () => {
+    const projectId = ProjectId.makeUnsafe("project-debug-mode");
+    const threadId = ThreadId.makeUnsafe("thread-debug-mode");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Reproduce the crash",
+          attachments: [],
+          interactionMode: "debug",
+        },
+      },
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-08-11T00:00:00.000Z",
+          runtimeMode: "approval-required",
+          interactionMode: "debug",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.interactionMode).toBe("debug");
+    expect(hydrated.draftThreadsByThreadId[threadId]?.interactionMode).toBe("debug");
+  });
+
+  it("preserves a staged goal in draft-thread state during hydration and drops blank ones", () => {
+    const projectId = ProjectId.makeUnsafe("project-goal");
+    const threadId = ThreadId.makeUnsafe("thread-goal");
+    const blankGoalThreadId = ThreadId.makeUnsafe("thread-goal-blank");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "clean the directory and build a snake game",
+        },
+        [blankGoalThreadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "   ",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftThreadsByThreadId[threadId]?.goal).toBe(
+      "clean the directory and build a snake game",
+    );
+    expect(hydrated.draftThreadsByThreadId[blankGoalThreadId]?.goal).toBeUndefined();
   });
 });
 
@@ -555,7 +633,14 @@ describe("composerDraftStore queued follow-ups", () => {
       name: "queued.png",
     });
     const store = useComposerDraftStore.getState();
-    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("queued-chat-1", queuedImage));
+    const queuedChatTurn = makeQueuedChatTurn("queued-chat-1", queuedImage);
+    if (queuedChatTurn.kind !== "chat") {
+      throw new Error("Expected a queued chat turn fixture");
+    }
+    store.enqueueQueuedTurn(threadId, {
+      ...queuedChatTurn,
+      interactionMode: "debug",
+    });
 
     const persistApi = useComposerDraftStore.persist as unknown as {
       getOptions: () => {
@@ -589,6 +674,7 @@ describe("composerDraftStore queued follow-ups", () => {
           planId: "plan-1",
         },
         terminalContexts: [{ text: "git status\nOn branch main" }],
+        interactionMode: "debug",
       },
     ]);
   });
@@ -827,5 +913,19 @@ describe("flushStorageBeforePageHide", () => {
     harness.setVisibility("visible");
     harness.fireDocument("visibilitychange");
     expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on partial DOM stubs without listener APIs", () => {
+    // SSR-style test environments stub `window`/`document` with only the
+    // fields under test (e.g. `{ documentElement }`); wiring must not crash
+    // module evaluation of stores that call this at import time.
+    expect(() =>
+      flushStorageBeforePageHide(vi.fn(), {
+        window: {} as unknown as NonNullable<FlushBeforePageHideEnv["window"]>,
+        document: { documentElement: {} } as unknown as NonNullable<
+          FlushBeforePageHideEnv["document"]
+        >,
+      }),
+    ).not.toThrow();
   });
 });

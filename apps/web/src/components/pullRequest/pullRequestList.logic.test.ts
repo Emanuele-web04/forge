@@ -38,6 +38,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     isPinned: false,
     projectContexts: [],
     mergeability: "unknown",
+    stack: null,
     labels: [],
     ...overrides,
   };

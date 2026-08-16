@@ -30,6 +30,52 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("marks only an empty shell with an active durable project for repair", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM orchestration_events`;
+
+      const firstRunSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.isFalse(firstRunSnapshot.requiresEmptyProjectShellRepair ?? false);
+
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id,
+          actor_kind, payload_json, metadata_json
+        ) VALUES (
+          'event-empty-shell-project-created', 'project', 'project-empty-shell', 0,
+          'project.created', '2026-08-11T00:00:00.000Z',
+          'command-empty-shell-project-created', NULL, NULL, 'user', '{}', '{}'
+        )
+      `;
+
+      const missingProjectionSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.isTrue(missingProjectionSnapshot.requiresEmptyProjectShellRepair ?? false);
+
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id,
+          actor_kind, payload_json, metadata_json
+        ) VALUES (
+          'event-empty-shell-project-deleted', 'project', 'project-empty-shell', 1,
+          'project.deleted', '2026-08-11T00:00:01.000Z',
+          'command-empty-shell-project-deleted', NULL, NULL, 'user', '{}', '{}'
+        )
+      `;
+
+      const deletedProjectSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.isFalse(deletedProjectSnapshot.requiresEmptyProjectShellRepair ?? false);
+
+      yield* sql`DELETE FROM orchestration_events`;
+    }),
+  );
+
   it.effect("hydrates Space identity and project assignments in full and shell snapshots", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -1692,6 +1738,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          goal: "",
+          goalStartedAt: null,
+          goalPausedAt: null,
           latestTurn: {
             turnId: asTurnId("turn-shell"),
             state: "completed",
@@ -2467,6 +2516,74 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreePath: "/tmp/wt/deleted-assoc",
         },
       ]);
+    }),
+  );
+
+  it.effect("reports snapshot sequence 0 for an empty projection cursor table", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_state`;
+
+      const { snapshotSequence } = yield* snapshotQuery.getSnapshotSequence();
+      assert.equal(snapshotSequence, 0);
+    }),
+  );
+
+  it.effect("fails with ProjectionStateIncompleteError when a required cursor row is missing", () =>
+    Effect.gen(function* () {
+      // Regression for the permanent resnapshot loop: a non-empty cursor
+      // table missing projection.hot (an interrupted repair leaves exactly
+      // this shape) used to read as snapshot sequence 0, which the stream
+      // layer interpreted as "high-water events behind" forever. It must be
+      // a typed, diagnosable failure instead of a silent 0.
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_state`;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        if (projector === ORCHESTRATION_PROJECTOR_NAMES.hot) continue;
+        yield* sql`
+            INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+            VALUES (${projector}, 953667, '2026-08-11T00:00:00.000Z')
+          `;
+      }
+
+      const outcome = yield* Effect.exit(snapshotQuery.getSnapshotSequence());
+      assert.equal(outcome._tag, "Failure");
+      if (outcome._tag === "Failure") {
+        const failure = outcome.cause.reasons[0];
+        assert.ok(failure && "error" in failure);
+        const error = (failure as { readonly error: unknown }).error as {
+          readonly _tag: string;
+          readonly missingProjectors: ReadonlyArray<string>;
+        };
+        assert.equal(error._tag, "ProjectionStateIncompleteError");
+        assert.deepEqual(error.missingProjectors, [ORCHESTRATION_PROJECTOR_NAMES.hot]);
+      }
+
+      yield* sql`DELETE FROM projection_state`;
+    }),
+  );
+
+  it.effect("derives the snapshot sequence from the minimum required cursor", () =>
+    Effect.gen(function* () {
+      // A stalled required projector must lower the fence (forcing honest
+      // replay), never be skipped: serving the higher cursor would hand
+      // clients a snapshot claiming coverage the stalled projection lacks.
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`
+        INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+        VALUES
+          (${ORCHESTRATION_PROJECTOR_NAMES.hot}, 42, '2026-08-11T00:00:00.000Z'),
+          (${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}, 7, '2026-08-11T00:00:00.000Z')
+      `;
+
+      const { snapshotSequence } = yield* snapshotQuery.getSnapshotSequence();
+      assert.equal(snapshotSequence, 7);
+
+      yield* sql`DELETE FROM projection_state`;
     }),
   );
 });

@@ -184,7 +184,7 @@ const PersistedQueuedComposerPlanFollowUp = Schema.Struct({
   createdAt: Schema.String,
   previewText: Schema.String,
   text: Schema.String,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: Schema.Literals(["default", "plan"]),
   selectedProvider: ProviderKind,
   selectedModel: Schema.NullOr(Schema.String),
   selectedPromptEffort: Schema.NullOr(Schema.String),
@@ -299,6 +299,7 @@ const PersistedDraftThreadState = Schema.Struct({
   workingDirectory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
+  goal: Schema.optionalKey(Schema.String),
   isTemporary: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(ThreadId),
 });
@@ -611,10 +612,9 @@ function normalizePersistedQueuedTurns(
       const mentions = Array.isArray(candidate.mentions)
         ? candidate.mentions.filter(Schema.is(ProviderMentionReference))
         : [];
-      const interactionMode =
-        candidate.interactionMode === "default" || candidate.interactionMode === "plan"
-          ? candidate.interactionMode
-          : null;
+      const interactionMode = Schema.is(ProviderInteractionMode)(candidate.interactionMode)
+        ? candidate.interactionMode
+        : null;
       const envMode =
         candidate.envMode === "local" || candidate.envMode === "worktree"
           ? candidate.envMode
@@ -726,6 +726,10 @@ function normalizePersistedDraftThreads(
         }
       }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
+      const goal =
+        typeof candidateDraftThread.goal === "string" && candidateDraftThread.goal.trim().length > 0
+          ? candidateDraftThread.goal
+          : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
@@ -744,17 +748,16 @@ function normalizePersistedDraftThreads(
         runtimeMode: Schema.is(RuntimeMode)(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
-        interactionMode:
-          candidateDraftThread.interactionMode === "plan" ||
-          candidateDraftThread.interactionMode === "default"
-            ? candidateDraftThread.interactionMode
-            : DEFAULT_INTERACTION_MODE,
+        interactionMode: Schema.is(ProviderInteractionMode)(candidateDraftThread.interactionMode)
+          ? candidateDraftThread.interactionMode
+          : DEFAULT_INTERACTION_MODE,
         entryPoint: normalizeDraftThreadEntryPoint(candidateDraftThread.entryPoint),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         workingDirectory: typeof workingDirectory === "string" ? workingDirectory : null,
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
+        ...(goal ? { goal } : {}),
         ...(isTemporary ? { isTemporary: true } : {}),
         ...(promotedTo ? { promotedTo } : {}),
       };
@@ -872,10 +875,9 @@ function normalizePersistedDraftsByThreadId(
     const runtimeMode = Schema.is(RuntimeMode)(draftCandidate.runtimeMode)
       ? draftCandidate.runtimeMode
       : null;
-    const interactionMode =
-      draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
-        ? draftCandidate.interactionMode
-        : null;
+    const interactionMode = Schema.is(ProviderInteractionMode)(draftCandidate.interactionMode)
+      ? draftCandidate.interactionMode
+      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,

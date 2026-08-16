@@ -32,12 +32,20 @@ export interface VisibleRateLimitRow {
   windowDurationMins?: number;
 }
 
+/** Activity kinds that carry account rate-limit payloads. Shared with the store selector
+ *  that narrows usage subscribers to these activities, so the two stay in sync. */
+export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "account.rate-limits.updated",
+  "account.rate-limited",
+]);
+
 const WINDOW_ORDER = new Map([
   ["5h", 0],
   ["Weekly", 1],
-  ["Sonnet", 2],
-  ["Opus", 3],
-  ["Current", 4],
+  ["Weekly (overage)", 2],
+  ["Sonnet", 3],
+  ["Opus", 4],
+  ["Current", 5],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -113,7 +121,23 @@ export function normalizeRateLimitLabel(
   if (normalized === "seven_day_opus" || normalized === "weekly_opus" || normalized === "opus") {
     return "Opus";
   }
-  return label;
+  if (
+    normalized === "seven_day_overage_included" ||
+    normalized === "weekly_overage_included" ||
+    normalized === "weekly_overage" ||
+    normalized === "overage"
+  ) {
+    return "Weekly (overage)";
+  }
+  return humanizeLabel(label);
+}
+
+function humanizeLabel(label: string): string {
+  return label
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function compareWindowLabels(a: string, b: string): number {
@@ -265,10 +289,7 @@ export function deriveAccountRateLimits(
 
   for (const thread of threads) {
     for (const activity of thread.activities) {
-      if (
-        activity.kind !== "account.rate-limits.updated" &&
-        activity.kind !== "account.rate-limited"
-      ) {
+      if (!ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS.has(activity.kind)) {
         continue;
       }
 

@@ -69,6 +69,7 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { REQUIRED_SNAPSHOT_PROJECTORS } from "./ProjectionSnapshotQuery.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -367,11 +368,75 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Ref.get(deferredProjectionRetryAttempts),
         Ref.get(deferredProjectionLastFailure),
       ]);
+      // Lag is measured directly from the cursor table so a projector that
+      // stalled without tripping the deferred dirty flag (or whose cursor row
+      // was deleted by an interrupted repair) is still visible here. Only the
+      // snapshot-fence cursors are lag-scored: the live path advances each
+      // per-projector cursor only when its predicate matches (checkpoints
+      // rejects every live event), so individual cursors legitimately trail
+      // the journal between bootstraps and scoring them would report a healthy
+      // system as permanently degraded. Missing rows follow that same fence
+      // scope: predicate-specific cursors are legitimately absent until their
+      // first matching event, while a missing required fence cursor makes the
+      // snapshot sequence incomplete. A read
+      // failure must not masquerade as health: the probe still answers (a
+      // failing /health body is worse than a degraded one), but reports
+      // state "unknown" so a database outage is distinguishable from both a
+      // healthy system and a diagnosed lag.
+      const lag = yield* Effect.gen(function* () {
+        const highWaterSequence = yield* eventStore.getHighWaterSequence();
+        const stateRows = yield* sql<{
+          readonly projector: string;
+          readonly lastAppliedSequence: number;
+        }>`
+          SELECT projector, last_applied_sequence AS "lastAppliedSequence"
+          FROM projection_state
+        `;
+        const sequenceByProjector = new Map(
+          stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+        );
+        const lagByProjector: Record<string, number> = {};
+        const missingProjectors: string[] = [];
+        for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
+          const sequence = sequenceByProjector.get(projector);
+          if (sequence === undefined) {
+            continue;
+          }
+          const projectorLag = highWaterSequence - sequence;
+          if (projectorLag > 0) {
+            lagByProjector[projector] = projectorLag;
+          }
+        }
+        if (stateRows.length > 0) {
+          for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
+            if (!sequenceByProjector.has(projector)) {
+              missingProjectors.push(projector);
+            }
+          }
+        }
+        return { probeFailed: false, highWaterSequence, lagByProjector, missingProjectors };
+      }).pipe(
+        Effect.catch(() =>
+          Effect.succeed({
+            probeFailed: true,
+            highWaterSequence: 0,
+            lagByProjector: {} as Record<string, number>,
+            missingProjectors: [] as string[],
+          }),
+        ),
+      );
+      const degraded =
+        dirty || lag.missingProjectors.length > 0 || Object.keys(lag.lagByProjector).length > 0;
       return {
-        state: dirty ? "degraded" : "healthy",
+        // A failed probe with the dirty flag set is still a known degradation;
+        // "unknown" is reserved for a failed probe with no other evidence.
+        state: degraded ? "degraded" : lag.probeFailed ? "unknown" : "healthy",
         inFlight,
         retryAttempts,
         lastFailure,
+        highWaterSequence: lag.highWaterSequence,
+        lagByProjector: lag.lagByProjector,
+        missingProjectors: lag.missingProjectors,
       };
     });
 

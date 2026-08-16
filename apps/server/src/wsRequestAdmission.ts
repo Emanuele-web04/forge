@@ -34,6 +34,7 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
   WS_METHODS.projectsSearchEntries,
   WS_METHODS.projectsSearchLocalEntries,
+  WS_METHODS.projectsSearchContent,
   WS_METHODS.projectsReadFile,
   WS_METHODS.studioListThreadOutputs,
   WS_METHODS.filesystemBrowse,

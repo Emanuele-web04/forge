@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
+  type ProviderInteractionMode,
   type ProviderKind,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
@@ -204,7 +205,7 @@ interface OpenCodeSessionContext {
   activeTurnSawFinalAssistant: boolean;
   activeTurnFinalAssistantMessageId: string | undefined;
   activeTurnToolCallIdleWatchdogStarted: boolean;
-  activeInteractionMode: "default" | "plan" | undefined;
+  activeInteractionMode: ProviderInteractionMode | undefined;
   appliedPermissionInteractionMode: "default" | "plan";
   activeAgent: string | undefined;
   activeVariant: string | undefined;
@@ -2458,7 +2459,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               rememberRelatedOpenCodeSession(context, part);
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
-                part.state.status === "running" ? (part.state.title ?? part.tool) : part.tool;
+                part.state.status === "running" ? part.state.title?.trim() || part.tool : part.tool;
               const detail = detailFromToolPart(part);
               const payload = {
                 itemType,
@@ -3893,8 +3894,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ? input.modelSelection.options?.variant
             : undefined;
 
-        const interactionMode = input.interactionMode === "plan" ? "plan" : "default";
-        yield* applyPermissionInteractionMode(context, interactionMode);
+        const interactionMode = input.interactionMode ?? "default";
+        const permissionInteractionMode = interactionMode === "plan" ? "plan" : "default";
+        yield* applyPermissionInteractionMode(context, permissionInteractionMode);
 
         context.activeTurnId = turnId;
         context.pendingHarnessPolicyTurnId = harnessPolicy === null ? undefined : turnId;

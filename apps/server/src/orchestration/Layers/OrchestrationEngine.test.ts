@@ -1182,6 +1182,30 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
+        projectId: asProjectId("project-health-fresh"),
+        title: "Fresh projection health",
+        workspaceRoot: "/tmp/project-health-fresh",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
+      state: "healthy",
+      missingProjectors: [],
+    });
+
+    await system.dispose();
+  });
+
   it("retries deferred projection catch-up while idle until it recovers", async () => {
     let bootstrapCalls = 0;
     let deferredCalls = 0;
@@ -1293,11 +1317,12 @@ describe("OrchestrationEngine", () => {
     expect(deferredCalls).toBeGreaterThanOrEqual(1);
     expect(bootstrapCalls).toBe(4);
     await vi.waitFor(async () => {
-      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toEqual({
+      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toMatchObject({
         state: "healthy",
         inFlight: false,
         retryAttempts: 0,
         lastFailure: null,
+        missingProjectors: [],
       });
     });
 

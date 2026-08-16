@@ -127,6 +127,8 @@ import type {
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
+  ProjectSearchContentInput,
+  ProjectSearchContentResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
   ProjectStopDevServerInput,
@@ -511,7 +513,7 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
-export const DesktopAppIcon = Schema.Literals(["default", "icon"]);
+export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
 export interface SynaraStorageSnapshot {
@@ -628,6 +630,7 @@ export interface NativeApi {
     searchLocalEntries: (
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
+    searchContent: (input: ProjectSearchContentInput) => Promise<ProjectSearchContentResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
     resolveOutOfRootFileReference: (
       input: ProjectResolveOutOfRootFileReferenceInput,

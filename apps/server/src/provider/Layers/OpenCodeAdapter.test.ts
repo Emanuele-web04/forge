@@ -3361,7 +3361,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("enforces Plan permissions under full access and restores them for the next turn", async () => {
+  it("enforces Plan permissions under full access and restores them for Debug", async () => {
     const runtime = createMockOpenCodeRuntime();
 
     await Effect.runPromise(
@@ -3381,7 +3381,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Implement the change",
           attachments: [],
-          interactionMode: "default",
+          interactionMode: "debug",
           modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
         });
       }).pipe(
@@ -4696,7 +4696,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               callID: "task-call-1",
               state: {
                 status: "running",
-                title: "Find changelog implementation",
+                title: "\nFind changelog implementation\n",
                 input: {
                   description: "Find changelog implementation",
                   prompt: "Explore changelog files.",

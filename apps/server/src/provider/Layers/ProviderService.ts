@@ -290,6 +290,21 @@ function hasResumeCursor(value: unknown): boolean {
   return value !== null && value !== undefined;
 }
 
+/**
+ * True for events that settle a turn/session lifecycle (as opposed to stream
+ * or item-level events). Terminal events are the only stale-generation events
+ * that may still be processed: they are the sole signal that can settle a
+ * thread whose runtime died after its lifecycle generation was rotated away.
+ */
+function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return (
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted" ||
+    event.type === "session.exited" ||
+    event.type === "runtime.error"
+  );
+}
+
 function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
   activeTurnId?: unknown,
@@ -1053,7 +1068,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             event.lifecycleGeneration !== undefined &&
             binding.lifecycleGeneration !== event.lifecycleGeneration
           ) {
-            return;
+            // The pump gate lets a stale terminal event through only when it
+            // can safely settle the thread: no current generation exists, or
+            // the event still names the turn the binding has active. Mirror
+            // that acceptance here, otherwise the accepted event is journaled
+            // and published but the durable binding keeps the dead turn active
+            // forever and the thread stays a reconciliation candidate.
+            const staleTerminalSettlesThread =
+              isTerminalRuntimeEvent(event) &&
+              (lifecycle.currentGeneration(event.threadId) === undefined ||
+                (event.turnId !== undefined &&
+                  runtimeActiveTurnId(binding.runtimePayload) === String(event.turnId)));
+            if (!staleTerminalSettlesThread) {
+              return;
+            }
           }
 
           const currentActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
@@ -1174,39 +1202,92 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void, unknown> =>
       Effect.uninterruptible(
         Effect.suspend(() => {
+          const journalAndPublish = (acceptedEvent: ProviderRuntimeEvent) =>
+            persistCanonicalRuntimeEvent(acceptedEvent).pipe(
+              Effect.flatMap((persisted) =>
+                Effect.sync(() => {
+                  if (acceptedEvent.type === "turn.started") {
+                    reconcileRuntimeIdleTimer(acceptedEvent);
+                  }
+                }).pipe(
+                  Effect.andThen(updateSessionBindingFromRuntimeEvent(acceptedEvent)),
+                  Effect.andThen(publishRuntimeEvent(acceptedEvent, persisted)),
+                  Effect.andThen(scheduleRetiredGatewaySessionRecovery(acceptedEvent)),
+                ),
+              ),
+            );
+          const canonicalEvent = event;
           if (
             event.lifecycleGeneration !== undefined &&
             lifecycle.currentGeneration(event.threadId) !== event.lifecycleGeneration
           ) {
-            // Warn, not debug: a persistent mismatch silently discards every
-            // runtime event for the thread — the provider runs, the UI shows
-            // nothing, and the runtime reconciler later settles the turn as
-            // interrupted. This log line is the only way to see it happening.
-            return Effect.logWarning("provider.session.stale_generation_event_ignored", {
-              threadId: event.threadId,
-              provider: event.provider,
-              eventType: event.type,
-              eventLifecycleGeneration: event.lifecycleGeneration,
-              currentLifecycleGeneration: lifecycle.currentGeneration(event.threadId),
-            });
+            const currentGeneration = lifecycle.currentGeneration(event.threadId);
+            // A stale-generation event is normally noise from a superseded
+            // session, but terminal events are the exception: they are the
+            // only signal that can settle a turn whose runtime died after its
+            // generation was rotated or retired (a stop, a recovery, or an
+            // idle retire). Dropping them strands the thread "working" with a
+            // dead runtime until the reconciler or an app restart intervenes,
+            // and silently discards the very error that explains the death.
+            //
+            // A stale terminal event is safe to let through when either:
+            //  - no current generation exists (nothing newer can be corrupted
+            //    by settling the old session's state), or
+            //  - the event still names the turn the binding considers active
+            //    (a newer epoch has not started a different turn, so settling
+            //    this turn cannot clobber newer state).
+            const staleTerminalIsSettling =
+              isTerminalRuntimeEvent(event) &&
+              (currentGeneration === undefined || event.turnId !== undefined);
+            if (!staleTerminalIsSettling) {
+              // Warn, not debug: a persistent mismatch silently discards every
+              // runtime event for the thread — the provider runs, the UI shows
+              // nothing, and the runtime reconciler later settles the turn as
+              // interrupted. This log line is the only way to see it happening.
+              return Effect.logWarning("provider.session.stale_generation_event_ignored", {
+                threadId: event.threadId,
+                provider: event.provider,
+                eventType: event.type,
+                eventLifecycleGeneration: event.lifecycleGeneration,
+                currentLifecycleGeneration: currentGeneration,
+              });
+            }
+            if (currentGeneration !== undefined) {
+              // A newer generation exists: only accept the stale terminal event
+              // when it still names the turn the binding has active. If the
+              // binding already moved on (or is gone), keep dropping it.
+              return directory.getBinding(event.threadId).pipe(
+                Effect.flatMap((maybeBinding) => {
+                  const binding = Option.getOrUndefined(maybeBinding);
+                  const boundActiveTurnId = binding
+                    ? runtimeActiveTurnId(binding.runtimePayload)
+                    : undefined;
+                  if (binding === undefined || boundActiveTurnId !== String(event.turnId)) {
+                    return Effect.logWarning("provider.session.stale_generation_event_ignored", {
+                      threadId: event.threadId,
+                      provider: event.provider,
+                      eventType: event.type,
+                      eventLifecycleGeneration: event.lifecycleGeneration,
+                      currentLifecycleGeneration: currentGeneration,
+                    });
+                  }
+                  return Effect.logInfo(
+                    "provider.session.stale_generation_terminal_event_accepted",
+                    {
+                      threadId: event.threadId,
+                      provider: event.provider,
+                      eventType: event.type,
+                      eventLifecycleGeneration: event.lifecycleGeneration,
+                      currentLifecycleGeneration: currentGeneration,
+                    },
+                  ).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
+                }),
+              );
+            }
+            // No current generation and the event is terminal: fall through so
+            // the stale session's exit/error settles the binding and projection.
           }
-          const canonicalEvent = event;
-          // Journal before mutating lifecycle/task state. If durable persistence
-          // fails, the supervised pump retries the same event while its source
-          // generation is still current and no recovery waiter has been released.
-          return persistCanonicalRuntimeEvent(canonicalEvent).pipe(
-            Effect.flatMap((persisted) =>
-              Effect.sync(() => {
-                if (canonicalEvent.type === "turn.started") {
-                  reconcileRuntimeIdleTimer(canonicalEvent);
-                }
-              }).pipe(
-                Effect.andThen(updateSessionBindingFromRuntimeEvent(canonicalEvent)),
-                Effect.andThen(publishRuntimeEvent(canonicalEvent, persisted)),
-                Effect.andThen(scheduleRetiredGatewaySessionRecovery(canonicalEvent)),
-              ),
-            ),
-          );
+          return journalAndPublish(canonicalEvent);
         }),
       );
 
@@ -1490,7 +1571,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
           ] === true;
-        if (hasActiveSession && (!input.allowRecovery || !requiresCredentialRotation)) {
+        // A live adapter session whose persisted generation no longer matches
+        // the thread's current generation is a zombie: its runtime events are
+        // rejected by the stale-generation gate, so a turn routed into it can
+        // produce no visible output and the thread appears wedged. Recovery-
+        // capable callers (turn sends) must replace it instead of fast-pathing
+        // into it. Control-plane callers (interrupts, responses) keep routing
+        // to the live session — stopping a wedged runtime is the user's escape
+        // hatch and must keep working.
+        const bindingMatchesCurrentGeneration =
+          binding.lifecycleGeneration === undefined ||
+          binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
+        if (
+          hasActiveSession &&
+          (!input.allowRecovery || (bindingMatchesCurrentGeneration && !requiresCredentialRotation))
+        ) {
           return {
             adapter,
             isActive: true,

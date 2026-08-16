@@ -276,6 +276,42 @@ export function buildTranscriptAutoFollowSignal(input: {
   return `${input.messageCount}\u001f${input.tailKey}`;
 }
 
+// Deliberately excludes the tail message's text length: while a streamed
+// message grows, LegendList's own `maintainScrollAtEnd` keeps the bottom
+// stick, and re-arming the auto-follow re-snap on every store flush would
+// schedule a redundant scrollToEnd per flush for the whole stream. The key
+// still moves on every transition that needs an explicit re-snap: a new tail
+// message, role change, stream start/settle, first content landing, and
+// completion.
+export function buildTranscriptTailKey(
+  tailMessage: {
+    readonly id: string;
+    readonly role: string;
+    readonly streaming?: boolean;
+    readonly text: string;
+    readonly completedAt?: string | null | undefined;
+  } | null,
+): string {
+  if (tailMessage === null) {
+    return "empty";
+  }
+  return [
+    tailMessage.id,
+    tailMessage.role,
+    tailMessage.streaming ? "streaming" : "settled",
+    // While streaming, per-token growth is owned by LegendList's
+    // maintainScrollAtEnd — only the empty->content transition matters here.
+    // Once settled, a projection repair can replace the text under the same id
+    // with nothing else changing, so length is back in the key.
+    tailMessage.streaming
+      ? tailMessage.text.length > 0
+        ? "content"
+        : "empty"
+      : String(tailMessage.text.length),
+    tailMessage.completedAt ?? "",
+  ].join(":");
+}
+
 export function resolveThreadArtifactWorkspaceRoot(input: {
   readonly isStudioContainer: boolean;
   readonly projectCwd: string | null;
@@ -592,6 +628,30 @@ export function resolveGitRepoUiState(input: {
   return input.queriedIsRepo ?? !input.isStudioContainer;
 }
 
+export interface SettledThreadBranchMismatch {
+  readonly threadBranch: string;
+  readonly currentBranch: string;
+}
+
+export function resolveSettledThreadBranchMismatch(input: {
+  isSettled: boolean;
+  isLocalWorkspace: boolean;
+  threadBranch: string | null | undefined;
+  currentBranch: string | null | undefined;
+}): SettledThreadBranchMismatch | null {
+  if (!input.isSettled || !input.isLocalWorkspace) {
+    return null;
+  }
+
+  const threadBranch = input.threadBranch?.trim() ?? "";
+  const currentBranch = input.currentBranch?.trim() ?? "";
+  if (!threadBranch || !currentBranch || threadBranch === currentBranch) {
+    return null;
+  }
+
+  return { threadBranch, currentBranch };
+}
+
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
@@ -717,6 +777,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    ...(draftThread.goal ? { goal: draftThread.goal } : {}),
   };
 }
 

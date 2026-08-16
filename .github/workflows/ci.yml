@@ -43,8 +43,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      - name: Cache Electron runtime
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
+
+      - name: Install Electron test runtime
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node apps/desktop/node_modules/electron/install.js; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Verify Linux terminal PTY native dependency
         if: runner.os == 'Linux'
@@ -115,6 +138,8 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Verify Windows terminal PTY native dependency under Bun
