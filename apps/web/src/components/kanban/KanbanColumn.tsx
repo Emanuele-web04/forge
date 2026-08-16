@@ -15,7 +15,7 @@ import { cn } from "~/lib/utils";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import {
-  KANBAN_COLUMN_LABELS,
+  resolveKanbanColumnLabel,
   resolveDraftDropAction,
   type KanbanCard,
   type KanbanColumnKey,
@@ -35,7 +35,12 @@ export function parseKanbanColumnDropId(
   if (prefix !== COLUMN_DROP_ID_PREFIX || projectIdParts.length === 0) {
     return null;
   }
-  if (column !== "draft" && column !== "inProgress" && column !== "done") {
+  if (
+    column !== "draft" &&
+    column !== "inProgress" &&
+    column !== "awaitingYou" &&
+    column !== "done"
+  ) {
     return null;
   }
   return { projectId: projectIdParts.join("|"), column };
@@ -90,6 +95,7 @@ function KanbanColumnComponent({
   onNewCard,
   prByThreadId,
   nowMs,
+  uncapped,
 }: {
   projectId: ProjectId;
   columnKey: KanbanColumnKey;
@@ -108,6 +114,12 @@ function KanbanColumnComponent({
   prByThreadId: KanbanCardPrLookup;
   /** Shared board clock for live elapsed labels. */
   nowMs?: number;
+  /**
+   * Board-level uncapped build (needs-review reveal): the per-column done cap is
+   * suppressed so the folded tail renders (C2) — a single source of truth for the
+   * fold instead of two stacked caps.
+   */
+  uncapped?: boolean;
 }) {
   const sortable = sortableProp ?? false;
   const droppable = droppableProp ?? false;
@@ -117,9 +129,10 @@ function KanbanColumnComponent({
   const [showAll, setShowAll] = useState(false);
 
   // Done columns can grow unbounded; cap the initial render so opening the board
-  // stays cheap for long-lived projects.
+  // stays cheap for long-lived projects. The board-level needs-review reveal
+  // (uncapped) lifts this inner cap so the folded tail renders (C2).
   const cappedCards =
-    columnKey === "done" && !showAll && cards.length > DONE_RENDER_CAP
+    columnKey === "done" && !uncapped && !showAll && cards.length > DONE_RENDER_CAP
       ? cards.slice(0, DONE_RENDER_CAP)
       : cards;
   const hiddenCount = cards.length - cappedCards.length;
@@ -158,7 +171,7 @@ function KanbanColumnComponent({
     <section className="flex min-h-0 min-w-64 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 px-1.5 pb-2">
         <h3 className="text-[13px] font-medium text-foreground/90">
-          {KANBAN_COLUMN_LABELS[columnKey]}
+          {resolveKanbanColumnLabel(columnKey)}
         </h3>
         <span className="text-xs text-muted-foreground/70">{cards.length}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">

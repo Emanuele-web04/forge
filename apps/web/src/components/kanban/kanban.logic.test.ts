@@ -7,16 +7,22 @@ import {
   areKanbanComposerDraftSnapshotsEqual,
   buildKanbanComposerDraftSnapshot,
   buildKanbanBoard,
+  deriveKanbanCardAttention,
   deriveKanbanColumn,
-  flattenProjectBoardForOverview,
+  deriveKanbanColumnV2,
   isKanbanDraftOnlyCard,
   kanbanDraftCardId,
   kanbanThreadCardId,
+  KANBAN_NEEDS_REVIEW_CAP,
   orderDraftCards,
   overviewVisibleKanbanCards,
   reorderDraftCardIds,
+  refineAttentionFlagsForLivePr,
   resolveDraftDropAction,
   resolveOptimisticDispatchOutcome,
+  resolveReviewFoldToggleLabel,
+  shouldShowReviewFoldToggle,
+  shouldToastForExpiredDispatch,
   type BuildKanbanBoardInput,
   type KanbanCard,
   type KanbanOptimisticDispatchSnapshot,
@@ -940,7 +946,7 @@ describe("resolveDraftDropAction", () => {
   });
 });
 
-describe("flattenProjectBoardForOverview", () => {
+describe("overviewVisibleKanbanCards", () => {
   const card = (cardId: string, column: KanbanCard["column"]): KanbanCard => ({
     cardId,
     threadId: ThreadId.makeUnsafe(cardId),
@@ -960,9 +966,12 @@ describe("flattenProjectBoardForOverview", () => {
     activeWorkStartedAt: null,
     isOptimisticDispatch: false,
   });
-  const board = (columns: Partial<Pick<KanbanProjectBoard, "draft" | "inProgress" | "done">>) => {
+  const board = (
+    columns: Partial<Pick<KanbanProjectBoard, "draft" | "inProgress" | "awaitingYou" | "done">>,
+  ) => {
     const draft = columns.draft ?? [];
     const inProgress = columns.inProgress ?? [];
+    const awaitingYou = columns.awaitingYou ?? [];
     const done = columns.done ?? [];
     return {
       projectId: ProjectId.makeUnsafe("project-1"),
@@ -970,30 +979,36 @@ describe("flattenProjectBoardForOverview", () => {
       projectKind: "project" as const,
       draft,
       inProgress,
+      awaitingYou,
       done,
-      totalCount: draft.length + inProgress.length + done.length,
+      totalCount: draft.length + inProgress.length + awaitingYou.length + done.length,
+      hiddenCount: 0,
     };
   };
 
-  it("orders cards In Progress, then Draft, then Done", () => {
-    const flattened = flattenProjectBoardForOverview(
-      board({
-        draft: [card("d", "draft")],
-        inProgress: [card("w", "inProgress")],
-        done: [card("x", "done")],
-      }),
-    );
+  it("caps each column before flattening and reports the folded remainder (H3)", () => {
+    const inProgress = Array.from({ length: 25 }, (_, index) => card(`w-${index}`, "inProgress"));
+    const done = Array.from({ length: 25 }, (_, index) => card(`d-${index}`, "done"));
+    const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(board({ inProgress, done }));
 
-    expect(flattened.map((entry) => entry.cardId)).toEqual(["w", "d", "x"]);
+    // Per-column cap: 20 each, so no In Progress card is pushed off the window
+    // by the Done tail — the attention-first contract of the overview.
+    expect(visibleCards).toHaveLength(40);
+    expect(hiddenCount).toBe(10);
+    expect(visibleCards.slice(0, 20).map((entry) => entry.cardId)[0]).toBe("w-0");
+    expect(visibleCards.at(-1)?.cardId).toBe("d-19");
   });
 
-  it("caps the overview's visible cards and reports the folded remainder", () => {
-    const done = Array.from({ length: 25 }, (_, index) => card(`done-${index}`, "done"));
-    const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(board({ done }));
+  it("routes Awaiting you after In Progress in v2 overview order", () => {
+    const boardData = board({
+      inProgress: [card("w", "inProgress")],
+      awaitingYou: [card("a", "awaitingYou")],
+      draft: [card("s", "draft")],
+      done: [card("x", "done")],
+    });
+    const { visibleCards } = overviewVisibleKanbanCards(boardData, true);
 
-    expect(visibleCards).toHaveLength(20);
-    expect(hiddenCount).toBe(5);
-    expect(visibleCards.at(-1)?.cardId).toBe("done-19");
+    expect(visibleCards.map((entry) => entry.cardId)).toEqual(["w", "a", "s", "x"]);
   });
 
   it("shows every card when the overview cap is not reached", () => {
@@ -1003,5 +1018,357 @@ describe("flattenProjectBoardForOverview", () => {
 
     expect(visibleCards.map((entry) => entry.cardId)).toEqual(["w"]);
     expect(hiddenCount).toBe(0);
+  });
+
+  it("caps only the overflowing columns in v2 routing, not the whole project", () => {
+    const awaitingYou = Array.from({ length: 30 }, (_, index) => card(`a-${index}`, "awaitingYou"));
+    const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(
+      board({ awaitingYou, done: [card("x", "done")] }),
+      true,
+    );
+
+    expect(visibleCards).toHaveLength(21);
+    expect(hiddenCount).toBe(10);
+    expect(visibleCards.at(-1)?.cardId).toBe("x");
+  });
+});
+
+const FROZEN_NOW_MS = Date.parse("2026-03-09T12:00:00.000Z");
+const FROZEN_NOW_ISO = new Date(FROZEN_NOW_MS).toISOString();
+
+describe("deriveKanbanColumnV2 (web adapter)", () => {
+  it("maps the web summary into the shared derivation and returns awaitingYou for pending approval", () => {
+    const thread = makeSidebarThreadSummary({
+      hasPendingApprovals: true,
+      session: makeSession({
+        status: "running",
+        orchestrationStatus: "running",
+        updatedAt: FROZEN_NOW_ISO,
+      }),
+      latestTurn: makeLatestTurn({ state: "running", completedAt: null }),
+    });
+    expect(deriveKanbanColumnV2(thread, FROZEN_NOW_MS)).toBe("awaitingYou");
+  });
+
+  it("falls back to the shared function without `now` for non-staleness cases", () => {
+    const settled = makeSidebarThreadSummary({ latestTurn: makeLatestTurn() });
+    expect(deriveKanbanColumnV2(settled)).toBe("done");
+    expect(deriveKanbanColumnV2(makeSidebarThreadSummary())).toBe("draft");
+    expect(deriveKanbanColumnV2(makeSidebarThreadSummary({ hasLiveTailWork: true }))).toBe(
+      "inProgress",
+    );
+  });
+
+  it("uses orchestrationStatus as the session status label", () => {
+    // `status: "connecting"` maps from the legacy phase; the adapter reads
+    // `orchestrationStatus` (the shared union) instead.
+    const connecting = makeSidebarThreadSummary({
+      session: makeSession({
+        status: "connecting",
+        orchestrationStatus: "starting",
+        updatedAt: FROZEN_NOW_ISO,
+      }),
+    });
+    expect(deriveKanbanColumnV2(connecting, FROZEN_NOW_MS)).toBe("inProgress");
+  });
+
+  it("parity with the shared module for a dead-session pending thread", () => {
+    const deadPending = makeSidebarThreadSummary({
+      hasPendingUserInput: true,
+      latestTurn: makeLatestTurn(),
+      session: makeSession({ status: "closed", orchestrationStatus: "stopped" }),
+    });
+    expect(deriveKanbanColumnV2(deadPending, FROZEN_NOW_MS)).toBe("done");
+  });
+});
+
+describe("deriveKanbanCardAttention", () => {
+  it("produces no attention on a plain settled card", () => {
+    const { attention, attentionLabels } = deriveKanbanCardAttention(
+      makeSidebarThreadSummary({
+        latestTurn: makeLatestTurn(),
+        session: makeSession({ orchestrationStatus: "ready", updatedAt: FROZEN_NOW_ISO }),
+      }),
+      { now: FROZEN_NOW_MS },
+    );
+    expect(attention).toEqual([]);
+    expect(attentionLabels).toEqual([]);
+  });
+
+  it("surfaces the failed pill when the session errored", () => {
+    const { attention, attentionLabels } = deriveKanbanCardAttention(
+      makeSidebarThreadSummary({
+        latestTurn: makeLatestTurn({ state: "error" }),
+        session: makeSession({
+          status: "error",
+          orchestrationStatus: "error",
+          lastError: "boom",
+          updatedAt: FROZEN_NOW_ISO,
+        }),
+      }),
+      { now: FROZEN_NOW_MS },
+    );
+    expect(attention).toContain("failed");
+    expect(attentionLabels).toContain("Failed");
+  });
+
+  it("adds needs-review when the caller passes an open PR", () => {
+    const { attention } = deriveKanbanCardAttention(
+      makeSidebarThreadSummary({
+        latestTurn: makeLatestTurn(),
+        session: makeSession({ orchestrationStatus: "ready", updatedAt: FROZEN_NOW_ISO }),
+      }),
+      { now: FROZEN_NOW_MS, needsReview: true },
+    );
+    expect(attention).toContain("needs-review");
+  });
+});
+
+describe("buildKanbanBoard v2 mode", () => {
+  const v2Options = (overrides: Partial<Parameters<typeof buildKanbanBoard>[1]> = {}) => ({
+    now: FROZEN_NOW_MS,
+    ...overrides,
+  });
+
+  it("buckets awaitingYou cards separately from inProgress", () => {
+    const awaiting = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-awaited"),
+      hasPendingApprovals: true,
+      latestTurn: makeLatestTurn({ state: "running", completedAt: null }),
+      session: makeSession({
+        status: "running",
+        orchestrationStatus: "running",
+        updatedAt: FROZEN_NOW_ISO,
+      }),
+    });
+    const running = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-running"),
+      hasLiveTailWork: true,
+      latestTurn: makeLatestTurn({ state: "running", completedAt: null }),
+      session: makeSession({
+        status: "running",
+        orchestrationStatus: "running",
+        updatedAt: FROZEN_NOW_ISO,
+      }),
+    });
+    const board = buildKanbanBoard(makeBoardInput({ threads: [awaiting, running] }), v2Options());
+    const project = board.projects[0]!;
+    expect(project.inProgress.map((card) => card.threadId)).toEqual(["thread-running"]);
+    expect(project.awaitingYou.map((card) => card.threadId)).toEqual(["thread-awaited"]);
+  });
+
+  it("fills attention and attentionLabel on thread cards in v2 mode", () => {
+    const failed = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-failed"),
+      latestTurn: makeLatestTurn({ state: "error" }),
+      session: makeSession({
+        status: "error",
+        orchestrationStatus: "error",
+        lastError: "x",
+        updatedAt: FROZEN_NOW_ISO,
+      }),
+    });
+    const board = buildKanbanBoard(makeBoardInput({ threads: [failed] }), v2Options());
+    const card = board.projects[0]!.awaitingYou[0]!;
+    expect(card.attention).toContain("failed");
+    expect(card.attentionLabels).toContain("Failed");
+  });
+
+  it("leaves classic cards with no attention fields", () => {
+    const failed = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-failed"),
+      latestTurn: makeLatestTurn({ state: "error" }),
+      session: makeSession({ status: "error", orchestrationStatus: "error" }),
+    });
+    const board = buildKanbanBoard(makeBoardInput({ threads: [failed] }));
+    const doneCard = board.projects[0]!.done[0]!;
+    expect(doneCard.attention).toBeUndefined();
+    expect(doneCard.attentionLabels).toBeUndefined();
+  });
+
+  it("applies the needs-review filter in v2 mode", () => {
+    const noReview = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-noreview"),
+      latestTurn: makeLatestTurn(),
+    });
+    const withReview = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-review"),
+      latestTurn: makeLatestTurn(),
+      lastKnownPr: {
+        number: 1,
+        title: "Open PR",
+        url: "https://example.com/pr/1",
+        baseBranch: "main",
+        headBranch: "fix",
+        state: "open",
+      },
+    });
+    const filtered = buildKanbanBoard(
+      makeBoardInput({ threads: [noReview, withReview] }),
+      v2Options({
+        needsReviewByThreadId: { "thread-review": true },
+        isNeedsReviewActive: true,
+      }),
+    );
+    const project = filtered.projects[0]!;
+    expect(project.done.map((card) => card.threadId)).toEqual(["thread-review"]);
+    expect(project.totalCount).toBe(1);
+    expect(project.done[0]!.needsReview).toBe(true);
+  });
+
+  it("caps each column at KANBAN_NEEDS_REVIEW_CAP rows in the filtered view", () => {
+    const reviewThreads = Array.from({ length: KANBAN_NEEDS_REVIEW_CAP + 8 }, (_, index) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-review-${index}`),
+        latestTurn: makeLatestTurn(),
+        lastKnownPr: {
+          number: index + 1,
+          title: "Open PR",
+          url: "https://example.com/pr",
+          baseBranch: "main",
+          headBranch: `fix-${index}`,
+          state: "open",
+        },
+      }),
+    );
+    const needsReviewByThreadId: Record<string, boolean> = {};
+    for (const thread of reviewThreads) {
+      needsReviewByThreadId[thread.id] = true;
+    }
+    const filtered = buildKanbanBoard(
+      makeBoardInput({ threads: reviewThreads }),
+      v2Options({ needsReviewByThreadId, isNeedsReviewActive: true }),
+    );
+    expect(filtered.projects[0]!.done).toHaveLength(KANBAN_NEEDS_REVIEW_CAP);
+    // The header count stays the true pre-cap total (H1): the cap only narrows
+    // what renders, so all review threads count toward it.
+    expect(filtered.projects[0]!.totalCount).toBe(KANBAN_NEEDS_REVIEW_CAP + 8);
+    // Cards folded behind the per-column cap are reported for a reveal affordance.
+    expect(filtered.projects[0]!.hiddenCount).toBe(8);
+  });
+
+  it("reveals the folded needs-review tail when the board is built uncapped (H1)", () => {
+    const reviewThreads = Array.from({ length: KANBAN_NEEDS_REVIEW_CAP + 5 }, (_, index) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-review-fold-${index}`),
+        latestTurn: makeLatestTurn(),
+        lastKnownPr: {
+          number: index + 1,
+          title: "Open PR",
+          url: "https://example.com/pr",
+          baseBranch: "main",
+          headBranch: `fix-${index}`,
+          state: "open",
+        },
+      }),
+    );
+    const needsReviewByThreadId: Record<string, boolean> = {};
+    for (const thread of reviewThreads) {
+      needsReviewByThreadId[thread.id] = true;
+    }
+    const revealed = buildKanbanBoard(
+      makeBoardInput({ threads: reviewThreads }),
+      v2Options({ needsReviewByThreadId, isNeedsReviewActive: true, uncapped: true }),
+    );
+    const project = revealed.projects[0]!;
+    expect(project.done).toHaveLength(KANBAN_NEEDS_REVIEW_CAP + 5);
+    expect(project.hiddenCount).toBe(0);
+    // The header count is unchanged by the reveal — it was already the pre-cap total.
+    expect(project.totalCount).toBe(KANBAN_NEEDS_REVIEW_CAP + 5);
+  });
+
+  it("keeps all cards when the needs-review filter is off", () => {
+    const board = buildKanbanBoard(
+      makeBoardInput({ threads: [makeSidebarThreadSummary({ latestTurn: makeLatestTurn() })] }),
+      v2Options(),
+    );
+    expect(board.projects[0]!.done).toHaveLength(1);
+  });
+});
+
+describe("refineAttentionFlagsForLivePr", () => {
+  // Attention labels flow through as raw flag identifiers, not display copy.
+  const failedFlag = "failed";
+  const needsReviewFlag = "needs-review";
+
+  it("keeps labels while the row has not resolved yet (undefined)", () => {
+    expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], undefined)).toEqual([
+      failedFlag,
+      needsReviewFlag,
+    ]);
+  });
+
+  it("keeps needs-review while the live row is open", () => {
+    expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], "open")).toEqual([
+      failedFlag,
+      needsReviewFlag,
+    ]);
+  });
+
+  it("drops needs-review once the live row settles merged", () => {
+    expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], "merged")).toEqual([
+      failedFlag,
+    ]);
+  });
+
+  it("drops needs-review when live resolution settled empty (null, C3/M3)", () => {
+    expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], null)).toEqual([
+      failedFlag,
+    ]);
+  });
+
+  it("drops needs-review once the live row settles closed", () => {
+    expect(refineAttentionFlagsForLivePr([needsReviewFlag], "closed")).toEqual([]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(refineAttentionFlagsForLivePr(undefined, undefined)).toEqual([]);
+    expect(refineAttentionFlagsForLivePr([], "open")).toEqual([]);
+  });
+});
+
+describe("shouldToastForExpiredDispatch (H5)", () => {
+  it("stays silent when the thread left the display set", () => {
+    expect(shouldToastForExpiredDispatch(undefined)).toBe(false);
+  });
+
+  it("stays silent while the thread still derives In Progress (slow provider)", () => {
+    expect(shouldToastForExpiredDispatch(makeSidebarThreadSummary({ hasLiveTailWork: true }))).toBe(
+      false,
+    );
+    expect(
+      shouldToastForExpiredDispatch(
+        makeSidebarThreadSummary({
+          session: makeSession({ status: "running", orchestrationStatus: "running" }),
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("toasts when the thread reverted to a non-progress column", () => {
+    // A plain thread with a settled turn derives Done after the expiry window —
+    // the revert toast is accurate, so it must surface.
+    expect(
+      shouldToastForExpiredDispatch(makeSidebarThreadSummary({ latestTurn: makeLatestTurn() })),
+    ).toBe(true);
+    expect(shouldToastForExpiredDispatch(makeSidebarThreadSummary())).toBe(true);
+  });
+});
+
+describe("needs-review reveal affordance (H1)", () => {
+  it("renders when there is a fold but the tail is not revealed", () => {
+    expect(shouldShowReviewFoldToggle(false, 3)).toBe(true);
+    expect(resolveReviewFoldToggleLabel(false, 3)).toBe("Show 3 more");
+  });
+
+  it("keeps the toggle reachable once revealed even with zero hidden cards", () => {
+    expect(shouldShowReviewFoldToggle(true, 0)).toBe(true);
+    expect(resolveReviewFoldToggleLabel(true, 0)).toBe("Show fewer");
+    expect(shouldShowReviewFoldToggle(true, 5)).toBe(true);
+    expect(resolveReviewFoldToggleLabel(true, 5)).toBe("Show fewer");
+  });
+
+  it("hides the toggle when there is no fold and nothing is revealed", () => {
+    expect(shouldShowReviewFoldToggle(false, 0)).toBe(false);
   });
 });

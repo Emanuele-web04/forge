@@ -6,6 +6,16 @@
 
 import type { ProjectId, ProviderKind, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import {
+  KANBAN_ATTENTION_LABELS,
+  KANBAN_COLUMN_V2_LABELS,
+  deriveKanbanAttention as deriveKanbanAttentionShared,
+  deriveKanbanColumnV2 as deriveKanbanColumnV2Shared,
+  hasKanbanLiveWork as hasKanbanLiveWorkShared,
+  type KanbanAttentionFlag,
+  type KanbanColumnV2Key,
+  type KanbanThreadDerivationInput,
+} from "@synara/shared/kanban";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
 import type { ComposerThreadDraftState } from "../../composerDraftStore";
 import {
@@ -15,13 +25,34 @@ import {
 } from "../../session-logic";
 import type { Project, SidebarThreadSummary } from "../../types";
 
-export type KanbanColumnKey = "draft" | "inProgress" | "done";
+/**
+ * Web column vocabulary. The classic path speaks draft/inProgress/done; the v2
+ * path (S1-P5) additionally renders `awaitingYou`. Classic derivation and label
+ * maps stay untouched — this is vocabulary for the v2 boards only. `awaitingYou`
+ * resolves from the shared v2 label map when a consumer spans both vocabularies.
+ */
+export type KanbanColumnKey = KanbanClassicColumnKey | "awaitingYou";
 
-export const KANBAN_COLUMN_LABELS: Record<KanbanColumnKey, string> = {
+/** Classic 3-column vocabulary — `KANBAN_COLUMN_LABELS` stays scoped to it. */
+export type KanbanClassicColumnKey = "draft" | "inProgress" | "done";
+
+export const KANBAN_COLUMN_LABELS: Record<KanbanClassicColumnKey, string> = {
   draft: "Draft",
   inProgress: "In Progress",
   done: "Done",
 };
+
+/**
+ * Display label for a kanban column, spanning both vocabularies. The classic map
+ * stays scoped to the classic keys; the v2-specific label resolves from the
+ * shared v2 map (`KANBAN_COLUMN_V2_LABELS`) so the copy never re-literalizes.
+ */
+export function resolveKanbanColumnLabel(column: KanbanColumnKey): string {
+  if (column === "awaitingYou") {
+    return KANBAN_COLUMN_V2_LABELS.awaitingYou;
+  }
+  return KANBAN_COLUMN_LABELS[column];
+}
 
 export const KANBAN_FALLBACK_DRAFT_TITLE = "New thread";
 
@@ -154,6 +185,19 @@ export interface KanbanCard {
   activeWorkStartedAt: string | null;
   /** Shown In Progress ahead of runtime state — renders the "Starting…" affordance. */
   isOptimisticDispatch: boolean;
+  /**
+   * v2-path attention flags (failed / stuck / awaiting-approval / awaiting-input /
+   * needs-review). Present only for v2 boards; classic cards never set it.
+   */
+  attention?: KanbanAttentionFlag[] | undefined;
+  /**
+   * v2-path red-pill copy for every `attention` flag (the renderer shows up to
+   * two). Present only for v2 boards; undefined for classic so the classic pill
+   * renderer is untouched.
+   */
+  attentionLabels?: string[] | undefined;
+  /** needs-review (open PR per the live PR view) — set on v2-path thread cards. */
+  needsReview?: boolean | undefined;
 }
 
 export interface KanbanProjectBoard {
@@ -162,13 +206,49 @@ export interface KanbanProjectBoard {
   projectKind: Project["kind"];
   draft: KanbanCard[];
   inProgress: KanbanCard[];
+  /** v2-path attention column — always present, empty in classic mode. */
+  awaitingYou: KanbanCard[];
   done: KanbanCard[];
   totalCount: number;
+  /**
+   * Cards folded behind a per-column render cap (needs-review filter, S1-P8).
+   * Classic/unfiltered boards never exceed their column arrays, so this is 0.
+   */
+  hiddenCount: number;
 }
 
 export interface KanbanBoard {
   projects: KanbanProjectBoard[];
   totalCount: number;
+}
+
+/**
+ * v2-path board build options. The derivation and the injected now-tick make the
+ * board attention-aware (awaiting-you column + attention pills); `needsReview`
+ * scopes the per-card open-PR flag (S1-P8) and `isNeedsReviewActive` gates the
+ * filtered view.
+ */
+export interface KanbanV2BuildOptions {
+  /** Injected wall-clock tick (epoch ms) from the board hook for stuck staleness. */
+  now: number;
+  /** Per-thread open-PR view (S1-P8) — hidden when omitted. */
+  needsReviewByThreadId?: Readonly<Record<string, boolean | undefined>>;
+  /** Whether the needs-review filter is currently on (S1-P8). */
+  isNeedsReviewActive?: boolean;
+  /**
+   * Drop the per-column needs-review render cap so the current v2 build renders
+   * every card behind the fold. The reveal affordance drives this — the header
+   * count stays the pre-cap total either way (H1).
+   */
+  uncapped?: boolean;
+  /**
+   * Durable last-activity stamp per thread (epoch ms), keyed by thread id. The
+   * heartbeat takes the max of session/thread stamps and this so a busy-but-quiet
+   * streaming turn never reads as stale even though `SidebarThreadSummary.updatedAt`
+   * is frozen on the streaming hot path (F1). Sourced from the durable thread
+   * shell's `updatedAt`, which advances per appended message.
+   */
+  lastActivityTimestampMsByThreadId?: Readonly<Record<string, number | null>>;
 }
 
 export interface BuildKanbanBoardInput {
@@ -219,7 +299,7 @@ function toSortableTimestamp(iso: string | null | undefined): number | null {
  * count as In Progress; a thread that never ran a turn is a Draft; settled
  * threads land in Done.
  */
-export function deriveKanbanColumn(thread: SidebarThreadSummary): KanbanColumnKey {
+export function deriveKanbanColumn(thread: SidebarThreadSummary): KanbanClassicColumnKey {
   // Pending requests whose session died (crash, close) are unanswerable — they
   // must not pin the thread to In Progress forever.
   const hasActionablePendingRequests =
@@ -247,6 +327,129 @@ export function deriveKanbanColumn(thread: SidebarThreadSummary): KanbanColumnKe
   return "done";
 }
 
+/** Projection of a `SidebarThreadSummary` into the shared structural derivation input. */
+function toKanbanThreadDerivationInput(
+  thread: SidebarThreadSummary,
+  lastActivityTimestampMs?: number | null,
+): KanbanThreadDerivationInput {
+  return {
+    latestTurn: thread.latestTurn
+      ? {
+          state: thread.latestTurn.state,
+          startedAt: thread.latestTurn.startedAt,
+          completedAt: thread.latestTurn.completedAt,
+        }
+      : null,
+    session: thread.session
+      ? {
+          status: thread.session.orchestrationStatus,
+          updatedAt: thread.session.updatedAt,
+          lastError: thread.session.lastError ?? null,
+        }
+      : null,
+    // The thread stamp advances per appended message; the shared heartbeat takes
+    // the later of it and `session.updatedAt` so a busy-but-quiet turn never
+    // reads as stale (mirrors providerRuntimeReconciliation.projectedLifecycleAgeMs).
+    threadUpdatedAt: thread.updatedAt ?? null,
+    // `SidebarThreadSummary.updatedAt` freezes while the summary build is skipped
+    // on the streaming hot path, so feed the durable last-activity stamp as well —
+    // the heartbeat then stays live on every delta (F1).
+    lastActivityTimestampMs: lastActivityTimestampMs ?? null,
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+    hasLiveTailWork: thread.hasLiveTailWork,
+  };
+}
+
+/**
+ * v2 clock-gate (C2): whether this thread could age into a stuck state, so the
+ * board only ticks the wall clock while a live-work candidate exists. This is
+ * the shared `hasKanbanLiveWork` over the same structural input the derivation
+ * uses — one liveness definition for the gate and the column/attention math.
+ * A wedged `starting` session, a running session with no settled turn, and a
+ * live-tail-only thread all count as live, so they tick and can earn a stuck
+ * pill; a fresh-but-idle thread does not.
+ */
+export function hasKanbanAttentionCandidate(
+  thread: SidebarThreadSummary,
+  lastActivityTimestampMs?: number | null,
+): boolean {
+  return hasKanbanLiveWorkShared(toKanbanThreadDerivationInput(thread, lastActivityTimestampMs));
+}
+
+/**
+ * Needs-review pill refinement (H2): the pill and the on-card PR chip must never
+ * contradict. The board seeds `needs-review` from `lastKnownPr` on first paint,
+ * while the chip renders the live resolved PR row. When a live row exists (open /
+ * merged / closed) it is the source of truth — a merged PR drops the pill; the
+ * persisted `lastKnownPr` stays the seed only for rows the live lookup has not
+ * resolved yet. Pure so the pill logic is unit-testable and identical on every
+ * surface that renders attention pills.
+ *
+ * Operates on RAW flag identifiers (`KanbanAttentionFlag`), which is the domain
+ * `card.attention` carries; display copy is mapped after refinement so the
+ * comparison never drifts from the flag set.
+ *
+ * State contract: `undefined` means "not yet resolved" (keep the initial pill);
+ * `null` means "live resolution settled with no open PR" (drop it); `"open" |
+ * "closed" | "merged"` is the live row state.
+ */
+export function refineAttentionFlagsForLivePr(
+  attentionFlags: readonly KanbanAttentionFlag[] | undefined,
+  livePrState: "open" | "closed" | "merged" | null | undefined,
+): KanbanAttentionFlag[] {
+  if (!attentionFlags || attentionFlags.length === 0) {
+    return [];
+  }
+  if (livePrState === undefined) {
+    return [...attentionFlags];
+  }
+  const liveNeedsReview = livePrState === "open";
+  return attentionFlags.filter((flag) => flag !== "needs-review" || liveNeedsReview);
+}
+
+/**
+ * v2-path column adapter. The web ↔ shared mapping lives only here: it projects
+ * the web thread summary into the shared structural input and delegates to
+ * `@synara/shared/kanban`. `now` is the injected ticking clock from the board
+ * hook (S1-P5); without it the derivation never consults staleness. Typed as the
+ * shared `KanbanColumnV2Key` so `awaitingYou` cannot leak into the classic path.
+ */
+export function deriveKanbanColumnV2(
+  thread: SidebarThreadSummary,
+  now?: number,
+  lastActivityTimestampMs?: number | null,
+): KanbanColumnV2Key {
+  const input = toKanbanThreadDerivationInput(thread, lastActivityTimestampMs);
+  return now !== undefined
+    ? deriveKanbanColumnV2Shared(input, { now })
+    : deriveKanbanColumnV2Shared(input);
+}
+
+/**
+ * v2-path attention projection for a thread card: the shared flag set plus the
+ * display label map. `now` feeds the stuck staleness check. `needsReview` is the
+ * per-thread open-PR view (S1-P8) that the shared module also turns into a pill.
+ */
+export function deriveKanbanCardAttention(
+  thread: SidebarThreadSummary,
+  opts: {
+    now: number;
+    needsReview?: boolean;
+    lastActivityTimestampMs?: number | null;
+  },
+): { attention: KanbanAttentionFlag[]; attentionLabels: string[] } {
+  const input = toKanbanThreadDerivationInput(thread, opts.lastActivityTimestampMs);
+  const attention = deriveKanbanAttentionShared(input, {
+    now: opts.now,
+    needsReview: opts.needsReview ?? false,
+  });
+  return {
+    attention,
+    attentionLabels: attention.map((flag) => KANBAN_ATTENTION_LABELS[flag]),
+  };
+}
+
 function resolveThreadCardTimestamp(
   thread: SidebarThreadSummary,
   column: KanbanColumnKey,
@@ -254,7 +457,7 @@ function resolveThreadCardTimestamp(
   if (column === "done" && thread.latestTurn?.completedAt) {
     return thread.latestTurn.completedAt;
   }
-  if (column === "inProgress") {
+  if (column === "inProgress" || column === "awaitingYou") {
     const liveTimestamp = thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null;
     if (liveTimestamp) {
       return liveTimestamp;
@@ -279,15 +482,31 @@ function buildThreadCard(
   thread: SidebarThreadSummary,
   composerDraftByThreadId: BuildKanbanBoardInput["composerDraftByThreadId"],
   isTerminal: boolean,
+  v2?: KanbanV2BuildOptions,
 ): KanbanCard {
-  const column = deriveKanbanColumn(thread);
+  const lastActivityTimestampMs = v2?.lastActivityTimestampMsByThreadId?.[thread.id] ?? null;
+  const column = v2
+    ? deriveKanbanColumnV2(thread, v2.now, lastActivityTimestampMs)
+    : deriveKanbanColumn(thread);
   const composerDraft = resolveComposerDraft(composerDraftByThreadId, thread.id);
   const timestamp = resolveThreadCardTimestamp(thread, column);
   const threadProvider = isTerminal
     ? null
     : (thread.session?.provider ?? thread.modelSelection.provider);
+  const attentionFields = v2
+    ? deriveKanbanCardAttention(thread, {
+        now: v2.now,
+        needsReview: v2.needsReviewByThreadId?.[thread.id] ?? false,
+        lastActivityTimestampMs,
+      })
+    : null;
+  // In Progress cards and Awaiting-you cards whose reason is staleness (stuck)
+  // are both live work: the elapsed label tracks their active stretch. Other
+  // Awaiting-you reasons (pending/failed) center on the human, not the work.
+  const isAwaitingStuck =
+    column === "awaitingYou" && attentionFields?.attention.includes("stuck") === true;
   const activeWorkStartedAt =
-    column === "inProgress"
+    column === "inProgress" || isAwaitingStuck
       ? deriveActiveWorkStartedAt(thread.latestTurn, thread.session, timestamp)
       : null;
   return {
@@ -309,6 +528,13 @@ function buildThreadCard(
     timestamp,
     activeWorkStartedAt,
     isOptimisticDispatch: false,
+    ...(v2
+      ? {
+          attention: attentionFields?.attention ?? [],
+          attentionLabels: attentionFields?.attentionLabels ?? [],
+          needsReview: v2.needsReviewByThreadId?.[thread.id] ?? false,
+        }
+      : {}),
   };
 }
 
@@ -442,6 +668,18 @@ function buildSyntheticOptimisticCard(
 export type KanbanOptimisticDispatchOutcome = "pending" | "settled" | "failed";
 
 /**
+ * Resolve whether an expired optimistic dispatch should surface a revert toast.
+ * A thread that left the display set (gone from the board/sidebar projection)
+ * while its dispatch was still on the wire cannot be confirmed as reverting
+ * here — stay silent rather than claim a revert we can't verify (H5). A thread
+ * that still derives In Progress (slow provider init) also stays silent: the
+ * card is already correct from derived state, so a revert toast would be a lie.
+ */
+export function shouldToastForExpiredDispatch(thread: SidebarThreadSummary | undefined): boolean {
+  return thread !== undefined && deriveKanbanColumn(thread) !== "inProgress";
+}
+
+/**
  * How runtime state relates to an optimistic dispatch:
  * - "settled": the dispatch produced visible runtime state — the thread derives
  *   In Progress, or a turn other than the dispatch-time baseline exists (covers
@@ -539,12 +777,29 @@ export function reorderDraftCardIds(
   return next;
 }
 
-export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
+interface KanbanProjectBuckets {
+  draft: KanbanCard[];
+  inProgress: KanbanCard[];
+  awaitingYou: KanbanCard[];
+  done: KanbanCard[];
+}
+
+const EMPTY_BUCKETS: KanbanProjectBuckets = {
+  draft: [],
+  inProgress: [],
+  awaitingYou: [],
+  done: [],
+};
+
+/** Rows per column kept in the v2 needs-review filtered view (S1-P8). */
+export const KANBAN_NEEDS_REVIEW_CAP = 30;
+
+export function buildKanbanBoard(
+  input: BuildKanbanBoardInput,
+  v2?: KanbanV2BuildOptions,
+): KanbanBoard {
   const threadIds = new Set<string>();
-  const cardsByProjectId = new Map<
-    ProjectId,
-    { draft: KanbanCard[]; inProgress: KanbanCard[]; done: KanbanCard[] }
-  >();
+  const cardsByProjectId = new Map<ProjectId, KanbanProjectBuckets>();
   const knownProjectIds = new Set<string>(input.projects.map((project) => project.id));
   const optimisticDispatchByThreadId = input.optimisticDispatchByThreadId ?? {};
   const handledOptimisticThreadIds = new Set<string>();
@@ -552,14 +807,18 @@ export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
   const resolveBoardProjectId = (projectId: ProjectId): ProjectId =>
     input.projectIdAliases?.[projectId] ?? projectId;
 
-  const bucketFor = (projectId: ProjectId) => {
+  const bucketFor = (projectId: ProjectId): KanbanProjectBuckets => {
     let bucket = cardsByProjectId.get(projectId);
     if (!bucket) {
-      bucket = { draft: [], inProgress: [], done: [] };
+      bucket = { draft: [], inProgress: [], awaitingYou: [], done: [] };
       cardsByProjectId.set(projectId, bucket);
     }
     return bucket;
   };
+
+  const needsReviewActive = v2?.isNeedsReviewActive === true;
+  const cardPassesNeedsReviewFilter = (card: KanbanCard): boolean =>
+    !needsReviewActive || card.needsReview === true;
 
   for (const thread of input.threads) {
     const boardProjectId = resolveBoardProjectId(thread.projectId);
@@ -569,7 +828,7 @@ export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
     threadIds.add(thread.id);
     const bucket = bucketFor(boardProjectId);
     const isTerminal = input.terminalEntryThreadIds?.has(thread.id) ?? false;
-    const card = buildThreadCard(thread, input.composerDraftByThreadId, isTerminal);
+    const card = buildThreadCard(thread, input.composerDraftByThreadId, isTerminal, v2);
     const optimisticEntry = optimisticDispatchByThreadId[thread.id];
     if (optimisticEntry) {
       handledOptimisticThreadIds.add(thread.id);
@@ -580,6 +839,9 @@ export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
         bucket.inProgress.push(forceOptimisticInProgressCard(card, optimisticEntry));
         continue;
       }
+    }
+    if (!cardPassesNeedsReviewFilter(card)) {
+      continue;
     }
     bucket[card.column].push(card);
     if (card.column === "done") {
@@ -637,11 +899,27 @@ export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
 
   let totalCount = 0;
   const projects = input.projects.map((project): KanbanProjectBoard => {
-    const bucket = cardsByProjectId.get(project.id) ?? { draft: [], inProgress: [], done: [] };
-    const draft = orderDraftCards(bucket.draft, input.draftOrderByProjectId[project.id]);
-    const inProgress = bucket.inProgress.toSorted(compareByRecencyDesc);
-    const done = bucket.done.toSorted(compareByRecencyDesc);
-    const projectTotalCount = draft.length + inProgress.length + done.length;
+    const bucket = cardsByProjectId.get(project.id) ?? EMPTY_BUCKETS;
+    // In the needs-review filtered view (S1-P8) each column is capped at
+    // KANBAN_NEEDS_REVIEW_CAP rows so live PR lookup stays bounded even on huge
+    // boards. The unfiltered view is uncapped — attention surfaces every card.
+    // When the user reveals the folded tail, the cap drops for this build so
+    // every review card renders (H1).
+    const cap = needsReviewActive && !v2?.uncapped ? KANBAN_NEEDS_REVIEW_CAP : Infinity;
+    const draft = orderDraftCards(bucket.draft, input.draftOrderByProjectId[project.id]).slice(
+      0,
+      cap,
+    );
+    const inProgress = bucket.inProgress.toSorted(compareByRecencyDesc).slice(0, cap);
+    const awaitingYou = bucket.awaitingYou.toSorted(compareByRecencyDesc).slice(0, cap);
+    const done = bucket.done.toSorted(compareByRecencyDesc).slice(0, cap);
+    // The header count is the true pre-cap total of cards matching the current
+    // filter — the capped columns only narrow what renders (H1).
+    const projectTotalCount =
+      bucket.draft.length +
+      bucket.inProgress.length +
+      bucket.awaitingYou.length +
+      bucket.done.length;
     totalCount += projectTotalCount;
     return {
       projectId: project.id,
@@ -649,17 +927,40 @@ export function buildKanbanBoard(input: BuildKanbanBoardInput): KanbanBoard {
       projectKind: project.kind,
       draft,
       inProgress,
+      awaitingYou,
       done,
       totalCount: projectTotalCount,
+      // v2 needs-review views expose the folded remainder behind their cap.
+      hiddenCount: Math.max(
+        0,
+        bucket.draft.length -
+          draft.length +
+          (bucket.inProgress.length - inProgress.length) +
+          (bucket.awaitingYou.length - awaitingYou.length) +
+          (bucket.done.length - done.length),
+      ),
     };
   });
 
   return { projects, totalCount };
 }
 
-/** Overview project columns list cards In Progress → Draft → Done. */
-export function flattenProjectBoardForOverview(board: KanbanProjectBoard): KanbanCard[] {
-  return [...board.inProgress, ...board.draft, ...board.done];
+/**
+ * Whether the board-level needs-review reveal affordance renders (H1). It stays
+ * reachable once the user has revealed the fold — a revealed board with no
+ * hidden cards must still offer "Show fewer" so the fold can be re-closed even
+ * after the filter count drops.
+ */
+export function shouldShowReviewFoldToggle(hasRevealed: boolean, hiddenCount: number): boolean {
+  return hasRevealed || hiddenCount > 0;
+}
+
+/**
+ * Button copy for the needs-review reveal: "Show N more" while there is a fold,
+ * "Show fewer" once the tail is revealed.
+ */
+export function resolveReviewFoldToggleLabel(hasRevealed: boolean, hiddenCount: number): string {
+  return hasRevealed ? "Show fewer" : `Show ${hiddenCount} more`;
 }
 
 const OVERVIEW_RENDER_CAP = 20;
@@ -667,16 +968,36 @@ const OVERVIEW_RENDER_CAP = 20;
 /**
  * The capped card list an overview project column actually renders, plus the count folded
  * behind its "Show more" affordance. Shared with the board root so per-card data (PR
- * badges) is fetched for exactly the rendered set.
+ * badges) is fetched for exactly the rendered set. The cap applies PER COLUMN before
+ * flattening, so attention cards (In Progress / Awaiting you) are never pushed off the
+ * visible window by a Done-heavy tail — the exact cards the attention-first overview
+ * exists to surface (H3). Classic flattens In Progress → Draft → Done; v2 routes
+ * Awaiting you after In Progress.
  */
-export function overviewVisibleKanbanCards(board: KanbanProjectBoard): {
+export function overviewVisibleKanbanCards(
+  board: KanbanProjectBoard,
+  v2?: boolean,
+): {
   visibleCards: KanbanCard[];
   hiddenCount: number;
 } {
-  const cards = flattenProjectBoardForOverview(board);
-  const visibleCards =
-    cards.length > OVERVIEW_RENDER_CAP ? cards.slice(0, OVERVIEW_RENDER_CAP) : cards;
-  return { visibleCards, hiddenCount: cards.length - visibleCards.length };
+  const cappedDraft = board.draft.slice(0, OVERVIEW_RENDER_CAP);
+  const cappedInProgress = board.inProgress.slice(0, OVERVIEW_RENDER_CAP);
+  const cappedAwaitingYou = board.awaitingYou.slice(0, OVERVIEW_RENDER_CAP);
+  const cappedDone = board.done.slice(0, OVERVIEW_RENDER_CAP);
+  const visibleCards = v2
+    ? [...cappedInProgress, ...cappedAwaitingYou, ...cappedDraft, ...cappedDone]
+    : [...cappedInProgress, ...cappedDraft, ...cappedDone];
+  const hiddenCount =
+    board.draft.length -
+    cappedDraft.length +
+    (board.inProgress.length - cappedInProgress.length) +
+    (board.awaitingYou.length - cappedAwaitingYou.length) +
+    (board.done.length - cappedDone.length) +
+    // Cards the needs-review filter already folded behind its 30-row column cap
+    // are also invisible on the overview and must count toward its affordance.
+    board.hiddenCount;
+  return { visibleCards, hiddenCount };
 }
 
 export type KanbanDraftOpenThreadReason = "not-draft" | "empty" | "worktree-pending";

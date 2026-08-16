@@ -308,6 +308,82 @@ export function createSidebarThreadSummariesSelector(): (
   };
 }
 
+/**
+ * Per-thread durable last-activity stamp (epoch ms), keyed by thread id. The
+ * kanban heartbeat reads this because `SidebarThreadSummary.updatedAt` freezes
+ * during streaming (the sidebar summary build is skipped on the streaming hot
+ * path), while the durable thread shell's `updatedAt` advances on every appended
+ * message — a busy-but-quiet turn must keep its heartbeat fresh. Derives only
+ * from reference-stable records (`threadIds` / `threadShellById`) and returns
+ * the previous result by reference when no surfaced timestamp actually advanced,
+ * so the board only re-derives when a thread's durable activity really moved.
+ */
+const EMPTY_LAST_ACTIVITY_TIMESTAMP: Readonly<Record<string, number | null>> = Object.freeze({});
+
+export function createLastActivityTimestampSelector(): (
+  state: AppState,
+) => Readonly<Record<string, number | null>> {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById: AppState["threadShellById"] | undefined;
+  let previousResult: Readonly<Record<string, number | null>> = EMPTY_LAST_ACTIVITY_TIMESTAMP;
+  let previousShellUpdatedAtByThreadId: Record<string, string | undefined> = {};
+
+  return (state) => {
+    if (
+      state.threadIds === previousThreadIds &&
+      state.threadShellById === previousThreadShellById
+    ) {
+      return previousResult;
+    }
+    previousThreadIds = state.threadIds;
+    previousThreadShellById = state.threadShellById;
+
+    if (!previousThreadIds || previousThreadIds.length === 0) {
+      previousResult = EMPTY_LAST_ACTIVITY_TIMESTAMP;
+      previousShellUpdatedAtByThreadId = {};
+      return previousResult;
+    }
+
+    // Fast path: when no thread's durable stamp moved since the last surface,
+    // keep the existing result object so board consumers do not re-derive for
+    // unrelated shell churn (e.g. meta-only bumps that keep `updatedAt`).
+    let anyChanged = false;
+    for (const threadId of previousThreadIds) {
+      const stamp = previousThreadShellById?.[threadId]?.updatedAt;
+      if (stamp !== previousShellUpdatedAtByThreadId[threadId]) {
+        anyChanged = true;
+        break;
+      }
+    }
+    if (!anyChanged) {
+      return previousResult;
+    }
+    const nextShellUpdatedAtByThreadId: Record<string, string | undefined> = {};
+    for (const threadId of previousThreadIds) {
+      const stamp = previousThreadShellById?.[threadId]?.updatedAt;
+      nextShellUpdatedAtByThreadId[threadId] = stamp;
+    }
+    previousShellUpdatedAtByThreadId = nextShellUpdatedAtByThreadId;
+
+    const nextResult: Record<string, number | null> = {};
+    let hasEntry = false;
+    for (const threadId of previousThreadIds) {
+      const stamp = nextShellUpdatedAtByThreadId[threadId];
+      if (!stamp) {
+        // Absent shell / stamp: do not conflate with an explicit null — a
+        // pruned shell must read as "no durable stamp" (C1) so the heartbeat
+        // never falls back to the frozen sidebar summary.
+        continue;
+      }
+      const parsed = Date.parse(stamp);
+      nextResult[threadId] = Number.isFinite(parsed) ? parsed : null;
+      hasEntry = true;
+    }
+    previousResult = hasEntry ? nextResult : EMPTY_LAST_ACTIVITY_TIMESTAMP;
+    return previousResult;
+  };
+}
+
 export function createComposerThreadMentionSourcesSelector(): (
   state: AppState,
 ) => readonly ComposerThreadMentionSource[] {

@@ -8,6 +8,7 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidebarTreeThreadsSelector,
@@ -486,5 +487,67 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createLastActivityTimestampSelector", () => {
+  it("excludes threads whose shell has no updatedAt (sparse map, C1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      threadShellById: {
+        // Shell A has a durable stamp; shell B is present but stale/pruned.
+        [threadIdA]: { ...shellA, updatedAt: "2026-03-09T11:00:00.000Z" },
+        [threadIdB]: { ...shellB },
+      },
+    });
+    const result = selectTimestamps(state);
+    expect(Object.keys(result)).toEqual([threadIdA]);
+    expect(result[threadIdA]).toBe(Date.parse("2026-03-09T11:00:00.000Z"));
+    // Absent shells must not be conflated with an explicit null.
+    expect(threadIdB in result).toBe(false);
+  });
+
+  it("returns the empty constant when no thread has a durable stamp", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA],
+      threadShellById: { [threadIdA]: { ...shellA } },
+    });
+    expect(selectTimestamps(state)).toEqual({});
+  });
+
+  it("keeps the previous result reference while stamps do not move", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const threadIds = [threadIdA] as readonly ThreadId[];
+    const threadShellById = {
+      [threadIdA]: { ...shellA, updatedAt: "2026-03-09T11:00:00.000Z" },
+    };
+    const before = selectTimestamps(makeState({ threadIds, threadShellById }));
+    const after = selectTimestamps(
+      makeState({ threadIds, threadShellById, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
+    );
+    expect(after).toBe(before);
+  });
+
+  it("keeps the previous result reference when a shell ref changes but the stamp does not", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const threadIds = [threadIdA] as readonly ThreadId[];
+    const stamp = "2026-03-09T11:00:00.000Z";
+    const before = selectTimestamps(
+      makeState({ threadIds, threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamp } } }),
+    );
+    // A meta-only shell update (new object, same durable stamp) must not churn
+    // the result — the fast path returns the previous object by reference (F1).
+    const after = selectTimestamps(
+      makeState({
+        threadIds,
+        threadShellById: {
+          [threadIdA]: { ...shellA, updatedAt: stamp, title: "renamed" },
+        },
+      }),
+    );
+    expect(after).toBe(before);
+    expect(after[threadIdA]).toBe(Date.parse(stamp));
   });
 });
