@@ -140,6 +140,11 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+// DeepSeek Harness' ACP bridge does not expose model/config selection. The
+// active model is selected by the user's Cordis composition instead.
+export const DeepSeekModelOptions = Schema.Struct({});
+export type DeepSeekModelOptions = typeof DeepSeekModelOptions.Type;
+
 export const DroidModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
@@ -151,6 +156,7 @@ export const ProviderModelOptions = Schema.Struct({
   cursor: Schema.optional(CursorModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  deepseek: Schema.optional(DeepSeekModelOptions),
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
@@ -230,6 +236,14 @@ const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
+const DEEPSEEK_CONFIGURED_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
@@ -422,7 +436,7 @@ function claudeCodeModeOption(
   apiEffortValue: ClaudeApiEffort,
   description: string,
 ): EffortOption {
-  return { value, label, description, apiEffortValue, controlSource: "provider-setting" };
+  return { value, label, description, apiEffortValue, controlSource: "provider-setting", ...{} };
 }
 
 // No-fast xhigh ladder: newer Claude Code models with xhigh/max API efforts and
@@ -613,6 +627,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "grok-build",
       name: "Grok 4.3",
       capabilities: GROK_BUILD_CAPABILITIES,
+    },
+  ],
+  deepseek: [
+    {
+      slug: "configured",
+      name: "Configured in DeepSeek Harness",
+      capabilities: DEEPSEEK_CONFIGURED_CAPABILITIES,
     },
   ],
   droid: [
@@ -1026,6 +1047,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
+  deepseek: "configured",
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
@@ -1109,6 +1131,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     kimi: "kimi-k2.7-code",
   },
   antigravity: {},
+  deepseek: {},
   droid: {
     droid: "claude-opus-4-8",
     factory: "claude-opus-4-8",
@@ -1196,6 +1219,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   cursor: "Cursor",
   antigravity: "Antigravity",
   grok: "Grok",
+  deepseek: "DeepSeek Harness",
   droid: "Droid",
   kilo: "Kilo",
   opencode: "OpenCode",
