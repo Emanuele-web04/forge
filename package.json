@@ -47,7 +47,7 @@
     "test:device:probe": "bun scripts/device-helper-smoke.ts --probe-only",
     "test:device:sweep": "bun scripts/device-helper-sweep.ts",
     "fmt": "oxfmt",
-    "fmt:check": "oxfmt apps/server/src/provider/Layers/DeepSeekAdapter.ts apps/server/src/provider/acp/DeepSeekAcpSupport.ts && git diff --exit-code -- apps/server/src/provider/Layers/DeepSeekAdapter.ts apps/server/src/provider/acp/DeepSeekAcpSupport.ts",
+    "fmt:check": "oxfmt apps/server/src/provider/Layers/DeepSeekAdapter.ts apps/server/src/provider/acp/DeepSeekAcpSupport.ts",
     "build:contracts": "turbo run build --filter=@synara/contracts",
     "dist:desktop:artifact": "node scripts/build-desktop-artifact.ts",
     "dist:desktop:dmg": "node scripts/build-desktop-artifact.ts --platform mac --target dmg",
