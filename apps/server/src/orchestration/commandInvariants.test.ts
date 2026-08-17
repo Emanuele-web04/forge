@@ -196,11 +196,16 @@ describe("commandInvariants", () => {
   });
 
   it("threadHasInFlightTurn includes starting/running sessions that active-turn misses", () => {
-    const runningSession = { status: "running" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
+    const runningSession = {
+      status: "running" as const,
+      activeTurnId: TurnId.makeUnsafe("turn-x"),
+    };
     expect(
       threadHasInFlightTurn({ session: runningSession, latestTurn: { state: "completed" } }),
     ).toBe(true);
-    expect(threadHasInFlightTurn({ session: null, latestTurn: { state: "completed" } })).toBe(false);
+    expect(threadHasInFlightTurn({ session: null, latestTurn: { state: "completed" } })).toBe(
+      false,
+    );
     const errored = { status: "error" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
     expect(threadHasInFlightTurn({ session: errored, latestTurn: null })).toBe(false);
   });

@@ -308,7 +308,11 @@ describe("synara_read_kanban_board", () => {
     const empty = await runHandler(toolById(tools, "synara_read_kanban_board"), {
       projectId: "project-nope",
     });
-    const emptyPayload = jsonText(empty) as { projects: unknown[]; asOf?: string; callerThreadId?: string };
+    const emptyPayload = jsonText(empty) as {
+      projects: unknown[];
+      asOf?: string;
+      callerThreadId?: string;
+    };
     expect(emptyPayload.projects).toEqual([]);
     expect(emptyPayload.asOf).toBe(NOW_ISO);
     expect(emptyPayload.callerThreadId).toBe("thread-caller");
@@ -323,7 +327,8 @@ describe("synara_read_kanban_board", () => {
     };
     const project = fullPayload.projects[0];
     expect(project).toBeTruthy();
-    const cardIds = project?.columns.flatMap((column) => column.cards.map((card) => card.threadId)) ?? [];
+    const cardIds =
+      project?.columns.flatMap((column) => column.cards.map((card) => card.threadId)) ?? [];
     expect(cardIds).toContain("thread-live");
     expect(cardIds).not.toContain("thread-archived");
   });
