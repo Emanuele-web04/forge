@@ -4,6 +4,7 @@ import type { MessageId, ProjectId, ThreadId } from "@synara/contracts";
 
 import type { AppState } from "./store";
 import {
+  createAccountRateLimitThreadsSelector,
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
@@ -40,6 +41,8 @@ interface TestStateSlices {
   threadShellById?: Readonly<Record<string, ThreadShell>>;
   sidebarThreadSummaryById?: Readonly<Record<string, SidebarThreadSummary>>;
   messageIdsByThreadId?: Readonly<Record<string, readonly MessageId[]>>;
+  activityIdsByThreadId?: Readonly<Record<string, readonly string[]>>;
+  activityByThreadId?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 
 function makeState(slices: TestStateSlices): AppState {
@@ -48,7 +51,13 @@ function makeState(slices: TestStateSlices): AppState {
     threadShellById: slices.threadShellById ?? {},
     sidebarThreadSummaryById: slices.sidebarThreadSummaryById ?? {},
     messageIdsByThreadId: slices.messageIdsByThreadId ?? {},
+    activityIdsByThreadId: slices.activityIdsByThreadId ?? {},
+    activityByThreadId: slices.activityByThreadId ?? {},
   } as unknown as AppState;
+}
+
+function makeActivity(id: string, kind: string) {
+  return { id, kind, createdAt: "2026-01-01T00:00:00.000Z", payload: {} };
 }
 
 describe("createThreadShellsSelector", () => {
@@ -93,6 +102,120 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createAccountRateLimitThreadsSelector", () => {
+  const rateLimitActivity = makeActivity("activity-rate", "account.rate-limits.updated");
+  const toolActivity = makeActivity("activity-tool", "provider.tool-call");
+
+  it("collects only account rate-limit activities", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      activityIdsByThreadId: {
+        [threadIdA]: [toolActivity.id, rateLimitActivity.id],
+        [threadIdB]: [toolActivity.id],
+      },
+      activityByThreadId: {
+        [threadIdA]: { [toolActivity.id]: toolActivity, [rateLimitActivity.id]: rateLimitActivity },
+        [threadIdB]: { [toolActivity.id]: toolActivity },
+      },
+    });
+
+    const result = selectRateLimitThreads(state);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.activities).toEqual([rateLimitActivity]);
+  });
+
+  it("stays reference-stable when message slices change (streaming deltas)", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+    const activityIdsByThreadId = { [threadIdA]: [rateLimitActivity.id] };
+    const activityByThreadId = { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } };
+
+    const before = selectRateLimitThreads(
+      makeState({ threadIds, activityIdsByThreadId, activityByThreadId }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId,
+        activityByThreadId,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
+
+  it("stays reference-stable when a non-rate-limit activity is appended", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+
+    const before = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
+        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
+      }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id, toolActivity.id] },
+        activityByThreadId: {
+          [threadIdA]: {
+            [rateLimitActivity.id]: rateLimitActivity,
+            [toolActivity.id]: toolActivity,
+          },
+        },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
+
+  it("returns a new result when a rate-limit activity is appended", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const threadIds = [threadIdA];
+    const laterRateLimitActivity = makeActivity("activity-rate-2", "account.rate-limited");
+
+    const before = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
+        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
+      }),
+    );
+    const after = selectRateLimitThreads(
+      makeState({
+        threadIds,
+        activityIdsByThreadId: {
+          [threadIdA]: [rateLimitActivity.id, laterRateLimitActivity.id],
+        },
+        activityByThreadId: {
+          [threadIdA]: {
+            [rateLimitActivity.id]: rateLimitActivity,
+            [laterRateLimitActivity.id]: laterRateLimitActivity,
+          },
+        },
+      }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after[0]?.activities).toEqual([rateLimitActivity, laterRateLimitActivity]);
+  });
+
+  it("returns the empty constant when no thread has rate-limit activities", () => {
+    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
+    const state = makeState({
+      threadIds: [threadIdA],
+      activityIdsByThreadId: { [threadIdA]: [toolActivity.id] },
+      activityByThreadId: { [threadIdA]: { [toolActivity.id]: toolActivity } },
+    });
+
+    expect(selectRateLimitThreads(state)).toEqual([]);
   });
 });
 

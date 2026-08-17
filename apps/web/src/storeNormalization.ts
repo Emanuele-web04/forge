@@ -1325,6 +1325,40 @@ function pendingInteractionRequestIds(
   return pendingRequestIds;
 }
 
+/** Dedupe specialized for the streaming hot path: when `activities` extends the previously
+ *  normalized (already deduped) array by appending, only the appended tail can introduce a
+ *  duplicate, so membership checks against the previous `byId` record replace the full
+ *  Map-building pass. Any other shape (replaced slot, snapshot rewrite, missing previous
+ *  slice) falls back to `dedupeActivitiesById` for identical results. */
+export function dedupeActivitiesByIdAfterAppend<TActivity extends Thread["activities"][number]>(
+  activities: ReadonlyArray<TActivity>,
+  previousActivities: ReadonlyArray<TActivity> | undefined,
+  previousActivityById: Record<string, Thread["activities"][number]> | undefined,
+): TActivity[] {
+  if (
+    previousActivities === undefined ||
+    previousActivityById === undefined ||
+    previousActivities.length === 0 ||
+    previousActivities.length > activities.length
+  ) {
+    return dedupeActivitiesById(activities);
+  }
+  for (let index = 0; index < previousActivities.length; index += 1) {
+    if (activities[index] !== previousActivities[index]) {
+      return dedupeActivitiesById(activities);
+    }
+  }
+  const appendedIds = new Set<string>();
+  for (let index = previousActivities.length; index < activities.length; index += 1) {
+    const id = activities[index]!.id;
+    if (previousActivityById[id] !== undefined || appendedIds.has(id)) {
+      return dedupeActivitiesById(activities);
+    }
+    appendedIds.add(id);
+  }
+  return activities as TActivity[];
+}
+
 export function dedupeActivitiesById<TActivity extends Thread["activities"][number]>(
   activities: ReadonlyArray<TActivity>,
 ): TActivity[] {

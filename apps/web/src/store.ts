@@ -346,10 +346,16 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadWorkspace(state, threadId, patch)),
 }));
 
-// Persist state changes with debouncing to avoid localStorage thrashing
+// Persist state changes with debouncing to avoid localStorage thrashing.
+// Project snapshots only depend on `state.projects` (immutable — every project mutation
+// produces a new array), so skip them on the streaming hot path where only thread slices move.
+let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  if (state.projects !== lastRememberedProjects) {
+    lastRememberedProjects = state.projects;
+    rememberProjectUiState(state.projects);
+    rememberProjectLocalNames(state.projects);
+  }
   debouncedPersistState.maybeExecute(state);
 });
 

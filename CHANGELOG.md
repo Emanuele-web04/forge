@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.7.2 - 2026-08-15
+
+### Added
+
+- Added a live iOS Simulator pane to the right dock on macOS, with device selection, first-run setup guidance, live H.264 video, direct mouse and keyboard input, hardware controls, screenshot and recording actions, and automatic pane opening when an agent launches an app.
+- Added provider-agnostic device tools for listing, booting, installing, launching, opening URLs, tapping, swiping, typing, pressing buttons, taking screenshots, reading the accessibility tree, and scrolling to named elements, with explicit approval boundaries for input and URL actions.
+- Added persistent thread goals with a stacked composer panel, elapsed-time tracking, pause and resume controls, achievement history, message-footer badges, provider prompt injection, and MCP read/write support.
+- Added autonomous goal continuation after clean turn completion, including startup recovery, user-queue priority, plan and interaction gates, pause-on-interrupt or failure behavior, terminal-session retries, and an explicit blocked state to prevent endless retries.
+- Added an evidence-first Debug interaction mode built around observe, reproduce, investigate, fix, and verify, with `/debug` and `/default` commands, draft and fork persistence, provider-wide prompt budgeting, and structured reproduction questions where supported.
+- Added workspace-wide file search with `Cmd/Ctrl+P` and grep-style content search with `Cmd/Ctrl+Shift+F`; results include paths, line numbers, matching snippets, keyboard navigation, and direct opening in the right-dock file pane.
+- Added stacked pull-request support with stack position badges, ordered stack navigation, stack-aware readiness and merge confirmations, GitHub async-merge polling, fallback compatibility, and repository-wide cache refresh after stack mutations.
+- Added message-level thread forking, visible fork-source dividers, source-aware fork titles, and native session forks across Claude, Cursor, Droid, Grok, and OpenCode in addition to Codex.
+- Added configurable chat-width presets for focused, standard, and wide transcript layouts.
+- Added file-link context actions for copying paths, opening files in Synara, and revealing supported references in the workspace.
+- Added reproducible production-path streaming benchmarks covering reducer, store, selector, derivation, layout, frame, and flush behavior.
+- Added a dark-mode macOS dock icon that follows system appearance automatically.
+
+### Changed
+
+- Reworked the iOS Simulator integration around a source-shipped Swift/Objective-C helper compiled with the user's selected Xcode, source-digest cache invalidation, a deny-by-default Seatbelt profile, bounded binary WebSocket framing, slow-client frame dropping, and persisted ownership recovery after crashes.
+- Changed thread goals from passive labels into durable objectives that remain intact across turns, provider retries, subagent steering, restarts, and user edits while giving queued user work precedence over automatic continuation.
+- Replaced automation's single stop-on-error switch with a durable consecutive-failure threshold that defaults to three, can be disabled, records failure counts and disable reasons, resets after success, and requires deliberate re-enabling after failure shutdown.
+- Reworked automation creation and editing with inline schedule and policy fields, risk confirmation, clearer disabled-state explanations, optimistic concurrency retries, and preservation of user edits when scheduler updates race the form.
+- Improved large-database startup by preserving the SQLite primary-key range scan during projector replay and tuning bounded cache and memory-map settings; measured replay on the documented 2.9 GB fixture dropped from minutes to about 24 seconds.
+- Reduced visible streaming work by batching text commits, stabilizing transcript tail keys, coalescing highlight scroll work, skipping irrelevant overlap measurements, caching message-trail projections, narrowing Zustand selectors, and backing off idle reconciliation polls.
+- Reordered assistant message presentation so text segments and tool rows follow provider event order, compacted reasoning anchors to its first update, task-list progress collapses into one evolving row, and the turn changes card appears before assistant footer actions.
+- Centralized native fork behavior and provider-input composition, added capability and in-flight-turn checks, preserved resumability metadata and turn counts, and retained transcript reconstruction as the safe fallback when a provider cannot fork natively.
+- Consolidated commit, push, and pull-request dialogs around shared Git action chrome, made primary actions more direct, preserved disabled reasons, and aligned action glyphs and message controls.
+- Changed provider selection to show installed providers, warm each available provider's model catalogue for new threads, and resolve prefetch paths from explicit worktree intent and real availability.
+- Improved model and usage discovery by isolating malformed descriptors, exposing Pi's maximum thinking level, bounding Codex archive reads to 64 KiB tail chunks, and humanizing unknown rate-limit windows.
+- Improved cross-platform presentation with runtime Windows taskbar-icon refresh, simpler sidebar control icons, refined fork and message-action glyphs, and day-aware message timestamps.
+- Hardened release automation with least-privilege token permissions, explicit clean-lane policy checks, deterministic Windows dependency installation, and version-scoped unsigned-Windows publication support.
+- Bumped Synara release package versions to `0.7.2` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed stale-generation terminal events being dropped instead of settling the owning turn, including terminal-session retry behavior for paused goal continuations.
+- Fixed oversized Pi and other provider runtime payloads being quarantined wholesale; payloads are now bounded and truncated while preserving the event and its diagnostic meaning.
+- Fixed previously unmapped provider events disappearing from the transcript by surfacing a bounded fallback row with captured diagnostic context.
+- Fixed OpenCode running-tool titles persisting leading or trailing whitespace and lifecycle-detail parsing rejecting otherwise valid untrimmed tool output.
+- Fixed assistant text being grouped apart from intervening tool activity, compacted reasoning attaching to its final update, and repeated task-list progress producing a noisy stack of rows.
+- Fixed streamed text repeatedly re-arming bottom-stick behavior, trail highlights scheduling redundant scroll work, and overlap checks reading layout when only the live tail grew.
+- Fixed projection cursors entering a permanent resnapshot loop when a page made no progress, and preserved retry backoff when a newer snapshot superseded an older projection.
+- Fixed large projector replays falling into an event-type index scan and temporary sort for every page instead of using the integer primary-key range.
+- Fixed queued-turn promotion losing durability across replay and restart, and fixed goal continuation races that could resurrect paused work, outrank queued user input, or loop after failures and timeouts.
+- Fixed automation failures being double-counted during duplicate reconciliation, concurrent scheduler writes overwriting edits, manual reruns clearing failure evidence, and legacy run threads or max-iteration stops lacking durable source and reason metadata.
+- Fixed new-chat drafts being lost across thread switches, saved-draft races during automation setup, and new-thread model prefetch using the wrong cwd or warming unavailable providers.
+- Fixed branch context being lost when switching or resuming threads, sends continuing against a transient branch mismatch, and the chat header hiding Pull when the current branch is behind upstream.
+- Fixed the Git diff preview retaining the previous file after selection changed, commit/push controls losing their disabled explanation, and worktree cancellation losing its durable UI state.
+- Fixed Windows Bun PTY startup, taskbar icons not refreshing after runtime icon changes, macOS quit intent being lost when updater shutdown failed, and valid empty desktop snapshots triggering a repair loop.
+- Fixed malformed provider model descriptors invalidating otherwise healthy catalogues, warm model discovery covering only one provider, and Pi's highest supported thinking level being omitted.
+- Fixed Codex usage polling loading entire archives and risking backend heap growth; archive scans now read backward in bounded chunks, split CRLF records correctly, and skip oversized trailing records without retaining them.
+- Fixed file and snippet search escaping the active workspace scope, stale queries opening the wrong result set, and search palette presentation retaining unnecessary surrounding UI.
+- Fixed iOS Simulator helper first-run deadlocks, stale attachments acknowledging input against dead boots, silent undelivered HID events, out-of-bounds taps being clamped, helper cache staleness, and Synara-owned simulators being orphaned after crashes.
+- Fixed source-control and transcript polish issues including footer ordering, misleading rate-limit labels, day-ambiguous timestamps, and inconsistent action-icon alignment.
+- Fixed a release-blocking TypeScript mismatch in the Codex usage tail-read test by explicitly typing the positional `FileHandle.read` spy calls without weakening runtime assertions.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,903 files.
+- `bun run lint` passed with 426 warnings and 0 errors.
+- The first `bun run typecheck` identified one release-blocking tuple-overload error in `apps/server/src/providerUsageSnapshot.test.ts`; the test typing was corrected, its focused suite passed 3/3, and the full rerun passed all 7 packages.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecation, plugin-timing, and large-chunk advisories remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 2m56.443s. Web passed 311 files / 3,944 tests. Server passed 334 files / 3,826 tests with 3 skipped files / 16 skipped tests. No targeted rerun or flaky product failure was needed.
+
 ## 0.7.1 - 2026-08-09
 
 ### Added

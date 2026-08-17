@@ -107,6 +107,10 @@ import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
+import {
+  registerEmptyRouteRestoreRefresh,
+  runEmptyRouteRestoreRefresh,
+} from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -143,6 +147,14 @@ const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS = 4_500;
 const THREAD_DETAIL_PROJECTION_RECONCILE_MAX_CONCURRENCY = 2;
+// Bounded backoff for the periodic catch-up polls while a healthy live stream
+// keeps delivering everything: consecutive empty replays stretch the 1.5s poll
+// toward 6s, and consecutive no-op projection reconciles stretch the 4.5s
+// reconcile toward 18s. Both reset on a new turn, any applied event, or any
+// repair signal (missing snapshot, pending dispatch, terminal fence, draft
+// promotion), so recovery paths always run at base cadence.
+const THREAD_DETAIL_REPLAY_MAX_NOOP_STREAK = 2;
+const THREAD_DETAIL_PROJECTION_RECONCILE_MAX_NOOP_STREAK = 2;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
@@ -1119,6 +1131,64 @@ function EventRouter() {
       );
     };
 
+    // Catch-up poll backoff, keyed by (threadId, turnId): a new turn resets the
+    // cadence so fresh activity repairs fast, while consecutive no-op polls
+    // during a healthy stream stretch toward their bounded caps.
+    interface ThreadCatchupBackoff {
+      turnId: string | null;
+      replayNoopStreak: number;
+      nextReplayAt: number;
+      reconcileNoopStreak: number;
+    }
+    const threadCatchupBackoffById = new Map<ThreadId, ThreadCatchupBackoff>();
+    const resolveThreadCatchupBackoff = (threadId: ThreadId): ThreadCatchupBackoff => {
+      const turnId = getThreadFromState(useStore.getState(), threadId)?.latestTurn?.turnId ?? null;
+      let entry = threadCatchupBackoffById.get(threadId);
+      if (entry === undefined || entry.turnId !== turnId) {
+        entry = { turnId, replayNoopStreak: 0, nextReplayAt: 0, reconcileNoopStreak: 0 };
+        threadCatchupBackoffById.set(threadId, entry);
+      }
+      return entry;
+    };
+    const noteThreadReplayResult = (threadId: ThreadId, appliedEventCount: number): void => {
+      const entry = resolveThreadCatchupBackoff(threadId);
+      if (appliedEventCount > 0) {
+        entry.replayNoopStreak = 0;
+        entry.nextReplayAt = 0;
+        return;
+      }
+      entry.replayNoopStreak = Math.min(
+        entry.replayNoopStreak + 1,
+        THREAD_DETAIL_REPLAY_MAX_NOOP_STREAK,
+      );
+      entry.nextReplayAt =
+        Date.now() + THREAD_DETAIL_CATCHUP_INTERVAL_MS * 2 ** entry.replayNoopStreak;
+    };
+    const noteThreadReconcileResult = (threadId: ThreadId, wasNoop: boolean): void => {
+      const entry = resolveThreadCatchupBackoff(threadId);
+      entry.reconcileNoopStreak = wasNoop
+        ? Math.min(
+            entry.reconcileNoopStreak + 1,
+            THREAD_DETAIL_PROJECTION_RECONCILE_MAX_NOOP_STREAK,
+          )
+        : 0;
+    };
+    const nextThreadProjectionReconcileDelayMs = (threadId: ThreadId): number => {
+      // Repair paths never back off: they exist to fix a client that is known
+      // (or suspected) to be out of sync, and delaying them delays recovery.
+      if (
+        threadProjectionTerminalFencePending.has(threadId) ||
+        isDraftThreadAwaitingProjection(threadId) ||
+        hasPendingTurnDispatch(threadId)
+      ) {
+        const entry = resolveThreadCatchupBackoff(threadId);
+        entry.reconcileNoopStreak = 0;
+        return THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS;
+      }
+      const entry = resolveThreadCatchupBackoff(threadId);
+      return THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS * 2 ** entry.reconcileNoopStreak;
+    };
+
     const beginThreadSubscription = (threadId: ThreadId) => {
       // Cursor resume delivers no snapshot: the stream replays only the gap on
       // top of the cached detail. Seed the live cursor so gap/live events apply
@@ -1137,6 +1207,7 @@ function EventRouter() {
       threadSnapshotNotFoundRetryAttempted.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
       threadProjectionTerminalFencePending.delete(threadId);
+      threadCatchupBackoffById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
       nextThreadProjectionReconcileAtById.set(
@@ -1165,6 +1236,13 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
+      // Any applied event — live or replayed — is fresh activity: drop the
+      // replay backoff so a subsequently lost event repairs at base cadence.
+      const backoff = threadCatchupBackoffById.get(threadId);
+      if (backoff !== undefined) {
+        backoff.replayNoopStreak = 0;
+        backoff.nextReplayAt = 0;
+      }
       return true;
     };
 
@@ -1212,6 +1290,7 @@ function EventRouter() {
         threadProjectionTerminalFencePending.delete(threadId);
         threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
+        threadCatchupBackoffById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
@@ -1318,10 +1397,13 @@ function EventRouter() {
       }
     }
 
-    const loadShellSnapshotOnce = async () => {
+    const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
       if (disposed) return;
-      const snapshot = await api.orchestration.getShellSnapshot();
-      if (disposed) return;
+      // A query can resolve after the live shell stream has already moved
+      // forward. Never roll the store back behind the EventRouter fence.
+      if (shellSnapshotSequence >= 0 && snapshot.snapshotSequence < shellSnapshotSequence) {
+        return;
+      }
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
@@ -1333,6 +1415,23 @@ function EventRouter() {
       flushShellBuffer(snapshot.snapshotSequence);
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
     };
+
+    const loadShellSnapshotOnce = async () => {
+      if (disposed) return;
+      const snapshot = await api.orchestration.getShellSnapshot();
+      if (disposed) return;
+      applyQueriedShellSnapshot(snapshot);
+    };
+
+    const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
+      runEmptyRouteRestoreRefresh({
+        getShellSnapshot: () => api.orchestration.getShellSnapshot(),
+        getSnapshot: () => api.orchestration.getSnapshot(),
+        repairState: () => api.orchestration.repairState(),
+        applyShellSnapshot: applyQueriedShellSnapshot,
+        hasThreads: () => (useStore.getState().threadIds?.length ?? 0) > 0,
+      }),
+    );
 
     let scopedSubscriptionRefresh: Promise<void> | null = null;
     const ensureScopedSubscriptions = () => {
@@ -1353,6 +1452,7 @@ function EventRouter() {
           threadProjectionTerminalFencePending.clear();
           threadSubscriptionGenerationById.clear();
           nextThreadProjectionReconcileAtById.clear();
+          threadCatchupBackoffById.clear();
           const previousThreadIds = [...subscribedThreadIds];
           subscribedThreadIds.clear();
           // Reconnect drops every lease at once, so the reconcile below sees no
@@ -1493,26 +1593,30 @@ function EventRouter() {
       domainEventFlushThrottler.maybeExecute();
     };
 
+    // Resolves the number of events actually applied, or null when the replay
+    // was skipped (already in flight, no cursor, or target already reached) —
+    // callers driving the poll backoff must not count a skip as an empty poll.
     const replayThreadEvents = async (
       threadId: ThreadId,
       targetSequence?: number,
-    ): Promise<void> => {
+    ): Promise<number | null> => {
       if (disposed || threadReplayRequestInFlight.has(threadId)) {
-        return;
+        return null;
       }
       const fromSequence = threadSnapshotSequenceById.get(threadId);
       if (
         fromSequence === undefined ||
         (targetSequence !== undefined && fromSequence >= targetSequence)
       ) {
-        return;
+        return null;
       }
       threadReplayRequestInFlight.add(threadId);
       // Promise chain keeps the run-always cleanup (finally) and lets a replay
       // rejection propagate to callers exactly as the try/finally did.
-      await api.orchestration
+      return await api.orchestration
         .replayEvents(fromSequence, threadId)
         .then((replayedEvents) => {
+          let appliedEventCount = 0;
           for (const event of replayedEvents
             .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
             .filter(
@@ -1526,7 +1630,18 @@ function EventRouter() {
             if (!applyFencedThreadEvent(threadId, event)) {
               break;
             }
+            appliedEventCount += 1;
           }
+          if (appliedEventCount === 0) {
+            // An empty replay is evidence of a quiet stream only if nothing
+            // else moved the cursor while it ran. A replay raced by live
+            // events (they applied first, so every replayed event was skipped)
+            // must not feed the no-op backoff.
+            const cursorAdvancedDuringReplay =
+              (threadSnapshotSequenceById.get(threadId) ?? fromSequence) > fromSequence;
+            return cursorAdvancedDuringReplay ? null : 0;
+          }
+          return appliedEventCount;
         })
         .finally(() => {
           threadReplayRequestInFlight.delete(threadId);
@@ -1545,6 +1660,7 @@ function EventRouter() {
       }
       threadProjectionReconcileInFlight.set(threadId, subscriptionGeneration);
       let projectionConfirmed = false;
+      let projectionAttemptFailed = false;
       try {
         const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
@@ -1579,10 +1695,19 @@ function EventRouter() {
         // Apply even when the cursor did not advance. The projection is
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
+        const stateBeforeProjectionApply = useStore.getState();
         syncServerThreadDetailHotPath(snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
+        // No-op: the live stream had already delivered everything the snapshot
+        // contains AND applying it changed nothing (no divergence repaired).
+        // Any real work — cursor advance or a store change — resets the streak.
+        noteThreadReconcileResult(
+          threadId,
+          snapshot.snapshotSequence <= currentSequence &&
+            useStore.getState() === stateBeforeProjectionApply,
+        );
         if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
@@ -1591,11 +1716,20 @@ function EventRouter() {
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
         }
+      } catch (error) {
+        projectionAttemptFailed = true;
+        throw error;
       } finally {
         if (threadProjectionReconcileInFlight.get(threadId) === subscriptionGeneration) {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
+          if (projectionAttemptFailed) {
+            // A failed reconcile is not evidence of a quiet healthy stream.
+            // Retry it at the base cadence, while preserving backoff when the
+            // snapshot was merely superseded by newer live events.
+            resolveThreadCatchupBackoff(threadId).reconcileNoopStreak = 0;
+          }
           if (projectionConfirmed) {
             threadProjectionTerminalFencePending.delete(threadId);
           }
@@ -1606,7 +1740,7 @@ function EventRouter() {
           ) {
             nextThreadProjectionReconcileAtById.set(
               threadId,
-              Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+              Date.now() + nextThreadProjectionReconcileDelayMs(threadId),
             );
           } else {
             nextThreadProjectionReconcileAtById.delete(threadId);
@@ -1980,9 +2114,29 @@ function EventRouter() {
         const draftThreadAwaitingProjection = isDraftThreadAwaitingProjection(threadId);
         if (shouldPollThreadDetailCatchup(threadId)) {
           if (!threadSnapshotSequenceById.has(threadId)) {
+            // Missing snapshot is a repair path — never backed off.
             void reconcileThreadProjection(threadId).catch(() => undefined);
-          } else {
-            void replayThreadEvents(threadId).catch(() => undefined);
+          } else if (
+            // A pending dispatch is the exact lost-event failure this poll
+            // repairs, so it always polls at base cadence; otherwise honor the
+            // empty-replay backoff (reset on any applied event or a new turn).
+            hasPendingTurnDispatch(threadId) ||
+            now >= resolveThreadCatchupBackoff(threadId).nextReplayAt
+          ) {
+            // A late replay result must not recreate backoff state for a thread
+            // whose lease was dropped (cleanup deleted it) or re-leased (a new
+            // generation starts fresh) while the request was in flight.
+            const replaySubscriptionGeneration = threadSubscriptionGenerationById.get(threadId);
+            void replayThreadEvents(threadId)
+              .then((appliedEventCount) => {
+                if (
+                  appliedEventCount !== null &&
+                  threadSubscriptionGenerationById.get(threadId) === replaySubscriptionGeneration
+                ) {
+                  noteThreadReplayResult(threadId, appliedEventCount);
+                }
+              })
+              .catch(() => undefined);
           }
         }
         if (
@@ -2018,8 +2172,10 @@ function EventRouter() {
       threadProjectionTerminalFencePending.clear();
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
+      threadCatchupBackoffById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
+      unregisterEmptyRouteRestoreRefresh();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and

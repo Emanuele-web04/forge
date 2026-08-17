@@ -21,6 +21,31 @@ describe("runProcess", () => {
     expect(result.stderrTruncated).toBe(false);
   });
 
+  it("does not emit a replacement character when truncation splits UTF-8 output", async () => {
+    const result = await runProcess("node", ["-e", "process.stdout.write('ab€cd')"], {
+      maxBufferBytes: 4,
+      outputMode: "truncate",
+    });
+
+    expect(result.stdout).toBe("ab");
+    expect(result.stdoutTruncated).toBe(true);
+  });
+
+  it("preserves UTF-8 characters split across process chunks and live observers", async () => {
+    const stdoutChunks: string[] = [];
+    const result = await runProcess(
+      "node",
+      [
+        "-e",
+        "process.stdout.write(Buffer.from([0xe2])); setTimeout(() => process.stdout.write(Buffer.from([0x82, 0xac])), 25)",
+      ],
+      { onStdoutChunk: (chunk) => stdoutChunks.push(chunk) },
+    );
+
+    expect(result.stdout).toBe("€");
+    expect(stdoutChunks.join("")).toBe("€");
+  });
+
   it("reports live stdout and stderr chunks while retaining the final output", async () => {
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
