@@ -19,7 +19,7 @@ separate Synara cloud.
 - **Plan and Debug modes** — the agent can propose before executing and pause to ask questions, or run any provider through an evidence-first debug loop without changing runtime permissions.
 - **Persistent thread goals** — attach an explicit multi-turn objective with pause/resume, achievement history, and bounded autonomous continuation.
 - **Review and delivery** — inspect diffs, run browser verification, commit, push, open pull requests, and use the pull-request workspace to review, comment, and merge without leaving the app.
-- **Local-first by design** — chats, projects, and history stay on your machine. Traffic goes only to the provider you pick.
+- **Local-first by design** — chats, projects, and history stay on your machine. Coding-agent traffic goes directly to the provider you pick rather than through a Synara model service.
 
 ## Providers
 
