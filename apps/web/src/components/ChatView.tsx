@@ -936,6 +936,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
     case "antigravity":
       return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
+    case "commandCode":
+      return normalizeCustomBinaryPath(providerOptions?.commandCode?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":
@@ -2308,6 +2310,7 @@ export default function ChatView({
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
       antigravity: resolveHint("antigravity"),
+      commandCode: resolveHint("commandCode"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),

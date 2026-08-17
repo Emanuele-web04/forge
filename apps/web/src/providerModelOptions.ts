@@ -11,6 +11,8 @@ import {
   type ClaudeModelSelection,
   type CodexModelOptions,
   type CodexModelSelection,
+  type CommandCodeModelOptions,
+  type CommandCodeModelSelection,
   type CursorModelOptions,
   type CursorModelSelection,
   type DroidModelOptions,
@@ -341,6 +343,11 @@ export function buildProviderOptionPatch(
 }
 
 export function buildModelSelection(
+  provider: "commandCode",
+  model: string,
+  options?: CommandCodeModelOptions | null | undefined,
+): CommandCodeModelSelection;
+export function buildModelSelection(
   provider: "codex",
   model: string,
   options?: CodexModelOptions | null | undefined,
@@ -405,6 +412,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as AntigravityModelOptions,
+          }
+        : { provider, model };
+    case "commandCode":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as CommandCodeModelOptions,
           }
         : { provider, model };
     case "codex":

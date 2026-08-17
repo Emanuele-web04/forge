@@ -390,6 +390,9 @@ export function PluginLibrary() {
   const antigravityCapabilitiesQuery = useQuery(
     providerComposerCapabilitiesQueryOptions("antigravity"),
   );
+  const commandCodeCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("commandCode"),
+  );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
@@ -412,6 +415,10 @@ export function PluginLibrary() {
     antigravity: {
       plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
+    },
+    commandCode: {
+      plugins: supportsPluginDiscovery(commandCodeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(commandCodeCapabilitiesQuery.data),
     },
     grok: {
       plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),

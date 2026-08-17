@@ -216,6 +216,14 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
   }),
+  commandCode: defineProviderOptionConfig<"commandCode">({
+    primaryOptionKey: "reasoningEffort",
+    options: {
+      reasoningEffort: providerOptionRule("string", [], "model-discovery", {
+        advertised: false,
+      }),
+    },
+  }),
   kilo: defineProviderOptionConfig<"kilo">({
     primaryOptionKey: "variant",
     options: {

@@ -74,6 +74,16 @@ export const PROVIDER_DESCRIPTORS = [
     usage: null,
   },
   {
+    kind: "commandCode",
+    displayName: PROVIDER_DISPLAY_NAMES.commandCode,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "cmd login",
+      learnMoreHref: "https://commandcode.ai/studio",
+    },
+  },
+  {
     kind: "kilo",
     displayName: PROVIDER_DISPLAY_NAMES.kilo,
     available: true,

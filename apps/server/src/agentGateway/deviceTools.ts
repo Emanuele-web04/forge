@@ -56,7 +56,7 @@ export const DEVICE_CONTROL_CAPABILITY = "device:control" as const;
  * put a human in the loop for them, so device actions with a physical or
  * exfiltration effect are refused rather than silently auto-approved.
  */
-const PROVIDERS_WITHOUT_APPROVAL_GATE = new Set<ProviderKind>(["antigravity"]);
+const PROVIDERS_WITHOUT_APPROVAL_GATE = new Set<ProviderKind>(["antigravity", "commandCode"]);
 
 export function deviceToolRequiresApproval(name: string): boolean {
   return DEVICE_APPROVAL_REQUIRED_TOOLS.has(name);

@@ -64,6 +64,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       antigravity: { ...provider, binaryPath: "agy" },
+      commandCode: { ...provider, binaryPath: "cmd" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },

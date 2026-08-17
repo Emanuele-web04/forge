@@ -32,6 +32,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "claudeAgent",
   "cursor",
   "antigravity",
+  "commandCode",
   "grok",
   "droid",
   "kilo",
@@ -140,6 +141,14 @@ export function makeModelSelection(
           ? {
               options: options as Extract<ModelSelection, { provider: "antigravity" }>["options"],
             }
+          : {}),
+      };
+    case "commandCode":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "commandCode" }>["options"] }
           : {}),
       };
     case "codex":

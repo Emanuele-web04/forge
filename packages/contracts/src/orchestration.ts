@@ -5,6 +5,7 @@ import {
   CodexModelOptions,
   CursorModelOptions,
   DroidModelOptions,
+  CommandCodeModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
@@ -60,6 +61,7 @@ export const ProviderKind = Schema.Literals([
   "antigravity",
   "grok",
   "droid",
+  "commandCode",
   "kilo",
   "opencode",
   "pi",
@@ -123,6 +125,13 @@ export const DroidModelSelection = Schema.Struct({
 });
 export type DroidModelSelection = typeof DroidModelSelection.Type;
 
+export const CommandCodeModelSelection = Schema.Struct({
+  provider: Schema.Literal("commandCode"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(CommandCodeModelOptions),
+});
+export type CommandCodeModelSelection = typeof CommandCodeModelSelection.Type;
+
 export const OpenCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("opencode"),
   model: TrimmedNonEmptyString,
@@ -151,6 +160,7 @@ export const ModelSelection = Schema.Union([
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
+  CommandCodeModelSelection,
   KiloModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
@@ -185,6 +195,10 @@ export const DroidProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const CommandCodeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
@@ -208,6 +222,7 @@ export const ProviderStartOptions = Schema.Struct({
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
+  commandCode: Schema.optional(CommandCodeProviderStartOptions),
   kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),

@@ -65,6 +65,11 @@ export function providerStartOptionsFromServerSettings(
     antigravity: {
       ...(providers.antigravity.binaryPath ? { binaryPath: providers.antigravity.binaryPath } : {}),
     },
+    commandCode: {
+      ...(providers.commandCode?.binaryPath
+        ? { binaryPath: providers.commandCode.binaryPath }
+        : {}),
+    },
     grok: {
       ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
     },

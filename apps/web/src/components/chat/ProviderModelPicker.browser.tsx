@@ -69,6 +69,12 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "Gemini 3.5 Flash",
     },
   ],
+  commandCode: [
+    {
+      slug: "poolside/laguna-s-2.1-free",
+      name: "Laguna S 2.1 Free",
+    },
+  ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
