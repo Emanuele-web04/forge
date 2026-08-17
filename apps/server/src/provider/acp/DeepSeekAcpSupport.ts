@@ -152,18 +152,24 @@ const makeGeneratedConfig = Effect.fnUntraced(function* (
 export function buildDeepSeekAcpSpawnInput(input: {
   readonly settings: DeepSeekAcpRuntimeSettings | null | undefined;
   readonly configPath: string;
+  readonly generatedSessionsRoot?: string;
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
 }): AcpSpawnInput {
+  const inheritedEnv = buildProviderChildEnvironment({
+    provider: "deepseek",
+    inheritedSynaraKeys: ["SYNARA_DEEPSEEK_SESSIONS_ROOT"],
+  });
+  const inheritedSessionsRoot = inheritedEnv.SYNARA_DEEPSEEK_SESSIONS_ROOT?.trim();
   return {
     command: input.settings?.binaryPath?.trim() || "dsh-acp-demo",
     args: ["--config", input.configPath],
     cwd: input.cwd,
     env: {
-      ...buildProviderChildEnvironment({
-        provider: "deepseek",
-        inheritedSynaraKeys: ["SYNARA_DEEPSEEK_SESSIONS_ROOT"],
-      }),
+      ...inheritedEnv,
+      ...(input.generatedSessionsRoot && !inheritedSessionsRoot
+        ? { SYNARA_DEEPSEEK_SESSIONS_ROOT: input.generatedSessionsRoot }
+        : {}),
       DSH_PERMISSION_MODE: deepSeekPermissionMode(input.runtimeMode),
     },
   };
@@ -173,15 +179,18 @@ export const makeDeepSeekAcpRuntime = (
   input: DeepSeekAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const customConfigPath = input.settings?.configPath?.trim();
     const configPath =
-      input.settings?.configPath?.trim() ||
-      (yield* makeGeneratedConfig(input.settings?.model, input.runtimeMode));
+      customConfigPath || (yield* makeGeneratedConfig(input.settings?.model, input.runtimeMode));
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDeepSeekAcpSpawnInput({
           settings: input.settings,
           configPath,
+          ...(customConfigPath
+            ? {}
+            : { generatedSessionsRoot: path.join(path.dirname(configPath), "sessions") }),
           cwd: input.cwd,
           runtimeMode: input.runtimeMode,
         }),

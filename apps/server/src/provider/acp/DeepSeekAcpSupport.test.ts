@@ -64,6 +64,20 @@ describe("buildDeepSeekAcpSpawnInput", () => {
     });
   });
 
+  it("keeps generated Harness persistence out of the project workspace", () => {
+    expect(
+      buildDeepSeekAcpSpawnInput({
+        settings: undefined,
+        configPath: "/tmp/deepseek/cordis.yml",
+        generatedSessionsRoot: "/tmp/deepseek/sessions",
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      }).env,
+    ).toMatchObject({
+      SYNARA_DEEPSEEK_SESSIONS_ROOT: "/tmp/deepseek/sessions",
+    });
+  });
+
   it("honors a custom Harness binary and Full Access mode", () => {
     expect(
       buildDeepSeekAcpSpawnInput({
@@ -87,6 +101,7 @@ describe("buildDeepSeekAcpSpawnInput", () => {
     const spawn = buildDeepSeekAcpSpawnInput({
       settings: undefined,
       configPath: "/tmp/deepseek/cordis.yml",
+      generatedSessionsRoot: "/tmp/generated-deepseek-sessions",
       cwd: "/tmp/project",
       runtimeMode: "approval-required",
     });
