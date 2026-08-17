@@ -19,8 +19,7 @@ function redactSensitiveDiagnosticString(value: string): string {
     .replace(
       /\b((?:access[-_]?token|api[-_]?key|auth|authorization|cookie|credential|password|secret|token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/giu,
       "$1[redacted]",
-    )
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/giu, "$1[redacted]@");
+    );
 }
 
 export function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {

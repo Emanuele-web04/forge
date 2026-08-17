@@ -35,12 +35,24 @@ export function isExplicitRelativePath(value: string): boolean {
   );
 }
 
-function normalizePathForComparison(value: string): string {
-  const withForwardSlashes = value.replace(/\\/g, "/");
-  // Normalize the drive letter so "C:/foo" and "c:/foo" compare equal.
-  return isWindowsDrivePath(withForwardSlashes)
-    ? withForwardSlashes.charAt(0).toLowerCase() + withForwardSlashes.slice(1)
-    : withForwardSlashes;
+function normalizePathSeparators(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function isNormalizedWindowsAbsolutePath(value: string): boolean {
+  return isWindowsDrivePath(value) || value.startsWith("//");
+}
+
+function windowsRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
+  const targetSegments = targetPath.split("/");
+  const rootSegments = workspaceRoot.split("/");
+  if (targetSegments.length <= rootSegments.length) {
+    return null;
+  }
+  const rootMatches = rootSegments.every(
+    (segment, index) => segment.toLowerCase() === targetSegments[index]?.toLowerCase(),
+  );
+  return rootMatches ? targetSegments.slice(rootSegments.length).join("/") : null;
 }
 
 // Converts an absolute path inside `workspaceRoot` to its workspace-relative
@@ -48,15 +60,27 @@ function normalizePathForComparison(value: string): string {
 // outside the root, and for anything that still fails the relative-path safety
 // check (so callers can hand the result straight to workspace file RPCs).
 export function workspaceRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
-  const normalizedTarget = normalizePathForComparison(targetPath.trim());
-  const normalizedRoot = normalizePathForComparison(workspaceRoot.trim()).replace(/\/+$/, "");
+  const trimmedTarget = targetPath.trim();
+  const trimmedRoot = workspaceRoot.trim();
+  const normalizedTarget = normalizePathSeparators(trimmedTarget);
+  const normalizedRoot = normalizePathSeparators(trimmedRoot).replace(/\/+$/, "");
   if (normalizedRoot.length === 0 || normalizedTarget.length === 0) {
     return null;
   }
-  if (!normalizedTarget.startsWith(`${normalizedRoot}/`)) {
+
+  const compareCaseInsensitively =
+    isNormalizedWindowsAbsolutePath(normalizedTarget) &&
+    isNormalizedWindowsAbsolutePath(normalizedRoot);
+  const relativePath = (
+    compareCaseInsensitively
+      ? windowsRelativePathOf(normalizedTarget, normalizedRoot)
+      : normalizedTarget.startsWith(`${normalizedRoot}/`)
+        ? normalizedTarget.slice(normalizedRoot.length + 1)
+        : null
+  )?.replace(/\/+$/, "");
+  if (!relativePath) {
     return null;
   }
-  const relativePath = normalizedTarget.slice(normalizedRoot.length + 1).replace(/\/+$/, "");
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
 }
 

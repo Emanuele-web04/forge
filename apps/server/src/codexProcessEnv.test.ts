@@ -10,6 +10,7 @@ import {
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
 } from "./codexProcessEnv";
+import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", async () => {
@@ -90,6 +91,27 @@ describe("disableCodexConfigSections", () => {
 });
 
 describe("buildCodexProcessEnv", () => {
+  it("registers the active custom provider env key for diagnostic redaction", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-provider-key-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'model_provider = "acme"',
+        "",
+        "[model_providers.acme]",
+        'env_key = "ACME-LICENSE.INTEGRATION"',
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      await buildCodexProcessEnv({ env: { CODEX_HOME: codexHome }, platform: "win32" });
+      expect(isProviderCredentialKey("ACME-LICENSE.INTEGRATION")).toBe(true);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("replaces a user-defined Synara MCP table only inside the session overlay", async () => {
     const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-source-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-runtime-"));

@@ -125,6 +125,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
   readonly requestedPath: string | null;
   readonly cwd: string | null;
   readonly codexHomePath?: string;
+  readonly scratchWorkspacesRoot?: string;
   readonly allowAbsoluteLocalPreviewFile?: boolean;
   readonly previewGrant?: string | null;
 }): Promise<ResolvedLocalPreviewFile | null> {
@@ -163,12 +164,15 @@ export async function resolveAllowedLocalPreviewFile(input: {
   }
 
   // Sessions that start before a project workspace exists run in per-thread
-  // scratch directories under the OS temp dir. Files agents create there are
-  // workspace-equivalent, so every preview type is servable from that root.
+  // scratch directories. Files agents create there are workspace-equivalent,
+  // so every preview type is servable from the configured private root. Keep
+  // the former temp roots readable for threads created before this migration.
   const tempRoots = await temporaryDirectoryRoots();
-  const scratchWorkspaceRoots = tempRoots.map((root) =>
-    path.join(root, SCRATCH_WORKSPACES_DIRNAME),
-  );
+  const configuredScratchRoot = await realpathOrNull(input.scratchWorkspacesRoot);
+  const scratchWorkspaceRoots = [
+    ...(configuredScratchRoot ? [configuredScratchRoot] : []),
+    ...tempRoots.map((root) => path.join(root, SCRATCH_WORKSPACES_DIRNAME)),
+  ];
   if (scratchWorkspaceRoots.some((root) => isPathInside(realFilePath, root))) {
     return resolved;
   }

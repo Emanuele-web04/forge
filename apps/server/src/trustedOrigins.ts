@@ -19,6 +19,9 @@ export const DESKTOP_APP_CORS_ORIGINS: ReadonlySet<string> = new Set([
 ]);
 
 export function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined) {
+  if (Array.isArray(rawOrigin) && rawOrigin.length !== 1) {
+    return null;
+  }
   const value = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
   const trimmed = value?.trim();
   if (!trimmed || trimmed === "null") {
