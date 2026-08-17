@@ -517,7 +517,7 @@ describe("applyCursorAcpModelSelection", () => {
     expect(calls).toEqual([{ type: "model", value: "default[]" }]);
   });
 
-  it("maps legacy Cursor base slugs to parameterized ACP model values", async () => {
+  it("maps legacy Cursor base slugs with fast mode defaulted off", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
@@ -556,7 +556,7 @@ describe("applyCursorAcpModelSelection", () => {
       }),
     );
 
-    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=true]" }]);
+    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=false]" }]);
   });
 
   it("maps unsupported false boolean parameters to an available Cursor ACP model value", async () => {
@@ -786,6 +786,7 @@ describe("applyCursorAcpModelSelection", () => {
       { type: "config", configId: "thinking", value: true },
       { type: "model", value: "gpt-5.3-codex-spark[reasoning=low]" },
       { type: "config", configId: "reasoning", value: "low" },
+      { type: "config", configId: "fast", value: "false" },
     ]);
   });
 
@@ -889,7 +890,56 @@ describe("applyCursorAcpModelSelection", () => {
     ]);
   });
 
-  it("disables Cursor fast mode through the dedicated ACP config option", async () => {
+  it("lets an explicit fastMode=false override a persisted parameterized fast model", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=high,fast=true]",
+          options: [
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6[effort=high,fast=true]",
+        options: { fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("defaults Cursor fast mode off through the dedicated ACP config option", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
@@ -936,7 +986,7 @@ describe("applyCursorAcpModelSelection", () => {
       applyCursorAcpModelSelection({
         runtime,
         model: "grok-4.6",
-        options: { reasoningEffort: "high", fastMode: false },
+        options: undefined,
         mapError: ({ cause }) => cause,
       }),
     );

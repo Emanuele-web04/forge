@@ -1185,7 +1185,6 @@ function collectCursorAcpConfigUpdates(
   configOptions: ReadonlyArray<Acp.SessionConfigOption>,
   options: CursorModelOptions | null | undefined,
 ): ReadonlyArray<{ readonly configId: string; readonly value: string | boolean }> {
-  if (!options) return [];
   const updates: Array<{ readonly configId: string; readonly value: string | boolean }> = [];
   const pushUpdate = (
     aliases: ReadonlyArray<string>,
@@ -1199,10 +1198,14 @@ function collectCursorAcpConfigUpdates(
     updates.push({ configId: option.id, value: configValue });
   };
 
-  pushUpdate(["effort", "reasoning", "thought level"], options.reasoningEffort);
-  pushUpdate(["context", "context size", "context window"], options.contextWindow);
-  pushUpdate(["fast", "fast mode"], options.fastMode);
-  pushUpdate(["thinking"], options.thinking);
+  pushUpdate(["effort", "reasoning", "thought level"], options?.reasoningEffort);
+  pushUpdate(["context", "context size", "context window"], options?.contextWindow);
+  // Cursor's persisted/current preference can be true even when Synara has no
+  // fast-mode override. The composer treats the lightning bolt as off unless
+  // fastMode is explicitly true, so make that default authoritative whenever
+  // the selected model exposes a dedicated ACP option.
+  pushUpdate(["fast", "fast mode"], options?.fastMode ?? false);
+  pushUpdate(["thinking"], options?.thinking);
   return updates;
 }
 
@@ -1239,6 +1242,22 @@ function mergeCursorModelOptions(
     ...(override ?? {}),
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function withCursorFastModeDefault(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+  baseModel: string,
+  options: CursorModelOptions | undefined,
+): CursorModelOptions | undefined {
+  if (options?.fastMode !== undefined) {
+    return options;
+  }
+  const exposesFastParameter = choices.some(
+    (choice) =>
+      cursorChoiceMatchesBase(choice, baseModel) &&
+      parseCursorModelParameters(choice.slug).has("fast"),
+  );
+  return exposesFastParameter ? { ...(options ?? {}), fastMode: false } : options;
 }
 
 function cursorModelParametersEqualExceptFast(left: string, right: string): boolean {
@@ -1348,10 +1367,6 @@ function resolveCursorAcpModelSelection(
   }
 
   const exactChoice = choices.find((choice) => choice.slug === trimmed);
-  if (exactChoice) {
-    return { _tag: "Resolved", value: exactChoice.slug };
-  }
-
   const baseModel = resolveCursorAcpBaseModelId(trimmed);
   if (baseModel === "auto") {
     return { _tag: "None" };
@@ -1359,6 +1374,7 @@ function resolveCursorAcpModelSelection(
   const cliBaseModel = normalizeCursorCliBaseModelId(baseModel);
 
   const acpModelValue =
+    exactChoice?.slug ??
     choices.find((choice) => choice.slug === baseModel)?.slug ??
     choices.find((choice) => resolveCursorAcpBaseModelId(choice.slug) === baseModel)?.slug ??
     choices.find((choice) => resolveCursorAcpBaseModelId(choice.slug) === cliBaseModel)?.slug ??
@@ -1457,9 +1473,10 @@ export function applyCursorAcpModelSelection<E>(input: {
         input.options,
       ),
     });
-    const mergedOptions = mergeCursorModelOptions(
-      cursorModelOptionsFromCliModelId(input.model),
-      runtimeSafeOptions,
+    const mergedOptions = withCursorFastModeDefault(
+      choices,
+      baseModel,
+      mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
     );
     const selection = resolveCursorAcpModelSelection(
       initialConfigOptions,
