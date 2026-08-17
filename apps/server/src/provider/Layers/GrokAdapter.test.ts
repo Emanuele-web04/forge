@@ -73,7 +73,7 @@ describe("Grok native plan approval", () => {
         hookEventName: "pre_tool_use",
         toolName: "run_terminal_cmd",
       }),
-    ).toMatchObject({ decision: "deny" });
+    ).toEqual({});
     expect(
       resolveGrokPlanHookResponse("plan", {
         hookCallbackId: "synara-plan-guard",
@@ -111,6 +111,21 @@ describe("Grok native plan approval", () => {
         input: { name: "synara_create_threads" },
       }),
     ).toMatchObject({ decision: "deny" });
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "run_terminal_command",
+      }),
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "run_terminal_command",
+        input: { command: "Get-ChildItem $env:USERPROFILE\\.synara" },
+      }),
+    ).toEqual({});
     expect(
       resolveGrokPlanHookResponse("default", {
         hookCallbackId: "synara-plan-guard",

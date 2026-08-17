@@ -143,6 +143,48 @@ export function resolveAcpFullAccessPermissionOutcome(
 const ACP_PLAN_MODE_INSPECTION_KINDS = new Set(["read", "search", "fetch", "think"]);
 const ACP_PLAN_MODE_MUTATING_KINDS = new Set(["execute", "edit", "delete", "move"]);
 const ACP_PLAN_MODE_MCP_WRAPPER_NAMES = new Set(["use_tool", "call_mcp_tool", "mcp_tool", "mcp"]);
+const ACP_PLAN_MODE_SHELL_TOOL_NAMES = new Set([
+  "run_terminal_command",
+  "run_terminal_cmd",
+  "bash",
+  "shell",
+  "sh",
+  "zsh",
+  "powershell",
+  "pwsh",
+  "cmd",
+  "terminal",
+]);
+const ACP_PLAN_MODE_GENERIC_READ_TOOLS = new Set([
+  "ask_user_question",
+  "enter_plan_mode",
+  "exit_plan_mode",
+  "fetch_mcp_resource",
+  "get_command_or_subagent_output",
+  "get_task_output",
+  "get_terminal_command_output",
+  "grep",
+  "hashline_grep",
+  "hashline_read",
+  "list_dir",
+  "list_mcp_resources",
+  "lsp",
+  "memory_get",
+  "memory_search",
+  "read_file",
+  "scheduler_list",
+  "search_tool",
+  "skill",
+  "todo_write",
+  "update_goal",
+  "wait_tasks",
+  "web_fetch",
+  "web_search",
+]);
+const ACP_PLAN_MODE_SHELL_INSPECTION_RE =
+  /\b(?:Get-ChildItem|Get-Content|Get-Item|Get-Acl|Get-Location|Get-Command|Get-Help|Get-Process|Get-Date|Test-Path|Select-Object|Select-String|Format-Table|Format-List|Format-Wide|Measure-Object|Write-Output|Write-Host|ForEach-Object|Where-Object|Sort-Object|Out-String|gci|gc|gi|pwd|ls|dir|cat|type|head|tail|tree|whoami|hostname|uname|printenv|findstr|rg|grep|echo|git\s+(?:status|log|diff|show|branch|rev-parse|ls-files|describe))\b/iu;
+const ACP_PLAN_MODE_SHELL_MUTATION_RE =
+  /(?:^|[\n;&|])\s*(?:Remove-Item|New-Item|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|Rename-Item|Clear-Content|Set-Item(?:Property)?|New-ItemProperty|Start-Process|Stop-Process|Invoke-Expression|Invoke-WebRequest|Invoke-RestMethod)\b|\b(?:rmdir|mkdir)\b|\b(?:rm|del|erase|rd|md|ren)\s+|\b(?:copy|move)\s+(?:\/|-|\S)|\b(?:git\s+(?:add|commit|push|checkout|reset|rebase|merge|rm|mv|restore|clean))\b|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|remove|uninstall)\b|\b(?:pip|uv)\s+install\b|\b(?:python|py|node|bun|deno)\s+-[ec]\b|\b(?:curl|wget)\b.+\s(?:-o|-O|--output)\b|(?:^|[^=<>])>(?!>)|>>/iu;
 const ACP_PLAN_MODE_SYNARA_READ_TOOLS = new Set([
   "synara_context",
   "synara_capabilities",
@@ -225,6 +267,41 @@ function collectAcpPlanToolNameCandidates(value: unknown, depth = 0, into: strin
   return into;
 }
 
+function extractAcpPlanShellCommand(value: unknown, depth = 0): string | undefined {
+  if (depth > 4 || value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["command", "cmd", "script", "code"]) {
+    if (typeof record[key] === "string" && record[key].trim()) {
+      return record[key].trim();
+    }
+  }
+  for (const nested of ["input", "rawInput", "arguments", "params", "tool_input"]) {
+    const found = extractAcpPlanShellCommand(record[nested], depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export function isAcpPlanModeShellToolName(name: string): boolean {
+  return ACP_PLAN_MODE_SHELL_TOOL_NAMES.has(normalizeAcpPlanToolName(name));
+}
+
+export function isAcpPlanModeReadOnlyShellCommand(command: string): boolean {
+  const text = command.trim();
+  if (!text) return false;
+  if (ACP_PLAN_MODE_SHELL_MUTATION_RE.test(text)) return false;
+  return ACP_PLAN_MODE_SHELL_INSPECTION_RE.test(text);
+}
+
 export function isAcpPlanModeInspectionToolCall(toolCall: {
   readonly kind?: string | undefined;
   readonly title?: string | null | undefined;
@@ -242,7 +319,18 @@ export function isAcpPlanModeInspectionToolCall(toolCall: {
   if (names.some((name) => ACP_PLAN_MODE_SYNARA_READ_TOOLS.has(name))) {
     return true;
   }
+  if (names.some((name) => ACP_PLAN_MODE_GENERIC_READ_TOOLS.has(name))) {
+    return true;
+  }
   if (names.length > 0 && names.every((name) => ACP_PLAN_MODE_MCP_WRAPPER_NAMES.has(name))) {
+    return true;
+  }
+  const command = extractAcpPlanShellCommand(toolCall.rawInput);
+  if (
+    (names.some((name) => ACP_PLAN_MODE_SHELL_TOOL_NAMES.has(name)) || kind === "execute") &&
+    command !== undefined &&
+    isAcpPlanModeReadOnlyShellCommand(command)
+  ) {
     return true;
   }
   if (kind && ACP_PLAN_MODE_INSPECTION_KINDS.has(kind)) {
@@ -263,9 +351,10 @@ export function isAcpPlanModeInspectionToolCall(toolCall: {
  * an omitted turn mode to `default` before dispatching the prompt.
  *
  * Plan mode stays fail-closed for mutating tools. Inspection tools (read,
- * search, fetch, Synara context/MCP reads, and Grok's `use_tool` wrapper)
- * may auto-allow so a Plan turn can look around without treating that as a
- * user rejection.
+ * search, fetch, Synara context/MCP reads, Grok's `use_tool` wrapper, and
+ * read-only shell lookups) may auto-allow so a Plan turn can look around
+ * without treating that as a user rejection. Grok cancels the whole turn
+ * when a permission is declined, so inspection shells must not be rejected.
  */
 export function resolveAcpPermissionPolicy(input: {
   readonly runtimeMode: RuntimeMode;

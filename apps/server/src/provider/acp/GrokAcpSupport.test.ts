@@ -287,6 +287,33 @@ describe("Grok ACP permission policy", () => {
         runtimeMode: "full-access",
         interactionMode: "plan",
         options,
+        toolCall: {
+          kind: "execute",
+          title: "run_terminal_command",
+          rawInput: {
+            command:
+              'if (Test-Path "$env:USERPROFILE\\.synara") { Get-ChildItem "$env:USERPROFILE\\.synara" -Force | Select-Object Name } else { Write-Output "NO_SYNARA_HOME" }',
+          },
+        },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: {
+          kind: "execute",
+          title: "run_terminal_command",
+          rawInput: { command: "Remove-Item -Recurse -Force .synara" },
+        },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "reject-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
         toolCall: { title: "use_tool", rawInput: { name: "synara_create_threads" } },
       }),
     ).toEqual({ outcome: "selected", optionId: "reject-once" });

@@ -135,6 +135,35 @@ describe("AcpAdapterSupport", () => {
         rawInput: { tool_name: "synara__synara_create_threads" },
       }),
     ).toBe(false);
+    expect(
+      isAcpPlanModeInspectionToolCall({
+        kind: "execute",
+        title: "run_terminal_command",
+        rawInput: {
+          command:
+            'if (Test-Path "$env:USERPROFILE\\.synara") { Get-ChildItem "$env:USERPROFILE\\.synara" -Force | Select-Object Name, Mode, Length, LastWriteTime } else { Write-Output "NO_SYNARA_HOME" }',
+        },
+      }),
+    ).toBe(true);
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: {
+          kind: "execute",
+          title: "run_terminal_command",
+          rawInput: { command: "Get-ChildItem $env:USERPROFILE\\.synara -Force" },
+        },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "implement-once" });
+    expect(
+      isAcpPlanModeInspectionToolCall({
+        kind: "execute",
+        title: "run_terminal_command",
+        rawInput: { command: 'Set-Content -Path README.md -Value "plan"' },
+      }),
+    ).toBe(false);
   });
 
   it("surfaces Default prompts only for active approval-required turns", () => {

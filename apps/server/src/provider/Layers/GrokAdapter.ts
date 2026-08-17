@@ -70,6 +70,7 @@ import {
 import {
   classifyAcpPromptTurnCompletion,
   isAcpPlanModeInspectionToolCall,
+  isAcpPlanModeShellToolName,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
   resolveAcpPermissionPolicy,
@@ -299,6 +300,7 @@ export function resolveGrokPlanHookResponse(
     typeof payload.toolName === "string" ? payload.toolName.trim().toLowerCase() : "";
   if (
     GROK_PLAN_READ_ONLY_TOOL_NAMES.has(toolName) ||
+    isAcpPlanModeShellToolName(toolName) ||
     isAcpPlanModeInspectionToolCall({
       title: toolName || undefined,
       rawInput: payload,
