@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
 } from "@synara/contracts";
@@ -19,6 +20,8 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasActiveTurn,
+  threadHasInFlightTurn,
 } from "./commandInvariants.ts";
 
 const now = new Date().toISOString();
@@ -176,6 +179,30 @@ describe("commandInvariants", () => {
         (thread) => thread.id,
       ),
     ).toEqual([ThreadId.makeUnsafe("thread-2")]);
+  });
+
+  it("threadHasActiveTurn trusts an active session turn or a running latest turn", () => {
+    const activeTurn = { activeTurnId: TurnId.makeUnsafe("turn-x") };
+    expect(threadHasActiveTurn({ session: activeTurn, latestTurn: null })).toBe(true);
+    expect(threadHasActiveTurn({ session: null, latestTurn: { state: "running" } })).toBe(true);
+    expect(threadHasActiveTurn({ session: null, latestTurn: { state: "completed" } })).toBe(false);
+    expect(threadHasActiveTurn({ session: { activeTurnId: null }, latestTurn: null })).toBe(false);
+    expect(
+      threadHasActiveTurn({
+        session: { activeTurnId: TurnId.makeUnsafe("turn-x") },
+        latestTurn: { state: "completed" },
+      }),
+    ).toBe(true);
+  });
+
+  it("threadHasInFlightTurn includes starting/running sessions that active-turn misses", () => {
+    const runningSession = { status: "running" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
+    expect(
+      threadHasInFlightTurn({ session: runningSession, latestTurn: { state: "completed" } }),
+    ).toBe(true);
+    expect(threadHasInFlightTurn({ session: null, latestTurn: { state: "completed" } })).toBe(false);
+    const errored = { status: "error" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
+    expect(threadHasInFlightTurn({ session: errored, latestTurn: null })).toBe(false);
   });
 
   it("requires existing thread", async () => {

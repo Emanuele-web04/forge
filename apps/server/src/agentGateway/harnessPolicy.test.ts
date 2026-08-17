@@ -35,12 +35,19 @@ describe("Synara harness policy", () => {
     assert.include(policy, "notifying the user versus staying silent");
     assert.include(policy, 'later manual follow-up such as "continue"');
     assert.include(policy, "Never call this tool for a manual follow-up turn");
+    assert.include(policy, "synara_read_kanban_board");
+    assert.include(policy, "synara_create_kanban_task");
+    assert.include(policy, "synara_move_kanban_card");
+    assert.include(policy, "must not be force-moved");
+    assert.include(policy, "dispatches start/settle (interrupt) to the thread");
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");
     assert.notInclude(policy, "one exact synara_create_threads plan");
+    assert.notInclude(policy, "synara_read_kanban_board");
+    assert.notInclude(policy, "synara_move_kanban_card");
   });
 
   it("delivers a private host-context block once per provider session", () => {

@@ -5,6 +5,7 @@ import { Deferred, Effect, Fiber, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeAgentGatewayBrowserTools } from "./browserTools.ts";
 import { BrowserHostRpcError } from "../browserAutomation/browserHostRpcClient.ts";
+import { makeAgentGatewayKanbanTools } from "./kanbanTools.ts";
 import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionRegistry.ts";
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
@@ -187,6 +188,118 @@ function makeTransport(input: {
 
 const post = (transport: ReturnType<typeof makeTransport>, token: string, body: unknown) =>
   transport({ authorizationHeader: `Bearer ${transport.resolveToken(token)}`, body });
+
+describe("agent gateway kanban tools", () => {
+  it.effect("returns board JSON through a tools/call on a thread session", () =>
+    Effect.gen(function* () {
+        const draft = { ...makeThread("thread-draft"), projectId: ProjectId.makeUnsafe("project-a") };
+        const transport = makeTransport({
+          threads: [draft],
+          tool: makeAgentGatewayKanbanTools({
+            snapshotQuery: {
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  projects: [
+                    {
+                      id: ProjectId.makeUnsafe("project-a"),
+                      title: "Project A",
+                      kind: "project" as const,
+                      workspaceRoot: "/repos/Project A",
+                    },
+                  ],
+                  threads: [draft],
+                }),
+            } as unknown as ProjectionSnapshotQueryShape,
+            workspacePaths: { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" },
+            now: () => Date.parse(NOW),
+            helpers: {
+              requireThreadShell: (threadId) => Effect.succeed(draft),
+              assertCallerMayDriveThread: () => Effect.void,
+              runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
+              startTurn: (() => Effect.succeed({})) as never,
+              interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
+            },
+          })[0]!,
+        });
+
+        const response = yield* post(transport, "token-1", {
+          jsonrpc: "2.0",
+          id: "read-board",
+          method: "tools/call",
+          params: { name: "synara_read_kanban_board", arguments: {} },
+        });
+        assert.equal(response.status, 200);
+        const body = response.body as { result?: { content?: Array<{ text?: string }> } };
+        const text = body.result?.content?.[0]?.text ?? "";
+        const payload = JSON.parse(text) as {
+          projects: Array<{ projectId: string; columns: Array<{ key: string; cards: unknown[] }> }>;
+          callerThreadId?: string;
+          asOf?: string;
+        };
+        assert.equal(payload.projects.length, 1);
+        const project = payload.projects[0];
+        assert.isDefined(project);
+        assert.equal(project.projectId, "project-a");
+        assert.equal(project.columns.length, 4);
+        assert.equal(payload.callerThreadId, "thread-draft");
+        assert.equal(payload.asOf, NOW);
+      }).pipe(Effect.timeout("2 seconds")),
+  );
+
+  it.effect("moves a card through tools/call on a thread session", () =>
+    Effect.gen(function* () {
+      const caller = makeThread("thread-caller");
+      const target = { ...makeThread("thread-target"), latestTurn: null };
+      let startRequests: Array<{ threadId: string; message: string }> = [];
+      const transport = makeTransport({
+        threads: [caller, target],
+        tool: makeAgentGatewayKanbanTools({
+          snapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                projects: [
+                  {
+                    id: ProjectId.makeUnsafe("project-a"),
+                    title: "Project A",
+                    kind: "project" as const,
+                    workspaceRoot: "/repos/Project A",
+                  },
+                ],
+                threads: [caller, target],
+              }),
+          } as unknown as ProjectionSnapshotQueryShape,
+          workspacePaths: { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" },
+          now: () => Date.parse(NOW),
+          helpers: {
+            requireThreadShell: (threadId) =>
+              Effect.succeed(threadId === "thread-target" ? target : caller),
+            assertCallerMayDriveThread: () => Effect.void,
+            runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
+            startTurn: ((input: { threadId: string; message: string }) => {
+              startRequests = [...startRequests, input];
+              return Effect.succeed({ sequence: 42 });
+            }) as never,
+            interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
+          },
+        })[2]!,
+      });
+
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "move-card",
+        method: "tools/call",
+        params: {
+          name: "synara_move_kanban_card",
+          arguments: { threadId: "thread-target", target: "inProgress", message: "Keep going" },
+        },
+      });
+      assert.equal(response.status, 200, JSON.stringify(response.body));
+      assert.equal(startRequests.length, 1, JSON.stringify(response.body));
+      assert.equal(startRequests[0]?.threadId, "thread-target");
+      assert.equal(startRequests[0]?.message, "Keep going");
+    }).pipe(Effect.timeout("2 seconds")),
+  );
+});
 
 describe("makeAgentGatewayMcpTransport cancellation", () => {
   it.effect(

@@ -50,6 +50,15 @@ export function threadHasInFlightTurn(thread: {
   );
 }
 
+/** The narrowest aliveness check the shared board model trusts: an active
+ * session turn or a still-running latest turn. Used to gate card operations. */
+export function threadHasActiveTurn(thread: {
+  readonly session: Pick<OrchestrationSession, "activeTurnId"> | null;
+  readonly latestTurn: Pick<OrchestrationLatestTurn, "state"> | null;
+}): boolean {
+  return thread.session?.activeTurnId != null || thread.latestTurn?.state === "running";
+}
+
 export function checkpointRevertActiveTurnDetail(threadId: ThreadId): string {
   return `Thread '${threadId}' has an active turn. Interrupt the current turn before reverting checkpoints.`;
 }
