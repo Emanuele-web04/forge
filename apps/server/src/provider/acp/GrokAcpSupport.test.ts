@@ -252,6 +252,33 @@ describe("Grok ACP permission policy", () => {
       }),
     ).toEqual({ outcome: "selected", optionId: "reject-once" });
   });
+
+  it("auto-allows Plan-mode inspection tools instead of treating them as a user rejection", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: { title: "use_tool", rawInput: { name: "synara_context" } },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: { kind: "execute", title: "Shell" },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "reject-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: { title: "use_tool", rawInput: { name: "synara_create_threads" } },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "reject-once" });
+  });
 });
 
 describe("applyGrokAcpModelSelection", () => {

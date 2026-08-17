@@ -100,6 +100,14 @@ describe("AcpAdapterSupport", () => {
         options,
       }),
     ).toEqual({ outcome: "selected", optionId: "implement-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: { kind: "read", title: "synara_context" },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "implement-once" });
   });
 
   it("surfaces Default prompts only for active approval-required turns", () => {

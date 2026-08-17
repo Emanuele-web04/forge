@@ -891,6 +891,7 @@ export function makeDroidAdapter(
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
+                  toolCall: params.toolCall,
                 });
                 if (policyOutcome !== undefined) {
                   if (policyOutcome.outcome === "selected") {

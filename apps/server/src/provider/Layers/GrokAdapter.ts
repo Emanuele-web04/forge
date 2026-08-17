@@ -69,6 +69,7 @@ import {
 } from "../Errors.ts";
 import {
   classifyAcpPromptTurnCompletion,
+  isAcpPlanModeInspectionToolCall,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
   resolveAcpPermissionPolicy,
@@ -266,8 +267,13 @@ export function extractGrokTerminalPlanMarkdown(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly capturedPlanFingerprint: string | undefined;
   readonly assistantText: string;
+  readonly failedToolDetail?: string | undefined;
 }): string | undefined {
-  if (input.interactionMode !== "plan" || input.capturedPlanFingerprint !== undefined) {
+  if (
+    input.interactionMode !== "plan" ||
+    input.capturedPlanFingerprint !== undefined ||
+    input.failedToolDetail?.trim()
+  ) {
     return undefined;
   }
   const planMarkdown = input.assistantText.trim();
@@ -291,7 +297,13 @@ export function resolveGrokPlanHookResponse(
   }
   const toolName =
     typeof payload.toolName === "string" ? payload.toolName.trim().toLowerCase() : "";
-  if (GROK_PLAN_READ_ONLY_TOOL_NAMES.has(toolName)) {
+  if (
+    GROK_PLAN_READ_ONLY_TOOL_NAMES.has(toolName) ||
+    isAcpPlanModeInspectionToolCall({
+      title: toolName || undefined,
+      rawInput: payload,
+    })
+  ) {
     return {};
   }
   return {
@@ -1229,6 +1241,7 @@ export function makeGrokAdapter(
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
+                  toolCall: params.toolCall,
                 });
                 if (policyOutcome !== undefined) {
                   if (policyOutcome.outcome === "selected") {
@@ -1955,6 +1968,7 @@ export function makeGrokAdapter(
                   interactionMode: ctx.activeInteractionMode,
                   capturedPlanFingerprint: ctx.lastPlanFingerprint,
                   assistantText: ctx.activePlanResponseText,
+                  ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
                 if (terminalPlanMarkdown !== undefined) {
                   ctx.lastPlanFingerprint = terminalPlanMarkdown;

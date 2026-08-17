@@ -140,6 +140,119 @@ export function resolveAcpFullAccessPermissionOutcome(
   return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
 }
 
+const ACP_PLAN_MODE_INSPECTION_KINDS = new Set(["read", "search", "fetch", "think"]);
+const ACP_PLAN_MODE_MUTATING_KINDS = new Set(["execute", "edit", "delete", "move"]);
+const ACP_PLAN_MODE_MCP_WRAPPER_NAMES = new Set(["use_tool", "call_mcp_tool", "mcp_tool", "mcp"]);
+const ACP_PLAN_MODE_SYNARA_READ_TOOLS = new Set([
+  "synara_context",
+  "synara_capabilities",
+  "synara_overview",
+  "synara_list_allowed_projects",
+  "synara_list_projects",
+  "synara_list_threads",
+  "synara_read_thread",
+  "synara_read_thread_activity",
+  "synara_read_thread_events",
+  "synara_read_thread_runtime_events",
+  "synara_diagnose_thread",
+  "synara_wait_for_threads",
+  "synara_wait_for_task",
+  "synara_read_task",
+  "synara_list_automations",
+  "synara_view_automation",
+]);
+const ACP_PLAN_MODE_SYNARA_WRITE_TOOLS = new Set([
+  "synara_create_thread",
+  "synara_create_threads",
+  "synara_create_task",
+  "synara_send_message",
+  "synara_interrupt_thread",
+  "synara_set_thread_title",
+  "synara_set_thread_archived",
+  "synara_set_thread_goal",
+  "synara_create_automation",
+  "synara_update_automation",
+  "synara_update_automation_memory",
+  "synara_cancel_automation",
+  "synara_report_automation_result",
+]);
+
+function normalizeAcpPlanToolName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function canonicalizeAcpPlanToolName(value: string): string {
+  const normalized = normalizeAcpPlanToolName(value);
+  if (normalized.startsWith("mcp_synara_synara_")) {
+    return `synara_${normalized.slice("mcp_synara_synara_".length)}`;
+  }
+  if (normalized.startsWith("mcp_synara_")) {
+    return `synara_${normalized.slice("mcp_synara_".length)}`;
+  }
+  if (normalized.startsWith("synara_synara_")) {
+    return `synara_${normalized.slice("synara_".length)}`;
+  }
+  return normalized;
+}
+
+function collectAcpPlanToolNameCandidates(value: unknown, depth = 0, into: string[] = []): string[] {
+  if (depth > 4 || into.length >= 16 || value == null) {
+    return into;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed && trimmed.length < 200) into.push(canonicalizeAcpPlanToolName(trimmed));
+    return into;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectAcpPlanToolNameCandidates(entry, depth + 1, into);
+    return into;
+  }
+  if (typeof value !== "object") {
+    return into;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["toolName", "tool_name", "name", "tool", "title"]) {
+    if (typeof record[key] === "string") {
+      into.push(canonicalizeAcpPlanToolName(record[key]));
+    }
+  }
+  for (const nested of ["input", "rawInput", "arguments", "params", "toolCall", "call"]) {
+    if (nested in record) collectAcpPlanToolNameCandidates(record[nested], depth + 1, into);
+  }
+  return into;
+}
+
+export function isAcpPlanModeInspectionToolCall(toolCall: {
+  readonly kind?: string | undefined;
+  readonly title?: string | null | undefined;
+  readonly rawInput?: unknown;
+}): boolean {
+  const kind = toolCall.kind?.trim().toLowerCase();
+  if (kind && ACP_PLAN_MODE_MUTATING_KINDS.has(kind)) {
+    return false;
+  }
+  const names = collectAcpPlanToolNameCandidates({
+    kind: toolCall.kind,
+    title: toolCall.title,
+    rawInput: toolCall.rawInput,
+  });
+  if (names.some((name) => ACP_PLAN_MODE_SYNARA_WRITE_TOOLS.has(name))) {
+    return false;
+  }
+  if (kind && ACP_PLAN_MODE_INSPECTION_KINDS.has(kind)) {
+    return true;
+  }
+  if (names.some((name) => ACP_PLAN_MODE_SYNARA_READ_TOOLS.has(name))) {
+    return true;
+  }
+  return names.length > 0 && names.every((name) => ACP_PLAN_MODE_MCP_WRAPPER_NAMES.has(name));
+}
+
 /**
  * Applies Synara's turn-scoped permission precedence to ACP reverse requests.
  *
@@ -147,13 +260,26 @@ export function resolveAcpFullAccessPermissionOutcome(
  * requests are cancelled so replay or late provider activity cannot inherit a
  * previous Plan turn or a future Full Access turn. Active adapters normalize
  * an omitted turn mode to `default` before dispatching the prompt.
+ *
+ * Plan mode stays fail-closed for mutating tools. Inspection tools (read,
+ * search, fetch, Synara context/MCP reads, and Grok's `use_tool` wrapper)
+ * may auto-allow so a Plan turn can look around without treating that as a
+ * user rejection.
  */
 export function resolveAcpPermissionPolicy(input: {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly options: ReadonlyArray<AcpPermissionOptionLike>;
+  readonly toolCall?: {
+    readonly kind?: string | undefined;
+    readonly title?: string | null | undefined;
+    readonly rawInput?: unknown;
+  };
 }): AcpPermissionPolicyOutcome | undefined {
   if (input.interactionMode === "plan") {
+    if (input.toolCall && isAcpPlanModeInspectionToolCall(input.toolCall)) {
+      return resolveAcpFullAccessPermissionOutcome(input.options);
+    }
     const optionId = selectAcpPermissionOptionId("decline", input.options);
     return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
   }

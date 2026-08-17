@@ -882,6 +882,7 @@ export function makeCursorAdapter(
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
+                  toolCall: params.toolCall,
                 });
                 if (policyOutcome !== undefined) {
                   return { outcome: policyOutcome };

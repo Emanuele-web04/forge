@@ -82,6 +82,28 @@ describe("Grok native plan approval", () => {
       }),
     ).toMatchObject({ decision: "deny" });
     expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "synara_context",
+      }),
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "use_tool",
+      }),
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "use_tool",
+        input: { name: "synara_create_threads" },
+      }),
+    ).toMatchObject({ decision: "deny" });
+    expect(
       resolveGrokPlanHookResponse("default", {
         hookCallbackId: "synara-plan-guard",
         hookEventName: "pre_tool_use",
@@ -164,6 +186,14 @@ describe("Grok native plan approval", () => {
         interactionMode: "plan",
         capturedPlanFingerprint: "# Native plan",
         assistantText: "# Duplicate",
+      }),
+    ).toBeUndefined();
+    expect(
+      extractGrokTerminalPlanMarkdown({
+        interactionMode: "plan",
+        capturedPlanFingerprint: undefined,
+        assistantText: "Checking Synara context before planning.",
+        failedToolDetail: "User rejected the execution for tool 'use_tool'",
       }),
     ).toBeUndefined();
   });
