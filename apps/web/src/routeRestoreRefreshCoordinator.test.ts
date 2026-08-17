@@ -5,7 +5,6 @@ import {
   EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS,
   registerEmptyRouteRestoreRefresh,
   requestEmptyRouteRestoreRefresh,
-  resetEmptyRouteRestoreSingleFlightForTests,
   runEmptyRouteRestoreRefresh,
 } from "./routeRestoreRefreshCoordinator";
 
@@ -38,14 +37,12 @@ function emptyUntilRepairShell(getShellSnapshotCalls: { count: number }) {
 let unregister: (() => void) | undefined;
 
 beforeEach(() => {
-  resetEmptyRouteRestoreSingleFlightForTests();
   vi.useFakeTimers();
 });
 
 afterEach(() => {
   unregister?.();
   unregister = undefined;
-  resetEmptyRouteRestoreSingleFlightForTests();
   vi.useRealTimers();
 });
 
@@ -94,33 +91,38 @@ describe("route restore refresh coordinator", () => {
     expect(repairState).not.toHaveBeenCalled();
   });
 
-  it("uses the full snapshot only as a probe and re-reads the fenced shell", async () => {
+  it("uses one full snapshot only as a probe and re-reads the fenced shell", async () => {
     let hasThreads = false;
+    let fullSnapshotProbed = false;
     const getShellSnapshot = vi
       .fn()
-      .mockResolvedValueOnce(shellSnapshot([]))
-      .mockResolvedValueOnce(shellSnapshot(["thread-1"]));
-    const getSnapshot = vi.fn().mockResolvedValue(readModel(["thread-1"]));
+      .mockImplementation(async () =>
+        fullSnapshotProbed ? shellSnapshot(["thread-1"]) : shellSnapshot([]),
+      );
+    const getSnapshot = vi.fn().mockImplementation(async () => {
+      fullSnapshotProbed = true;
+      return readModel(["thread-1"]);
+    });
     const repairState = vi.fn();
     const appliedShellSnapshots: OrchestrationShellSnapshot[] = [];
 
-    await expect(
-      runEmptyRouteRestoreRefresh({
-        getShellSnapshot,
-        getSnapshot,
-        repairState,
-        applyShellSnapshot: (snapshot) => {
-          appliedShellSnapshots.push(snapshot);
-          hasThreads = snapshot.threads.length > 0;
-        },
-        hasThreads: () => hasThreads,
-      }),
-    ).resolves.toBe(true);
+    const recovery = runEmptyRouteRestoreRefresh({
+      getShellSnapshot,
+      getSnapshot,
+      repairState,
+      applyShellSnapshot: (snapshot) => {
+        appliedShellSnapshots.push(snapshot);
+        hasThreads = snapshot.threads.length > 0;
+      },
+      hasThreads: () => hasThreads,
+    });
+    await vi.runAllTimersAsync();
+    await expect(recovery).resolves.toBe(true);
 
     expect(getSnapshot).toHaveBeenCalledTimes(1);
     expect(repairState).not.toHaveBeenCalled();
-    expect(getShellSnapshot).toHaveBeenCalledTimes(2);
-    expect(appliedShellSnapshots).toHaveLength(2);
+    expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
+    expect(appliedShellSnapshots).toHaveLength(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
   });
 
   it("polls before repairing when projections stay empty during catch-up", async () => {
@@ -143,7 +145,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
-    expect(getSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS);
+    expect(getSnapshot).toHaveBeenCalledTimes(1);
     expect(repairState).toHaveBeenCalledTimes(1);
   });
 
@@ -170,6 +172,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(getShellSnapshot).toHaveBeenCalledTimes(2);
+    expect(getSnapshot).not.toHaveBeenCalled();
     expect(repairState).not.toHaveBeenCalled();
   });
 
@@ -186,30 +189,48 @@ describe("route restore refresh coordinator", () => {
         }),
     );
 
-    const first = runEmptyRouteRestoreRefresh({
-      getShellSnapshot,
-      getSnapshot,
-      repairState,
-      applyShellSnapshot: (snapshot) => {
-        hasThreads = snapshot.threads.length > 0;
-      },
-      hasThreads: () => hasThreads,
-    });
-    const second = runEmptyRouteRestoreRefresh({
-      getShellSnapshot,
-      getSnapshot,
-      repairState,
-      applyShellSnapshot: (snapshot) => {
-        hasThreads = snapshot.threads.length > 0;
-      },
-      hasThreads: () => hasThreads,
-    });
+    unregister = registerEmptyRouteRestoreRefresh(() =>
+      runEmptyRouteRestoreRefresh({
+        getShellSnapshot,
+        getSnapshot,
+        repairState,
+        applyShellSnapshot: (snapshot) => {
+          hasThreads = snapshot.threads.length > 0;
+        },
+        hasThreads: () => hasThreads,
+      }),
+    );
+    const first = requestEmptyRouteRestoreRefresh();
+    const second = requestEmptyRouteRestoreRefresh();
 
     await vi.runAllTimersAsync();
     expect(repairState).toHaveBeenCalledTimes(1);
     resolveRepair?.();
     await expect(first).resolves.toBe(true);
     await expect(second).resolves.toBe(true);
+  });
+
+  it("starts a fresh recovery when the registered EventRouter changes", async () => {
+    let resolveFirst: ((value: boolean) => void) | null = null;
+    const firstHandler = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const unregisterFirst = registerEmptyRouteRestoreRefresh(firstHandler);
+    const first = requestEmptyRouteRestoreRefresh();
+
+    unregisterFirst();
+    const secondHandler = vi.fn().mockResolvedValue(true);
+    unregister = registerEmptyRouteRestoreRefresh(secondHandler);
+    const second = requestEmptyRouteRestoreRefresh();
+
+    await expect(second).resolves.toBe(true);
+    expect(secondHandler).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.(false);
+    await expect(first).resolves.toBe(false);
   });
 
   it("repairs an empty projection then consumes a fresh fenced shell snapshot", async () => {
@@ -232,6 +253,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(repairState).toHaveBeenCalledTimes(1);
+    expect(getSnapshot).toHaveBeenCalledTimes(1);
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
   });
 });

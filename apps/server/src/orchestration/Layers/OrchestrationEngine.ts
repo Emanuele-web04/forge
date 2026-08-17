@@ -192,9 +192,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // Full projection repair is multi-minute on large state DBs. Coalesce concurrent
   // callers onto one rebuild and skip thrash when a repair just completed.
   type ProjectionRepairError = OrchestrationDispatchError | OrchestrationEventStoreError;
-  const projectionRepairInFlight = yield* Ref.make<
-    Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError> | null
-  >(null);
+  const projectionRepairInFlight = yield* Ref.make<Deferred.Deferred<
+    OrchestrationReadModel,
+    ProjectionRepairError
+  > | null>(null);
   const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
   // Committed events are durable before they reach this boundary. Once
@@ -1437,10 +1438,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     Effect.gen(function* () {
       const nowMs = Date.now();
       const lastSuccessMs = yield* Ref.get(lastSuccessfulProjectionRepairAtMs);
-      if (
-        lastSuccessMs > 0 &&
-        nowMs - lastSuccessMs < PROJECTION_REPAIR_COOLDOWN_MS
-      ) {
+      if (lastSuccessMs > 0 && nowMs - lastSuccessMs < PROJECTION_REPAIR_COOLDOWN_MS) {
         yield* Effect.log(
           "skipping orchestration projection repair (recent successful rebuild)",
         ).pipe(
@@ -1452,19 +1450,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return yield* maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
       }
 
-      const joinDeferred = yield* Deferred.make<
-        OrchestrationReadModel,
-        ProjectionRepairError
-      >();
+      const joinDeferred = yield* Deferred.make<OrchestrationReadModel, ProjectionRepairError>();
       const claim = yield* Ref.modify(
         projectionRepairInFlight,
         (
           current,
         ): readonly [
-          { readonly kind: "join" | "start"; readonly deferred: Deferred.Deferred<
-            OrchestrationReadModel,
-            ProjectionRepairError
-          > },
+          {
+            readonly kind: "join" | "start";
+            readonly deferred: Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError>;
+          },
           Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError> | null,
         ] => {
           if (current !== null) {
