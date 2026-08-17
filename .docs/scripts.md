@@ -18,18 +18,20 @@
 
 ## Desktop `.dmg` packaging notes
 
-- Default build is unsigned/not notarized for local sharing.
-- The DMG build uses `assets/macos-icon-1024.png` as the production app icon source.
+- Default local builds are unsigned/not notarized unless `--signed` is supplied with the required platform credentials.
+- Production icon sources are centralized in `scripts/lib/brand-assets.ts`. The current macOS source is `assets/prod/black-macos-1024.png` (with the legacy macOS variant alongside it); do not hard-code a separate packaging icon path in docs or scripts.
 - Desktop production windows load the bundled UI from `synara://app/index.html` (not a `127.0.0.1` document URL).
 - Desktop packaging includes `apps/server/dist` (the `synara` backend) and starts it on loopback with an auth token for WebSocket/API traffic.
-- Your tester can still open it on macOS by right-clicking the app and choosing **Open** on first launch.
-- To keep staging files for debugging package contents, run: `bun run dist:desktop:dmg -- --keep-stage`
-- To allow code-signing/notarization when configured in CI/secrets, add: `--signed`.
+- Your tester can still open an unsigned local macOS build by right-clicking the app and choosing **Open** on first launch.
+- To keep staging files for debugging package contents, run: `bun run dist:desktop:dmg -- --keep-stage`.
+- To enable code-signing/notarization when the required credentials are configured, add `--signed`.
 - Windows `--signed` uses Azure Trusted Signing and expects:
   `AZURE_TRUSTED_SIGNING_ENDPOINT`, `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`,
-  `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`, and `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`.
-- Azure authentication env vars are also required (for example service principal with secret):
+  `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`, `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`,
+  and `AZURE_TRUSTED_SIGNING_SUBJECT_DN`.
+- Azure authentication env vars are also required (for example a service principal with secret):
   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`.
+- Release publication has stricter signing/provenance policy than a local artifact build; use `docs/release.md` as the source of truth for release requirements.
 
 ## Running multiple dev instances
 

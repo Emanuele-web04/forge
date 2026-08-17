@@ -107,6 +107,10 @@ import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
+import {
+  registerEmptyRouteRestoreRefresh,
+  runEmptyRouteRestoreRefresh,
+} from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -1393,10 +1397,13 @@ function EventRouter() {
       }
     }
 
-    const loadShellSnapshotOnce = async () => {
+    const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
       if (disposed) return;
-      const snapshot = await api.orchestration.getShellSnapshot();
-      if (disposed) return;
+      // A query can resolve after the live shell stream has already moved
+      // forward. Never roll the store back behind the EventRouter fence.
+      if (shellSnapshotSequence >= 0 && snapshot.snapshotSequence < shellSnapshotSequence) {
+        return;
+      }
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
@@ -1408,6 +1415,23 @@ function EventRouter() {
       flushShellBuffer(snapshot.snapshotSequence);
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
     };
+
+    const loadShellSnapshotOnce = async () => {
+      if (disposed) return;
+      const snapshot = await api.orchestration.getShellSnapshot();
+      if (disposed) return;
+      applyQueriedShellSnapshot(snapshot);
+    };
+
+    const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
+      runEmptyRouteRestoreRefresh({
+        getShellSnapshot: () => api.orchestration.getShellSnapshot(),
+        getSnapshot: () => api.orchestration.getSnapshot(),
+        repairState: () => api.orchestration.repairState(),
+        applyShellSnapshot: applyQueriedShellSnapshot,
+        hasThreads: () => (useStore.getState().threadIds?.length ?? 0) > 0,
+      }),
+    );
 
     let scopedSubscriptionRefresh: Promise<void> | null = null;
     const ensureScopedSubscriptions = () => {
@@ -2151,6 +2175,7 @@ function EventRouter() {
       threadCatchupBackoffById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
+      unregisterEmptyRouteRestoreRefresh();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and
