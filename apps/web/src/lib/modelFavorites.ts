@@ -9,6 +9,7 @@ export const FAVORITE_MODEL_STORAGE_KEYS = {
   cursor: "synara:cursor-favourite-models:v1",
   kilo: "synara:kilo-favourite-models:v1",
   opencode: "synara:opencode-favourite-models:v1",
+  commandcode: "synara:commandcode-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
 } as const;
 
@@ -18,7 +19,11 @@ const FavoriteModelSlugsSchema = Schema.Array(Schema.String);
 
 export function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
   return (
-    provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
+    provider === "cursor" ||
+    provider === "kilo" ||
+    provider === "opencode" ||
+    provider === "commandcode" ||
+    provider === "pi"
   );
 }
 

@@ -253,17 +253,20 @@ describe("TerminalEvent", () => {
     ).toBe(true);
   });
 
-  it.each(["codex", "claude", "antigravity"] as const)("accepts %s activity events", (cliKind) => {
-    expect(
-      decodes(TerminalEvent, {
-        type: "activity",
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        createdAt: new Date().toISOString(),
-        hasRunningSubprocess: true,
-        cliKind,
-        agentState: "running",
-      }),
-    ).toBe(true);
-  });
+  it.each(["codex", "claude", "antigravity", "commandcode"] as const)(
+    "accepts %s activity events",
+    (cliKind) => {
+      expect(
+        decodes(TerminalEvent, {
+          type: "activity",
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          createdAt: new Date().toISOString(),
+          hasRunningSubprocess: true,
+          cliKind,
+          agentState: "running",
+        }),
+      ).toBe(true);
+    },
+  );
 });

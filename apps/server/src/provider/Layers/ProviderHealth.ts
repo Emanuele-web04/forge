@@ -119,6 +119,7 @@ const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
+const COMMANDCODE_PROVIDER = "commandcode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
@@ -133,6 +134,7 @@ const PROVIDERS = [
   DROID_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
+  COMMANDCODE_PROVIDER,
   PI_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
@@ -289,6 +291,20 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       executable: "pi",
       args: () => ["update"],
       lockKey: "pi-native",
+      strategy: "always",
+    },
+  },
+  commandcode: {
+    provider: COMMANDCODE_PROVIDER,
+    binaryName: "cmd",
+    // Command Code is distributed as a native binary and owns its update channel.
+    npmPackageName: null,
+    homebrew: null,
+    latestVersionSource: null,
+    nativeUpdate: {
+      executable: "cmd",
+      args: () => ["update"],
+      lockKey: "commandcode-native",
       strategy: "always",
     },
   },
@@ -848,6 +864,15 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
 
 const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
   runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runCommandCodeCommand = (args: ReadonlyArray<string>, executable = "cmd") =>
+  runProviderCommand(executable, args, providerCommandEnv(COMMANDCODE_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1717,6 +1742,86 @@ export const checkAntigravityProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── Command Code CLI health check ─────────────────────────────────
+
+export const checkCommandCodeProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "cmd";
+    const versionProbe = yield* probeProviderCliVersion(
+      runCommandCodeCommand(["--version"], executable),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      return {
+        provider: COMMANDCODE_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Command Code CLI (`cmd`) is not installed or is not on PATH."
+            : `Command Code CLI health check failed: ${String(versionProbe.cause)}`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: COMMANDCODE_PROVIDER,
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt,
+        message: "Command Code CLI version check timed out.",
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      return {
+        provider: COMMANDCODE_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: detailFromResult(version) ?? "Command Code CLI version check failed.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const models = yield* runCommandCodeCommand(["--list-models"], executable).pipe(
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
+      Effect.result,
+    );
+    if (
+      Result.isSuccess(models) &&
+      Option.isSome(models.success) &&
+      models.success.value.code === 0 &&
+      models.success.value.stdout.trim().length > 0
+    ) {
+      return {
+        provider: COMMANDCODE_PROVIDER,
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: parsedVersion,
+        checkedAt,
+        message: "Command Code CLI is installed, authenticated, and returned available models.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: COMMANDCODE_PROVIDER,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      version: parsedVersion,
+      checkedAt,
+      message:
+        "Command Code CLI is installed, but Synara could not verify login by listing models.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const makeCheckCursorProviderStatus = (
@@ -2203,6 +2308,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.kilo.binaryPath;
           case "opencode":
             return settings.providers.opencode.binaryPath;
+          case "commandcode":
+            return settings.providers.commandcode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
         }
@@ -2409,6 +2516,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   OPENCODE_PROVIDER,
                   makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  COMMANDCODE_PROVIDER,
+                  checkCommandCodeProviderStatus(settings.providers.commandcode.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,

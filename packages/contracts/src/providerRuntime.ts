@@ -30,6 +30,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "acp.cursor.extension",
   "kilo.sdk.event",
   "opencode.sdk.event",
+  "commandcode.cli.event",
   "pi.sdk.event",
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;

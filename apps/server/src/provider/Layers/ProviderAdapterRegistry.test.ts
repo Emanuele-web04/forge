@@ -5,6 +5,7 @@ import { assertFailure } from "@effect/vitest/utils";
 import { Effect, Layer, Stream } from "effect";
 
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { CommandCodeAdapter, CommandCodeAdapterShape } from "../Services/CommandCodeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
@@ -45,6 +46,23 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   stopTask: vi.fn(),
   backgroundTask: vi.fn(),
   steerSubagent: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
+const fakeCommandCodeAdapter: CommandCodeAdapterShape = {
+  provider: "commandcode",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
   respondToRequest: vi.fn(),
   respondToUserInput: vi.fn(),
   stopSession: vi.fn(),
@@ -188,6 +206,7 @@ const layer = it.layer(
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(KiloAdapter, fakeKiloAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
+        Layer.succeed(CommandCodeAdapter, fakeCommandCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
       ),
     ),
@@ -228,6 +247,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "droid",
         "kilo",
         "opencode",
+        "commandcode",
         "pi",
       ]);
     }),

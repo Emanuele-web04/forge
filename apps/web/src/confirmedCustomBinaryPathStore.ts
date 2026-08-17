@@ -21,6 +21,7 @@ const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set<ProviderKind>([
   "droid",
   "kilo",
   "opencode",
+  "commandcode",
   "pi",
 ]);
 

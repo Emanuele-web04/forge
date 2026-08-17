@@ -124,6 +124,7 @@ type CustomModelSettingsKey =
   | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
+  | "customCommandCodeModels"
   | "customPiModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
@@ -144,6 +145,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  commandcode: new Set(getModelOptions("commandcode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
 };
 
@@ -170,6 +172,7 @@ const PersistedProviderKind = Schema.Literals([
   "droid",
   "kilo",
   "opencode",
+  "commandcode",
   "pi",
 ]).pipe(
   Schema.decodeTo(
@@ -205,6 +208,7 @@ export const AppSettingsSchema = Schema.Struct({
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  commandCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -276,6 +280,7 @@ export const AppSettingsSchema = Schema.Struct({
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customCommandCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -404,6 +409,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional OpenCode model slugs for the picker and provider runtime.",
     placeholder: "provider/model",
     example: "openai/gpt-5",
+  },
+  commandcode: {
+    provider: "commandcode",
+    settingsKey: "customCommandCodeModels",
+    defaultSettingsKey: "customCommandCodeModels",
+    title: "Command Code",
+    description: "Save additional Command Code model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "anthropic/claude-sonnet-4-5",
   },
   pi: {
     provider: "pi",
@@ -545,6 +559,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       "opencode",
       settings.openCodeBinaryPath,
     ),
+    commandCodeBinaryPath: normalizeProviderBinaryPathOverride(
+      "commandcode",
+      settings.commandCodeBinaryPath,
+    ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
@@ -562,6 +580,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    customCommandCodeModels: normalizeCustomModelSlugs(
+      settings.customCommandCodeModels,
+      "commandcode",
+    ),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
@@ -587,6 +609,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     kiloServerUrl: settings.providers.kilo.serverUrl,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
     openCodeExperimentalWebSockets: settings.providers.opencode.experimentalWebSockets,
+    commandCodeBinaryPath: settings.providers.commandcode.binaryPath,
     openCodeServerPasswordConfigured: settings.providers.opencode.serverPasswordConfigured,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
@@ -599,6 +622,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
+    customCommandCodeModels: settings.providers.commandcode.customModels,
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
@@ -629,6 +653,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
+    hasOwn(patch, "commandCodeBinaryPath") ||
     hasOwn(patch, "piAgentDir")
   );
 }
@@ -755,6 +780,16 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
+  if (hasOwn(patch, "commandCodeBinaryPath") || hasOwn(patch, "customCommandCodeModels")) {
+    providers.commandcode = {
+      ...(hasOwn(patch, "commandCodeBinaryPath")
+        ? { binaryPath: patch.commandCodeBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customCommandCodeModels")
+        ? { customModels: patch.customCommandCodeModels ?? [] }
+        : {}),
+    };
+  }
   if (
     hasOwn(patch, "piAgentDir") ||
     hasOwn(patch, "piBinaryPath") ||
@@ -801,6 +836,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeExperimentalWebSockets",
     "openCodeServerPassword",
     "openCodeServerUrl",
+    "commandCodeBinaryPath",
     "piAgentDir",
     "piBinaryPath",
     "textGenerationModel",
@@ -829,6 +865,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customDroidModels",
     "customKiloModels",
     "customOpenCodeModels",
+    "customCommandCodeModels",
     "customPiModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
@@ -878,6 +915,7 @@ export function getCustomModelsByProvider(
     droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
+    commandcode: getCustomModelsForProvider(settings, "commandcode"),
     pi: getCustomModelsForProvider(settings, "pi"),
   };
 }
@@ -1026,6 +1064,7 @@ export function getCustomModelOptionsByProvider(
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
+    commandcode: getAppModelOptions("commandcode", customModelsByProvider.commandcode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
   };
 }
@@ -1046,6 +1085,7 @@ export function getProviderStartOptions(
     | "openCodeBinaryPath"
     | "openCodeExperimentalWebSockets"
     | "openCodeServerUrl"
+    | "commandCodeBinaryPath"
     | "piAgentDir"
     | "piBinaryPath"
   >,
@@ -1066,6 +1106,10 @@ export function getProviderStartOptions(
   const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
     "opencode",
     settings.openCodeBinaryPath,
+  );
+  const commandCodeBinaryPath = normalizeProviderBinaryPathOverride(
+    "commandcode",
+    settings.commandCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
   const hasOpenCodeStartOptions = Boolean(
@@ -1133,6 +1177,13 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(commandCodeBinaryPath
+      ? {
+          commandcode: {
+            binaryPath: commandCodeBinaryPath,
+          },
+        }
+      : {}),
     ...(piBinaryPath || settings.piAgentDir
       ? {
           pi: {
@@ -1185,6 +1236,7 @@ export function getCustomBinaryPathForProvider(
     | "droidBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
+    | "commandCodeBinaryPath"
     | "piBinaryPath"
   >,
   provider: ProviderKind,
@@ -1206,6 +1258,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":
       return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
+    case "commandcode":
+      return normalizeProviderBinaryPathOverride(provider, settings.commandCodeBinaryPath);
     case "pi":
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
   }

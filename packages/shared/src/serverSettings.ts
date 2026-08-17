@@ -80,6 +80,9 @@ export function providerStartOptionsFromServerSettings(
       ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),
       experimentalWebSockets: providers.opencode.experimentalWebSockets,
     },
+    commandcode: {
+      ...(providers.commandcode.binaryPath ? { binaryPath: providers.commandcode.binaryPath } : {}),
+    },
     pi: {
       ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
       ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),

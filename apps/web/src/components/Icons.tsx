@@ -277,6 +277,24 @@ export const PiIcon: Icon = (props) => (
   </svg>
 );
 
+export const CommandCodeIcon: Icon = ({
+  className,
+  "aria-hidden": ariaHidden,
+  "aria-label": ariaLabel,
+  role,
+  style,
+  ..._svgProps
+}) => (
+  <img
+    src="/commandcode-logo.png"
+    alt={ariaLabel ?? "Command Code"}
+    aria-hidden={ariaHidden}
+    role={role}
+    className={className}
+    style={style}
+  />
+);
+
 export const OpenCodeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg">
     <g clipPath="url(#opencode__clip0_1311_94969)">

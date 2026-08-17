@@ -18,6 +18,7 @@ import {
 } from "../Services/ProviderAdapterRegistry.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
+import { CommandCodeAdapter } from "../Services/CommandCodeAdapter.ts";
 import { CursorAdapter } from "../Services/CursorAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
@@ -44,6 +45,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* DroidAdapter,
             yield* KiloAdapter,
             yield* OpenCodeAdapter,
+            yield* CommandCodeAdapter,
             yield* PiAdapter,
           ];
 
