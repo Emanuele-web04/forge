@@ -125,6 +125,16 @@ describe("composerDraftStore modelSelection", () => {
     ).toEqual(modelSelection("codex", "gpt-5.6-sol", { fastMode: true }));
   });
 
+  it("preserves Devin model options in the draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(threadId, "devin", { fastMode: true }, { model: "adaptive" });
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.devin,
+    ).toEqual(modelSelection("devin", "adaptive", { fastMode: true }));
+  });
+
   it("keeps default-only model selections on the draft", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelection(threadId, modelSelection("codex", "gpt-5.4"));
@@ -365,6 +375,7 @@ describe("composerDraftStore modelSelection", () => {
         kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
@@ -393,6 +404,7 @@ describe("composerDraftStore modelSelection", () => {
         kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -426,6 +438,7 @@ describe("composerDraftStore modelSelection", () => {
         kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -459,6 +472,7 @@ describe("composerDraftStore modelSelection", () => {
         kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         pi: [

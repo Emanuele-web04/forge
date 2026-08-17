@@ -24,8 +24,7 @@ const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?!\[REDACTED\])(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
   /(?<![A-Za-z0-9_.-])((["']?)([A-Za-z0-9_.-]+)\2\s*(?::|=)\s*)/giu;
-const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN =
-  /((?:^|,|\[)\s*(["'])([A-Za-z0-9_.-]+)\2\s*,\s*)/giu;
+const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN = /((?:^|,|\[)\s*(["'])([A-Za-z0-9_.-]+)\2\s*,\s*)/giu;
 const JSON_NAME_FIELD_PATTERN =
   /(?:"name"|'name'|\bname)\s*:\s*(["'])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/giu;
 const JSON_VALUE_FIELD_PATTERN =
@@ -475,11 +474,7 @@ function redactInspectedNamedValueObjects(value: string): string {
   return redacted;
 }
 
-function redactValue(
-  value: unknown,
-  seen = new WeakSet<object>(),
-  depth = 0,
-): unknown {
+function redactValue(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
   if (typeof value === "string") return redactText(value);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number") return Number.isFinite(value) ? value : null;

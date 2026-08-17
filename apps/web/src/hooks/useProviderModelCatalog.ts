@@ -114,6 +114,7 @@ export function useProviderModelCatalog(input: {
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
+  const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
 
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
@@ -184,6 +185,14 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: devinModelDiscoveryEnabled,
     }),
   );
 
@@ -260,6 +269,13 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const hasResolvedDevinModelDiscovery =
+    devinDynamicModelsQuery.data?.source === "devin-cli" &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    isInitialModelDiscoveryPending(devinDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -295,6 +311,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.opencode,
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
+      devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
     };
     const result: Record<
       ProviderKind,
@@ -313,6 +330,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
+      devin: devinDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -324,6 +342,7 @@ export function useProviderModelCatalog(input: {
       "kilo",
       "opencode",
       "pi",
+      "devin",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -348,6 +367,7 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    devinDynamicModelsQuery.data,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -358,6 +378,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
+      devin: devinModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -366,6 +387,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      devinModelDiscoveryPending,
     ],
   );
 
@@ -382,6 +404,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
+      devin: devinDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -393,6 +416,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      devinDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -443,7 +467,9 @@ export function useProviderModelCatalog(input: {
                   ? kiloDynamicModelsQuery
                   : selectedProvider === "opencode"
                     ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+                    : selectedProvider === "pi"
+                      ? piDynamicModelsQuery
+                      : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

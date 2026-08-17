@@ -8,6 +8,7 @@ export type ProviderChildKind =
   | "claude"
   | "codex"
   | "cursor"
+  | "devin"
   | "droid"
   | "grok"
   | "kilo"
@@ -30,6 +31,8 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "FACTORY_API_KEY",
   "CURSOR_API_KEY",
   "DOCKER_AUTH_CONFIG",
+  "WINDSURF_API_KEY",
+  "DEVIN_API_KEY",
 ]);
 
 export function registerProviderCredentialKey(key: string): void {
@@ -57,6 +60,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   cursor: new Set(["CURSOR_API_KEY"]),
   droid: new Set(["FACTORY_API_KEY"]),
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
+  devin: new Set(["WINDSURF_API_KEY", "DEVIN_API_KEY"]),
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",
