@@ -307,7 +307,7 @@ export function isAcpPlanModeReadOnlyShellCommand(command: string): boolean {
 }
 
 export function isAcpPlanModeInspectionToolCall(toolCall: {
-  readonly kind?: string | undefined;
+  readonly kind?: string | null | undefined;
   readonly title?: string | null | undefined;
   readonly rawInput?: unknown;
 }): boolean {
@@ -365,7 +365,7 @@ export function resolveAcpPermissionPolicy(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly options: ReadonlyArray<AcpPermissionOptionLike>;
   readonly toolCall?: {
-    readonly kind?: string | undefined;
+    readonly kind?: string | null | undefined;
     readonly title?: string | null | undefined;
     readonly rawInput?: unknown;
   };
