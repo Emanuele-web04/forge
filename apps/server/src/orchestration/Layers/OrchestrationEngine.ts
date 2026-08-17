@@ -25,7 +25,11 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../../config.ts";
-import { toPersistenceSqlError, type PersistenceSqlError } from "../../persistence/Errors.ts";
+import {
+  toPersistenceSqlError,
+  type OrchestrationEventStoreError,
+  type PersistenceSqlError,
+} from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import {
   OrchestrationCommandReceiptRepository,
@@ -77,6 +81,8 @@ import {
 
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
+/** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
+const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
 type CommandExecutionState = "queued" | "in-flight" | "abandoned";
@@ -183,6 +189,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const deferredProjectionRetryAttempts = yield* Ref.make(0);
   const deferredProjectionLastFailure = yield* Ref.make<string | null>(null);
   const deferredProjectionScope = yield* Scope.make("sequential");
+  // Full projection repair is multi-minute on large state DBs. Coalesce concurrent
+  // callers onto one rebuild and skip thrash when a repair just completed.
+  type ProjectionRepairError = OrchestrationDispatchError | OrchestrationEventStoreError;
+  const projectionRepairInFlight = yield* Ref.make<Deferred.Deferred<
+    OrchestrationReadModel,
+    ProjectionRepairError
+  > | null>(null);
+  const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
   // Committed events are durable before they reach this boundary. Once
   // publication starts, a dispatch deadline must not interrupt it and leave
@@ -1291,7 +1305,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
   // Used by the settings screen to rebuild local indexes without deleting chats.
-  const repairState: OrchestrationEngineShape["repairState"] = () =>
+  // Also invoked by empty-route / desktop recovery paths — those can stampede.
+  const runProjectionRepair: OrchestrationEngineShape["repairState"] = () =>
     maintenanceLock.withPermits(1)(
       Effect.gen(function* () {
         yield* Effect.log("repairing orchestration projection state");
@@ -1418,6 +1433,58 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return snapshot;
       }),
     );
+
+  const repairState: OrchestrationEngineShape["repairState"] = () =>
+    Effect.gen(function* () {
+      const nowMs = Date.now();
+      const lastSuccessMs = yield* Ref.get(lastSuccessfulProjectionRepairAtMs);
+      if (lastSuccessMs > 0 && nowMs - lastSuccessMs < PROJECTION_REPAIR_COOLDOWN_MS) {
+        yield* Effect.log(
+          "skipping orchestration projection repair (recent successful rebuild)",
+        ).pipe(
+          Effect.annotateLogs({
+            cooldownMs: PROJECTION_REPAIR_COOLDOWN_MS,
+            ageMs: nowMs - lastSuccessMs,
+          }),
+        );
+        return yield* maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
+      }
+
+      const joinDeferred = yield* Deferred.make<OrchestrationReadModel, ProjectionRepairError>();
+      const claim = yield* Ref.modify(
+        projectionRepairInFlight,
+        (
+          current,
+        ): readonly [
+          {
+            readonly kind: "join" | "start";
+            readonly deferred: Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError>;
+          },
+          Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError> | null,
+        ] => {
+          if (current !== null) {
+            return [{ kind: "join", deferred: current }, current];
+          }
+          return [{ kind: "start", deferred: joinDeferred }, joinDeferred];
+        },
+      );
+
+      if (claim.kind === "join") {
+        yield* Effect.log("joining in-flight orchestration projection repair");
+        return yield* Deferred.await(claim.deferred);
+      }
+
+      return yield* Effect.gen(function* () {
+        const exit = yield* Effect.exit(runProjectionRepair());
+        if (exit._tag === "Success") {
+          yield* Ref.set(lastSuccessfulProjectionRepairAtMs, Date.now());
+          yield* Deferred.succeed(claim.deferred, exit.value).pipe(Effect.orDie);
+          return exit.value;
+        }
+        yield* Deferred.failCause(claim.deferred, exit.cause).pipe(Effect.orDie);
+        return yield* Effect.failCause(exit.cause);
+      }).pipe(Effect.ensuring(Ref.set(projectionRepairInFlight, null)));
+    });
 
   return {
     quiesce,

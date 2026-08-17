@@ -1374,6 +1374,62 @@ describe("OrchestrationEngine", () => {
     await runtime.dispose();
   });
 
+  it("coalesces concurrent projection repairs and skips an immediate repeat", async () => {
+    let bootstrapCalls = 0;
+    let repairBootstrapCalls = 0;
+    let resolveBootstrapStarted: (() => void) | undefined;
+    let releaseBootstrap: (() => void) | undefined;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      resolveBootstrapStarted = resolve;
+    });
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const blockingProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.sync(() => (bootstrapCalls += 1)).pipe(
+        Effect.flatMap((call) => {
+          if (call === 1) {
+            return Effect.void;
+          }
+          repairBootstrapCalls += 1;
+          resolveBootstrapStarted?.();
+          return Effect.promise(() => bootstrapGate);
+        }),
+      ),
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectDeferredEvent: () => Effect.void,
+    };
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, blockingProjectionPipeline)),
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+
+    const firstRepair = runtime.runPromise(engine.repairState());
+    await bootstrapStarted;
+    const secondRepair = runtime.runPromise(engine.repairState());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBootstrap?.();
+
+    const [firstSnapshot, secondSnapshot] = await Promise.all([firstRepair, secondRepair]);
+    expect(secondSnapshot).toEqual(firstSnapshot);
+    expect(repairBootstrapCalls).toBe(1);
+
+    await runtime.runPromise(engine.repairState());
+    expect(repairBootstrapCalls).toBe(1);
+
+    await runtime.dispose();
+  });
+
   it("retires an empty existing project when re-adding the same workspace root", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

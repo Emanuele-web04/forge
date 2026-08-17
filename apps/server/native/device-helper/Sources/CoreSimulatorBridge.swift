@@ -56,6 +56,20 @@ func resolveDeveloperDirectory() -> String {
   return path.isEmpty ? "/Applications/Xcode.app/Contents/Developer" : path
 }
 
+/// Candidate locations for the SimulatorKit binary inside an Xcode bundle.
+///
+/// Xcode 27 beta 4 moved SimulatorKit from
+/// `Contents/Developer/Library/PrivateFrameworks` to `Contents/SharedFrameworks`;
+/// both are tried so one helper spans stable and beta toolchains. Order matters
+/// only for error messages — at most one exists in any given install.
+func simulatorKitCandidatePaths(developerDirectory: String) -> [String] {
+  let contentsDirectory = (developerDirectory as NSString).deletingLastPathComponent
+  return [
+    developerDirectory + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+    contentsDirectory + "/SharedFrameworks/SimulatorKit.framework/SimulatorKit",
+  ]
+}
+
 /// The dlopen handles the capability probe needs for `dlsym` lookups.
 struct PrivateFrameworkHandles {
   /// nil when SimulatorKit itself would not load. The probe reports that as one
@@ -81,12 +95,19 @@ func loadPrivateFrameworks(
     throw SimulatorError.frameworkLoadFailed("CoreSimulator (\(message))")
   }
 
-  let simulatorKitPath = developerDirectory
-    + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
-  let simulatorKit = dlopen(simulatorKitPath, RTLD_NOW)
+  let simulatorKitPaths = simulatorKitCandidatePaths(developerDirectory: developerDirectory)
+  var simulatorKit: UnsafeMutableRawPointer?
+  var loadFailures: [String] = []
+  for candidate in simulatorKitPaths {
+    if let handle = dlopen(candidate, RTLD_NOW) {
+      simulatorKit = handle
+      break
+    }
+    loadFailures.append("\(candidate) (\(String(cString: dlerror())))")
+  }
   if simulatorKit == nil && requireSimulatorKit {
-    let message = String(cString: dlerror())
-    throw SimulatorError.frameworkLoadFailed("SimulatorKit at \(simulatorKitPath) (\(message))")
+    throw SimulatorError.frameworkLoadFailed(
+      "SimulatorKit at " + loadFailures.joined(separator: ", "))
   }
 
   // Accessibility translation is optional: without it `describe-ui` degrades,
