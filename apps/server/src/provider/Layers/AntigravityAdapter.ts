@@ -144,17 +144,138 @@ function resumeConversationId(value: unknown): string | undefined {
   return undefined;
 }
 
-function transcriptPathForConversation(conversationId: string): string {
+const ANTIGRAVITY_CONVERSATION_ID_PATTERN = /^[A-Za-z0-9._-]{8,}$/;
+const ANTIGRAVITY_CONVERSATION_KEY_IN_TEXT =
+  /(?:conversationId|conversation_id)\s*[:=]\s*["']?([A-Za-z0-9._-]{8,})/i;
+const ANTIGRAVITY_BRAIN_CONVERSATION_IN_TEXT =
+  /antigravity-cli[/\\]brain[/\\]([A-Za-z0-9._-]{8,})/;
+
+function asAntigravityConversationId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && ANTIGRAVITY_CONVERSATION_ID_PATTERN.test(trimmed) ? trimmed : undefined;
+}
+
+/** Read a conversation id from hook payloads, including nested session objects. */
+export function extractAntigravityConversationId(value: unknown): string | undefined {
+  if (typeof value === "string") return asAntigravityConversationId(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["conversationId", "conversation_id", "providerThreadId"]) {
+    const found = extractAntigravityConversationId(record[key]);
+    if (found) return found;
+  }
+  for (const nestedKey of ["session", "conversation", "payload"]) {
+    const found = extractAntigravityConversationId(record[nestedKey]);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Recover a conversation id from `agy` logs or print-mode stdout. */
+export function extractAntigravityConversationIdFromText(text: string): string | undefined {
+  return (
+    asAntigravityConversationId(text.match(ANTIGRAVITY_CONVERSATION_KEY_IN_TEXT)?.[1]) ??
+    asAntigravityConversationId(text.match(ANTIGRAVITY_BRAIN_CONVERSATION_IN_TEXT)?.[1])
+  );
+}
+
+export function antigravityCliHome(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, ".gemini", "antigravity-cli");
+}
+
+export function antigravityBrainRoot(homeDir: string = os.homedir()): string {
+  return path.join(antigravityCliHome(homeDir), "brain");
+}
+
+export function antigravityLastConversationsPath(homeDir: string = os.homedir()): string {
+  return path.join(antigravityCliHome(homeDir), "cache", "last_conversations.json");
+}
+
+function transcriptPathForConversation(
+  conversationId: string,
+  brainRoot: string = antigravityBrainRoot(),
+): string {
   return path.join(
-    os.homedir(),
-    ".gemini",
-    "antigravity-cli",
-    "brain",
+    brainRoot,
     conversationId,
     ".system_generated",
     "logs",
     "transcript.jsonl",
   );
+}
+
+/** Map of conversation id → directory mtime, for print-mode resume set-diff. */
+export async function listAntigravityBrainConversationIds(
+  brainRoot: string,
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  try {
+    entries = await fs.readdir(brainRoot, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const id = asAntigravityConversationId(entry.name);
+    if (!id) continue;
+    try {
+      const stats = await fs.stat(path.join(brainRoot, entry.name));
+      result.set(id, stats.mtimeMs);
+    } catch {
+      // Directory vanished between readdir and stat.
+    }
+  }
+  return result;
+}
+
+export async function readAntigravityLastConversationId(
+  cachePath: string,
+  cwd: string,
+): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(cachePath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const direct = record[cwd];
+    if (typeof direct === "string") return asAntigravityConversationId(direct);
+    const normalized = path.resolve(cwd);
+    for (const [key, value] of Object.entries(record)) {
+      if (typeof value !== "string") continue;
+      if (path.resolve(key) === normalized) return asAntigravityConversationId(value);
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Print-mode `agy -p` does not put conversationId on stdout. The durable id is
+ * the new `brain/<id>` directory (and `last_conversations.json` for the cwd).
+ */
+export function discoverAntigravityConversationId(input: {
+  readonly before: ReadonlyMap<string, number>;
+  readonly after: ReadonlyMap<string, number>;
+  readonly lastConversationIdBefore?: string;
+  readonly lastConversationIdAfter?: string;
+}): string | undefined {
+  const added = [...input.after.keys()].filter((id) => !input.before.has(id));
+  if (input.lastConversationIdAfter && added.includes(input.lastConversationIdAfter)) {
+    return input.lastConversationIdAfter;
+  }
+  if (added.length > 0) {
+    return added
+      .map((id) => ({ id, mtime: input.after.get(id) ?? 0 }))
+      .sort((left, right) => right.mtime - left.mtime)[0]?.id;
+  }
+  if (
+    input.lastConversationIdAfter &&
+    input.lastConversationIdAfter !== input.lastConversationIdBefore
+  ) {
+    return input.lastConversationIdAfter;
+  }
+  return undefined;
 }
 
 function shellQuote(value: string, platform: NodeJS.Platform = process.platform): string {
@@ -592,6 +713,8 @@ export interface AntigravityAdapterDependencies {
     args: readonly string[],
     options: SpawnOptions,
   ) => AntigravityChildProcess;
+  readonly brainRoot?: string;
+  readonly lastConversationsPath?: string;
 }
 
 const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {}) =>
@@ -654,6 +777,74 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       return context
         ? Effect.succeed(context)
         : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
+    };
+
+    const brainRoot = dependencies.brainRoot ?? antigravityBrainRoot();
+    const lastConversationsPath =
+      dependencies.lastConversationsPath ?? antigravityLastConversationsPath();
+
+    const rememberConversation = (
+      context: AntigravitySessionContext,
+      conversationId: string,
+      source: string,
+      payload: unknown = { conversationId },
+    ) => {
+      const learned = conversationId !== context.conversationId;
+      context.conversationId = conversationId;
+      if (!context.transcriptPath) {
+        context.transcriptPath = transcriptPathForConversation(conversationId, brainRoot);
+      }
+      if (!learned) return;
+      context.session = {
+        ...context.session,
+        resumeCursor: conversationId,
+        updatedAt: new Date().toISOString(),
+      };
+      offer({
+        ...base(context, { includeTurn: false }),
+        type: "thread.started",
+        payload: { providerThreadId: conversationId },
+        raw: raw(source, payload),
+      } satisfies ProviderRuntimeEvent);
+    };
+
+    const learnConversationFromTurnArtifacts = async (
+      context: AntigravitySessionContext,
+      artifacts: {
+        readonly logFile: string;
+        readonly stdout: string;
+        readonly brainBefore: ReadonlyMap<string, number>;
+        readonly lastConversationIdBefore?: string;
+      },
+    ) => {
+      if (context.conversationId) return;
+      const brainAfter = await listAntigravityBrainConversationIds(brainRoot);
+      const lastConversationIdAfter = await readAntigravityLastConversationId(
+        lastConversationsPath,
+        context.session.cwd ?? "",
+      );
+      const fromBrain = discoverAntigravityConversationId({
+        before: artifacts.brainBefore,
+        after: brainAfter,
+        lastConversationIdBefore: artifacts.lastConversationIdBefore,
+        lastConversationIdAfter,
+      });
+      if (fromBrain) {
+        rememberConversation(context, fromBrain, "brain-dir");
+        return;
+      }
+      try {
+        const logText = await fs.readFile(artifacts.logFile, "utf8");
+        const fromLog = extractAntigravityConversationIdFromText(logText);
+        if (fromLog) {
+          rememberConversation(context, fromLog, "log-file");
+          return;
+        }
+      } catch {
+        // The CLI log is best-effort; the brain directory is the primary source.
+      }
+      const fromStdout = extractAntigravityConversationIdFromText(artifacts.stdout);
+      if (fromStdout) rememberConversation(context, fromStdout, "stdout");
     };
 
     const releaseTurnGatewayLease = (
@@ -867,32 +1058,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         } catch {
           continue;
         }
-        const conversationId =
-          typeof payload.conversationId === "string" ? payload.conversationId : undefined;
+        const conversationId = extractAntigravityConversationId(payload);
         const transcriptPath =
           typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
         const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
-        const learnedConversation = conversationId && conversationId !== context.conversationId;
-        if (conversationId) context.conversationId = conversationId;
+        if (conversationId) rememberConversation(context, conversationId, eventName, payload);
         if (transcriptPath && transcriptPath !== context.transcriptPath) {
           context.transcriptPath = transcriptPath;
           context.processedTranscriptBytes = 0;
           delete context.processedTranscriptPath;
         }
         if (modelName) context.modelName = modelName;
-        if (learnedConversation) {
-          context.session = {
-            ...context.session,
-            resumeCursor: conversationId,
-            updatedAt: new Date().toISOString(),
-          };
-          offer({
-            ...base(context, { includeTurn: false }),
-            type: "thread.started",
-            payload: { providerThreadId: conversationId },
-            raw: raw(eventName, payload),
-          } satisfies ProviderRuntimeEvent);
-        }
         const stepIndex =
           typeof payload.stepIdx === "number" &&
           Number.isInteger(payload.stepIdx) &&
@@ -1031,7 +1207,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           ...(conversationId ? { conversationId } : {}),
           ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
           ...(conversationId
-            ? { transcriptPath: transcriptPathForConversation(conversationId) }
+            ? { transcriptPath: transcriptPathForConversation(conversationId, brainRoot) }
             : {}),
           processedHookBytes: 0,
           processedTranscriptBytes: 0,
@@ -1176,6 +1352,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         } satisfies ProviderRuntimeEvent);
 
         const conversationId = context.conversationId;
+        const cwd = context.session.cwd ?? serverConfig.cwd;
+        const brainBefore = conversationId
+          ? new Map<string, number>()
+          : yield* Effect.promise(() => listAntigravityBrainConversationIds(brainRoot));
+        const lastConversationIdBefore = conversationId
+          ? undefined
+          : yield* Effect.promise(() =>
+              readAntigravityLastConversationId(lastConversationsPath, cwd),
+            );
         const args: string[] = [
           ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
           "--dangerously-skip-permissions",
@@ -1195,7 +1380,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             ((command: string, spawnArgs: readonly string[], options: SpawnOptions) =>
               spawn(command, spawnArgs, options) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
-            cwd: context.session.cwd ?? serverConfig.cwd,
+            cwd,
             env: buildAntigravityTurnProcessEnvironment({
               eventFile,
               ...(gatewaySessionLease && gatewayBootstrapToken
@@ -1267,6 +1452,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             // into the next turn's authority.
             releaseTurnGatewayLease(context, gatewaySessionLease);
             await pollHookFile(context).catch(() => undefined);
+            await learnConversationFromTurnArtifacts(context, {
+              logFile,
+              stdout,
+              brainBefore,
+              lastConversationIdBefore,
+            }).catch(() => undefined);
             if (!ownsTurn()) {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;

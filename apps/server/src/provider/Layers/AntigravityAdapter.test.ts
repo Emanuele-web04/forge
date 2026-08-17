@@ -24,6 +24,9 @@ import {
   buildAntigravityTurnProcessEnvironment,
   buildAntigravityTurnPrompt,
   ensureCapturePlugin,
+  discoverAntigravityConversationId,
+  extractAntigravityConversationId,
+  extractAntigravityConversationIdFromText,
   hookScriptSource,
   makeAntigravityRuntimeEventBase,
   makeAntigravityAdapterLive,
@@ -897,6 +900,242 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-interrupt-hung-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Antigravity conversation resume", () => {
+  it("reads conversation ids from nested hook payloads and CLI logs", () => {
+    expect(
+      extractAntigravityConversationId({
+        session: { conversationId: "conv-from-session" },
+      }),
+    ).toBe("conv-from-session");
+    expect(
+      extractAntigravityConversationIdFromText(
+        'opened ~/.gemini/antigravity-cli/brain/conv-from-brain/.system_generated/logs/transcript.jsonl',
+      ),
+    ).toBe("conv-from-brain");
+    expect(extractAntigravityConversationIdFromText('conversationId: "conv-from-log"')).toBe(
+      "conv-from-log",
+    );
+  });
+
+  it("prefers a cwd-matched new brain directory over other new conversations", () => {
+    expect(
+      discoverAntigravityConversationId({
+        before: new Map([["old-conv-1", 1]]),
+        after: new Map([
+          ["old-conv-1", 1],
+          ["conv-other", 3],
+          ["conv-cwd-id", 2],
+        ]),
+        lastConversationIdBefore: "old-conv-1",
+        lastConversationIdAfter: "conv-cwd-id",
+      }),
+    ).toBe("conv-cwd-id");
+  });
+
+  it("falls back to the newest new brain directory when the cwd cache is stale", () => {
+    expect(
+      discoverAntigravityConversationId({
+        before: new Map(),
+        after: new Map([
+          ["conv-older", 10],
+          ["conv-newer", 20],
+        ]),
+      }),
+    ).toBe("conv-newer");
+  });
+
+  it("reuses the learned conversation id on the next print-mode turn", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-resume-"));
+    const spawnedArgs: string[][] = [];
+    let processSequence = 0;
+    const spawnProcess = ((
+      _command: string,
+      args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      spawnedArgs.push([...args]);
+      const eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, {
+        pid: 20_000 + ++processSequence,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      setTimeout(() => {
+        if (eventFile && spawnedArgs.length === 1) {
+          void fs
+            .appendFile(eventFile, 'stop\t{"session":{"conversationId":"conv-keep"}}\n')
+            .then(() => child.emit("close", 0, null));
+          return;
+        }
+        child.emit("close", 0, null);
+      }, 40).unref();
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-resume");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const waitUntilReady = Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === threadId,
+              );
+              if (session?.status === "ready" && session.resumeCursor !== undefined) return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity resume test turn did not settle.");
+          });
+
+          yield* adapter.sendTurn({ threadId, input: "shall we do this?", attachments: [] });
+          yield* waitUntilReady;
+          expect(spawnedArgs[0]).toContain("--new-project");
+          expect(spawnedArgs[0]).not.toContain("--conversation");
+
+          yield* adapter.sendTurn({ threadId, input: "yes, do that", attachments: [] });
+          yield* Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              if (spawnedArgs.length >= 2) return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity follow-up turn did not spawn.");
+          });
+          const conversationIndex = spawnedArgs[1]?.indexOf("--conversation") ?? -1;
+          expect(conversationIndex).toBeGreaterThanOrEqual(0);
+          expect(spawnedArgs[1]?.[conversationIndex + 1]).toBe("conv-keep");
+          expect(spawnedArgs[1]).not.toContain("--new-project");
+          const waitUntilFollowUpReady = Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === threadId,
+              );
+              if (session?.status === "ready") return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity follow-up turn did not settle.");
+          });
+          yield* waitUntilFollowUpReady;
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-resume-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("learns the conversation id from the new brain directory when hooks omit it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-brain-"));
+    const brainRoot = path.join(root, "brain");
+    await fs.mkdir(brainRoot, { recursive: true });
+    const spawnedArgs: string[][] = [];
+    let processSequence = 0;
+    const spawnProcess = ((
+      _command: string,
+      args: readonly string[],
+    ) => {
+      spawnedArgs.push([...args]);
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, {
+        pid: 21_000 + ++processSequence,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      setTimeout(() => {
+        if (spawnedArgs.length === 1) {
+          void fs.mkdir(path.join(brainRoot, "conv-brain1")).then(() => child.emit("close", 0, null));
+          return;
+        }
+        child.emit("close", 0, null);
+      }, 40).unref();
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-brain");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const waitUntilReady = Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === threadId,
+              );
+              if (session?.status === "ready" && session.resumeCursor !== undefined) return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity brain-dir resume test turn did not settle.");
+          });
+
+          yield* adapter.sendTurn({ threadId, input: "propose three ideas", attachments: [] });
+          yield* waitUntilReady;
+          expect(spawnedArgs[0]).toContain("--new-project");
+
+          yield* adapter.sendTurn({ threadId, input: "what about the third?", attachments: [] });
+          yield* Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              if (spawnedArgs.length >= 2) return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity brain-dir follow-up turn did not spawn.");
+          });
+          const conversationIndex = spawnedArgs[1]?.indexOf("--conversation") ?? -1;
+          expect(conversationIndex).toBeGreaterThanOrEqual(0);
+          expect(spawnedArgs[1]?.[conversationIndex + 1]).toBe("conv-brain1");
+          expect(spawnedArgs[1]).not.toContain("--new-project");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              brainRoot,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-brain-resume-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
