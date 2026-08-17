@@ -837,7 +837,7 @@ describe("Antigravity CLI integration helpers", () => {
     }
   });
 
-  it("renders a transcript tool call exactly once when the hook also reports it", async () => {
+  it("dedupes hook and transcript copies without collapsing repeated tool names", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-tool-dedup-"));
     const transcriptDir = path.join(
       root,
@@ -878,7 +878,7 @@ describe("Antigravity CLI integration helpers", () => {
             Stream.filter(
               (event) => event.type === "item.started" || event.type === "item.completed",
             ),
-            Stream.take(2),
+            Stream.take(4),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -897,9 +897,9 @@ describe("Antigravity CLI integration helpers", () => {
           });
           expect(eventFile).toBeTruthy();
 
-          // Both the pre-tool hook and the transcript report the same call
-          // (step 1). The timeline must show it once — started + completed —
-          // and the transcript fallback must not duplicate it.
+          // Both sources report two run_command calls in the same planner step.
+          // Each real call must render once, without either duplicating the
+          // hook/transcript copy or collapsing the repeated tool name.
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -908,8 +908,10 @@ describe("Antigravity CLI integration helpers", () => {
                   conversationId: "conv-dedup-1",
                   transcriptPath: transcriptFile,
                 })}`,
-                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo dedup"}}}',
-                'post-tool\t{"stepIdx":1,"error":""}',
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo first"}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"error":""}',
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo second"}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"error":""}',
                 "",
               ].join("\n"),
             ),
@@ -922,7 +924,10 @@ describe("Antigravity CLI integration helpers", () => {
                   step_index: 1,
                   type: "PLANNER_RESPONSE",
                   thinking: "planning",
-                  tool_calls: [{ name: "run_command", args: { CommandLine: "echo dedup" } }],
+                  tool_calls: [
+                    { name: "run_command", args: { CommandLine: "echo first" } },
+                    { name: "run_command", args: { CommandLine: "echo second" } },
+                  ],
                 }),
                 "",
               ].join("\n"),
@@ -932,8 +937,13 @@ describe("Antigravity CLI integration helpers", () => {
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(2);
-          expect(events.map((event) => event.type)).toEqual(["item.started", "item.completed"]);
+          expect(events).toHaveLength(4);
+          expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
+            "item.started",
+            "item.completed",
+          ]);
           const comparable = events.map((event) => ({
             type: event.type,
             itemType: event.payload.itemType,
@@ -952,6 +962,18 @@ describe("Antigravity CLI integration helpers", () => {
               itemType: "command_execution",
               title: "run_command",
               toolCallId: `antigravity-${turn.turnId}-tool-0`,
+            },
+            {
+              type: "item.started",
+              itemType: "command_execution",
+              title: "run_command",
+              toolCallId: `antigravity-${turn.turnId}-tool-1`,
+            },
+            {
+              type: "item.completed",
+              itemType: "command_execution",
+              title: "run_command",
+              toolCallId: `antigravity-${turn.turnId}-tool-1`,
             },
           ]);
 
@@ -1003,7 +1025,11 @@ describe("Antigravity CLI integration helpers", () => {
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
           const eventsFiber = yield* adapter.streamEvents.pipe(
-            Stream.take(9),
+            Stream.takeUntil(
+              (event) =>
+                event.type === "item.started" &&
+                event.providerRefs?.providerThreadId === "conv-parent-1",
+            ),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -1044,6 +1070,7 @@ describe("Antigravity CLI integration helpers", () => {
                   stepIdx: 1,
                   error: "",
                 })}`,
+                `stop\t${JSON.stringify({ conversationId: "conv-child-1" })}`,
                 `stop\t${JSON.stringify({ conversationId: "conv-child-1" })}`,
                 `pre-tool\t${JSON.stringify({
                   conversationId: "conv-parent-1",
@@ -1105,6 +1132,13 @@ describe("Antigravity CLI integration helpers", () => {
             state: "completed",
             stopReason: "model_stop",
           });
+          expect(
+            events.filter(
+              (event) =>
+                event.type === "turn.completed" &&
+                event.providerRefs?.providerThreadId === "conv-child-1",
+            ),
+          ).toHaveLength(1);
           // The parent thread must not be re-emitted for the subagent, and the
           // session keeps its own conversation: its own tool events stay bound
           // to conv-parent-1 without a parent ref.
@@ -1134,6 +1168,114 @@ describe("Antigravity CLI integration helpers", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-subagent-events-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles an unfinished child turn when the parent process fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-child-failure-"));
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn.completed" &&
+                event.providerRefs?.providerParentThreadId === undefined,
+            ),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-child-failure");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            resumeCursor: { conversationId: "conv-parent-failure" },
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "spawn a failing subagent",
+            attachments: [],
+          });
+          expect(eventFile).toBeTruthy();
+
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              `pre-invocation\t${JSON.stringify({
+                conversationId: "conv-child-failure",
+                modelName: "gemini-3.6-flash-medium",
+              })}\n`,
+            ),
+          );
+          child?.emit("close", 1, null);
+
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          const childTerminalIndex = events.findIndex(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerThreadId === "conv-child-failure",
+          );
+          const parentTerminalIndex = events.findIndex(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerParentThreadId === undefined,
+          );
+          expect(childTerminalIndex).toBeGreaterThanOrEqual(0);
+          expect(childTerminalIndex).toBeLessThan(parentTerminalIndex);
+          expect(events[childTerminalIndex]?.payload).toMatchObject({
+            state: "failed",
+            stopReason: "error",
+          });
+          expect(
+            events.filter(
+              (event) =>
+                event.type === "turn.completed" &&
+                event.providerRefs?.providerThreadId === "conv-child-failure",
+            ),
+          ).toHaveLength(1);
+
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-child-failure-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
