@@ -219,7 +219,9 @@ interface ProcessTableRow {
 }
 
 function redactAndTruncateProcessArgs(args: string): string {
-  const redacted = redactSensitiveProcessArgs(args);
+  const redacted = redactSensitiveProcessArgs(args, {
+    truncateSensitiveEnvironmentRemainder: true,
+  });
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;

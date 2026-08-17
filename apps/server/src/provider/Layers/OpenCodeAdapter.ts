@@ -184,7 +184,10 @@ interface OpenCodeSessionContext {
   /** Human replies settled from permission.list while their permission.replied echo is pending. */
   readonly locallyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
-  readonly pendingTextDeltasByPartId: Map<string, string>;
+  readonly pendingTextDeltasByPartId: Map<
+    string,
+    { readonly text: string; readonly bufferedAfterKnownSnapshot: boolean }
+  >;
   readonly messageRoleById: Map<string, "user" | "assistant">;
   readonly messageSnapshotKeyById: Map<string, string>;
   readonly partById: Map<string, Part>;
@@ -575,16 +578,6 @@ function commonPrefixLength(left: string, right: string): number {
   return index;
 }
 
-function suffixPrefixOverlap(text: string, delta: string): number {
-  const maxLength = Math.min(text.length, delta.length);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (text.endsWith(delta.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
-}
-
 function resolveLatestAssistantText(previousText: string | undefined, nextText: string): string {
   if (previousText && previousText.length > nextText.length && previousText.startsWith(nextText)) {
     return previousText;
@@ -603,14 +596,13 @@ function mergeOpenCodeAssistantText(
   };
 }
 
-function appendOpenCodeAssistantTextDelta(
+export function appendOpenCodeAssistantTextDelta(
   previousText: string,
   delta: string,
 ): { readonly nextText: string; readonly deltaToEmit: string } {
-  const deltaToEmit = delta.slice(suffixPrefixOverlap(previousText, delta));
   return {
-    nextText: previousText + deltaToEmit,
-    deltaToEmit,
+    nextText: previousText + delta,
+    deltaToEmit: delta,
   };
 }
 
@@ -622,9 +614,13 @@ function bufferPendingTextDelta(
   if (delta.length === 0) {
     return;
   }
-  const previousText = context.pendingTextDeltasByPartId.get(partId) ?? "";
-  const { nextText } = appendOpenCodeAssistantTextDelta(previousText, delta);
-  context.pendingTextDeltasByPartId.set(partId, nextText);
+  const previous = context.pendingTextDeltasByPartId.get(partId);
+  const { nextText } = appendOpenCodeAssistantTextDelta(previous?.text ?? "", delta);
+  context.pendingTextDeltasByPartId.set(partId, {
+    text: nextText,
+    bufferedAfterKnownSnapshot:
+      (previous?.bufferedAfterKnownSnapshot ?? false) || context.partById.has(partId),
+  });
 }
 
 function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part): Part {
@@ -634,11 +630,18 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
   }
 
   const pendingDelta = context.pendingTextDeltasByPartId.get(part.id);
-  if (!pendingDelta || pendingDelta.length === 0) {
+  if (!pendingDelta || pendingDelta.text.length === 0) {
     return part;
   }
 
-  const { nextText } = appendOpenCodeAssistantTextDelta(part.text, pendingDelta);
+  // A delta buffered before the first part snapshot may already be present in
+  // the later cumulative snapshot. A delta buffered after a known snapshot
+  // (for example while the message role is still unknown) is newer than that
+  // snapshot and must be appended even when its text matches the snapshot suffix.
+  const nextText =
+    !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
+      ? part.text
+      : part.text + pendingDelta.text;
   context.pendingTextDeltasByPartId.delete(part.id);
   return nextText === part.text ? part : { ...part, text: nextText };
 }

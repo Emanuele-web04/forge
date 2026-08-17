@@ -15,7 +15,10 @@ import {
 } from "@synara/shared/shell";
 
 import { resolveBaseCodexHomePath, resolveSynaraCodexHomeOverlayPath } from "./codexHomePaths.ts";
-import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
+import {
+  buildProviderChildEnvironment,
+  registerProviderCredentialKey,
+} from "./providerChildEnvironment.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
@@ -716,11 +719,14 @@ export async function buildCodexProcessEnv(
     provider: "codex",
     baseEnv: configuredEnv,
   });
+  const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
+  if (providerEnvKey) {
+    registerProviderCredentialKey(providerEnvKey);
+  }
 
   if (platform === "darwin" || platform === "linux") {
     try {
       const shell = resolveLoginShell(platform, effectiveEnv.SHELL);
-      const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
       if (shell && providerEnvKey && !effectiveEnv[providerEnvKey]?.trim()) {
         const shellEnvironment = (input.readEnvironment ?? readEnvironmentFromLoginShell)(shell, [
           ...CODEX_PROCESS_SHELL_ENV_NAMES,
