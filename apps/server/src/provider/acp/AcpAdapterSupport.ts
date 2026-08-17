@@ -186,15 +186,13 @@ function normalizeAcpPlanToolName(value: string): string {
 }
 
 function canonicalizeAcpPlanToolName(value: string): string {
-  const normalized = normalizeAcpPlanToolName(value);
-  if (normalized.startsWith("mcp_synara_synara_")) {
-    return `synara_${normalized.slice("mcp_synara_synara_".length)}`;
-  }
+  let normalized = normalizeAcpPlanToolName(value);
   if (normalized.startsWith("mcp_synara_")) {
-    return `synara_${normalized.slice("mcp_synara_".length)}`;
+    normalized = `synara_${normalized.slice("mcp_synara_".length)}`;
   }
-  if (normalized.startsWith("synara_synara_")) {
-    return `synara_${normalized.slice("synara_".length)}`;
+  // Grok MCP exposes Synara tools as `synara__synara_context`.
+  while (normalized.startsWith("synara_synara_")) {
+    normalized = `synara_${normalized.slice("synara_synara_".length)}`;
   }
   return normalized;
 }
@@ -233,9 +231,6 @@ export function isAcpPlanModeInspectionToolCall(toolCall: {
   readonly rawInput?: unknown;
 }): boolean {
   const kind = toolCall.kind?.trim().toLowerCase();
-  if (kind && ACP_PLAN_MODE_MUTATING_KINDS.has(kind)) {
-    return false;
-  }
   const names = collectAcpPlanToolNameCandidates({
     kind: toolCall.kind,
     title: toolCall.title,
@@ -244,13 +239,19 @@ export function isAcpPlanModeInspectionToolCall(toolCall: {
   if (names.some((name) => ACP_PLAN_MODE_SYNARA_WRITE_TOOLS.has(name))) {
     return false;
   }
-  if (kind && ACP_PLAN_MODE_INSPECTION_KINDS.has(kind)) {
-    return true;
-  }
   if (names.some((name) => ACP_PLAN_MODE_SYNARA_READ_TOOLS.has(name))) {
     return true;
   }
-  return names.length > 0 && names.every((name) => ACP_PLAN_MODE_MCP_WRAPPER_NAMES.has(name));
+  if (names.length > 0 && names.every((name) => ACP_PLAN_MODE_MCP_WRAPPER_NAMES.has(name))) {
+    return true;
+  }
+  if (kind && ACP_PLAN_MODE_INSPECTION_KINDS.has(kind)) {
+    return true;
+  }
+  if (kind && ACP_PLAN_MODE_MUTATING_KINDS.has(kind)) {
+    return false;
+  }
+  return false;
 }
 
 /**

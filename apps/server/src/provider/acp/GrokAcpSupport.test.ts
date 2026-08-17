@@ -267,6 +267,18 @@ describe("Grok ACP permission policy", () => {
         runtimeMode: "full-access",
         interactionMode: "plan",
         options,
+        toolCall: {
+          kind: "other",
+          title: "use_tool",
+          rawInput: { tool_name: "synara__synara_context", tool_input: {} },
+        },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
         toolCall: { kind: "execute", title: "Shell" },
       }),
     ).toEqual({ outcome: "selected", optionId: "reject-once" });

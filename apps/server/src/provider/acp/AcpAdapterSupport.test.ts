@@ -5,6 +5,7 @@ import {
   acpPermissionOutcome,
   canonicalItemTypeFromAcpToolKind,
   classifyAcpPromptTurnCompletion,
+  isAcpPlanModeInspectionToolCall,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
   resolveAcpFullAccessPermissionOutcome,
@@ -108,6 +109,32 @@ describe("AcpAdapterSupport", () => {
         toolCall: { kind: "read", title: "synara_context" },
       }),
     ).toEqual({ outcome: "selected", optionId: "implement-once" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+        toolCall: {
+          kind: "other",
+          title: "use_tool",
+          rawInput: { tool_name: "synara__synara_context", tool_input: {} },
+        },
+      }),
+    ).toEqual({ outcome: "selected", optionId: "implement-once" });
+    expect(
+      isAcpPlanModeInspectionToolCall({
+        kind: "other",
+        title: "synara__synara_context",
+        rawInput: { variant: "UseTool", tool_name: "synara__synara_context", tool_input: {} },
+      }),
+    ).toBe(true);
+    expect(
+      isAcpPlanModeInspectionToolCall({
+        kind: "execute",
+        title: "use_tool",
+        rawInput: { tool_name: "synara__synara_create_threads" },
+      }),
+    ).toBe(false);
   });
 
   it("surfaces Default prompts only for active approval-required turns", () => {

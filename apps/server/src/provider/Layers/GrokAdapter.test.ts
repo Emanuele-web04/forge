@@ -100,6 +100,14 @@ describe("Grok native plan approval", () => {
         hookCallbackId: "synara-plan-guard",
         hookEventName: "pre_tool_use",
         toolName: "use_tool",
+        input: { tool_name: "synara__synara_context" },
+      }),
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "use_tool",
         input: { name: "synara_create_threads" },
       }),
     ).toMatchObject({ decision: "deny" });
