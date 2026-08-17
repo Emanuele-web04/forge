@@ -1,7 +1,21 @@
 # Workspace layout
 
-- `/apps/server`: Node.js WebSocket server. Wraps Codex app-server, serves the built web app, and opens the browser on start.
-- `/apps/web`: React + Vite UI. Session control, conversation, and provider event rendering. Connects to the server via WebSocket.
-- `/apps/desktop`: Electron shell. Spawns a desktop-scoped `synara` backend process and loads the shared web app.
-- `/packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types.
-- `/packages/shared`: Shared runtime utilities consumed by both server and web. Uses explicit subpath exports (e.g. `@synara/shared/git`, `@synara/shared/DrainableWorker`) — no barrel index.
+Synara is a Bun/Turbo monorepo. Runtime ownership is split across the app workspaces, while shared schemas and cross-runtime helpers live under `packages`.
+
+- `/apps/server` — The authoritative Synara backend and published `@synara/cli` package. Owns orchestration/persistence, provider adapters and health/discovery, Git/worktrees, terminals, automation, workspace files, HTTP/WebSocket RPC, and the bundled web client used outside Vite development.
+- `/apps/web` — React + Vite application. Owns presentation, client transport/state coordination, chat/composer/editor/dock surfaces, and subscription-driven projection of server-authoritative state.
+- `/apps/desktop` — Electron host for the shared web client. Supervises a desktop-scoped Synara server process and provides native window, update, IPC, browser-automation, and other OS/Electron integrations.
+- `/apps/marketing` — Public marketing/download site. Kept separate from the product runtime and desktop/web application bundles.
+- `/packages/contracts` — Shared Effect Schema and TypeScript contracts for orchestration, provider/session/model data, RPC methods, settings, keybindings, automation, device/browser surfaces, and other cross-process payloads.
+- `/packages/shared` — Shared runtime utilities consumed by multiple apps/packages, including pure helpers as well as intentionally cross-runtime logging, worker, filesystem/network, and platform-boundary utilities. Uses explicit subpath exports (for example `@synara/shared/git` and `@synara/shared/threadWorkspace`) rather than one catch-all barrel.
+- `/scripts` — Repository-level development, packaging, release, migration-lineage, canary, and smoke-test tooling. Package-specific scripts remain with their owning app when they depend on that workspace's package context or Turbo task ownership.
+
+## Ownership rule of thumb
+
+- Durable application truth and server-authoritative/backend side effects belong in `apps/server`.
+- Browser presentation belongs in `apps/web`; desktop-only native hosting and Electron/OS side effects belong in `apps/desktop`.
+- Cross-process data shapes belong in `packages/contracts`.
+- Runtime utilities genuinely shared across multiple workspaces belong in `packages/shared`, whether pure or stateful/I/O-bound when the cross-runtime abstraction is intentional.
+- Repository-level build/release/developer automation belongs in `/scripts`; app-specific automation stays in the owning workspace when it relies on local dependencies or package tasks.
+
+See [architecture.md](./architecture.md) for the runtime/data-flow overview and [provider-architecture.md](./provider-architecture.md) for provider integration boundaries.

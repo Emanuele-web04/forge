@@ -64,7 +64,7 @@ import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
 } from "./provider/supervisedProcessTeardown.ts";
-import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
+import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
@@ -1043,7 +1043,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         await this.stopSession(threadId);
       }
 
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
+      const resolvedCwd = resolveScratchWorkspaceCwd(threadId, input.cwd);
 
       const session: ProviderSession = {
         provider: "codex",

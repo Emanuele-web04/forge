@@ -29,6 +29,7 @@ import {
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import {
+  appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapterLive,
   makeKiloAdapterLive,
   normalizeOpenCodeTokenUsage,
@@ -2242,7 +2243,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "part-1",
               messageID: "assistant-message-1",
               type: "text",
-              text: "",
+              // The cumulative snapshot may already contain the earlier buffered delta.
+              text: "Hello",
               time: {
                 start: 1,
               },
@@ -2323,6 +2325,127 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         itemType: "assistant_message",
         detail: "Hello",
       },
+    });
+  });
+
+  it("keeps a delta buffered after a role-unknown snapshot even when its suffix matches", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-role-late-delta"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-role-late-delta"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-role-late",
+              messageID: "assistant-message-role-late",
+              type: "text",
+              text: "lo",
+              time: { start: 1 },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.delta",
+          properties: {
+            sessionID: "opencode-session-1",
+            partID: "part-role-late",
+            delta: "lo",
+          },
+        });
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            info: {
+              id: "assistant-message-role-late",
+              role: "assistant",
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-role-late",
+              messageID: "assistant-message-role-late",
+              type: "text",
+              text: "lolo",
+              time: { start: 1, end: 2 },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: {
+            sessionID: "opencode-session-1",
+            status: { type: "idle" },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: "lolo" },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: { itemType: "assistant_message", detail: "lolo" },
     });
   });
 
@@ -5708,6 +5831,23 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(result.session).toMatchObject({
       status: "running",
       activeTurnId: result.secondTurn.turnId,
+    });
+  });
+});
+
+describe("OpenCode incremental text assembly", () => {
+  it("preserves coincidental suffix/prefix overlap in raw provider deltas", () => {
+    expect(appendOpenCodeAssistantTextDelta("reset", "ting")).toEqual({
+      nextText: "resetting",
+      deltaToEmit: "ting",
+    });
+    expect(appendOpenCodeAssistantTextDelta("plan", "ning")).toEqual({
+      nextText: "planning",
+      deltaToEmit: "ning",
+    });
+    expect(appendOpenCodeAssistantTextDelta("lo", "ose")).toEqual({
+      nextText: "loose",
+      deltaToEmit: "ose",
     });
   });
 });

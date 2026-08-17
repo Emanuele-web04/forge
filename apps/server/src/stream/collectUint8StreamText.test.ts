@@ -33,4 +33,33 @@ describe("collectUint8StreamText", () => {
       truncated: true,
     });
   });
+
+  it("does not emit a replacement character when truncation splits a UTF-8 sequence", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("ab€cd")]),
+        maxBytes: 4,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "ab",
+      truncated: true,
+    });
+    expect(result.text).not.toContain("�");
+  });
+
+  it("drops an incomplete four-byte UTF-8 suffix at the byte limit", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("ok🙂done")]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "ok",
+      truncated: true,
+    });
+  });
 });

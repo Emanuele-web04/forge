@@ -11,9 +11,20 @@ interface ParsedSemver {
   readonly prerelease: ReadonlyArray<string>;
 }
 
+function splitPrerelease(version: string): { main: string; prerelease: string | undefined } {
+  const separatorIndex = version.indexOf("-");
+  if (separatorIndex === -1) {
+    return { main: version, prerelease: undefined };
+  }
+  return {
+    main: version.slice(0, separatorIndex),
+    prerelease: version.slice(separatorIndex + 1),
+  };
+}
+
 function normalizeCodexVersion(version: string): string {
-  const [main, prerelease] = version.trim().split("-", 2);
-  const segments = (main ?? "")
+  const { main, prerelease } = splitPrerelease(version.trim());
+  const segments = main
     .split(".")
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
@@ -27,7 +38,7 @@ function normalizeCodexVersion(version: string): string {
 
 function parseSemver(version: string): ParsedSemver | null {
   const normalized = normalizeCodexVersion(version);
-  const [main = "", prerelease] = normalized.split("-", 2);
+  const { main, prerelease } = splitPrerelease(normalized);
   const segments = main.split(".");
   if (segments.length !== 3) {
     return null;
