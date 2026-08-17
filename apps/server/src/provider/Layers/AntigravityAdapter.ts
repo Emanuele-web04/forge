@@ -208,9 +208,9 @@ export async function listAntigravityBrainConversationIds(
   brainRoot: string,
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
-  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  let entries: ReadonlyArray<{ readonly name: string; isDirectory(): boolean }>;
   try {
-    entries = await fs.readdir(brainRoot, { withFileTypes: true });
+    entries = await fs.readdir(brainRoot, { encoding: "utf8", withFileTypes: true });
   } catch {
     return result;
   }
@@ -256,8 +256,8 @@ export async function readAntigravityLastConversationId(
 export function discoverAntigravityConversationId(input: {
   readonly before: ReadonlyMap<string, number>;
   readonly after: ReadonlyMap<string, number>;
-  readonly lastConversationIdBefore?: string;
-  readonly lastConversationIdAfter?: string;
+  readonly lastConversationIdBefore?: string | undefined;
+  readonly lastConversationIdAfter?: string | undefined;
 }): string | undefined {
   const added = [...input.after.keys()].filter((id) => !input.before.has(id));
   if (input.lastConversationIdAfter && added.includes(input.lastConversationIdAfter)) {
@@ -813,7 +813,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         readonly logFile: string;
         readonly stdout: string;
         readonly brainBefore: ReadonlyMap<string, number>;
-        readonly lastConversationIdBefore?: string;
+        readonly lastConversationIdBefore?: string | undefined;
       },
     ) => {
       if (context.conversationId) return;
