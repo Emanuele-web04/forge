@@ -4,7 +4,6 @@
 import { createReadStream, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import readline from "node:readline";
 
 import type {
   ProviderKind,
@@ -28,6 +27,7 @@ const MAX_RECENT_USAGE_FILES = 2_000;
 const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
 const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CODEX_SESSION_LINE_BYTES = 1024 * 1024;
+const MAX_CLAUDE_TRANSCRIPT_LINE_BYTES = 1024 * 1024;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -521,51 +521,96 @@ async function listRecentClaudeTranscriptFiles(
  * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
  * once. Reading one into a string costs its full size in the heap plus a second copy for
  * the line split, so a few large transcripts are enough to exhaust old space and abort the
- * backend. Streaming holds one line at a time instead.
+ * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
+ * recreate the same problem inside a line reader.
  */
 export async function readClaudeUsageSamples(
   path: string,
 ): Promise<ReadonlyArray<ClaudeUsageSample>> {
   const samples: ClaudeUsageSample[] = [];
   const seenKeys = new Set<string>();
-  const stream = createReadStream(path, { encoding: "utf8" });
-  // Counts every line including blank ones, so a record's fallback key stays tied to its
-  // position in the file rather than to how many records preceded it.
-  let index = -1;
+  const stream = createReadStream(path);
+  let lineChunks: Buffer[] = [];
+  let lineBytes = 0;
+  let lineIndex = 0;
+  let skippingOversizedLine = false;
+
+  const collectLine = (line: Buffer, index: number): void => {
+    if (line.length === 0) {
+      return;
+    }
+    const contents = line.toString("utf8");
+    if (!contents.trim()) {
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      return;
+    }
+
+    const record = asRecord(parsed);
+    if (!record) {
+      return;
+    }
+
+    const fallbackKey = `${path}:${index}`;
+    const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
+    if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
+      seenKeys.add(assistantSample.dedupeKey);
+      samples.push(assistantSample.sample);
+    }
+
+    const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
+    if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
+      seenKeys.add(toolResultSample.dedupeKey);
+      samples.push(toolResultSample.sample);
+    }
+  };
+
+  const appendLineChunk = (chunk: Buffer): void => {
+    if (skippingOversizedLine || chunk.length === 0) {
+      return;
+    }
+    if (lineBytes + chunk.length > MAX_CLAUDE_TRANSCRIPT_LINE_BYTES) {
+      lineChunks = [];
+      lineBytes = 0;
+      skippingOversizedLine = true;
+      return;
+    }
+    lineChunks.push(chunk);
+    lineBytes += chunk.length;
+  };
+
+  const finishLine = (): void => {
+    if (!skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+    }
+    lineChunks = [];
+    lineBytes = 0;
+    lineIndex += 1;
+    skippingOversizedLine = false;
+  };
 
   try {
-    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-    for await (const line of lines) {
-      index += 1;
-      if (!line.trim()) {
-        continue;
+    for await (const chunk of stream) {
+      let lineStart = 0;
+      for (let index = 0; index < chunk.length; index += 1) {
+        if (chunk[index] !== 0x0a) {
+          continue;
+        }
+        appendLineChunk(chunk.subarray(lineStart, index));
+        finishLine();
+        lineStart = index + 1;
       }
+      appendLineChunk(chunk.subarray(lineStart));
+    }
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const record = asRecord(parsed);
-      if (!record) {
-        continue;
-      }
-
-      const fallbackKey = `${path}:${index}`;
-      const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
-      if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
-        seenKeys.add(assistantSample.dedupeKey);
-        samples.push(assistantSample.sample);
-      }
-
-      const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
-      if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
-        seenKeys.add(toolResultSample.dedupeKey);
-        samples.push(toolResultSample.sample);
-      }
+    // Match readFile/split behavior for a final record that has not been newline-terminated.
+    if (lineBytes > 0 && !skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
     }
   } catch {
     // A transcript that vanishes or fails partway through yields what was read by then,

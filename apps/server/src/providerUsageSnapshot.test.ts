@@ -155,4 +155,39 @@ describe("readClaudeUsageSamples", () => {
 
     await expect(readClaudeUsageSamples(`${file}.absent`)).resolves.toEqual([]);
   });
+
+  it("skips an oversized record and resumes at the next line", async () => {
+    const oversizedAssistantLine = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-08-14T10:30:00.000Z",
+      message: {
+        model: "claude-opus-4-5",
+        content: "x".repeat(2 * 1024 * 1024),
+        usage: { input_tokens: 50, output_tokens: 0 },
+      },
+    });
+    const file = await makeSessionFile(
+      [
+        assistantLine({ timestamp: "2026-08-14T10:00:00.000Z", totalTokens: 40 }),
+        oversizedAssistantLine,
+        assistantLine({ timestamp: "2026-08-14T11:00:00.000Z", totalTokens: 60 }),
+      ].join("\n"),
+      "transcript.jsonl",
+    );
+
+    await expect(readClaudeUsageSamples(file)).resolves.toEqual([
+      {
+        sessionId: `${file}:0`,
+        timestampMs: Date.parse("2026-08-14T10:00:00.000Z"),
+        totalTokens: 40,
+        model: "claude-opus-4-5",
+      },
+      {
+        sessionId: `${file}:2`,
+        timestampMs: Date.parse("2026-08-14T11:00:00.000Z"),
+        totalTokens: 60,
+        model: "claude-opus-4-5",
+      },
+    ]);
+  });
 });
