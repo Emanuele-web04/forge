@@ -179,13 +179,17 @@ describe("route restore refresh coordinator", () => {
   it("coalesces concurrent empty-route recoveries into one repair", async () => {
     let hasThreads = false;
     const shellCalls = { count: 0 };
-    let resolveRepair: (() => void) | null = null;
+    const repairControl = {
+      resolve: (): void => {
+        throw new Error("repair promise resolver was not initialized");
+      },
+    };
     const getShellSnapshot = emptyUntilRepairShell(shellCalls);
     const getSnapshot = vi.fn().mockResolvedValue(readModel([]));
     const repairState = vi.fn(
       () =>
         new Promise<OrchestrationReadModel>((resolve) => {
-          resolveRepair = () => resolve(readModel(["thread-repaired"]));
+          repairControl.resolve = () => resolve(readModel(["thread-repaired"]));
         }),
     );
 
@@ -205,17 +209,21 @@ describe("route restore refresh coordinator", () => {
 
     await vi.runAllTimersAsync();
     expect(repairState).toHaveBeenCalledTimes(1);
-    resolveRepair?.();
+    repairControl.resolve();
     await expect(first).resolves.toBe(true);
     await expect(second).resolves.toBe(true);
   });
 
   it("starts a fresh recovery when the registered EventRouter changes", async () => {
-    let resolveFirst: ((value: boolean) => void) | null = null;
+    const firstControl = {
+      resolve: (_value: boolean): void => {
+        throw new Error("first recovery resolver was not initialized");
+      },
+    };
     const firstHandler = vi.fn(
       () =>
         new Promise<boolean>((resolve) => {
-          resolveFirst = resolve;
+          firstControl.resolve = resolve;
         }),
     );
     const unregisterFirst = registerEmptyRouteRestoreRefresh(firstHandler);
@@ -229,7 +237,7 @@ describe("route restore refresh coordinator", () => {
     await expect(second).resolves.toBe(true);
     expect(secondHandler).toHaveBeenCalledTimes(1);
 
-    resolveFirst?.(false);
+    firstControl.resolve(false);
     await expect(first).resolves.toBe(false);
   });
 
