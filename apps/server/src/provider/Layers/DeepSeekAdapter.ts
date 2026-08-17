@@ -38,6 +38,7 @@ import {
   resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
+import { withAcpPlanModePrompt } from "../acp/AcpAdapterSessionSupport.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -56,6 +57,28 @@ import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 
 const PROVIDER = "deepseek" as const;
 const MAX_INLINE_SKILL_CHARS = 48_000;
+// session/prompt can resolve before its already-enqueued session/update events
+// finish running through the adapter's notification consumer. Keep the turn
+// attribution alive briefly so committed assistant text cannot be dropped.
+const DEEPSEEK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const DEEPSEEK_TURN_SETTLE_DRAIN_POLL_MS = 25;
+const DEEPSEEK_PLAN_MODE_PROMPT_PREFIX = [
+  "Synara DeepSeek Harness plan mode is active.",
+  "Do not implement or mutate files in this turn.",
+  "Do not ask follow-up questions or wait for confirmation; if scope is ambiguous, choose a reasonable default and state the assumption in the plan.",
+  "When ready, create the final implementation plan.",
+].join("\n");
+
+export function buildDeepSeekTurnPromptText(input: {
+  readonly text: string;
+  readonly interactionMode: "default" | "plan" | "debug";
+}): string {
+  return withAcpPlanModePrompt({
+    text: input.text,
+    interactionMode: input.interactionMode,
+    promptPrefix: DEEPSEEK_PLAN_MODE_PROMPT_PREFIX,
+  });
+}
 
 type PendingApproval = {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
@@ -73,6 +96,9 @@ type DeepSeekSessionContext = {
   promptFiber: Fiber.Fiber<void, never> | undefined;
   activeTurnId: TurnId | undefined;
   activeInteractionMode: "default" | "plan" | "debug" | undefined;
+  sessionUpdatesProcessed: number;
+  turnStarting: boolean;
+  pendingTurnInterrupted: boolean;
   stopped: boolean;
 };
 
@@ -137,6 +163,18 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
           threadId: ctx.threadId,
           payload: { exitKind: "graceful" },
         });
+      });
+
+    const waitForDeepSeekQueuedTurnEventsDrained = (ctx: DeepSeekSessionContext) =>
+      Effect.gen(function* () {
+        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
+        const startedAt = Date.now();
+        while (
+          ctx.sessionUpdatesProcessed < target &&
+          Date.now() - startedAt < DEEPSEEK_TURN_SETTLE_DRAIN_MAX_WAIT_MS
+        ) {
+          yield* Effect.sleep(DEEPSEEK_TURN_SETTLE_DRAIN_POLL_MS);
+        }
       });
 
     const startSession: DeepSeekAdapterShape["startSession"] = (input) =>
@@ -277,6 +315,9 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
           promptFiber: undefined,
           activeTurnId: undefined,
           activeInteractionMode: undefined,
+          sessionUpdatesProcessed: 0,
+          turnStarting: false,
+          pendingTurnInterrupted: false,
           stopped: false,
         };
         sessions.set(input.threadId, ctx);
@@ -371,7 +412,13 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
                 case "PlanUpdated":
                   return;
               }
-            }),
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  ctx.sessionUpdatesProcessed += 1;
+                }),
+              ),
+            ),
           ),
         ).pipe(Effect.forkIn(scope));
 
@@ -389,7 +436,7 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
     const sendTurn: DeepSeekAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        if (ctx.activeTurnId !== undefined) {
+        if (ctx.activeTurnId !== undefined || ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
@@ -423,28 +470,43 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
           });
         }
 
-        const inlineSkills = input.skills?.length
-          ? yield* Effect.tryPromise(() =>
-              buildInlineSkillInstructions({
-                provider: PROVIDER,
-                skills: input.skills ?? [],
-                maxChars: MAX_INLINE_SKILL_CHARS,
-              }),
-            ).pipe(Effect.orElseSucceed(() => ""))
-          : "";
-        const text = [input.input?.trim(), inlineSkills].filter(Boolean).join("\n\n");
-        if (!text) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "A text prompt is required.",
-          });
-        }
+        ctx.turnStarting = true;
+        const interactionMode = input.interactionMode ?? "default";
+        const { text, turnId } = yield* Effect.gen(function* () {
+          const inlineSkills = input.skills?.length
+            ? yield* Effect.tryPromise(() =>
+                buildInlineSkillInstructions({
+                  provider: PROVIDER,
+                  skills: input.skills ?? [],
+                  maxChars: MAX_INLINE_SKILL_CHARS,
+                }),
+              ).pipe(Effect.orElseSucceed(() => ""))
+            : "";
+          const rawText = [input.input?.trim(), inlineSkills].filter(Boolean).join("\n\n");
+          if (!rawText) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: "A text prompt is required.",
+            });
+          }
 
-        const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        ctx.activeTurnId = turnId;
-        ctx.activeInteractionMode = input.interactionMode ?? "default";
-        ctx.turns.push({ id: turnId, items: [] });
+          const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+          ctx.activeTurnId = turnId;
+          ctx.activeInteractionMode = interactionMode;
+          ctx.pendingTurnInterrupted = false;
+          ctx.turns.push({ id: turnId, items: [] });
+          return {
+            text: buildDeepSeekTurnPromptText({ text: rawText, interactionMode }),
+            turnId,
+          };
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              ctx.turnStarting = false;
+            }),
+          ),
+        );
         ctx.session = {
           ...ctx.session,
           status: "running",
@@ -461,17 +523,21 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
         });
 
         const promptFiber = yield* Effect.gen(function* () {
-          const response = yield* ctx.acp
-            .prompt({ prompt: [{ type: "text", text }] })
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
-              ),
-            );
+          const response = yield* Effect.suspend(() =>
+            ctx.pendingTurnInterrupted || ctx.stopped
+              ? Effect.succeed({ stopReason: "cancelled" as const })
+              : ctx.acp.prompt({ prompt: [{ type: "text", text }] }),
+          ).pipe(
+            Effect.mapError((error) =>
+              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
+            ),
+          );
+          yield* waitForDeepSeekQueuedTurnEventsDrained(ctx);
           if (ctx.activeTurnId !== turnId) return;
           const completion = classifyAcpPromptTurnCompletion({ stopReason: response.stopReason });
           ctx.activeTurnId = undefined;
           ctx.activeInteractionMode = undefined;
+          ctx.pendingTurnInterrupted = false;
           ctx.session = {
             ...ctx.session,
             status: "ready",
@@ -493,9 +559,11 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
         }).pipe(
           Effect.catch((error) =>
             Effect.gen(function* () {
+              yield* waitForDeepSeekQueuedTurnEventsDrained(ctx);
               if (ctx.activeTurnId === turnId) {
                 ctx.activeTurnId = undefined;
                 ctx.activeInteractionMode = undefined;
+                ctx.pendingTurnInterrupted = false;
                 ctx.session = {
                   ...ctx.session,
                   status: "error",
@@ -524,6 +592,9 @@ export function makeDeepSeekAdapter(options: DeepSeekAdapterLiveOptions = {}) {
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (turnId !== undefined && ctx.activeTurnId !== turnId) return;
+        if (ctx.activeTurnId === undefined && !ctx.turnStarting) return;
+        ctx.pendingTurnInterrupted = true;
+        if (ctx.activeTurnId === undefined) return;
         yield* ctx.acp.cancel.pipe(
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),

@@ -243,7 +243,11 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
   deepseek: {
     provider: DEEPSEEK_PROVIDER,
     binaryName: "dsh-acp-demo",
-    npmPackageName: "@deepseek-ai/dsh-acp-demo",
+    // The developer-preview ACP package is not a standalone Harness
+    // distribution: latest currently has an invalid peer-dependency graph and
+    // the preview channel omits the composition's leaf plugins. Do not offer a
+    // package-managed install/update until upstream publishes a turnkey CLI.
+    npmPackageName: null,
     homebrew: null,
     nativeUpdate: null,
   },

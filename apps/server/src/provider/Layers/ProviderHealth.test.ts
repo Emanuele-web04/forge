@@ -249,6 +249,18 @@ function withTempCodexHome(configContent?: string) {
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("provider update commands", () => {
+    it("does not offer the incomplete DeepSeek Harness preview package as a managed install", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.deepseek;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "dsh-acp-demo",
+      });
+
+      assert.strictEqual(capabilities.packageName, null);
+      assert.strictEqual(capabilities.update, null);
+    });
+
     it("delegates native Claude release-channel truth to Claude", () => {
       const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.claudeAgent;
       assert.ok(definition);
