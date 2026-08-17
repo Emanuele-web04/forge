@@ -147,8 +147,7 @@ function resumeConversationId(value: unknown): string | undefined {
 const ANTIGRAVITY_CONVERSATION_ID_PATTERN = /^[A-Za-z0-9._-]{8,}$/;
 const ANTIGRAVITY_CONVERSATION_KEY_IN_TEXT =
   /(?:conversationId|conversation_id)\s*[:=]\s*["']?([A-Za-z0-9._-]{8,})/i;
-const ANTIGRAVITY_BRAIN_CONVERSATION_IN_TEXT =
-  /antigravity-cli[/\\]brain[/\\]([A-Za-z0-9._-]{8,})/;
+const ANTIGRAVITY_BRAIN_CONVERSATION_IN_TEXT = /antigravity-cli[/\\]brain[/\\]([A-Za-z0-9._-]{8,})/;
 
 function asAntigravityConversationId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
