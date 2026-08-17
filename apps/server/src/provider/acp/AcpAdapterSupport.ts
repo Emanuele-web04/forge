@@ -239,7 +239,11 @@ function canonicalizeAcpPlanToolName(value: string): string {
   return normalized;
 }
 
-function collectAcpPlanToolNameCandidates(value: unknown, depth = 0, into: string[] = []): string[] {
+function collectAcpPlanToolNameCandidates(
+  value: unknown,
+  depth = 0,
+  into: string[] = [],
+): string[] {
   if (depth > 4 || into.length >= 16 || value == null) {
     return into;
   }
