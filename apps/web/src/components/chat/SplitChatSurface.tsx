@@ -620,8 +620,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
-  const [floatingBrowserTarget, setFloatingBrowserTarget] =
-    useState<FloatingBrowserTarget | null>(null);
+  const [floatingBrowserTarget, setFloatingBrowserTarget] = useState<FloatingBrowserTarget | null>(
+    null,
+  );
   const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,
@@ -699,15 +700,16 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   ]);
 
   useEffect(() => {
-    const floatingLeaf = activeSplitView && floatingBrowserTarget
-      ? findLeafPaneById(activeSplitView.root, floatingBrowserTarget.paneId)
-      : null;
+    const floatingLeaf =
+      activeSplitView && floatingBrowserTarget
+        ? findLeafPaneById(activeSplitView.root, floatingBrowserTarget.paneId)
+        : null;
     const floatingBrowserIsStillValid = Boolean(
       activeSplitView &&
-        floatingLeaf &&
-        floatingLeaf.id === activeSplitView.focusedPaneId &&
-        floatingLeaf.threadId === floatingBrowserTarget?.threadId &&
-        floatingLeaf.panel.panel !== "browser",
+      floatingLeaf &&
+      floatingLeaf.id === activeSplitView.focusedPaneId &&
+      floatingLeaf.threadId === floatingBrowserTarget?.threadId &&
+      floatingLeaf.panel.panel !== "browser",
     );
     if (floatingBrowserTarget !== null && !floatingBrowserIsStillValid) {
       setFloatingBrowserTarget(null);
@@ -1033,9 +1035,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         showFloatingBrowser={shouldRenderFloatingBrowserPanel({
           hostThreadId: leaf.threadId,
           floatingThreadId:
-            floatingBrowserTarget?.paneId === leaf.id
-              ? floatingBrowserTarget.threadId
-              : null,
+            floatingBrowserTarget?.paneId === leaf.id ? floatingBrowserTarget.threadId : null,
           dockBrowserVisible: leaf.panel.panel === "browser",
           isFocused,
         })}

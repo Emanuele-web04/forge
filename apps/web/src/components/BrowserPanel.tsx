@@ -1327,11 +1327,13 @@ export function BrowserPanel({
     if (!ensureLiveRuntime() || !api || !activeTab) {
       return;
     }
-    void runBrowserAction(() => api.browser.reload({ threadId, tabId: activeTab.id })).then((state) => {
-      if (state) {
-        upsertThreadState(state);
-      }
-    });
+    void runBrowserAction(() => api.browser.reload({ threadId, tabId: activeTab.id })).then(
+      (state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+      },
+    );
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   const onChooseSuggestion = useCallback(
@@ -1615,10 +1617,7 @@ export function BrowserPanel({
 
   const header = (
     <div
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2",
-        mode === "floating" && "cursor-grab",
-      )}
+      className={cn("flex min-w-0 flex-1 items-center gap-2", mode === "floating" && "cursor-grab")}
       data-floating-browser-header={mode === "floating" ? "true" : undefined}
     >
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}

@@ -21,9 +21,7 @@ function panelRect(): DOMRect {
 }
 
 function contentRect(): DOMRect {
-  const content = document.querySelector<HTMLElement>(
-    "[data-floating-browser-content='true']",
-  );
+  const content = document.querySelector<HTMLElement>("[data-floating-browser-content='true']");
   if (!content) throw new Error("Floating browser content is missing");
   return content.getBoundingClientRect();
 }
@@ -99,9 +97,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
     expect({ left: rect.left, top: rect.top }).toEqual({ left: 468, top: 268 });
   });
 
-  const southEastHandle = document.querySelector<HTMLElement>(
-    "[data-floating-resize-edge='se']",
-  );
+  const southEastHandle = document.querySelector<HTMLElement>("[data-floating-resize-edge='se']");
   if (!southEastHandle) throw new Error("Floating browser resize handle is missing");
   dispatchPointer(southEastHandle, "pointerdown", 784, 484);
   overlay = activePointerOverlay();

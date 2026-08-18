@@ -21,15 +21,7 @@ export interface FloatingBrowserPanelSize {
   height: number;
 }
 
-export type FloatingBrowserResizeEdge =
-  | "n"
-  | "e"
-  | "s"
-  | "w"
-  | "ne"
-  | "nw"
-  | "se"
-  | "sw";
+export type FloatingBrowserResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
 
 export const FLOATING_BROWSER_PANEL_MARGIN_PX = BROWSER_FLOATING_PANEL_MARGIN_PX;
 export const FLOATING_BROWSER_PANEL_DEFAULT_SIZE: FloatingBrowserPanelSize = {

@@ -26,17 +26,14 @@ export function DiffPanelShell(props: {
   header?: ReactNode;
   children: ReactNode;
 }) {
-  const shouldUseDragRegion =
-    isElectron && props.mode !== "sheet" && props.mode !== "floating";
+  const shouldUseDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "floating";
   const hasHeader = props.header !== null && props.header !== undefined;
 
   return (
     <div
       className={cn(
         "flex h-full min-w-0 flex-col",
-        props.mode === "floating"
-          ? "bg-transparent"
-          : "bg-[var(--color-background-surface)]",
+        props.mode === "floating" ? "bg-transparent" : "bg-[var(--color-background-surface)]",
         props.mode === "inline"
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",

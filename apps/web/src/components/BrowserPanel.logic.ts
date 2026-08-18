@@ -85,10 +85,7 @@ export function createBrowserPanelRendererHandoff(): BrowserPanelRendererHandoff
 
   function trackDetach(threadId: string, detach: Promise<unknown>): void {
     const previous = pendingByThreadId.get(threadId);
-    const completion = Promise.all([
-      previous ?? Promise.resolve(),
-      detach,
-    ]).then(
+    const completion = Promise.all([previous ?? Promise.resolve(), detach]).then(
       () => undefined,
       () => undefined,
     );
@@ -135,10 +132,7 @@ export function createBrowserPanelHideScheduler(
     // Cancelling here also handles the opposite React commit order, where cleanup queued
     // the hide before the replacement host mounted.
     cancel(threadId);
-    liveHostCountByThreadId.set(
-      threadId,
-      (liveHostCountByThreadId.get(threadId) ?? 0) + 1,
-    );
+    liveHostCountByThreadId.set(threadId, (liveHostCountByThreadId.get(threadId) ?? 0) + 1);
 
     let released = false;
     return () => {

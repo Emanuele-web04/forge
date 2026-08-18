@@ -504,14 +504,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
     guest.currentUrl = "http://localhost:3000/";
     guest.emit("did-start-navigation", {}, guest.currentUrl, false, true);
-    guest.emit(
-      "did-fail-load",
-      {},
-      -102,
-      "ERR_CONNECTION_REFUSED",
-      guest.currentUrl,
-      true,
-    );
+    guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", guest.currentUrl, true);
     guest.emit("did-stop-loading");
     await Promise.resolve();
 

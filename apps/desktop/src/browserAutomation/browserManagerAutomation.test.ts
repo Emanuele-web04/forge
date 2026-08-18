@@ -171,9 +171,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
     expect(nativeWebContents.close).toHaveBeenCalled();
     const next = manager.getState({ threadId: THREAD_ID });
-    expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe(
-      "renderer",
-    );
+    expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe("renderer");
     manager.dispose();
   });
 

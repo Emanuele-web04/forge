@@ -1578,7 +1578,12 @@ export class DesktopBrowserManager {
       return;
     }
 
-    if (input.surface === "renderer" && activeTabId && activeRuntimeKey && activeRuntime?.ownsWebContents) {
+    if (
+      input.surface === "renderer" &&
+      activeTabId &&
+      activeRuntimeKey &&
+      activeRuntime?.ownsWebContents
+    ) {
       this.destroyRuntime(input.threadId, activeTabId);
       const activeTab = this.getTab(state, activeTabId);
       if (activeTab) {

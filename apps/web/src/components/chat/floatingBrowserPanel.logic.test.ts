@@ -71,9 +71,9 @@ describe("floating browser panel visibility", () => {
     expect(
       shouldRenderFloatingBrowserPanel({ ...matchingInput, floatingThreadId: "thread-b" }),
     ).toBe(false);
-    expect(
-      shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true }),
-    ).toBe(false);
+    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true })).toBe(
+      false,
+    );
     expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, isFocused: false })).toBe(false);
   });
 });

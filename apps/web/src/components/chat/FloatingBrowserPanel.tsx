@@ -17,10 +17,7 @@ import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
 import { EllipsisIcon, PanelRightCloseIcon, XIcon } from "../../lib/icons";
 import { requestBrowserPanelBoundsSync } from "../../lib/browserPanelBoundsSync";
-import {
-  createPanelResizeOverlay,
-  removePanelResizeOverlay,
-} from "../../lib/panelResize";
+import { createPanelResizeOverlay, removePanelResizeOverlay } from "../../lib/panelResize";
 import { cn } from "../../lib/utils";
 import { IconButton } from "../ui/icon-button";
 import {

@@ -368,10 +368,11 @@ describe("hasObscuringHitStackElementAboveSurface", () => {
 
   it("stops at a descendant of the viewport as well", () => {
     expect(
-      hasObscuringHitStackElementAboveSurface(
-        [{ id: "viewport-child" }, underlyingChat],
-        { isSurfaceBoundary, isNonObscuring, isVisible },
-      ),
+      hasObscuringHitStackElementAboveSurface([{ id: "viewport-child" }, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
     ).toBe(false);
   });
 
