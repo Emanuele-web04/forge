@@ -27,10 +27,13 @@ function contentRect(): DOMRect {
 }
 
 function dispatchPointer(target: Element, type: string, clientX: number, clientY: number): void {
+  const pressed = type === "pointerdown" || type === "pointermove";
   target.dispatchEvent(
     new PointerEvent(type, {
       bubbles: true,
       cancelable: true,
+      button: 0,
+      buttons: pressed ? 1 : 0,
       clientX,
       clientY,
       pointerId: 1,
