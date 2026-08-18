@@ -86,10 +86,13 @@ it("drags, resizes, and exposes pop/close controls", async () => {
     .toBeVisible();
   const header = document.querySelector<HTMLElement>("[data-floating-browser-header='true']");
   if (!header) throw new Error("Floating browser drag handle is missing");
-  dispatchPointer(header, "pointerdown", 700, 370);
+  const panel = panelRect();
+  expect(header.getBoundingClientRect().top).toBeGreaterThanOrEqual(panel.top);
+  expect(header.getBoundingClientRect().right).toBeLessThanOrEqual(panel.right + 1);
+  dispatchPointer(header, "pointerdown", 700, 380);
   let overlay = activePointerOverlay();
-  dispatchPointer(overlay, "pointermove", 600, 270);
-  dispatchPointer(overlay, "pointerup", 600, 270);
+  dispatchPointer(overlay, "pointermove", 600, 280);
+  dispatchPointer(overlay, "pointerup", 600, 280);
 
   await vi.waitFor(() => {
     const rect = panelRect();
@@ -110,9 +113,19 @@ it("drags, resizes, and exposes pop/close controls", async () => {
     expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 270 });
   });
 
-  await mounted.getByRole("button", { name: "Floating browser actions" }).click();
+  dispatchPointer(header, "pointerdown", 700, 380);
+  overlay = activePointerOverlay();
+  dispatchPointer(overlay, "pointerup", 700, 380);
+  await expect
+    .element(mounted.getByRole("button", { name: "Open browser in sidebar" }))
+    .toBeVisible();
   await mounted.getByRole("button", { name: "Open browser in sidebar" }).click();
-  await mounted.getByRole("button", { name: "Floating browser actions" }).click();
+  dispatchPointer(header, "pointerdown", 700, 380);
+  overlay = activePointerOverlay();
+  dispatchPointer(overlay, "pointerup", 700, 380);
+  await expect
+    .element(mounted.getByRole("button", { name: "Close floating browser" }))
+    .toBeVisible();
   await mounted.getByRole("button", { name: "Close floating browser" }).click();
   expect(onPopToSidebar).toHaveBeenCalledOnce();
   expect(onClose).toHaveBeenCalledOnce();

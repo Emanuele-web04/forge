@@ -16,7 +16,6 @@ import type { ThreadId } from "@synara/contracts";
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
 import { EllipsisIcon, PanelRightCloseIcon, XIcon } from "../../lib/icons";
-import { isElectron } from "../../env";
 import { requestBrowserPanelBoundsSync } from "../../lib/browserPanelBoundsSync";
 import {
   createPanelResizeOverlay,
@@ -30,6 +29,7 @@ import {
   FLOATING_BROWSER_PANEL_MARGIN_PX,
   floatingBrowserResizeCursor,
   initialFloatingBrowserPanelRect,
+  isFloatingBrowserDragGesture,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   type FloatingBrowserPanelHostSize,
@@ -73,32 +73,68 @@ function hostSize(host: HTMLElement): FloatingBrowserPanelHostSize {
   };
 }
 
-function isInteractivePointerTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(
-      "button, input, textarea, select, a, [role='button'], [contenteditable='true']",
-    ) !== null
-  );
+function attachFloatingPointerOverlaySession(
+  overlay: HTMLElement,
+  handlers: {
+    onMove: (event: PointerEvent) => void;
+    onRelease: () => void;
+    onAbort: () => void;
+  },
+): () => void {
+  const onMove = (event: PointerEvent) => {
+    if (event.buttons === 0) {
+      handlers.onAbort();
+      return;
+    }
+    handlers.onMove(event);
+  };
+  const onRelease = () => handlers.onRelease();
+  const onAbort = () => handlers.onAbort();
+
+  overlay.addEventListener("pointermove", onMove);
+  overlay.addEventListener("pointerup", onRelease);
+  overlay.addEventListener("pointercancel", onAbort);
+  window.addEventListener("blur", onAbort);
+  document.addEventListener("mouseleave", onAbort);
+
+  return () => {
+    overlay.removeEventListener("pointermove", onMove);
+    overlay.removeEventListener("pointerup", onRelease);
+    overlay.removeEventListener("pointercancel", onAbort);
+    window.removeEventListener("blur", onAbort);
+    document.removeEventListener("mouseleave", onAbort);
+  };
 }
 
 export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const activeInteractionCleanupRef = useRef<(() => void) | null>(null);
-  const nativeDragStartRectRef = useRef<FloatingBrowserPanelRect | null>(null);
+  const interactingRef = useRef(false);
+  const didDragRef = useRef(false);
   const hasMeasuredHostRef = useRef(false);
   const panelRectRef = useRef<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [panelRect, setPanelRect] = useState<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [controlsOpen, setControlsOpen] = useState(false);
 
-  const setClampedPanelRect = useCallback(
+  const applyPanelRect = useCallback((next: FloatingBrowserPanelRect, host: HTMLElement) => {
+    const clamped = clampFloatingBrowserPanelRect(next, hostSize(host));
+    panelRectRef.current = clamped;
+    const panel = panelRef.current;
+    if (panel) {
+      panel.style.left = `${clamped.left}px`;
+      panel.style.top = `${clamped.top}px`;
+      panel.style.width = `${clamped.width}px`;
+      panel.style.height = `${clamped.height}px`;
+    }
+    return clamped;
+  }, []);
+
+  const commitPanelRect = useCallback(
     (next: FloatingBrowserPanelRect, host: HTMLElement) => {
-      const clamped = clampFloatingBrowserPanelRect(next, hostSize(host));
-      panelRectRef.current = clamped;
-      setPanelRect(clamped);
+      setPanelRect(applyPanelRect(next, host));
     },
-    [],
+    [applyPanelRect],
   );
 
   useLayoutEffect(() => {
@@ -106,12 +142,11 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     if (!host) return;
 
     const measure = () => {
+      if (interactingRef.current) return;
       const size = hostSize(host);
       if (!hasMeasuredHostRef.current) {
         hasMeasuredHostRef.current = true;
-        const initial = initialFloatingBrowserPanelRect(size);
-        panelRectRef.current = initial;
-        setPanelRect(initial);
+        commitPanelRect(initialFloatingBrowserPanelRect(size), host);
         return;
       }
       const clamped = clampFloatingBrowserPanelRect(panelRectRef.current, size);
@@ -123,15 +158,14 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       ) {
         return;
       }
-      panelRectRef.current = clamped;
-      setPanelRect(clamped);
+      commitPanelRect(clamped, host);
     };
 
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(host);
     return () => observer.disconnect();
-  }, []);
+  }, [commitPanelRect]);
 
   useEffect(() => {
     return () => {
@@ -144,48 +178,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     requestBrowserPanelBoundsSync();
   }, [panelRect]);
 
-  useEffect(() => {
-    if (!isElectron) return;
-    return window.desktopBridge?.browser.onFloatingControl((event) => {
-      if (event.threadId !== props.threadId) return;
-      if (event.action === "sidebar") {
-        props.onPopToSidebar();
-        return;
-      }
-      if (event.action === "close") {
-        props.onClose();
-        return;
-      }
-      if (event.action === "drag-end") {
-        setPanelRect({ ...panelRectRef.current });
-        nativeDragStartRectRef.current = null;
-        return;
-      }
-      const host = hostRef.current;
-      if (!host) return;
-      const dragOrigin =
-        event.action === "drag-live"
-          ? (nativeDragStartRectRef.current ??= panelRectRef.current)
-          : panelRectRef.current;
-      const next = moveFloatingBrowserPanelRect(
-        dragOrigin,
-        { x: event.deltaX ?? 0, y: event.deltaY ?? 0 },
-        hostSize(host),
-      );
-      if (event.action === "drag-live") {
-        panelRectRef.current = next;
-        const panel = panelRef.current;
-        if (panel) {
-          panel.style.left = `${next.left}px`;
-          panel.style.top = `${next.top}px`;
-        }
-        return;
-      }
-      setClampedPanelRect(next, host);
-    });
-  }, [props.onClose, props.onPopToSidebar, props.threadId, setClampedPanelRect]);
-
-  const startInteraction = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const host = hostRef.current;
     if (!host) return;
 
@@ -195,10 +188,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     const resizeEdge = resizeHandle?.dataset.floatingResizeEdge as
       | FloatingBrowserResizeEdge
       | undefined;
-    const dragHandle = target.closest("[data-floating-browser-header='true']") !== null;
-    if (!resizeEdge && (!dragHandle || isInteractivePointerTarget(target))) {
-      return;
-    }
+    if (!resizeEdge) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -207,47 +197,116 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     const startClientX = event.clientX;
     const startClientY = event.clientY;
     const startRect = panelRectRef.current;
-    const cursor = resizeEdge ? floatingBrowserResizeCursor(resizeEdge) : "grabbing";
+    const cursor = floatingBrowserResizeCursor(resizeEdge);
     const resizeOverlay = createPanelResizeOverlay(cursor);
     const previousBodyCursor = document.body.style.cursor;
     const previousBodyUserSelect = document.body.style.userSelect;
     let finished = false;
+    interactingRef.current = true;
+    let detachPointerSession = () => {};
 
     const finish = () => {
       if (finished) return;
       finished = true;
+      interactingRef.current = false;
+      detachPointerSession();
       removePanelResizeOverlay(resizeOverlay);
       document.body.style.cursor = previousBodyCursor;
       document.body.style.userSelect = previousBodyUserSelect;
-      resizeOverlay.removeEventListener("pointermove", onPointerMove);
-      resizeOverlay.removeEventListener("pointerup", finish);
-      resizeOverlay.removeEventListener("pointercancel", finish);
       if (activeInteractionCleanupRef.current === finish) {
         activeInteractionCleanupRef.current = null;
       }
+      commitPanelRect(panelRectRef.current, host);
     };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      applyPanelRect(
+        resizeFloatingBrowserPanelRect(
+          startRect,
+          {
+            edge: resizeEdge,
+            deltaX: moveEvent.clientX - startClientX,
+            deltaY: moveEvent.clientY - startClientY,
+          },
+          hostSize(host),
+        ),
+        host,
+      );
+    };
+
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = "none";
+    detachPointerSession = attachFloatingPointerOverlaySession(resizeOverlay, {
+      onMove: onPointerMove,
+      onRelease: finish,
+      onAbort: finish,
+    });
+    activeInteractionCleanupRef.current = finish;
+  };
+
+  const startHandleGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    const host = hostRef.current;
+    if (!host || event.button !== 0) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    activeInteractionCleanupRef.current?.();
+    didDragRef.current = false;
+    const reopenMenuOnRelease = !controlsOpen;
+    setControlsOpen(false);
+
+    const startClientX = event.clientX;
+    const startClientY = event.clientY;
+    const startRect = panelRectRef.current;
+    const resizeOverlay = createPanelResizeOverlay("grabbing");
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    let finished = false;
+    let detachPointerSession = () => {};
+
+    const finish = (openMenu: boolean) => {
+      if (finished) return;
+      finished = true;
+      interactingRef.current = false;
+      detachPointerSession();
+      removePanelResizeOverlay(resizeOverlay);
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+      if (activeInteractionCleanupRef.current === finishWithRelease) {
+        activeInteractionCleanupRef.current = null;
+      }
+      if (didDragRef.current) {
+        commitPanelRect(panelRectRef.current, host);
+        return;
+      }
+      if (openMenu && reopenMenuOnRelease) {
+        setControlsOpen(true);
+      }
+    };
+    const finishWithRelease = () => finish(true);
+    const finishWithAbort = () => finish(false);
 
     const onPointerMove = (moveEvent: PointerEvent) => {
       const delta = {
         x: moveEvent.clientX - startClientX,
         y: moveEvent.clientY - startClientY,
       };
-      const next = resizeEdge
-        ? resizeFloatingBrowserPanelRect(
-            startRect,
-            { edge: resizeEdge, deltaX: delta.x, deltaY: delta.y },
-            hostSize(host),
-          )
-        : moveFloatingBrowserPanelRect(startRect, delta, hostSize(host));
-      setClampedPanelRect(next, host);
+      if (!didDragRef.current) {
+        if (!isFloatingBrowserDragGesture(delta)) return;
+        didDragRef.current = true;
+        interactingRef.current = true;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      applyPanelRect(moveFloatingBrowserPanelRect(startRect, delta, hostSize(host)), host);
     };
 
-    document.body.style.cursor = cursor;
-    document.body.style.userSelect = "none";
-    resizeOverlay.addEventListener("pointermove", onPointerMove);
-    resizeOverlay.addEventListener("pointerup", finish);
-    resizeOverlay.addEventListener("pointercancel", finish);
-    activeInteractionCleanupRef.current = finish;
+    detachPointerSession = attachFloatingPointerOverlaySession(resizeOverlay, {
+      onMove: onPointerMove,
+      onRelease: finishWithRelease,
+      onAbort: finishWithAbort,
+    });
+    activeInteractionCleanupRef.current = finishWithRelease;
   };
 
   return (
@@ -260,7 +319,6 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       <div
         ref={panelRef}
         data-floating-browser-panel="true"
-        data-native-browser-surface="true"
         role="region"
         aria-label="Floating browser"
         className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-xl border border-border bg-transparent text-foreground shadow-2xl ring-1 ring-black/10"
@@ -271,7 +329,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           height: `${panelRect.height}px`,
           touchAction: "none",
         }}
-        onPointerDown={startInteraction}
+        onPointerDown={startResize}
       >
         <div
           data-floating-browser-content="true"
@@ -285,47 +343,37 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
             />
           </Suspense>
         </div>
-        {!isElectron ? <div
+        <div
           data-floating-browser-controls="true"
-          className="pointer-events-auto absolute bottom-full right-2 z-50 -mb-px opacity-100"
+          className="pointer-events-none absolute right-2 top-2 z-[70]"
         >
-          <div
-            data-floating-browser-header="true"
-            className="group/floating-browser-controls flex cursor-grab items-center gap-0.5 rounded-full border border-border bg-background/95 p-0.5 text-foreground shadow-lg backdrop-blur-md"
-          >
-            <span
-              aria-hidden="true"
-              className="grid h-6 w-3 shrink-0 cursor-grab grid-cols-2 place-content-center gap-0.5"
-            >
-              {Array.from({ length: 6 }, (_, index) => (
-                <span key={index} className="size-0.5 rounded-full bg-muted-foreground" />
-              ))}
-            </span>
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border/80 bg-background/90 p-0.5 shadow-sm backdrop-blur-md">
             <IconButton
+              type="button"
               variant="ghost"
               size="icon-xs"
               label="Floating browser actions"
-              tooltip="Floating browser actions"
+              tooltip="Drag to move, click for actions"
               tooltipSide="bottom"
+              data-floating-browser-header="true"
               aria-expanded={controlsOpen}
               aria-haspopup="true"
-              className="size-6 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
-                setControlsOpen((open) => !open);
-              }}
+              className="size-6 cursor-grab rounded-full text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+              onPointerDown={startHandleGesture}
             >
               <EllipsisIcon className="size-3.5" />
             </IconButton>
             {controlsOpen ? (
               <>
                 <IconButton
+                  type="button"
                   variant="ghost"
                   size="icon-xs"
                   label="Open browser in sidebar"
                   tooltip="Open browser in sidebar"
                   tooltipSide="bottom"
                   className="size-6 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     setControlsOpen(false);
@@ -335,12 +383,14 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
                   <PanelRightCloseIcon />
                 </IconButton>
                 <IconButton
+                  type="button"
                   variant="ghost"
                   size="icon-xs"
                   label="Close floating browser"
                   tooltip="Close floating browser"
                   tooltipSide="bottom"
                   className="size-6 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     setControlsOpen(false);
@@ -352,7 +402,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
               </>
             ) : null}
           </div>
-        </div> : null}
+        </div>
         {RESIZE_HANDLES.map(({ edge, className }) => (
           <div
             key={edge}

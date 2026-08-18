@@ -14,6 +14,7 @@ import {
   isBlankBrowserTabUrl,
   resolveBrowserFloatingZoomFactor,
   resolveCopyableBrowserTabUrl,
+  resolveFloatingBrowserGuestLayout,
 } from "./browserSession";
 
 const ELECTRON_UA =
@@ -25,6 +26,17 @@ describe("floating browser page zoom", () => {
     expect(resolveBrowserFloatingZoomFactor(480)).toBe(0.375);
     expect(resolveBrowserFloatingZoomFactor(1_280)).toBe(1);
     expect(resolveBrowserFloatingZoomFactor(1_600)).toBe(1);
+  });
+
+  it("scales the frozen 1280x800 guest into the floating card without changing page zoom", () => {
+    expect(resolveFloatingBrowserGuestLayout({ width: 320, height: 220 })).toEqual({
+      width: 1_280,
+      height: 800,
+      scale: 0.25,
+      x: 0,
+      y: 10,
+    });
+    expect(resolveFloatingBrowserGuestLayout({ width: 1_280, height: 800 }).scale).toBe(1);
   });
 
   it("resets invalid or hidden widths to normal page zoom", () => {

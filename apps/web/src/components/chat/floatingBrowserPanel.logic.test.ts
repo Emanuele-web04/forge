@@ -6,6 +6,7 @@ import {
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   shouldRenderFloatingBrowserPanel,
+  isFloatingBrowserDragGesture,
 } from "./floatingBrowserPanel.logic";
 
 describe("floating browser panel geometry", () => {
@@ -74,5 +75,12 @@ describe("floating browser panel visibility", () => {
       shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true }),
     ).toBe(false);
     expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, isFocused: false })).toBe(false);
+  });
+});
+
+describe("floating browser drag gesture", () => {
+  it("ignores small pointer jitter and treats larger movement as a drag", () => {
+    expect(isFloatingBrowserDragGesture({ x: 2, y: 2 })).toBe(false);
+    expect(isFloatingBrowserDragGesture({ x: 4, y: 0 })).toBe(true);
   });
 });

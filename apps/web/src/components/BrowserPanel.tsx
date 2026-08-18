@@ -35,7 +35,6 @@ import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
 import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
-  resolveBrowserFloatingZoomFactor,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
 import {
@@ -73,6 +72,7 @@ import {
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -177,6 +177,7 @@ export function BrowserAnnotationButton(props: {
 // layout containers. Treating either as blockers hides the WebContentsView.
 const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
   "[data-panel-resize-overlay='true']",
+  "[data-floating-browser-controls='true']",
   "[data-slot='sheet-backdrop']",
   "[data-slot='sheet-popup']",
   "[data-slot='toast-portal']",
@@ -651,7 +652,7 @@ export function BrowserPanel({
     threadBrowserState?.tabs[0] ??
     null;
   const activeTabId = activeTab?.id ?? null;
-  const usesNativeRuntime = activeTab?.runtimeSurface === "native";
+  const usesNativeRuntime = !isFloatingMode && activeTab?.runtimeSurface === "native";
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
@@ -881,9 +882,11 @@ export function BrowserPanel({
     } else if (webview.parentElement !== host) {
       host.append(webview);
     }
-    webview.style.borderRadius = isFloatingMode ? "10px" : "";
-    webview.style.clipPath = isFloatingMode ? "inset(0 round 10px)" : "";
-    webview.style.overflow = isFloatingMode ? "hidden" : "";
+    applyBrowserWebviewPresentation(webview, {
+      floating: isFloatingMode,
+      slotWidth: host.clientWidth,
+      slotHeight: host.clientHeight,
+    });
 
     const initialUrl = activeTabInitialUrlRef.current;
     const shouldLoadInitialUrl = browserWebviewTabIdRef.current !== activeTabId;
@@ -1105,6 +1108,14 @@ export function BrowserPanel({
         });
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
+      const webview = browserWebviewRef.current;
+      if (webview) {
+        applyBrowserWebviewPresentation(webview, {
+          floating: isFloatingMode,
+          slotWidth: element.clientWidth,
+          slotHeight: element.clientHeight,
+        });
+      }
       const rect = element.getBoundingClientRect();
       const bounds = obscuredByOverlay
         ? null
@@ -1135,12 +1146,11 @@ export function BrowserPanel({
             readDesktopZoomFactor(),
           )
         : null;
-      const surface = usesNativeRuntime ? "native" : "renderer";
+      const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
       // Native WebContentsViews and adopted renderer <webview>s share the same main-process
-      // WebContents. Use the converted DIP width so both surfaces receive the exact same
-      // miniature presentation scale, while normal sidebar/sheet surfaces stay at 100%.
-      const pageZoomFactor =
-        isFloatingMode && bounds ? resolveBrowserFloatingZoomFactor(bounds.width) : 1;
+      // WebContents. Floating presentation is a CSS scale of the frozen 1280x800 guest, so
+      // keep page zoom at 1 and avoid reflowing the live page as the card moves.
+      const pageZoomFactor = 1;
       const containerKey = containerBounds
         ? `:container-${Math.round(containerBounds.x)}:${Math.round(containerBounds.y)}:${Math.round(containerBounds.width)}:${Math.round(containerBounds.height)}`
         : "";

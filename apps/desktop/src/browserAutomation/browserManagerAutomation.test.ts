@@ -85,6 +85,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       webContents: nativeWebContents,
       setBounds: vi.fn(),
       setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
@@ -139,6 +140,41 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
     expect(rendererWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
     rendererManager.dispose();
+  });
+
+  it("demotes a native runtime to renderer when the floating surface claims the tab", () => {
+    const nativeWebContents = new FakeWebContents(201);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 800, height: 600 },
+    });
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 40, y: 80, width: 320, height: 220 },
+    });
+    expect(nativeWebContents.close).toHaveBeenCalled();
+    const next = manager.getState({ threadId: THREAD_ID });
+    expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe(
+      "renderer",
+    );
+    manager.dispose();
   });
 
   it("refuses a detached native fallback and returns an adopted renderer webview", () => {
@@ -1085,6 +1121,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       webContents: nativeWebContents,
       setBounds: vi.fn(),
       setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
@@ -1155,6 +1192,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           webContents,
           setBounds: vi.fn(),
           setVisible: vi.fn(),
+          setBorderRadius: vi.fn(),
         });
       }
 

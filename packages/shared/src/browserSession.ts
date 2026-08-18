@@ -11,8 +11,8 @@ export const BROWSER_BLANK_URL = "about:blank";
 export const BROWSER_SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 
 // Keep the human-facing floating browser aligned with the canonical viewport used by
-// background automation. At a smaller presentation width, browser page zoom exposes this
-// same logical desktop viewport instead of clipping its wide layout.
+// background automation. Presentation scale fits that 1280x800 guest into the card
+// with CSS; page zoom stays at 1 so the live page does not reflow while the card moves.
 export const BROWSER_AUTOMATION_VIEWPORT_WIDTH = 1_280;
 export const BROWSER_AUTOMATION_VIEWPORT_HEIGHT = 800;
 /** Matches the environment overlay's `p-3` edge gutter. */
@@ -23,6 +23,34 @@ export function resolveBrowserFloatingZoomFactor(physicalViewportWidth: number):
     return 1;
   }
   return Math.min(1, physicalViewportWidth / BROWSER_AUTOMATION_VIEWPORT_WIDTH);
+}
+
+export interface FloatingBrowserGuestLayout {
+  width: number;
+  height: number;
+  scale: number;
+  x: number;
+  y: number;
+}
+
+// Fit the canonical automation viewport into the floating card with CSS scale.
+// The guest keeps a 1280x800 layout; only the compositor transform changes.
+export function resolveFloatingBrowserGuestLayout(slot: {
+  width: number;
+  height: number;
+}): FloatingBrowserGuestLayout {
+  const width = BROWSER_AUTOMATION_VIEWPORT_WIDTH;
+  const height = BROWSER_AUTOMATION_VIEWPORT_HEIGHT;
+  const slotWidth = Number.isFinite(slot.width) && slot.width > 0 ? slot.width : 1;
+  const slotHeight = Number.isFinite(slot.height) && slot.height > 0 ? slot.height : 1;
+  const scale = Math.min(1, slotWidth / width, slotHeight / height);
+  return {
+    width,
+    height,
+    scale,
+    x: Math.max(0, Math.round((slotWidth - width * scale) / 2)),
+    y: Math.max(0, Math.round((slotHeight - height * scale) / 2)),
+  };
 }
 
 export function normalizeBrowserPageZoomFactor(value: unknown): number {

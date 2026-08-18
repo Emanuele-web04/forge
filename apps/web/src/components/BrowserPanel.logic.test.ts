@@ -17,6 +17,7 @@ import {
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -558,5 +559,29 @@ describe("resolveBrowserChromeStatus", () => {
       tone: "default",
       label: "Starting browser...",
     });
+  });
+});
+
+describe("floating browser webview presentation", () => {
+  it("scales the frozen guest into the card, then restores fill layout", () => {
+    const webview = { style: {} } as HTMLElement;
+    applyBrowserWebviewPresentation(webview, {
+      floating: true,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(webview.style.width).toBe("1280px");
+    expect(webview.style.height).toBe("800px");
+    expect(webview.style.transform).toBe("scale(0.25)");
+    expect(webview.style.top).toBe("10px");
+
+    applyBrowserWebviewPresentation(webview, {
+      floating: false,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(webview.style.width).toBe("100%");
+    expect(webview.style.height).toBe("100%");
+    expect(webview.style.transform).toBe("");
   });
 });

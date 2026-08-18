@@ -8,6 +8,7 @@ import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
   normalizeBrowserUrlInput,
+  resolveFloatingBrowserGuestLayout,
 } from "@synara/shared/browserSession";
 import type {
   BrowserAnnotationEvent,
@@ -629,4 +630,38 @@ export function resolveBrowserAddressSync(
     value: input.nextDisplayValue,
     syncedValue: input.nextDisplayValue,
   };
+}
+
+export function applyBrowserWebviewPresentation(
+  webview: HTMLElement,
+  input: { floating: boolean; slotWidth: number; slotHeight: number },
+): void {
+  if (!input.floating) {
+    webview.style.position = "";
+    webview.style.left = "";
+    webview.style.top = "";
+    webview.style.width = "100%";
+    webview.style.height = "100%";
+    webview.style.transform = "";
+    webview.style.transformOrigin = "";
+    webview.style.borderRadius = "";
+    webview.style.clipPath = "";
+    webview.style.overflow = "";
+    return;
+  }
+
+  const layout = resolveFloatingBrowserGuestLayout({
+    width: input.slotWidth,
+    height: input.slotHeight,
+  });
+  webview.style.position = "absolute";
+  webview.style.left = `${layout.x}px`;
+  webview.style.top = `${layout.y}px`;
+  webview.style.width = `${layout.width}px`;
+  webview.style.height = `${layout.height}px`;
+  webview.style.transform = layout.scale === 1 ? "" : `scale(${layout.scale})`;
+  webview.style.transformOrigin = "top left";
+  webview.style.borderRadius = "10px";
+  webview.style.clipPath = "inset(0 round 10px)";
+  webview.style.overflow = "hidden";
 }

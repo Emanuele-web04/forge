@@ -9,7 +9,6 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
-  screen,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
@@ -24,7 +23,6 @@ import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
-  BrowserFloatingControlEvent,
   BrowserDetachWebviewInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
@@ -42,7 +40,6 @@ import {
   BROWSER_BLANK_URL as ABOUT_BLANK_URL,
   BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
   BROWSER_AUTOMATION_VIEWPORT_WIDTH,
-  BROWSER_FLOATING_PANEL_MARGIN_PX,
   classifyBrowserWindowOpen,
   isBlankBrowserTabUrl,
   normalizeBrowserPageZoomFactor,
@@ -230,31 +227,6 @@ export interface BrowserAutomationDownloadEvent {
 export interface DesktopBrowserManagerOptions {
   beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
   annotationPreloadPath?: string;
-  onFloatingControl?: (event: BrowserFloatingControlEvent) => void;
-}
-
-const FLOATING_BROWSER_CONTROLS_PREFIX = "__synara_floating_browser_controls__:";
-
-function floatingBrowserControlsScript(zoomFactor: number): string {
-  const scale = 1 / Math.max(0.25, zoomFactor);
-  return `(() => {
-    const id = '__synara-floating-browser-controls';
-    let root = document.getElementById(id);
-    if (!root) {
-      root = document.createElement('div'); root.id = id;
-      root.innerHTML = '<button data-drag aria-label="Drag floating browser"><i></i><i></i><i></i><i></i><i></i><i></i></button><button data-menu aria-label="Floating browser actions">•••</button><button data-sidebar aria-label="Open browser in sidebar">▣</button><button data-close aria-label="Close floating browser">×</button>';
-      const style = document.createElement('style');
-      style.textContent = '#'+id+'{position:fixed;right:8px;top:8px;z-index:2147483647;display:flex;align-items:center;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.2);border-radius:999px;background:rgba(10,10,10,.82);box-shadow:0 4px 14px rgba(0,0,0,.3);color:white;transform-origin:top right;font:12px system-ui}#'+id+' button{box-sizing:border-box;width:24px;height:24px;padding:0;border:0;border-radius:999px;background:transparent;color:inherit;cursor:pointer}#'+id+' button:hover{background:rgba(255,255,255,.15)}#'+id+' [data-drag]{width:14px;display:grid;grid-template-columns:repeat(2,2px);place-content:center;gap:2px;cursor:grab}#'+id+' [data-drag] i{width:2px;height:2px;border-radius:50%;background:#aaa}#'+id+' [data-sidebar],#'+id+' [data-close]{display:none}#'+id+'[data-open] [data-sidebar],#'+id+'[data-open] [data-close]{display:block}';
-      document.documentElement.append(style, root);
-      const send = value => console.debug('${FLOATING_BROWSER_CONTROLS_PREFIX}'+JSON.stringify(value));
-      root.querySelector('[data-menu]').onclick = event => { event.preventDefault(); event.stopPropagation(); root.toggleAttribute('data-open'); };
-      root.querySelector('[data-sidebar]').onclick = event => { event.preventDefault(); event.stopPropagation(); send({action:'sidebar'}); };
-      root.querySelector('[data-close]').onclick = event => { event.preventDefault(); event.stopPropagation(); send({action:'close'}); };
-      const grip = root.querySelector('[data-drag]');
-      grip.onpointerdown = event => { event.preventDefault(); event.stopPropagation(); send({action:'drag-start',screenX:event.screenX,screenY:event.screenY}); };
-    }
-    root.style.transform = 'scale(${scale})';
-  })()`;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -430,8 +402,6 @@ function browserAutomationInputMatches(
 
 export class DesktopBrowserManager {
   private window: BrowserWindow | null = null;
-  private floatingDragOverlay: WebContentsView | null = null;
-  private floatingDragPollTimer: ReturnType<typeof setInterval> | null = null;
   private activeThreadId: ThreadId | null = null;
   private activeBounds: BrowserPanelBounds | null = null;
   private activeContainerBounds: BrowserPanelBounds | null = null;
@@ -531,7 +501,6 @@ export class DesktopBrowserManager {
   setWindow(window: BrowserWindow | null): void {
     const previousWindow = this.window;
     if (previousWindow && previousWindow !== window) {
-      this.stopFloatingDragCapture();
       // Detach while the old BrowserWindow is still addressable; clearing the
       // field first leaves native child views orphaned over the next renderer.
       this.detachAttachedRuntime();
@@ -548,111 +517,6 @@ export class DesktopBrowserManager {
       }
       return;
     }
-  }
-
-  private stopFloatingDragCapture(): void {
-    if (this.floatingDragPollTimer !== null) {
-      clearInterval(this.floatingDragPollTimer);
-      this.floatingDragPollTimer = null;
-    }
-    const overlay = this.floatingDragOverlay;
-    this.floatingDragOverlay = null;
-    if (!overlay) return;
-    try {
-      this.window?.contentView.removeChildView(overlay);
-    } catch {
-      // The parent window may already be tearing down.
-    }
-    if (!overlay.webContents.isDestroyed()) overlay.webContents.close();
-  }
-
-  private startFloatingDragCapture(threadId: ThreadId): void {
-    const window = this.window;
-    const runtime = this.attachedRuntimeKey ? this.runtimes.get(this.attachedRuntimeKey) : null;
-    if (!window || !runtime?.view) return;
-    this.stopFloatingDragCapture();
-
-    const overlay = new WebContentsView({
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
-    });
-    this.floatingDragOverlay = overlay;
-    overlay.setBackgroundColor("#00000000");
-    const html = "<!doctype html><style>html,body{margin:0;width:100%;height:100%;background:transparent;cursor:grabbing}</style>";
-    const startPoint = screen.getCursorScreenPoint();
-    const startBounds = runtime.view.getBounds();
-    let lastAppliedX = startBounds.x;
-    let lastAppliedY = startBounds.y;
-    const updateFromCursor = () => {
-      if (this.floatingDragOverlay !== overlay || !runtime.view) return;
-      const nextPoint = screen.getCursorScreenPoint();
-      const contentBounds = window.getContentBounds();
-      const containerBounds = this.activeContainerBounds ?? {
-        x: 0,
-        y: 0,
-        width: contentBounds.width,
-        height: contentBounds.height,
-      };
-      const x = Math.min(
-        Math.max(
-          containerBounds.x + BROWSER_FLOATING_PANEL_MARGIN_PX,
-          startBounds.x + nextPoint.x - startPoint.x,
-        ),
-        Math.max(
-          containerBounds.x + BROWSER_FLOATING_PANEL_MARGIN_PX,
-          containerBounds.x +
-            containerBounds.width -
-            startBounds.width -
-            BROWSER_FLOATING_PANEL_MARGIN_PX,
-        ),
-      );
-      const y = Math.min(
-        Math.max(
-          containerBounds.y + BROWSER_FLOATING_PANEL_MARGIN_PX,
-          startBounds.y + nextPoint.y - startPoint.y,
-        ),
-        Math.max(
-          containerBounds.y + BROWSER_FLOATING_PANEL_MARGIN_PX,
-          containerBounds.y +
-            containerBounds.height -
-            startBounds.height -
-            BROWSER_FLOATING_PANEL_MARGIN_PX,
-        ),
-      );
-      if (x === lastAppliedX && y === lastAppliedY) return;
-      lastAppliedX = x;
-      lastAppliedY = y;
-      runtime.view.setBounds({ ...startBounds, x, y });
-      this.options.onFloatingControl?.({
-        threadId,
-        action: "drag-live",
-        deltaX: x - startBounds.x,
-        deltaY: y - startBounds.y,
-      });
-    };
-    const beforeMouseEvent = (_event: Electron.Event, input: Electron.MouseInputEvent) => {
-      if (input.type === "mouseUp") {
-        this.options.onFloatingControl?.({ threadId, action: "drag-end" });
-        this.stopFloatingDragCapture();
-        return;
-      }
-    };
-    overlay.webContents.on("before-mouse-event", beforeMouseEvent);
-    overlay.webContents.once("did-finish-load", () => {
-      if (this.floatingDragOverlay !== overlay || !this.window) return;
-      const contentBounds = this.window.getContentBounds();
-      overlay.setBounds({ x: 0, y: 0, width: contentBounds.width, height: contentBounds.height });
-      this.window.contentView.addChildView(overlay);
-      this.floatingDragPollTimer = setInterval(updateFromCursor, 16);
-      const cursorPoint = screen.getCursorScreenPoint();
-      overlay.webContents.sendInputEvent({
-        type: "mouseDown",
-        x: cursorPoint.x - contentBounds.x,
-        y: cursorPoint.y - contentBounds.y,
-        button: "left",
-        clickCount: 1,
-      });
-    });
-    void overlay.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   }
 
   subscribe(listener: BrowserStateListener): () => void {
@@ -1276,7 +1140,6 @@ export class DesktopBrowserManager {
 
   dispose(): void {
     this.disposed = true;
-    this.stopFloatingDragCapture();
     this.annotations.dispose();
     this.sessionPolicy.dispose();
     this.clearAllPendingWindowOpenTasks();
@@ -1696,6 +1559,9 @@ export class DesktopBrowserManager {
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
     const activeRuntime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
+    if (input.surface === "native" && activeRuntimeKey) {
+      this.rendererOnlyRuntimeKeys.delete(activeRuntimeKey);
+    }
     const requiresRenderer = activeRuntimeKey
       ? this.rendererOnlyRuntimeKeys.has(activeRuntimeKey)
       : false;
@@ -1712,6 +1578,22 @@ export class DesktopBrowserManager {
       return;
     }
 
+    if (input.surface === "renderer" && activeTabId && activeRuntimeKey && activeRuntime?.ownsWebContents) {
+      this.destroyRuntime(input.threadId, activeTabId);
+      const activeTab = this.getTab(state, activeTabId);
+      if (activeTab) {
+        activeTab.runtimeSurface = "renderer";
+        suspendTabState(activeTab);
+        this.markThreadStateChanged(input.threadId);
+        this.emitState(input.threadId);
+      }
+      this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
+      this.attachedRuntimeKey = null;
+      this.attachedBoundsSignature = null;
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
+      return;
+    }
+
     if (
       input.surface === "native" &&
       !requiresRenderer &&
@@ -1723,6 +1605,7 @@ export class DesktopBrowserManager {
       this.destroyRuntime(input.threadId, activeTabId);
       const activeTab = this.getTab(state, activeTabId);
       if (activeTab) {
+        activeTab.runtimeSurface = "native";
         suspendTabState(activeTab);
         this.markThreadStateChanged(input.threadId);
       }
@@ -1731,6 +1614,7 @@ export class DesktopBrowserManager {
     }
 
     if ((input.surface === "renderer" || requiresRenderer) && activeTabId && !activeRuntime) {
+      if (activeRuntimeKey) this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
       this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       return;
     }
@@ -2579,14 +2463,7 @@ export class DesktopBrowserManager {
       this.enforceBackgroundAutomationRuntimeBudget();
       return;
     }
-    runtime.view.setBorderRadius(pageZoomFactor < 1 ? 12 : 0);
-    void runtime.webContents
-      .executeJavaScript(
-        pageZoomFactor < 1
-          ? floatingBrowserControlsScript(pageZoomFactor)
-          : "document.getElementById('__synara-floating-browser-controls')?.remove()",
-      )
-      .catch(() => undefined);
+    runtime.view.setBorderRadius(0);
     if (this.attachedRuntimeKey === runtime.key) {
       this.setRuntimeViewHidden(runtime, false);
       this.bringRuntimeViewToFront(runtime);
@@ -2795,11 +2672,6 @@ export class DesktopBrowserManager {
     });
 
     const beforeMouseEvent = (_event: Electron.Event, input: Electron.MouseInputEvent) => {
-      if (input.type === "mouseUp" && this.floatingDragOverlay) {
-        this.options.onFloatingControl?.({ threadId, action: "drag-end" });
-        this.stopFloatingDragCapture();
-        return;
-      }
       if (
         input.type === "mouseDown" ||
         input.type === "mouseWheel" ||
@@ -2831,52 +2703,6 @@ export class DesktopBrowserManager {
     webContents.on("page-title-updated", pageTitleUpdated);
     runtime.listenerDisposers.push(() => {
       webContents.removeListener("page-title-updated", pageTitleUpdated);
-    });
-
-    const consoleMessage = (
-      details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>,
-    ) => {
-      const message = typeof details.message === "string" ? details.message : "";
-      if (!message.startsWith(FLOATING_BROWSER_CONTROLS_PREFIX)) return;
-      try {
-        const payload = JSON.parse(
-          message.slice(FLOATING_BROWSER_CONTROLS_PREFIX.length),
-        ) as Omit<BrowserFloatingControlEvent, "threadId"> & { action: string };
-        if (payload.action === "drag-start") {
-          this.startFloatingDragCapture(threadId);
-          return;
-        }
-        if (
-          payload.action === "sidebar" ||
-          payload.action === "close" ||
-          payload.action === "drag"
-        ) {
-          this.options.onFloatingControl?.({
-            threadId,
-            action: payload.action,
-            ...("deltaX" in payload ? { deltaX: payload.deltaX } : {}),
-            ...("deltaY" in payload ? { deltaY: payload.deltaY } : {}),
-          });
-        }
-      } catch {
-        // Ignore malformed page messages.
-      }
-    };
-    webContents.on("console-message", consoleMessage);
-    runtime.listenerDisposers.push(() => {
-      webContents.removeListener("console-message", consoleMessage);
-    });
-
-    const injectFloatingControlsAfterNavigation = () => {
-      const zoomFactor = this.getVisiblePageZoomFactor(threadId);
-      if (zoomFactor >= 1) return;
-      void webContents
-        .executeJavaScript(floatingBrowserControlsScript(zoomFactor))
-        .catch(() => undefined);
-    };
-    webContents.on("did-finish-load", injectFloatingControlsAfterNavigation);
-    runtime.listenerDisposers.push(() => {
-      webContents.removeListener("did-finish-load", injectFloatingControlsAfterNavigation);
     });
 
     const pageFaviconUpdated = (_event: Electron.Event, faviconUrls: string[]) => {

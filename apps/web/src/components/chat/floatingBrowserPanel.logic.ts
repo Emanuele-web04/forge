@@ -224,6 +224,15 @@ export function floatingBrowserResizeCursor(edge: FloatingBrowserResizeEdge): st
   return "nwse-resize";
 }
 
+export const FLOATING_BROWSER_DRAG_THRESHOLD_PX = 4;
+
+export function isFloatingBrowserDragGesture(
+  delta: { x: number; y: number },
+  thresholdPx = FLOATING_BROWSER_DRAG_THRESHOLD_PX,
+): boolean {
+  return Math.hypot(delta.x, delta.y) >= thresholdPx;
+}
+
 // Keep this decision shared by single and split surfaces so a stale request can never
 // reappear over another thread or duplicate a browser that is already docked and visible.
 export function shouldRenderFloatingBrowserPanel(input: {
