@@ -6,7 +6,10 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import type { ProviderListModelsResult, ProviderModelDescriptor } from "@synara/contracts";
+import type {
+  ProviderListModelsResult,
+  ProviderModelDescriptor,
+} from "@synara/contracts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import {
@@ -128,7 +131,8 @@ function findCopilotModelConfig(
   return options.find(
     (option): option is Extract<Acp.SessionConfigOption, { readonly type: "select" }> =>
       option.type === "select" &&
-      (option.id.trim().toLowerCase() === "model" || option.category?.trim().toLowerCase() === "model"),
+      (option.id.trim().toLowerCase() === "model" ||
+        option.category?.trim().toLowerCase() === "model"),
   );
 }
 
