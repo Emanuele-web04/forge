@@ -63,8 +63,47 @@ export function createBrowserRendererLossHandler<TRenderer>({
 }
 
 export interface BrowserPanelHideScheduler {
+  /** Claims the thread's live browser surface until the returned release function is called. */
+  readonly acquire: (threadId: string) => () => void;
   readonly cancel: (threadId: string) => void;
   readonly schedule: (threadId: string, hide: () => void) => void;
+}
+
+export interface BrowserPanelRendererHandoff {
+  readonly trackDetach: (threadId: string, detach: Promise<unknown>) => void;
+  readonly waitForDetach: (threadId: string) => Promise<void>;
+}
+
+/**
+ * Serializes renderer guest replacement across dock/floating BrowserPanel instances.
+ * React can mount the replacement before the old panel's IPC cleanup has completed;
+ * waiting here keeps browserManager's duplicate-runtime guard from stranding the guest.
+ */
+export function createBrowserPanelRendererHandoff(): BrowserPanelRendererHandoff {
+  const pendingByThreadId = new Map<string, Promise<void>>();
+
+  function trackDetach(threadId: string, detach: Promise<unknown>): void {
+    const previous = pendingByThreadId.get(threadId);
+    const completion = Promise.all([
+      previous ?? Promise.resolve(),
+      detach,
+    ]).then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingByThreadId.set(threadId, completion);
+    void completion.then(() => {
+      if (pendingByThreadId.get(threadId) === completion) {
+        pendingByThreadId.delete(threadId);
+      }
+    });
+  }
+
+  function waitForDetach(threadId: string): Promise<void> {
+    return pendingByThreadId.get(threadId) ?? Promise.resolve();
+  }
+
+  return { trackDetach, waitForDetach };
 }
 
 type BrowserPanelHideTimer = ReturnType<typeof globalThis.setTimeout>;
@@ -81,6 +120,7 @@ export function createBrowserPanelHideScheduler(
   clearTimer: (timer: BrowserPanelHideTimer) => void = (timer) => globalThis.clearTimeout(timer),
 ): BrowserPanelHideScheduler {
   const pendingByThreadId = new Map<string, BrowserPanelHideTimer>();
+  const liveHostCountByThreadId = new Map<string, number>();
 
   function cancel(threadId: string): void {
     const pending = pendingByThreadId.get(threadId);
@@ -89,17 +129,42 @@ export function createBrowserPanelHideScheduler(
     clearTimer(pending);
   }
 
+  function acquire(threadId: string): () => void {
+    // A new live host takes over before the previous host's cleanup necessarily runs.
+    // Cancelling here also handles the opposite React commit order, where cleanup queued
+    // the hide before the replacement host mounted.
+    cancel(threadId);
+    liveHostCountByThreadId.set(
+      threadId,
+      (liveHostCountByThreadId.get(threadId) ?? 0) + 1,
+    );
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+
+      const nextCount = (liveHostCountByThreadId.get(threadId) ?? 1) - 1;
+      if (nextCount > 0) {
+        liveHostCountByThreadId.set(threadId, nextCount);
+      } else {
+        liveHostCountByThreadId.delete(threadId);
+      }
+    };
+  }
+
   function schedule(threadId: string, hide: () => void): void {
     cancel(threadId);
     const pending = setTimer(() => {
       if (pendingByThreadId.get(threadId) !== pending) return;
       pendingByThreadId.delete(threadId);
+      if ((liveHostCountByThreadId.get(threadId) ?? 0) > 0) return;
       hide();
     });
     pendingByThreadId.set(threadId, pending);
   }
 
-  return { cancel, schedule };
+  return { acquire, cancel, schedule };
 }
 
 /**
@@ -113,6 +178,42 @@ export function shouldOccludeBrowserWebview(input: {
   hasObscuringOverlay: boolean;
 }): boolean {
   return input.showLocalServersHome || input.browserActionsMenuOpen || input.hasObscuringOverlay;
+}
+
+/**
+ * Checks only the hit-test entries above a browser surface.
+ *
+ * `document.elementsFromPoint()` continues past the surface into its ancestors
+ * and then into sibling content behind it. Treating every visible entry as an
+ * obstruction makes an overlaid browser hide itself whenever the chat behind it
+ * is also hit-testable. The first surface/descendant entry is the compositor
+ * boundary; anything after it is not eligible to occlude the browser.
+ */
+export function hasObscuringHitStackElementAboveSurface<TElement>(
+  hitElements: readonly TElement[],
+  input: {
+    isSurfaceBoundary: (element: TElement) => boolean;
+    isNonObscuring: (element: TElement) => boolean;
+    isVisible: (element: TElement) => boolean;
+  },
+): boolean {
+  let hasVisibleElementAboveSurface = false;
+  for (const hitElement of hitElements) {
+    if (input.isSurfaceBoundary(hitElement)) {
+      return hasVisibleElementAboveSurface;
+    }
+    if (input.isNonObscuring(hitElement)) {
+      continue;
+    }
+    if (input.isVisible(hitElement)) {
+      hasVisibleElementAboveSurface = true;
+    }
+  }
+
+  // If the surface is absent from the hit-test stack, the remaining entries are
+  // ambiguous (and commonly represent content behind the floating panel). Do
+  // not hide the browser based on that incomplete stack.
+  return false;
 }
 
 interface ResolveBrowserAddressSyncInput {

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   BrowserAnnotationEvent,
   BrowserUseOpenPanelRequest,
+  BrowserFloatingControlEvent,
   DesktopBridge,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
@@ -245,6 +246,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () => {
         ipcRenderer.removeListener(IPC.browser.requestOpenPanel, wrappedListener);
       };
+    },
+    onFloatingControl: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (typeof payload !== "object" || payload === null) return;
+        listener(payload as BrowserFloatingControlEvent);
+      };
+      ipcRenderer.on(IPC.browser.floatingControl, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.browser.floatingControl, wrappedListener);
     },
     onBrowserCopyLink: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {

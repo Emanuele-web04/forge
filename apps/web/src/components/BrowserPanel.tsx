@@ -18,6 +18,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CameraIcon,
+  CircleAlertIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   GlobeIcon,
@@ -34,6 +35,7 @@ import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
 import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
+  resolveBrowserFloatingZoomFactor,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
 import {
@@ -46,6 +48,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
+import { BROWSER_PANEL_BOUNDS_SYNC_EVENT } from "~/lib/browserPanelBoundsSync";
 import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
@@ -63,7 +66,9 @@ import {
   browserWebviewInitialUrl,
   buildBrowserAddressSuggestions,
   createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
+  hasObscuringHitStackElementAboveSurface,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
@@ -98,6 +103,7 @@ const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
 const browserPanelHideScheduler = createBrowserPanelHideScheduler();
+const browserPanelRendererHandoff = createBrowserPanelRendererHandoff();
 // The address field and tab pills share one chrome-control surface so the whole row reads
 // as a single cohesive control: matching height, radius, border width, and type scale.
 const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
@@ -318,19 +324,18 @@ function hasTopLayerDomObstruction(element: HTMLElement): boolean {
     }
 
     const hitElements = document.elementsFromPoint(x, y);
-    for (const hitElement of hitElements) {
-      if (!(hitElement instanceof HTMLElement)) {
-        continue;
-      }
-      if (hitElement === element || element.contains(hitElement) || hitElement.contains(element)) {
-        continue;
-      }
-      if (isNativeBrowserNonObscuringOverlayElement(hitElement)) {
-        continue;
-      }
-      if (!isVisibleOverlayElement(hitElement)) {
-        continue;
-      }
+    if (
+      hasObscuringHitStackElementAboveSurface(hitElements, {
+        isSurfaceBoundary: (hitElement) =>
+          hitElement === element ||
+          (hitElement instanceof HTMLElement && element.contains(hitElement)),
+        isNonObscuring: (hitElement) =>
+          hitElement instanceof HTMLElement &&
+          isNativeBrowserNonObscuringOverlayElement(hitElement),
+        isVisible: (hitElement) =>
+          hitElement instanceof HTMLElement && isVisibleOverlayElement(hitElement),
+      })
+    ) {
       return true;
     }
   }
@@ -412,6 +417,30 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
             {props.title}
           </p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
+  return (
+    <div
+      className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d] px-6 text-center text-white"
+      role="alert"
+    >
+      <div className="flex max-w-xs flex-col items-center">
+        <CircleAlertIcon className="size-7 text-white/35" aria-hidden="true" />
+        <p className="mt-3 text-sm font-medium text-white/80">This page could not be loaded</p>
+        <p className="mt-1 text-xs text-white/45">{props.message}</p>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="mt-4"
+          onClick={props.onReload}
+        >
+          Reload page
+        </Button>
       </div>
     </div>
   );
@@ -552,6 +581,7 @@ export function BrowserPanel({
   // Defaults belong in the body, never in the destructuring pattern: React Compiler cannot lower an
   // AssignmentPattern there and silently drops the whole component's memoization.
   const runtimeMode = runtimeModeProp ?? "live";
+  const isFloatingMode = mode === "floating";
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
   const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
@@ -636,6 +666,7 @@ export function BrowserPanel({
     hasActiveTab: activeTab !== null,
     workspaceReady: runtimeReady,
   });
+  const browserPageError = threadBrowserState?.lastError ?? null;
   const browserAddressSuggestions = buildBrowserAddressSuggestions({
     query: addressValue,
     activeTabId: activeTab?.id ?? null,
@@ -706,9 +737,9 @@ export function BrowserPanel({
         }
         if (webContentsId && webContentsId > 0) {
           try {
-            void api.browser
-              .detachWebview({ threadId, tabId, webContentsId })
-              .catch(ignoreBrowserWebviewDetachError);
+            const detachPromise = api.browser.detachWebview({ threadId, tabId, webContentsId });
+            browserPanelRendererHandoff.trackDetach(threadId, detachPromise);
+            void detachPromise.catch(ignoreBrowserWebviewDetachError);
           } catch {
             ignoreBrowserWebviewDetachError();
           }
@@ -747,7 +778,7 @@ export function BrowserPanel({
       return;
     }
 
-    browserPanelHideScheduler.cancel(threadId);
+    const releaseLiveHost = browserPanelHideScheduler.acquire(threadId);
 
     // Timeout-0 keeps the reset writes asynchronous (no wasted pre-paint
     // render), which also keeps this component eligible for React Compiler.
@@ -775,6 +806,7 @@ export function BrowserPanel({
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
+      releaseLiveHost();
       browserPanelHideScheduler.schedule(threadId, () => {
         void api.browser.hide({ threadId });
       });
@@ -849,6 +881,9 @@ export function BrowserPanel({
     } else if (webview.parentElement !== host) {
       host.append(webview);
     }
+    webview.style.borderRadius = isFloatingMode ? "10px" : "";
+    webview.style.clipPath = isFloatingMode ? "inset(0 round 10px)" : "";
+    webview.style.overflow = isFloatingMode ? "hidden" : "";
 
     const initialUrl = activeTabInitialUrlRef.current;
     const shouldLoadInitialUrl = browserWebviewTabIdRef.current !== activeTabId;
@@ -873,7 +908,8 @@ export function BrowserPanel({
       attachRetryDelayMs = Math.min(attachRetryDelayMs * 2, 500);
     };
 
-    const attachVisibleWebview = () => {
+    let attachHandoffInFlight = false;
+    const attachVisibleWebviewNow = () => {
       if (cancelled) {
         return;
       }
@@ -949,6 +985,16 @@ export function BrowserPanel({
         })
         .then(finishAttachment, () => finishAttachment(null));
     };
+    const attachVisibleWebview = () => {
+      if (cancelled || attachHandoffInFlight) {
+        return;
+      }
+      attachHandoffInFlight = true;
+      void browserPanelRendererHandoff.waitForDetach(threadId).then(() => {
+        attachHandoffInFlight = false;
+        attachVisibleWebviewNow();
+      });
+    };
 
     const handleRendererLoss = createBrowserRendererLossHandler({
       renderer: webview,
@@ -994,6 +1040,7 @@ export function BrowserPanel({
     browserRendererGeneration,
     detachRendererBrowserWebview,
     isLiveRuntime,
+    isFloatingMode,
     showLocalServersHome,
     threadId,
     upsertThreadState,
@@ -1001,7 +1048,7 @@ export function BrowserPanel({
     workspaceReady,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     return () => {
       detachRendererBrowserWebview();
     };
@@ -1049,11 +1096,13 @@ export function BrowserPanel({
       // While the local-servers home is up, force the browser surface hidden instead of
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
-      const obscuredByOverlay = shouldOccludeBrowserWebview({
-        showLocalServersHome,
-        browserActionsMenuOpen,
-        hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
-      });
+      const obscuredByOverlay =
+        browserPageError !== null ||
+        shouldOccludeBrowserWebview({
+          showLocalServersHome,
+          browserActionsMenuOpen,
+          hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+        });
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const rect = element.getBoundingClientRect();
@@ -1071,10 +1120,33 @@ export function BrowserPanel({
               readDesktopZoomFactor(),
             );
           })();
+      const floatingHost = isFloatingMode
+        ? element.closest<HTMLElement>("[data-floating-browser-host='true']")
+        : null;
+      const floatingHostRect = floatingHost?.getBoundingClientRect();
+      const containerBounds = floatingHostRect
+        ? resolveDesktopDipRectFromCssRect(
+            {
+              x: floatingHostRect.left,
+              y: floatingHostRect.top,
+              width: floatingHostRect.width,
+              height: floatingHostRect.height,
+            },
+            readDesktopZoomFactor(),
+          )
+        : null;
       const surface = usesNativeRuntime ? "native" : "renderer";
+      // Native WebContentsViews and adopted renderer <webview>s share the same main-process
+      // WebContents. Use the converted DIP width so both surfaces receive the exact same
+      // miniature presentation scale, while normal sidebar/sheet surfaces stay at 100%.
+      const pageZoomFactor =
+        isFloatingMode && bounds ? resolveBrowserFloatingZoomFactor(bounds.width) : 1;
+      const containerKey = containerBounds
+        ? `:container-${Math.round(containerBounds.x)}:${Math.round(containerBounds.y)}:${Math.round(containerBounds.width)}:${Math.round(containerBounds.height)}`
+        : "";
       const nextKey = bounds
-        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
-        : `${surface}:hidden`;
+        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}${containerKey}`
+        : `${surface}:hidden:zoom-${pageZoomFactor}`;
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
         perfCountersRef.current.syncSkips += 1;
@@ -1083,7 +1155,7 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, surface })
+        .setPanelBounds({ threadId, bounds, containerBounds, surface, pageZoomFactor })
         .catch(ignoreBrowserBoundsSyncError);
     };
 
@@ -1170,6 +1242,7 @@ export function BrowserPanel({
     // measured rect and would otherwise strand the native view at the old scale.
     const unsubscribeZoom = subscribeDesktopZoomFactor(scheduleSyncBounds);
     window.addEventListener("resize", scheduleSyncBounds);
+    window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, scheduleSyncBounds);
     window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
@@ -1180,6 +1253,7 @@ export function BrowserPanel({
       observer.disconnect();
       unsubscribeZoom();
       window.removeEventListener("resize", scheduleSyncBounds);
+      window.removeEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, scheduleSyncBounds);
       window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
@@ -1198,7 +1272,9 @@ export function BrowserPanel({
   }, [
     api,
     browserActionsMenuOpen,
+    browserPageError,
     isLiveRuntime,
+    isFloatingMode,
     showLocalServersHome,
     threadId,
     usesNativeRuntime,
@@ -1236,6 +1312,17 @@ export function BrowserPanel({
     threadId,
     upsertThreadState,
   ]);
+
+  const onReloadActiveTab = useCallback(() => {
+    if (!ensureLiveRuntime() || !api || !activeTab) {
+      return;
+    }
+    void runBrowserAction(() => api.browser.reload({ threadId, tabId: activeTab.id })).then((state) => {
+      if (state) {
+        upsertThreadState(state);
+      }
+    });
+  }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   const onChooseSuggestion = useCallback(
     (suggestion: BrowserAddressSuggestion) => {
@@ -1517,7 +1604,13 @@ export function BrowserPanel({
   );
 
   const header = (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-2",
+        mode === "floating" && "cursor-grab",
+      )}
+      data-floating-browser-header={mode === "floating" ? "true" : undefined}
+    >
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
@@ -1758,95 +1851,97 @@ export function BrowserPanel({
 
   if (!api && isLiveRuntime) {
     return (
-      <DiffPanelShell mode={mode} header={header}>
+      <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
         <DiffPanelLoadingState label="Browser is unavailable." />
       </DiffPanelShell>
     );
   }
 
   return (
-    <DiffPanelShell mode={mode} header={header}>
+    <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={browserTabsBarRef}
-          className={cn(
-            "flex items-center gap-2 border-b border-border px-2 py-1.5",
-            // Extend the frameless window drag region across the tab strip's empty space so
-            // the panel is easy to grab; interactive children stay no-drag via global CSS.
-            isElectron && mode !== "sheet" && "drag-region",
-          )}
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-            {threadBrowserState?.tabs.map((tab) => {
-              const isActive = tab.id === activeTab?.id;
-              const tabIsBlank = isBlankBrowserTabUrl(tab);
-              return (
-                <div
-                  key={tab.id}
-                  className={cn(
-                    "group flex min-w-0 max-w-[14rem] items-center px-2.5 text-left transition-colors",
-                    BROWSER_CHROME_CONTROL_CLASS_NAME,
-                    isActive
-                      ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
-                      : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
-                    tab.status === "suspended" && !tabIsBlank ? "opacity-75" : "",
-                  )}
-                >
-                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
-                    {tab.faviconUrl ? (
-                      <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
-                    ) : (
-                      <GlobeIcon className="size-3 text-muted-foreground" />
+        {!isFloatingMode ? (
+          <div
+            ref={browserTabsBarRef}
+            className={cn(
+              "flex items-center gap-2 border-b border-border px-2 py-1.5",
+              // Extend the frameless window drag region across the tab strip's empty space so
+              // the panel is easy to grab; interactive children stay no-drag via global CSS.
+              isElectron && mode !== "sheet" && "drag-region",
+            )}
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+              {threadBrowserState?.tabs.map((tab) => {
+                const isActive = tab.id === activeTab?.id;
+                const tabIsBlank = isBlankBrowserTabUrl(tab);
+                return (
+                  <div
+                    key={tab.id}
+                    className={cn(
+                      "group flex min-w-0 max-w-[14rem] items-center px-2.5 text-left transition-colors",
+                      BROWSER_CHROME_CONTROL_CLASS_NAME,
+                      isActive
+                        ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
+                        : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
+                      tab.status === "suspended" && !tabIsBlank ? "opacity-75" : "",
                     )}
-                  </span>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 truncate text-left"
-                    onClick={() => {
-                      if (!ensureLiveRuntime()) return;
-                      if (!api) return;
-                      void runBrowserAction(() =>
-                        api.browser.selectTab({ threadId, tabId: tab.id }),
-                      ).then((state) => {
-                        if (state) {
-                          upsertThreadState(state);
-                        }
-                      });
-                    }}
                   >
-                    {tab.title || "Untitled"}
-                  </button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className={closeButtonClassName(isActive)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseTab(tab.id);
-                    }}
-                  >
-                    <XIcon className="size-3" />
-                    <span className="sr-only">Close tab</span>
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-          {browserChromeStatus ? (
-            <div
-              className={cn(
-                "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
-                browserChromeStatus.tone === "error"
-                  ? "border-destructive/25 bg-destructive/8 text-destructive"
-                  : "border-border/60 bg-background/80 text-muted-foreground",
-              )}
-              title={browserChromeStatus.label}
-            >
-              {browserChromeStatus.label}
+                    <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
+                      {tab.faviconUrl ? (
+                        <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
+                      ) : (
+                        <GlobeIcon className="size-3 text-muted-foreground" />
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left"
+                      onClick={() => {
+                        if (!ensureLiveRuntime()) return;
+                        if (!api) return;
+                        void runBrowserAction(() =>
+                          api.browser.selectTab({ threadId, tabId: tab.id }),
+                        ).then((state) => {
+                          if (state) {
+                            upsertThreadState(state);
+                          }
+                        });
+                      }}
+                    >
+                      {tab.title || "Untitled"}
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className={closeButtonClassName(isActive)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCloseTab(tab.id);
+                      }}
+                    >
+                      <XIcon className="size-3" />
+                      <span className="sr-only">Close tab</span>
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
-          ) : null}
-        </div>
+            {browserChromeStatus ? (
+              <div
+                className={cn(
+                  "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+                  browserChromeStatus.tone === "error"
+                    ? "border-destructive/25 bg-destructive/8 text-destructive"
+                    : "border-border/60 bg-background/80 text-muted-foreground",
+                )}
+                title={browserChromeStatus.label}
+              >
+                {browserChromeStatus.label}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="relative min-h-0 flex-1 bg-transparent">
           {!isLiveRuntime ? (
             <BrowserRuntimePreview
@@ -1859,7 +1954,19 @@ export function BrowserPanel({
             </div>
           ) : null}
           {isLiveRuntime ? (
-            <div ref={browserViewportRef} className="absolute inset-0 bg-[#0d0d0d]" />
+            <div
+              ref={browserViewportRef}
+              data-floating-browser-viewport={isFloatingMode ? "true" : undefined}
+              className={cn(
+                "absolute overflow-hidden",
+                isFloatingMode ? "bg-transparent" : "bg-[#0d0d0d]",
+                isFloatingMode && "rounded-[10px] [clip-path:inset(0_round_10px)]",
+                "inset-0",
+              )}
+            />
+          ) : null}
+          {isLiveRuntime && browserPageError ? (
+            <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
           ) : null}
           {showLocalServersHome ? (
             <BrowserLocalServersHome

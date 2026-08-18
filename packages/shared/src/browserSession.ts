@@ -10,6 +10,25 @@ const RESERVED_FRAME_NAMES = new Set(["", "_blank", "_self", "_parent", "_top"])
 export const BROWSER_BLANK_URL = "about:blank";
 export const BROWSER_SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 
+// Keep the human-facing floating browser aligned with the canonical viewport used by
+// background automation. At a smaller presentation width, browser page zoom exposes this
+// same logical desktop viewport instead of clipping its wide layout.
+export const BROWSER_AUTOMATION_VIEWPORT_WIDTH = 1_280;
+export const BROWSER_AUTOMATION_VIEWPORT_HEIGHT = 800;
+/** Matches the environment overlay's `p-3` edge gutter. */
+export const BROWSER_FLOATING_PANEL_MARGIN_PX = 12;
+
+export function resolveBrowserFloatingZoomFactor(physicalViewportWidth: number): number {
+  if (!Number.isFinite(physicalViewportWidth) || physicalViewportWidth <= 0) {
+    return 1;
+  }
+  return Math.min(1, physicalViewportWidth / BROWSER_AUTOMATION_VIEWPORT_WIDTH);
+}
+
+export function normalizeBrowserPageZoomFactor(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
+}
+
 // Dedicated auth hosts are safe popup signals. Multi-purpose hosts such as github.com need
 // path checks below so ordinary _blank links still open as tabs.
 const OAUTH_HOST_PATTERNS: readonly RegExp[] = [

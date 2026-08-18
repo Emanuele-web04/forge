@@ -81,13 +81,13 @@ function findComposerForm(paneScopeId: string): HTMLElement | null {
 }
 
 // Electron <webview> can swallow pointermove during drag; this keeps resizing in the React layer.
-export function createPanelResizeOverlay(): HTMLDivElement {
+export function createPanelResizeOverlay(cursor = "col-resize"): HTMLDivElement {
   const overlay = document.createElement("div");
   overlay.setAttribute("data-panel-resize-overlay", "true");
   overlay.style.position = "fixed";
   overlay.style.inset = "0";
   overlay.style.zIndex = "2147483647";
-  overlay.style.cursor = "col-resize";
+  overlay.style.cursor = cursor;
   overlay.style.background = "transparent";
   document.body.append(overlay);
   notifyNativeSurfaceOcclusionChange();

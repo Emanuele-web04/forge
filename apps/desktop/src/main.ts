@@ -370,6 +370,9 @@ let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
 const browserManager = new DesktopBrowserManager({
   annotationPreloadPath: annotationGuestPreload,
+  onFloatingControl: (event) => {
+    mainWindow?.webContents.send(IPC.browser.floatingControl, event);
+  },
   beforeInputEvent: (event, input) => {
     if (
       isKeyboardShortcutsHelpChord(

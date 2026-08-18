@@ -8,8 +8,10 @@ import {
   buildBrowserAddressSuggestions,
   browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
   formatBrowserAnnotationActionError,
+  hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
@@ -253,6 +255,63 @@ describe("createBrowserPanelHideScheduler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the surface visible when a new live host mounts before the old host cleans up", () => {
+    vi.useFakeTimers();
+    try {
+      const hide = vi.fn();
+      const scheduler = createBrowserPanelHideScheduler();
+      const releaseDockHost = scheduler.acquire("thread-a");
+      const releaseFloatingHost = scheduler.acquire("thread-a");
+
+      releaseDockHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).not.toHaveBeenCalled();
+
+      releaseFloatingHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("createBrowserPanelRendererHandoff", () => {
+  it("waits for the previous renderer guest to detach before attaching its replacement", async () => {
+    let resolveDetach!: () => void;
+    const detach = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", detach);
+    const replacementReady = handoff.waitForDetach("thread-a");
+    let didAttach = false;
+    void replacementReady.then(() => {
+      didAttach = true;
+    });
+
+    await Promise.resolve();
+    expect(didAttach).toBe(false);
+
+    resolveDetach();
+    await replacementReady;
+
+    expect(didAttach).toBe(true);
+  });
+
+  it("does not block a replacement when detach IPC rejects", async () => {
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", Promise.reject(new Error("stale guest")));
+
+    await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
+  });
 });
 
 describe("shouldOccludeBrowserWebview", () => {
@@ -272,6 +331,55 @@ describe("shouldOccludeBrowserWebview", () => {
         showLocalServersHome: false,
         browserActionsMenuOpen: false,
         hasObscuringOverlay: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasObscuringHitStackElementAboveSurface", () => {
+  const surface = { id: "viewport" };
+  const overlay = { id: "dialog" };
+  const underlyingChat = { id: "chat" };
+  const isVisible = (element: { id: string }) => element.id !== "hidden";
+  const isNonObscuring = (element: { id: string }) => element.id === "toast-portal";
+  const isSurfaceBoundary = (element: { id: string }) =>
+    element.id === surface.id || element.id === "viewport-child";
+
+  it("detects a visible overlay above the viewport and ignores content behind it", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([overlay, surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat underlying chat siblings as an overlay", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("stops at a descendant of the viewport as well", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface(
+        [{ id: "viewport-child" }, underlyingChat],
+        { isSurfaceBoundary, isNonObscuring, isVisible },
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores an incomplete stack that never reaches the viewport", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
       }),
     ).toBe(false);
   });

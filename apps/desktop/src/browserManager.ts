@@ -9,6 +9,7 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
+  screen,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
@@ -23,6 +24,7 @@ import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
+  BrowserFloatingControlEvent,
   BrowserDetachWebviewInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
@@ -38,8 +40,12 @@ import type {
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 import {
   BROWSER_BLANK_URL as ABOUT_BLANK_URL,
+  BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
+  BROWSER_AUTOMATION_VIEWPORT_WIDTH,
+  BROWSER_FLOATING_PANEL_MARGIN_PX,
   classifyBrowserWindowOpen,
   isBlankBrowserTabUrl,
+  normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput as normalizeUrlInput,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
@@ -165,8 +171,8 @@ const SUSPENDED_TAB_STATUS: BrowserTabState["status"] = "suspended";
 const BACKGROUND_AUTOMATION_BOUNDS: BrowserPanelBounds = {
   x: -10_000,
   y: 0,
-  width: 1_280,
-  height: 800,
+  width: BROWSER_AUTOMATION_VIEWPORT_WIDTH,
+  height: BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
 };
 
 interface BrowserPerformanceSnapshot {
@@ -224,6 +230,31 @@ export interface BrowserAutomationDownloadEvent {
 export interface DesktopBrowserManagerOptions {
   beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
   annotationPreloadPath?: string;
+  onFloatingControl?: (event: BrowserFloatingControlEvent) => void;
+}
+
+const FLOATING_BROWSER_CONTROLS_PREFIX = "__synara_floating_browser_controls__:";
+
+function floatingBrowserControlsScript(zoomFactor: number): string {
+  const scale = 1 / Math.max(0.25, zoomFactor);
+  return `(() => {
+    const id = '__synara-floating-browser-controls';
+    let root = document.getElementById(id);
+    if (!root) {
+      root = document.createElement('div'); root.id = id;
+      root.innerHTML = '<button data-drag aria-label="Drag floating browser"><i></i><i></i><i></i><i></i><i></i><i></i></button><button data-menu aria-label="Floating browser actions">•••</button><button data-sidebar aria-label="Open browser in sidebar">▣</button><button data-close aria-label="Close floating browser">×</button>';
+      const style = document.createElement('style');
+      style.textContent = '#'+id+'{position:fixed;right:8px;top:8px;z-index:2147483647;display:flex;align-items:center;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.2);border-radius:999px;background:rgba(10,10,10,.82);box-shadow:0 4px 14px rgba(0,0,0,.3);color:white;transform-origin:top right;font:12px system-ui}#'+id+' button{box-sizing:border-box;width:24px;height:24px;padding:0;border:0;border-radius:999px;background:transparent;color:inherit;cursor:pointer}#'+id+' button:hover{background:rgba(255,255,255,.15)}#'+id+' [data-drag]{width:14px;display:grid;grid-template-columns:repeat(2,2px);place-content:center;gap:2px;cursor:grab}#'+id+' [data-drag] i{width:2px;height:2px;border-radius:50%;background:#aaa}#'+id+' [data-sidebar],#'+id+' [data-close]{display:none}#'+id+'[data-open] [data-sidebar],#'+id+'[data-open] [data-close]{display:block}';
+      document.documentElement.append(style, root);
+      const send = value => console.debug('${FLOATING_BROWSER_CONTROLS_PREFIX}'+JSON.stringify(value));
+      root.querySelector('[data-menu]').onclick = event => { event.preventDefault(); event.stopPropagation(); root.toggleAttribute('data-open'); };
+      root.querySelector('[data-sidebar]').onclick = event => { event.preventDefault(); event.stopPropagation(); send({action:'sidebar'}); };
+      root.querySelector('[data-close]').onclick = event => { event.preventDefault(); event.stopPropagation(); send({action:'close'}); };
+      const grip = root.querySelector('[data-drag]');
+      grip.onpointerdown = event => { event.preventDefault(); event.stopPropagation(); send({action:'drag-start',screenX:event.screenX,screenY:event.screenY}); };
+    }
+    root.style.transform = 'scale(${scale})';
+  })()`;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -347,6 +378,13 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
 }
 
+function browserPresentationSignature(
+  bounds: BrowserPanelBounds | null,
+  pageZoomFactor: number,
+): string {
+  return `${browserBoundsSignature(bounds)}:zoom-${pageZoomFactor}`;
+}
+
 function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
@@ -392,9 +430,14 @@ function browserAutomationInputMatches(
 
 export class DesktopBrowserManager {
   private window: BrowserWindow | null = null;
+  private floatingDragOverlay: WebContentsView | null = null;
+  private floatingDragPollTimer: ReturnType<typeof setInterval> | null = null;
   private activeThreadId: ThreadId | null = null;
   private activeBounds: BrowserPanelBounds | null = null;
+  private activeContainerBounds: BrowserPanelBounds | null = null;
   private activeBoundsThreadId: ThreadId | null = null;
+  private activePageZoomFactor = 1;
+  private activePageZoomThreadId: ThreadId | null = null;
   private attachedRuntimeKey: string | null = null;
   private attachedBoundsSignature: string | null = null;
   private readonly states = new Map<ThreadId, ThreadBrowserState>();
@@ -433,6 +476,7 @@ export class DesktopBrowserManager {
   >();
   private readonly pendingStatePublicationsByKey = new Map<string, PendingStatePublication>();
   private readonly runtimes = new Map<string, LiveTabRuntime>();
+  private readonly runtimePageZoomFactors = new Map<string, number>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
   private readonly automationRuntimeKeys = new Set<string>();
   private readonly automationRuntimeProtectedUntilByKey = new Map<string, number>();
@@ -487,6 +531,7 @@ export class DesktopBrowserManager {
   setWindow(window: BrowserWindow | null): void {
     const previousWindow = this.window;
     if (previousWindow && previousWindow !== window) {
+      this.stopFloatingDragCapture();
       // Detach while the old BrowserWindow is still addressable; clearing the
       // field first leaves native child views orphaned over the next renderer.
       this.detachAttachedRuntime();
@@ -503,6 +548,111 @@ export class DesktopBrowserManager {
       }
       return;
     }
+  }
+
+  private stopFloatingDragCapture(): void {
+    if (this.floatingDragPollTimer !== null) {
+      clearInterval(this.floatingDragPollTimer);
+      this.floatingDragPollTimer = null;
+    }
+    const overlay = this.floatingDragOverlay;
+    this.floatingDragOverlay = null;
+    if (!overlay) return;
+    try {
+      this.window?.contentView.removeChildView(overlay);
+    } catch {
+      // The parent window may already be tearing down.
+    }
+    if (!overlay.webContents.isDestroyed()) overlay.webContents.close();
+  }
+
+  private startFloatingDragCapture(threadId: ThreadId): void {
+    const window = this.window;
+    const runtime = this.attachedRuntimeKey ? this.runtimes.get(this.attachedRuntimeKey) : null;
+    if (!window || !runtime?.view) return;
+    this.stopFloatingDragCapture();
+
+    const overlay = new WebContentsView({
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    this.floatingDragOverlay = overlay;
+    overlay.setBackgroundColor("#00000000");
+    const html = "<!doctype html><style>html,body{margin:0;width:100%;height:100%;background:transparent;cursor:grabbing}</style>";
+    const startPoint = screen.getCursorScreenPoint();
+    const startBounds = runtime.view.getBounds();
+    let lastAppliedX = startBounds.x;
+    let lastAppliedY = startBounds.y;
+    const updateFromCursor = () => {
+      if (this.floatingDragOverlay !== overlay || !runtime.view) return;
+      const nextPoint = screen.getCursorScreenPoint();
+      const contentBounds = window.getContentBounds();
+      const containerBounds = this.activeContainerBounds ?? {
+        x: 0,
+        y: 0,
+        width: contentBounds.width,
+        height: contentBounds.height,
+      };
+      const x = Math.min(
+        Math.max(
+          containerBounds.x + BROWSER_FLOATING_PANEL_MARGIN_PX,
+          startBounds.x + nextPoint.x - startPoint.x,
+        ),
+        Math.max(
+          containerBounds.x + BROWSER_FLOATING_PANEL_MARGIN_PX,
+          containerBounds.x +
+            containerBounds.width -
+            startBounds.width -
+            BROWSER_FLOATING_PANEL_MARGIN_PX,
+        ),
+      );
+      const y = Math.min(
+        Math.max(
+          containerBounds.y + BROWSER_FLOATING_PANEL_MARGIN_PX,
+          startBounds.y + nextPoint.y - startPoint.y,
+        ),
+        Math.max(
+          containerBounds.y + BROWSER_FLOATING_PANEL_MARGIN_PX,
+          containerBounds.y +
+            containerBounds.height -
+            startBounds.height -
+            BROWSER_FLOATING_PANEL_MARGIN_PX,
+        ),
+      );
+      if (x === lastAppliedX && y === lastAppliedY) return;
+      lastAppliedX = x;
+      lastAppliedY = y;
+      runtime.view.setBounds({ ...startBounds, x, y });
+      this.options.onFloatingControl?.({
+        threadId,
+        action: "drag-live",
+        deltaX: x - startBounds.x,
+        deltaY: y - startBounds.y,
+      });
+    };
+    const beforeMouseEvent = (_event: Electron.Event, input: Electron.MouseInputEvent) => {
+      if (input.type === "mouseUp") {
+        this.options.onFloatingControl?.({ threadId, action: "drag-end" });
+        this.stopFloatingDragCapture();
+        return;
+      }
+    };
+    overlay.webContents.on("before-mouse-event", beforeMouseEvent);
+    overlay.webContents.once("did-finish-load", () => {
+      if (this.floatingDragOverlay !== overlay || !this.window) return;
+      const contentBounds = this.window.getContentBounds();
+      overlay.setBounds({ x: 0, y: 0, width: contentBounds.width, height: contentBounds.height });
+      this.window.contentView.addChildView(overlay);
+      this.floatingDragPollTimer = setInterval(updateFromCursor, 16);
+      const cursorPoint = screen.getCursorScreenPoint();
+      overlay.webContents.sendInputEvent({
+        type: "mouseDown",
+        x: cursorPoint.x - contentBounds.x,
+        y: cursorPoint.y - contentBounds.y,
+        button: "left",
+        clickCount: 1,
+      });
+    });
+    void overlay.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   }
 
   subscribe(listener: BrowserStateListener): () => void {
@@ -1126,6 +1276,7 @@ export class DesktopBrowserManager {
 
   dispose(): void {
     this.disposed = true;
+    this.stopFloatingDragCapture();
     this.annotations.dispose();
     this.sessionPolicy.dispose();
     this.clearAllPendingWindowOpenTasks();
@@ -1162,10 +1313,13 @@ export class DesktopBrowserManager {
     this.automationWindowOpenListenersByRuntimeKey.clear();
     this.automationDownloadListenersByRuntimeKey.clear();
     this.automationSideEffectProvenanceByRuntimeKey.clear();
+    this.runtimePageZoomFactors.clear();
     this.window = null;
     this.activeThreadId = null;
     this.activeBounds = null;
     this.activeBoundsThreadId = null;
+    this.activePageZoomFactor = 1;
+    this.activePageZoomThreadId = null;
     this.attachedBoundsSignature = null;
     this.runtimeSyncFlushScheduled = false;
   }
@@ -1473,6 +1627,7 @@ export class DesktopBrowserManager {
   close(input: BrowserThreadInput): ThreadBrowserState {
     this.markHumanControl(input.threadId);
     this.clearSuspendTimer(input.threadId);
+    this.resetRuntimePageZoomForThread(input.threadId);
 
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
@@ -1509,6 +1664,9 @@ export class DesktopBrowserManager {
     if (!keepsAgentRuntimeAlive) {
       this.markHumanControl(input.threadId);
     }
+    // A hidden browser must never leave the miniature presentation zoom on a
+    // runtime that automation or a later screenshot can reacquire.
+    this.resetRuntimePageZoomForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
@@ -1530,16 +1688,22 @@ export class DesktopBrowserManager {
     this.perfCounters.setPanelBoundsCalls += 1;
     const state = this.getOrCreateState(input.threadId);
     const nextBounds = normalizeBounds(input.bounds);
-    const nextBoundsSignature = browserBoundsSignature(nextBounds);
+    this.activeContainerBounds = normalizeBounds(input.containerBounds ?? null);
+    const nextPageZoomFactor = nextBounds
+      ? normalizeBrowserPageZoomFactor(input.pageZoomFactor)
+      : 1;
+    const nextBoundsSignature = browserPresentationSignature(nextBounds, nextPageZoomFactor);
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
     const activeRuntime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
     const requiresRenderer = activeRuntimeKey
       ? this.rendererOnlyRuntimeKeys.has(activeRuntimeKey)
       : false;
+    this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
     this.setActiveBounds(input.threadId, nextBounds);
 
     if (!state.open || nextBounds === null) {
+      this.resetRuntimePageZoomForThread(input.threadId);
       if (this.activeThreadId === input.threadId) {
         this.detachAttachedRuntime();
         this.activeThreadId = null;
@@ -1567,7 +1731,7 @@ export class DesktopBrowserManager {
     }
 
     if ((input.surface === "renderer" || requiresRenderer) && activeTabId && !activeRuntime) {
-      this.activateThreadForPendingRenderer(input.threadId, nextBounds);
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       return;
     }
 
@@ -1589,15 +1753,15 @@ export class DesktopBrowserManager {
         const runtime = this.runtimes.get(activeRuntimeKey);
         if (runtime) {
           this.perfCounters.setPanelBoundsViewportUpdates += 1;
-          this.attachRuntime(runtime, nextBounds);
+          this.attachRuntime(runtime, nextBounds, nextPageZoomFactor);
           return;
         }
       }
-      this.attachActiveTab(input.threadId, nextBounds);
+      this.attachActiveTab(input.threadId, nextBounds, { pageZoomFactor: nextPageZoomFactor });
       return;
     }
 
-    this.activateThread(input.threadId, nextBounds);
+    this.activateThread(input.threadId, nextBounds, nextPageZoomFactor);
   }
 
   // Adopts the renderer-owned <webview> so the visible page and browser host tools
@@ -1963,34 +2127,46 @@ export class DesktopBrowserManager {
     clipboard.writeImage(image);
   }
 
-  private activateThread(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+  private activateThread(
+    threadId: ThreadId,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(threadId),
+  ): void {
     const previousThreadId = this.activeThreadId;
     if (this.activeThreadId && this.activeThreadId !== threadId) {
+      this.resetRuntimePageZoomForThread(this.activeThreadId);
       this.scheduleThreadSuspend(this.activeThreadId);
     }
 
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
     this.activeBoundsThreadId = threadId;
+    this.setActivePageZoomFactor(threadId, pageZoomFactor);
     if (previousThreadId && previousThreadId !== threadId) {
       this.updatePopupWindowsForThread(previousThreadId);
     }
     this.resumeThread(threadId);
-    this.attachActiveTab(threadId, bounds);
+    this.attachActiveTab(threadId, bounds, { pageZoomFactor });
     this.updatePopupWindowsForThread(threadId);
   }
 
   // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
   // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
-  private activateThreadForPendingRenderer(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+  private activateThreadForPendingRenderer(
+    threadId: ThreadId,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(threadId),
+  ): void {
     const previousThreadId = this.activeThreadId;
     if (previousThreadId && previousThreadId !== threadId) {
+      this.resetRuntimePageZoomForThread(previousThreadId);
       this.scheduleThreadSuspend(previousThreadId);
       this.updatePopupWindowsForThread(previousThreadId);
     }
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
     this.activeBoundsThreadId = threadId;
+    this.setActivePageZoomFactor(threadId, pageZoomFactor);
     this.clearSuspendTimer(threadId);
     this.updatePopupWindowsForThread(threadId);
   }
@@ -2010,10 +2186,53 @@ export class DesktopBrowserManager {
     }
     this.activeBounds = null;
     this.activeBoundsThreadId = null;
+    this.clearActivePageZoomForThread(threadId);
   }
 
   private getVisibleBoundsForThread(threadId: ThreadId): BrowserPanelBounds | null {
     return this.activeBoundsThreadId === threadId ? this.activeBounds : null;
+  }
+
+  private setActivePageZoomFactor(threadId: ThreadId, pageZoomFactor: number): void {
+    this.activePageZoomThreadId = threadId;
+    this.activePageZoomFactor = normalizeBrowserPageZoomFactor(pageZoomFactor);
+  }
+
+  private clearActivePageZoomForThread(threadId: ThreadId): void {
+    if (this.activePageZoomThreadId !== threadId) {
+      return;
+    }
+    this.activePageZoomThreadId = null;
+    this.activePageZoomFactor = 1;
+  }
+
+  private getVisiblePageZoomFactor(threadId: ThreadId): number {
+    return this.activePageZoomThreadId === threadId ? this.activePageZoomFactor : 1;
+  }
+
+  private setRuntimePageZoomFactor(runtime: LiveTabRuntime, pageZoomFactor: number): void {
+    const nextPageZoomFactor = normalizeBrowserPageZoomFactor(pageZoomFactor);
+    if (this.runtimePageZoomFactors.get(runtime.key) === nextPageZoomFactor) {
+      return;
+    }
+
+    try {
+      runtime.webContents.setZoomFactor(nextPageZoomFactor);
+    } catch {
+      // The guest may be tearing down between a bounds update and its cleanup.
+    }
+    this.runtimePageZoomFactors.set(runtime.key, nextPageZoomFactor);
+  }
+
+  private resetRuntimePageZoomForThread(threadId: ThreadId): void {
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.threadId === threadId) {
+        this.setRuntimePageZoomFactor(runtime, 1);
+      }
+    }
+    if (this.activePageZoomThreadId === threadId) {
+      this.activePageZoomFactor = 1;
+    }
   }
 
   private resumeThread(threadId: ThreadId): void {
@@ -2287,7 +2506,7 @@ export class DesktopBrowserManager {
   private attachActiveTab(
     threadId: ThreadId,
     bounds: BrowserPanelBounds,
-    options: { forceLoad?: boolean } = {},
+    options: { forceLoad?: boolean; pageZoomFactor?: number } = {},
   ): void {
     const state = this.ensureWorkspace(threadId);
     const activeTab = this.getActiveTab(state);
@@ -2301,13 +2520,21 @@ export class DesktopBrowserManager {
       const rendererRuntime = this.runtimes.get(runtimeKey);
       if (!rendererRuntime || rendererRuntime.ownsWebContents) {
         if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, activeTab.id);
-        this.activateThreadForPendingRenderer(threadId, bounds);
+        this.activateThreadForPendingRenderer(
+          threadId,
+          bounds,
+          options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
+        );
         return;
       }
     }
     const wasSuspended = activeTab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(threadId, activeTab.id);
-    this.attachRuntime(runtime, bounds);
+    this.attachRuntime(
+      runtime,
+      bounds,
+      options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
+    );
     const shouldLoadProjectedUrl =
       options.forceLoad || (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey));
     if (shouldLoadProjectedUrl) {
@@ -2320,13 +2547,18 @@ export class DesktopBrowserManager {
     }
   }
 
-  private attachRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
+  private attachRuntime(
+    runtime: LiveTabRuntime,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(runtime.threadId),
+  ): void {
     const window = this.window;
+    this.setRuntimePageZoomFactor(runtime, pageZoomFactor);
     if (!window) {
       return;
     }
 
-    const nextBoundsSignature = browserBoundsSignature(bounds);
+    const nextBoundsSignature = browserPresentationSignature(bounds, pageZoomFactor);
     this.runtimeLastActiveAtByKey.set(runtime.key, Date.now());
     // Renderer-owned <webview> runtimes are already visible in React; keep any
     // old native view detached so it cannot cover the real browser surface.
@@ -2347,6 +2579,14 @@ export class DesktopBrowserManager {
       this.enforceBackgroundAutomationRuntimeBudget();
       return;
     }
+    runtime.view.setBorderRadius(pageZoomFactor < 1 ? 12 : 0);
+    void runtime.webContents
+      .executeJavaScript(
+        pageZoomFactor < 1
+          ? floatingBrowserControlsScript(pageZoomFactor)
+          : "document.getElementById('__synara-floating-browser-controls')?.remove()",
+      )
+      .catch(() => undefined);
     if (this.attachedRuntimeKey === runtime.key) {
       this.setRuntimeViewHidden(runtime, false);
       this.bringRuntimeViewToFront(runtime);
@@ -2555,6 +2795,11 @@ export class DesktopBrowserManager {
     });
 
     const beforeMouseEvent = (_event: Electron.Event, input: Electron.MouseInputEvent) => {
+      if (input.type === "mouseUp" && this.floatingDragOverlay) {
+        this.options.onFloatingControl?.({ threadId, action: "drag-end" });
+        this.stopFloatingDragCapture();
+        return;
+      }
       if (
         input.type === "mouseDown" ||
         input.type === "mouseWheel" ||
@@ -2586,6 +2831,52 @@ export class DesktopBrowserManager {
     webContents.on("page-title-updated", pageTitleUpdated);
     runtime.listenerDisposers.push(() => {
       webContents.removeListener("page-title-updated", pageTitleUpdated);
+    });
+
+    const consoleMessage = (
+      details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>,
+    ) => {
+      const message = typeof details.message === "string" ? details.message : "";
+      if (!message.startsWith(FLOATING_BROWSER_CONTROLS_PREFIX)) return;
+      try {
+        const payload = JSON.parse(
+          message.slice(FLOATING_BROWSER_CONTROLS_PREFIX.length),
+        ) as Omit<BrowserFloatingControlEvent, "threadId"> & { action: string };
+        if (payload.action === "drag-start") {
+          this.startFloatingDragCapture(threadId);
+          return;
+        }
+        if (
+          payload.action === "sidebar" ||
+          payload.action === "close" ||
+          payload.action === "drag"
+        ) {
+          this.options.onFloatingControl?.({
+            threadId,
+            action: payload.action,
+            ...("deltaX" in payload ? { deltaX: payload.deltaX } : {}),
+            ...("deltaY" in payload ? { deltaY: payload.deltaY } : {}),
+          });
+        }
+      } catch {
+        // Ignore malformed page messages.
+      }
+    };
+    webContents.on("console-message", consoleMessage);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("console-message", consoleMessage);
+    });
+
+    const injectFloatingControlsAfterNavigation = () => {
+      const zoomFactor = this.getVisiblePageZoomFactor(threadId);
+      if (zoomFactor >= 1) return;
+      void webContents
+        .executeJavaScript(floatingBrowserControlsScript(zoomFactor))
+        .catch(() => undefined);
+    };
+    webContents.on("did-finish-load", injectFloatingControlsAfterNavigation);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-finish-load", injectFloatingControlsAfterNavigation);
     });
 
     const pageFaviconUpdated = (_event: Electron.Event, faviconUrls: string[]) => {
@@ -2628,6 +2919,14 @@ export class DesktopBrowserManager {
       isMainFrame: boolean,
     ) => {
       if (isMainFrame && !_isInPlace) {
+        const state = this.states.get(threadId);
+        const tab = state ? this.getTab(state, tabId) : null;
+        if (state && tab && tab.lastError !== null) {
+          tab.lastError = null;
+          syncThreadLastError(state);
+          this.markThreadStateChanged(threadId);
+          this.emitState(threadId);
+        }
         this.annotations.handleNavigation(threadId, tabId, webContents.id);
       }
     };
@@ -2863,6 +3162,9 @@ export class DesktopBrowserManager {
     if (!runtime) {
       return;
     }
+    // Runtime teardown is also a zoom teardown. This covers tab close, suspension,
+    // renderer handoff, and background-runtime eviction—not just an explicit panel hide.
+    this.setRuntimePageZoomFactor(runtime, 1);
     this.annotations.handleRuntimeDetached(
       threadId,
       tabId,
@@ -2888,6 +3190,7 @@ export class DesktopBrowserManager {
     }
 
     this.runtimes.delete(key);
+    this.runtimePageZoomFactors.delete(key);
     const webContents = runtime.webContents;
     for (const disposeListener of runtime.listenerDisposers.splice(0)) {
       disposeListener();
@@ -3304,10 +3607,6 @@ function syncTabStateFromRuntime(
       setIfChanged(tab.faviconUrl, faviconUrls[0] ?? tab.faviconUrl, (value) => {
         tab.faviconUrl = value;
       }) || didChange;
-  }
-  if (tab.lastError && !tab.isLoading) {
-    tab.lastError = null;
-    didChange = true;
   }
   didChange = syncThreadLastError(state) || didChange;
   return didChange;

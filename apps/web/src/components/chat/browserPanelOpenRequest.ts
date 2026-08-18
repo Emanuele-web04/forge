@@ -7,7 +7,7 @@ interface SingleBrowserPanelOpenRequestInput {
   readonly currentThreadId: ThreadId;
   readonly requestedThreadId: ThreadId;
   readonly requestImmediateBrowserHydration: () => void;
-  readonly openBrowserPane: (threadId: ThreadId) => void;
+  readonly showFloatingBrowser: (threadId: ThreadId) => void;
 }
 
 export function routeSingleBrowserPanelOpenRequest(
@@ -22,13 +22,13 @@ export function routeSingleBrowserPanelOpenRequest(
   // Explicit same-thread requests must not wait for rAF, which Electron may
   // suspend while the app is backgrounded.
   input.requestImmediateBrowserHydration();
-  input.openBrowserPane(input.currentThreadId);
+  input.showFloatingBrowser(input.currentThreadId);
 }
 
 interface SplitBrowserPanelOpenRequestInput {
   readonly splitView: SplitView;
   readonly requestedThreadId: ThreadId;
-  readonly openBrowserPanel: (paneId: PaneId) => void;
+  readonly showFloatingBrowser: (paneId: PaneId) => void;
 }
 
 export function routeSplitBrowserPanelOpenRequest(input: SplitBrowserPanelOpenRequestInput): void {
@@ -37,5 +37,5 @@ export function routeSplitBrowserPanelOpenRequest(input: SplitBrowserPanelOpenRe
     return;
   }
 
-  input.openBrowserPanel(focusedPane.id);
+  input.showFloatingBrowser(focusedPane.id);
 }

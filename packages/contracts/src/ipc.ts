@@ -376,7 +376,11 @@ export interface BrowserPanelBounds {
 export interface BrowserSetPanelBoundsInput {
   threadId: ThreadId;
   bounds: BrowserPanelBounds | null;
+  /** Optional containing surface used to constrain direct native floating-panel movement. */
+  containerBounds?: BrowserPanelBounds | null;
   surface?: "native" | "renderer";
+  /** Guest page zoom for a presentation surface; omitted/1 keeps the normal 100% viewport. */
+  pageZoomFactor?: number;
 }
 
 export interface BrowserAttachWebviewInput extends BrowserTabInput {
@@ -472,6 +476,13 @@ export interface BrowserCopyLinkEvent {
 // visible from stealing the browser session.
 export interface BrowserUseOpenPanelRequest {
   threadId: ThreadId;
+}
+
+export interface BrowserFloatingControlEvent {
+  threadId: ThreadId;
+  action: "drag" | "drag-live" | "drag-end" | "sidebar" | "close";
+  deltaX?: number;
+  deltaY?: number;
 }
 
 interface BrowserControlMethods {
@@ -595,6 +606,7 @@ export interface DesktopBridge {
     onBrowserUseOpenPanelRequest: (
       listener: (request: BrowserUseOpenPanelRequest) => void,
     ) => () => void;
+    onFloatingControl: (listener: (event: BrowserFloatingControlEvent) => void) => () => void;
     onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BROWSER_AUTOMATION_VIEWPORT_WIDTH,
   BROWSER_SEARCH_URL_PREFIX,
   buildAcceptLanguageHeader,
   buildChromeClientHints,
@@ -8,13 +9,32 @@ import {
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
   isLikelyOAuthHost,
+  normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
   isBlankBrowserTabUrl,
+  resolveBrowserFloatingZoomFactor,
   resolveCopyableBrowserTabUrl,
 } from "./browserSession";
 
 const ELECTRON_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Synara/0.3.1 Chrome/124.0.6367.91 Electron/30.0.1 Safari/537.36";
+
+describe("floating browser page zoom", () => {
+  it("fits the canonical 1280px automation viewport into the physical popup width", () => {
+    expect(BROWSER_AUTOMATION_VIEWPORT_WIDTH).toBe(1_280);
+    expect(resolveBrowserFloatingZoomFactor(480)).toBe(0.375);
+    expect(resolveBrowserFloatingZoomFactor(1_280)).toBe(1);
+    expect(resolveBrowserFloatingZoomFactor(1_600)).toBe(1);
+  });
+
+  it("resets invalid or hidden widths to normal page zoom", () => {
+    expect(resolveBrowserFloatingZoomFactor(0)).toBe(1);
+    expect(resolveBrowserFloatingZoomFactor(Number.NaN)).toBe(1);
+    expect(normalizeBrowserPageZoomFactor(undefined)).toBe(1);
+    expect(normalizeBrowserPageZoomFactor(Number.NaN)).toBe(1);
+    expect(normalizeBrowserPageZoomFactor(0.375)).toBe(0.375);
+  });
+});
 
 describe("deriveChromeUserAgent", () => {
   it("strips Electron and app product tokens to leave a vanilla Chrome UA", () => {

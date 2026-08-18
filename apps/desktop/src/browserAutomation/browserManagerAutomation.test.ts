@@ -75,9 +75,72 @@ class FakeWebContents extends EventEmitter {
   canGoForward = () => false;
   close = vi.fn();
   loadURL = vi.fn(() => Promise.resolve());
+  setZoomFactor = vi.fn();
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("uses the floating page zoom for native and renderer guests, then resets it", () => {
+    const nativeWebContents = new FakeWebContents(101);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const nativeManager = new DesktopBrowserManager();
+    nativeManager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    nativeManager.open({ threadId: THREAD_ID });
+    nativeManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 0, width: 480, height: 340 },
+      pageZoomFactor: 0.375,
+    });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.375);
+
+    nativeManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 0, width: 640, height: 340 },
+      pageZoomFactor: 0.5,
+    });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.5);
+
+    nativeManager.hide({ threadId: THREAD_ID });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+    nativeManager.dispose();
+
+    const rendererWebContents = Object.assign(new FakeWebContents(102), {
+      getType: () => "webview",
+      hostWebContents: { id: 41 },
+      session: browserSession,
+      debugger: { isAttached: () => false, detach: vi.fn() },
+    });
+    fromId.mockReturnValue(rendererWebContents);
+    const rendererManager = new DesktopBrowserManager();
+    const state = rendererManager.open({ threadId: THREAD_ID });
+    const tabId = state.activeTabId!;
+    rendererManager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 102 }, 41);
+    rendererManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 0, y: 0, width: 480, height: 340 },
+      pageZoomFactor: 0.375,
+    });
+    expect(rendererWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.375);
+
+    rendererManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    });
+    expect(rendererWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+    rendererManager.dispose();
+  });
+
   it("refuses a detached native fallback and returns an adopted renderer webview", () => {
     const manager = new DesktopBrowserManager();
     const state = manager.open({ threadId: THREAD_ID });

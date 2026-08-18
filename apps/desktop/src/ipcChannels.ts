@@ -56,6 +56,7 @@ export const DESKTOP_IPC_CHANNELS = {
     attachWebview: "desktop:browser-attach-webview",
     detachWebview: "desktop:browser-detach-webview",
     requestOpenPanel: "desktop:browser-use-request-open-panel",
+    floatingControl: "desktop:browser-floating-control",
     copyLink: "desktop:browser-copy-link",
     requestCopyLink: "desktop:browser-request-copy-link",
     copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",

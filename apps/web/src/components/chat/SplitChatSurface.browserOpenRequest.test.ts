@@ -56,22 +56,22 @@ describe("routeSplitBrowserPanelOpenRequest", () => {
     routeSplitBrowserPanelOpenRequest({
       splitView: createSplitView(),
       requestedThreadId: THREAD_B,
-      openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
+      showFloatingBrowser: (paneId) => calls.push(`float:${paneId}`),
     });
 
     expect(calls).toEqual([]);
   });
 
-  it("opens the browser only when the requesting thread is already focused", () => {
+  it("shows the floating browser only when the requesting thread is already focused", () => {
     const calls: string[] = [];
 
     routeSplitBrowserPanelOpenRequest({
       splitView: createSplitView(),
       requestedThreadId: THREAD_A,
-      openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
+      showFloatingBrowser: (paneId) => calls.push(`float:${paneId}`),
     });
 
-    expect(calls).toEqual(["open:pane-a"]);
+    expect(calls).toEqual(["float:pane-a"]);
   });
 
   it("does not replace a pane for a thread outside the split", () => {
@@ -80,7 +80,7 @@ describe("routeSplitBrowserPanelOpenRequest", () => {
     routeSplitBrowserPanelOpenRequest({
       splitView: createSplitView(),
       requestedThreadId: THREAD_C,
-      openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
+      showFloatingBrowser: (paneId) => calls.push(`float:${paneId}`),
     });
 
     expect(calls).toEqual([]);
