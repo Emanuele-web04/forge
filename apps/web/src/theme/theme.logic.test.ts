@@ -292,9 +292,26 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--codex-base-accent"]).toBe("#606acc");
     expect(cssVariables.variables["--background"]).toBe("#0d0d0f");
     expect(cssVariables.variables["--card"]).toBe("#151517");
-    expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.038)");
+    expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.077)");
+    expect(cssVariables.variables["--destructive-foreground"]).toBe("#ff7e78");
+    expect(cssVariables.variables["--success-foreground"]).toBe("#69c967");
+    expect(cssVariables.variables["--warning-foreground"]).toBe("#f5b44a");
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
+  });
+
+  it("uses mode-appropriate semantic colors for foreground text", () => {
+    for (const variant of ["light", "dark"] as const) {
+      const pack = resolveThemePack(DEFAULT_THEME_STATE, variant);
+      const { variables } = buildThemeCssVariables(pack, variant, { electron: false });
+
+      expect(variables["--destructive-foreground"]).toBe(pack.theme.semanticColors.diffRemoved);
+      expect(variables["--success-foreground"]).toBe(pack.theme.semanticColors.diffAdded);
+      expect(variables["--warning-foreground"]).toBe(variables["--warning"]);
+      expect(variables["--destructive-foreground"]).not.toBe(pack.theme.surface);
+      expect(variables["--success-foreground"]).not.toBe(pack.theme.surface);
+      expect(variables["--warning-foreground"]).not.toBe(pack.theme.surface);
+    }
   });
 
   it("exposes a structured derived-token surface for retrieving non-stored colors", () => {
@@ -313,7 +330,7 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
-      "rgba(227, 228, 230, 0.038)",
+      "rgba(227, 228, 230, 0.077)",
     );
     expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(36, 36, 38, 0.96)");
   });

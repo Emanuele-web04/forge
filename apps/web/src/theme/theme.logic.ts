@@ -698,7 +698,7 @@ export function buildThemeCssVariables(
     "--card": readCodexVariable("--color-background-panel"),
     "--card-foreground": readCodexVariable("--color-text-foreground"),
     "--destructive": pack.theme.semanticColors.diffRemoved,
-    "--destructive-foreground": pack.theme.surface,
+    "--destructive-foreground": pack.theme.semanticColors.diffRemoved,
     "--foreground": readCodexVariable("--color-text-foreground"),
     "--info": pack.theme.accent,
     // Keep legacy app-level "info" consumers on Codex's accent-text path so
@@ -721,11 +721,11 @@ export function buildThemeCssVariables(
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
     "--success": pack.theme.semanticColors.diffAdded,
-    "--success-foreground": pack.theme.surface,
+    "--success-foreground": pack.theme.semanticColors.diffAdded,
     "--theme-font-code-family": pack.theme.fonts.code ?? "",
     "--theme-font-ui-family": pack.theme.fonts.ui ?? "",
     "--warning": warningColor,
-    "--warning-foreground": pack.theme.surface,
+    "--warning-foreground": warningColor,
   };
 
   return {
