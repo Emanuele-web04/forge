@@ -67,9 +67,9 @@ it("drags, resizes, and exposes pop/close controls", async () => {
     const rect = panelRect();
     expect({ left: rect.left, top: rect.top, width: rect.width, height: rect.height }).toEqual({
       left: 568,
-      top: 368,
+      top: 388,
       width: 320,
-      height: 220,
+      height: 200,
     });
   });
 
@@ -97,7 +97,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
 
   await vi.waitFor(() => {
     const rect = panelRect();
-    expect({ left: rect.left, top: rect.top }).toEqual({ left: 468, top: 268 });
+    expect({ left: rect.left, top: rect.top }).toEqual({ left: 468, top: 288 });
   });
 
   const southEastHandle = document.querySelector<HTMLElement>("[data-floating-resize-edge='se']");
@@ -109,7 +109,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
 
   await vi.waitFor(() => {
     const rect = panelRect();
-    expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 270 });
+    expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 250 });
   });
 
   dispatchPointer(header, "pointerdown", 700, 380);

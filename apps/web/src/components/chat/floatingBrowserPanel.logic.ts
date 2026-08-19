@@ -26,11 +26,11 @@ export type FloatingBrowserResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "s
 export const FLOATING_BROWSER_PANEL_MARGIN_PX = BROWSER_FLOATING_PANEL_MARGIN_PX;
 export const FLOATING_BROWSER_PANEL_DEFAULT_SIZE: FloatingBrowserPanelSize = {
   width: 320,
-  height: 220,
+  height: 200,
 };
 export const FLOATING_BROWSER_PANEL_MIN_SIZE: FloatingBrowserPanelSize = {
   width: 320,
-  height: 220,
+  height: 200,
 };
 export const FLOATING_BROWSER_PANEL_MAX_SIZE: FloatingBrowserPanelSize = {
   width: 760,

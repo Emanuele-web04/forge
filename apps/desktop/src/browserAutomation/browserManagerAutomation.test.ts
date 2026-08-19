@@ -155,7 +155,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const manager = new DesktopBrowserManager();
     manager.setWindow({
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
-      webContents: { id: 41 },
     } as never);
     const opened = manager.open({ threadId: THREAD_ID });
     manager.setPanelBounds({
@@ -170,28 +169,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       surface: "renderer",
       bounds: { x: 40, y: 80, width: 320, height: 220 },
     });
-    expect(nativeWebContents.close).not.toHaveBeenCalled();
-    expect(nativeView.setBounds).toHaveBeenLastCalledWith({
-      x: -10_000,
-      y: 0,
-      width: 1_280,
-      height: 800,
-    });
-    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+    expect(nativeWebContents.close).toHaveBeenCalled();
     const next = manager.getState({ threadId: THREAD_ID });
     expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe("renderer");
-
-    const rendererWebContents = Object.assign(new FakeWebContents(202), {
-      getType: () => "webview",
-      hostWebContents: { id: 41 },
-      session: browserSession,
-    });
-    fromId.mockReturnValue(rendererWebContents);
-    manager.attachWebview(
-      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
-      41,
-    );
-    expect(nativeWebContents.close).toHaveBeenCalled();
     manager.dispose();
   });
 

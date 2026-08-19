@@ -13,9 +13,9 @@ describe("floating browser panel geometry", () => {
   it("starts compact in the bottom-right of its host", () => {
     expect(initialFloatingBrowserPanelRect({ width: 1_000, height: 700 })).toEqual({
       left: 668,
-      top: 468,
+      top: 488,
       width: 320,
-      height: 220,
+      height: 200,
     });
   });
 
@@ -43,7 +43,7 @@ describe("floating browser panel geometry", () => {
       { width: 1_000, height: 700 },
     );
 
-    expect(resized).toEqual({ left: 360, top: 300, width: 320, height: 220 });
+    expect(resized).toEqual({ left: 360, top: 320, width: 320, height: 200 });
     expect(resized.left + resized.width).toBe(680);
     expect(resized.top + resized.height).toBe(520);
   });

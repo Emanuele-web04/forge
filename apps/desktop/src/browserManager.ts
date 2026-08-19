@@ -447,7 +447,6 @@ export class DesktopBrowserManager {
   private readonly runtimes = new Map<string, LiveTabRuntime>();
   private readonly runtimePageZoomFactors = new Map<string, number>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
-  private readonly crashedTabRuntimeKeys = new Set<string>();
   private readonly automationRuntimeKeys = new Set<string>();
   private readonly automationRuntimeProtectedUntilByKey = new Map<string, number>();
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
@@ -1413,7 +1412,6 @@ export class DesktopBrowserManager {
     });
     this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
-    this.crashedTabRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = state.tabs.filter((candidate) => candidate.id !== input.tabId);
     if (state.activeTabId === input.tabId) {
@@ -1503,11 +1501,9 @@ export class DesktopBrowserManager {
     const existingState = this.states.get(input.threadId);
     this.destroyThreadRuntimes(input.threadId);
     for (const tab of existingState?.tabs ?? []) {
-      const runtimeKey = buildRuntimeKey(input.threadId, tab.id);
       this.annotations.clearProjection(input.threadId, tab.id);
-      this.rendererOnlyRuntimeKeys.delete(runtimeKey);
-      this.crashedTabRuntimeKeys.delete(runtimeKey);
-      this.automationRuntimeKeys.delete(runtimeKey);
+      this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
+      this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
     }
 
     const state = this.getOrCreateState(input.threadId);
@@ -1586,14 +1582,18 @@ export class DesktopBrowserManager {
       activeRuntimeKey &&
       activeRuntime?.ownsWebContents
     ) {
+      this.destroyRuntime(input.threadId, activeTabId);
       const activeTab = this.getTab(state, activeTabId);
       if (activeTab) {
         activeTab.runtimeSurface = "renderer";
+        suspendTabState(activeTab);
         this.markThreadStateChanged(input.threadId);
         this.emitState(input.threadId);
       }
-      this.parkNativeRuntimeForRendererHandoff(activeRuntime);
-      this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
+      this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
+      this.attachedRuntimeKey = null;
+      this.attachedBoundsSignature = null;
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
       return;
     }
 
@@ -1726,9 +1726,9 @@ export class DesktopBrowserManager {
     }
 
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
-    const adoptedUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const requiresLocalPreviewBootstrap =
-      isLocalFileUrl(expectedUrl) && adoptedUrl !== expectedUrl;
+      isLocalFileUrl(expectedUrl) &&
+      this.sessionPolicy.resolveDisplayUrl(webContents.getURL()) !== expectedUrl;
     if (requiresLocalPreviewBootstrap) {
       void this.loadTab(input.threadId, tab.id, {
         force: true,
@@ -1737,15 +1737,9 @@ export class DesktopBrowserManager {
       return this.snapshotThreadState(input.threadId, state);
     }
 
-    const adoptedSuccessfully =
-      !webContents.isLoading() && Boolean(adoptedUrl) && adoptedUrl !== ABOUT_BLANK_URL;
-    const recoveringFromCrash = this.crashedTabRuntimeKeys.delete(key);
-    const shouldClearLastError = adoptedSuccessfully || recoveringFromCrash;
-    const didChange = tab.status !== LIVE_TAB_STATUS || (shouldClearLastError && tab.lastError !== null);
+    const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
     tab.status = LIVE_TAB_STATUS;
-    if (shouldClearLastError) {
-      tab.lastError = null;
-    }
+    tab.lastError = null;
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(input.threadId);
@@ -1886,7 +1880,6 @@ export class DesktopBrowserManager {
     this.destroyRuntime(input.threadId, input.tabId);
     this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
-    this.crashedTabRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = nextTabs;
 
@@ -2044,24 +2037,6 @@ export class DesktopBrowserManager {
     this.updatePopupWindowsForThread(threadId);
   }
 
-  // Keep the native WebContents alive until attachWebview adopts the renderer guest.
-  // Destroying it here would reload the page and lose in-memory layout.
-  private parkNativeRuntimeForRendererHandoff(runtime: LiveTabRuntime): void {
-    this.rendererOnlyRuntimeKeys.add(runtime.key);
-    if (this.attachedRuntimeKey === runtime.key) {
-      this.attachedRuntimeKey = null;
-      this.attachedBoundsSignature = null;
-    }
-    if (!runtime.ownsWebContents || !runtime.view) {
-      return;
-    }
-    // Keep the canonical 1280x800 guest layout while the renderer webview attaches.
-    // Hiding at 0x0 would reflow the live page before the handoff completes.
-    runtime.view.setBounds({ ...BACKGROUND_AUTOMATION_BOUNDS });
-    const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
-    nativeView.setVisible?.(false);
-  }
-
   // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
   // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
   private activateThreadForPendingRenderer(
@@ -2167,9 +2142,7 @@ export class DesktopBrowserManager {
       if (this.rendererOnlyRuntimeKeys.has(runtimeKey)) {
         const rendererRuntime = this.runtimes.get(runtimeKey);
         if (!rendererRuntime || rendererRuntime.ownsWebContents) {
-          if (rendererRuntime?.ownsWebContents) {
-            this.parkNativeRuntimeForRendererHandoff(rendererRuntime);
-          }
+          if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, tab.id);
           continue;
         }
       }
@@ -2433,9 +2406,7 @@ export class DesktopBrowserManager {
     if (this.rendererOnlyRuntimeKeys.has(runtimeKey)) {
       const rendererRuntime = this.runtimes.get(runtimeKey);
       if (!rendererRuntime || rendererRuntime.ownsWebContents) {
-        if (rendererRuntime?.ownsWebContents) {
-          this.parkNativeRuntimeForRendererHandoff(rendererRuntime);
-        }
+        if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, activeTab.id);
         this.activateThreadForPendingRenderer(
           threadId,
           bounds,
@@ -2851,7 +2822,6 @@ export class DesktopBrowserManager {
         tab.status = "suspended";
         tab.isLoading = false;
         tab.lastError = "This tab stopped unexpectedly.";
-        this.crashedTabRuntimeKeys.add(buildRuntimeKey(threadId, tabId));
         syncThreadLastError(state);
         this.markThreadStateChanged(threadId);
         this.emitState(threadId);
