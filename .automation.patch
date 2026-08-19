@@ -1,0 +1,147 @@
+diff --git a/apps/server/src/provider/acp/AcpSessionRuntime.ts b/apps/server/src/provider/acp/AcpSessionRuntime.ts
+--- a/apps/server/src/provider/acp/AcpSessionRuntime.ts
++++ b/apps/server/src/provider/acp/AcpSessionRuntime.ts
+@@ -1,5 +1,5 @@
+ // FILE: AcpSessionRuntime.ts
+-// Purpose: Owns one authenticated ACP process, session setup, configuration, and event stream.
++// Purpose: Owns one ACP process, optional authentication, session setup, configuration, and events.
+ // Layer: Provider ACP runtime
+ // Exports: AcpSessionRuntime and its typed runtime factory contracts.
+ 
+@@ -187,7 +187,13 @@ export interface AcpSessionRuntimeOptions {
+   readonly authMethodId?: string;
+   readonly resolveAuthMethodId?: (
+     initializeResult: Acp.InitializeResponse,
+-  ) => Effect.Effect<string, AcpErrors.AcpError>;
++  ) => Effect.Effect<string | undefined, AcpErrors.AcpError>;
++  /**
++   * Whether startup requires an ACP authentication method. Existing concrete
++   * providers stay strict by default; agents such as Copilot BYOK may omit
++   * `authMethods` when they do not need client-driven authentication.
++   */
++  readonly authentication?: "required" | "when-advertised";
+   /**
+    * MCP servers to attach to the session. Invoked after `initialize` so the
+    * builder can pick a transport based on the agent's advertised
+@@ -1054,28 +1060,30 @@ const makeAcpSessionRuntime = (
+           ? yield* options.resolveAuthMethodId(initializeResult)
+           : options.authMethodId;
+ 
+-      if (!authMethodId) {
++      if (!authMethodId && options.authentication !== "when-advertised") {
+         return yield* new AcpErrors.AcpRequestError({
+           code: -32602,
+           errorMessage: "ACP agent did not provide an authentication method.",
+           data: { authMethods: initializeResult.authMethods ?? [] },
+         });
+       }
+ 
+-      const authenticatePayload = {
+-        methodId: authMethodId,
+-        ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
+-      } satisfies Acp.AuthenticateRequest;
++      if (authMethodId) {
++        const authenticatePayload = {
++          methodId: authMethodId,
++          ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
++        } satisfies Acp.AuthenticateRequest;
+ 
+-      yield* withStartupTimeout(
+-        "authenticate",
+-        startupTimeouts.authenticateMs,
+-        runLoggedRequest(
++        yield* withStartupTimeout(
+           "authenticate",
+-          authenticatePayload,
+-          acp.agent.authenticate(authenticatePayload),
+-        ),
+-      );
++          startupTimeouts.authenticateMs,
++          runLoggedRequest(
++            "authenticate",
++            authenticatePayload,
++            acp.agent.authenticate(authenticatePayload),
++          ),
++        );
++      }
+ 
+       const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+diff --git a/apps/server/src/provider/acp/CopilotAcpSupport.ts b/apps/server/src/provider/acp/CopilotAcpSupport.ts
+--- a/apps/server/src/provider/acp/CopilotAcpSupport.ts
++++ b/apps/server/src/provider/acp/CopilotAcpSupport.ts
+@@ -23,7 +23,7 @@ export interface CopilotAcpRuntimeSettings {
+ 
+ export interface CopilotAcpRuntimeInput extends Omit<
+   AcpSessionRuntimeOptions,
+-  "authMethodId" | "resolveAuthMethodId" | "spawn"
++  "authMethodId" | "resolveAuthMethodId" | "authentication" | "spawn"
+ > {
+   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+   readonly copilotSettings: CopilotAcpRuntimeSettings | null | undefined;
+@@ -57,30 +57,17 @@ export function buildCopilotAcpSpawnInput(
+ /**
+  * Let the agent advertise the authentication methods it supports and select its
+- * first preferred method. Synara should not hard-code GitHub's evolving login
+- * mechanism into the ACP transport layer.
++ * first preferred method when authentication is required. Copilot ACP can run
++ * with BYOK and no GitHub login, so absence of authMethods is valid.
+  */
+ export const resolveCopilotAcpAuthMethodId = (
+   initializeResult: Acp.InitializeResponse,
+-): Effect.Effect<string, AcpErrors.AcpError> =>
+-  Effect.gen(function* () {
+-    const authMethodIds = (initializeResult.authMethods ?? [])
+-      .map((method) => method.id.trim())
+-      .filter((id) => id.length > 0);
+-    const authMethodId = authMethodIds[0];
+-    if (authMethodId) {
+-      return authMethodId;
+-    }
+-
+-    return yield* new AcpErrors.AcpRequestError({
+-      code: -32602,
+-      errorMessage: "GitHub Copilot CLI did not advertise an ACP authentication method.",
+-      data: {
+-        authMethods: initializeResult.authMethods ?? [],
+-        detail: "Run `copilot` and complete sign-in before starting a Synara Copilot session.",
+-      },
+-    });
+-  });
++): Effect.Effect<string | undefined> =>
++  Effect.succeed(
++    (initializeResult.authMethods ?? []).map((method) => method.id.trim()).find(Boolean),
++  );
+ 
+ export const makeCopilotAcpRuntime = (
+   input: CopilotAcpRuntimeInput,
+@@ -91,6 +78,7 @@ export const makeCopilotAcpRuntime = (
+         ...input,
+         spawn: buildCopilotAcpSpawnInput(input.copilotSettings, input.cwd),
+         resolveAuthMethodId: resolveCopilotAcpAuthMethodId,
++        authentication: "when-advertised",
+       }).pipe(
+         Layer.provide(
+           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+diff --git a/apps/server/src/provider/acp/CopilotAcpSupport.test.ts b/apps/server/src/provider/acp/CopilotAcpSupport.test.ts
+--- a/apps/server/src/provider/acp/CopilotAcpSupport.test.ts
++++ b/apps/server/src/provider/acp/CopilotAcpSupport.test.ts
+@@ -49,18 +49,11 @@ describe("resolveCopilotAcpAuthMethodId", () => {
+     expect(methodId).toBe("github-login");
+   });
+ 
+-  it("fails with an actionable error when the ACP server advertises no auth method", async () => {
+-    const error = await Effect.runPromise(
+-      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
++  it("allows BYOK sessions when Copilot advertises no client-driven auth method", async () => {
++    const methodId = await Effect.runPromise(
++      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])),
+     );
+-
+-    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+-    if (error._tag !== "AcpRequestError") {
+-      throw error;
+-    }
+-    expect(error.errorMessage).toContain("did not advertise an ACP authentication method");
++    expect(methodId).toBeUndefined();
+   });
+ });
