@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport.ts";
 import {
   applyGrokAcpModelSelection,
+  buildGrokAcpSessionMeta,
   buildGrokAcpSpawnInput,
   isGrokSessionStoragePathNotFoundError,
   resolveGrokAcpAuthMethodId,
@@ -104,6 +105,31 @@ describe("buildGrokAcpSpawnInput", () => {
       "--always-approve",
       "stdio",
     ]);
+  });
+});
+
+describe("buildGrokAcpSessionMeta", () => {
+  it("omits _meta when there are no hooks and no effort", () => {
+    expect(buildGrokAcpSessionMeta({})).toBeUndefined();
+    expect(buildGrokAcpSessionMeta({ reasoningEffort: "   " })).toBeUndefined();
+  });
+
+  it("preserves Synara hook metadata and adds extra-high effort for ACP session setup", () => {
+    expect(
+      buildGrokAcpSessionMeta({
+        base: {
+          "x.ai/hooks": {
+            PreToolUse: [{ matcher: "*", hookCallbackIds: ["synara-plan-guard"] }],
+          },
+        },
+        reasoningEffort: "xhigh",
+      }),
+    ).toEqual({
+      "x.ai/hooks": {
+        PreToolUse: [{ matcher: "*", hookCallbackIds: ["synara-plan-guard"] }],
+      },
+      reasoningEffort: "xhigh",
+    });
   });
 });
 

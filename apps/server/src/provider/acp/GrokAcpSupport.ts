@@ -129,6 +129,24 @@ export function buildGrokAcpSpawnInput(
   };
 }
 
+/**
+ * Grok 1.0+ reads reasoning effort from session/new, session/load, and
+ * session/resume `_meta.reasoningEffort`. `session/load` ignores the
+ * `--reasoning-effort` process flag, so ACP clients must send the value here
+ * or a resumed thread keeps its previous effort.
+ */
+export function buildGrokAcpSessionMeta(input: {
+  readonly base?: Record<string, unknown>;
+  readonly reasoningEffort?: string | null | undefined;
+}): Record<string, unknown> | undefined {
+  const reasoningEffort = input.reasoningEffort?.trim();
+  const meta = {
+    ...(input.base ?? {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
 function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
   return new Set(
     (initializeResult.authMethods ?? [])
@@ -194,10 +212,15 @@ export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const sessionMeta = buildGrokAcpSessionMeta({
+      ...(input.sessionMeta ? { base: input.sessionMeta } : {}),
+      reasoningEffort: input.grokSettings?.reasoningEffort,
+    });
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
+        ...(sessionMeta ? { sessionMeta } : {}),
         resolveAuthMethodId: resolveGrokAcpAuthMethodId,
         authenticateMeta: { headless: true },
         freshSessionRetry: {
@@ -223,8 +246,8 @@ export function applyGrokAcpModelSelection<E>(input: {
   readonly mapError: (context: GrokAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   void input;
-  // Grok ACP 0.1.210 advertises models in initialize/session responses but does
-  // not implement `session/set_config_option`. Model and effort are therefore
-  // process-start settings supplied by `buildGrokAcpSpawnInput`.
+  // Grok ACP still does not implement `session/set_config_option`. Model and
+  // effort are process-start settings: CLI `-m` / `--reasoning-effort` plus
+  // `session/*` `_meta.reasoningEffort` from `buildGrokAcpSessionMeta`.
   return Effect.void;
 }
