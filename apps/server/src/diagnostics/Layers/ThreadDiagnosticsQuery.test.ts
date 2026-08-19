@@ -72,7 +72,10 @@ layer("ThreadDiagnosticsQuery", (it) => {
       });
       assert.equal(incidents.length, 1);
       assert.equal(incidents[0]?.code, "THREAD_STREAM_CAPACITY_EXCEEDED");
-      assert.deepEqual(incidents[0]?.detail, { reason: "thread-capacity", activeThreads: 16 });
+      assert.deepEqual(incidents[0]?.detail, {
+        reason: "thread-capacity",
+        activeThreads: 16,
+      });
     }),
   );
 });
