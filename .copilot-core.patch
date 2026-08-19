@@ -1,0 +1,170 @@
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -63,6 +63,7 @@ export const ProviderKind = Schema.Literals([
+   "kilo",
+   "opencode",
+   "pi",
++  "copilot",
+ ]);
+@@ -144,6 +145,12 @@ export const PiModelSelection = Schema.Struct({
+ });
+ export type PiModelSelection = typeof PiModelSelection.Type;
+ 
++export const CopilotModelSelection = Schema.Struct({
++  provider: Schema.Literal("copilot"),
++  model: TrimmedNonEmptyString,
++});
++export type CopilotModelSelection = typeof CopilotModelSelection.Type;
++
+ export const ModelSelection = Schema.Union([
+@@ -154,6 +161,7 @@ export const ModelSelection = Schema.Union([
+   KiloModelSelection,
+   OpenCodeModelSelection,
+   PiModelSelection,
++  CopilotModelSelection,
+ ]);
+@@ -201,6 +209,10 @@ export const PiProviderStartOptions = Schema.Struct({
+   agentDir: Schema.optional(TrimmedNonEmptyString),
+ });
+ 
++export const CopilotProviderStartOptions = Schema.Struct({
++  binaryPath: Schema.optional(TrimmedNonEmptyString),
++});
++
+ export const ProviderStartOptions = Schema.Struct({
+@@ -211,6 +223,7 @@ export const ProviderStartOptions = Schema.Struct({
+   kilo: Schema.optional(KiloProviderStartOptions),
+   opencode: Schema.optional(OpenCodeProviderStartOptions),
+   pi: Schema.optional(PiProviderStartOptions),
++  copilot: Schema.optional(CopilotProviderStartOptions),
+ });
+diff --git a/packages/contracts/src/model.ts b/packages/contracts/src/model.ts
+--- a/packages/contracts/src/model.ts
++++ b/packages/contracts/src/model.ts
+@@ -826,6 +826,20 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
+   ],
+   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
+   pi: [],
++  // Copilot advertises its real account-specific model catalog over ACP.
++  copilot: [
++    {
++      slug: "default",
++      name: "Copilot default",
++      capabilities: {
++        reasoningEffortLevels: [],
++        supportsFastMode: false,
++        supportsThinkingToggle: false,
++        promptInjectedEffortLevels: [],
++        contextWindowOptions: [],
++      },
++    },
++  ],
+   cursor: [
+@@ -1065,6 +1079,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
+   droid: "claude-opus-4-8",
+   kilo: "kilo/kilo-auto/free",
+   opencode: "openai/gpt-5",
++  copilot: "default",
+ };
+@@ -1205,6 +1220,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
+   kilo: {},
+   opencode: {},
+   pi: {},
++  copilot: {},
+ };
+@@ -1246,6 +1262,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
+   kilo: "Kilo",
+   opencode: "OpenCode",
+   pi: "Pi",
++  copilot: "GitHub Copilot",
+ };
+diff --git a/packages/contracts/src/settings.ts b/packages/contracts/src/settings.ts
+--- a/packages/contracts/src/settings.ts
++++ b/packages/contracts/src/settings.ts
+@@ -79,6 +79,12 @@ export const PiServerProviderSettings = Schema.Struct({
+ });
+ export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
+ 
++export const CopilotServerProviderSettings = Schema.Struct({
++  ...ProviderSettingsBase,
++  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "copilot")),
++});
++export type CopilotServerProviderSettings = typeof CopilotServerProviderSettings.Type;
++
+ const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
+@@ -111,6 +117,7 @@ export const ServerSettings = Schema.Struct({
+     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
++    copilot: CopilotServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+   }).pipe(Schema.withDecodingDefault(() => ({}))),
+@@ -190,6 +197,7 @@ export const ServerSettingsPatch = Schema.Struct({
+           agentDir: Schema.optionalKey(StringSetting),
+         }),
+       ),
++      copilot: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+     }),
+   ),
+diff --git a/packages/shared/src/providerMetadata.ts b/packages/shared/src/providerMetadata.ts
+--- a/packages/shared/src/providerMetadata.ts
++++ b/packages/shared/src/providerMetadata.ts
+@@ -94,6 +94,13 @@ export const PROVIDER_DESCRIPTORS = [
+     supportsNativeTurnSteering: true,
+     usage: null,
+   },
++  {
++    kind: "copilot",
++    displayName: PROVIDER_DISPLAY_NAMES.copilot,
++    available: true,
++    supportsNativeTurnSteering: false,
++    usage: null,
++  },
+ ] as const satisfies readonly ProviderDescriptor[];
+diff --git a/packages/shared/src/serverSettings.ts b/packages/shared/src/serverSettings.ts
+--- a/packages/shared/src/serverSettings.ts
++++ b/packages/shared/src/serverSettings.ts
+@@ -84,5 +84,8 @@ export function providerStartOptionsFromServerSettings(
+       ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
+       ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
+     },
++    copilot: {
++      ...(providers.copilot.binaryPath ? { binaryPath: providers.copilot.binaryPath } : {}),
++    },
+   };
+ }
+diff --git a/apps/server/src/provider/Layers/ProviderAdapterRegistry.ts b/apps/server/src/provider/Layers/ProviderAdapterRegistry.ts
+--- a/apps/server/src/provider/Layers/ProviderAdapterRegistry.ts
++++ b/apps/server/src/provider/Layers/ProviderAdapterRegistry.ts
+@@ -24,6 +24,7 @@ import { KiloAdapter } from "../Services/KiloAdapter.ts";
+ import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
+ import { PiAdapter } from "../Services/PiAdapter.ts";
+ import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
++import { CopilotAdapter } from "../Services/CopilotAdapter.ts";
+@@ -44,6 +45,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
+             yield* KiloAdapter,
+             yield* OpenCodeAdapter,
+             yield* PiAdapter,
++            yield* CopilotAdapter,
+           ];
+diff --git a/apps/server/src/provider/runtimeLayer.ts b/apps/server/src/provider/runtimeLayer.ts
+--- a/apps/server/src/provider/runtimeLayer.ts
++++ b/apps/server/src/provider/runtimeLayer.ts
+@@ -17,6 +17,7 @@ import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
+ import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
+ import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
+ import { makePiAdapterLive } from "./Layers/PiAdapter";
++import { makeCopilotAdapterLive } from "./Layers/CopilotAdapter";
+@@ -83,6 +84,7 @@ export function makeServerProviderLayer(
+     const piAdapterLayer = makePiAdapterLive(
+       nativeEventLogger ? { nativeEventLogger } : undefined,
+     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
++    const copilotAdapterLayer = makeCopilotAdapterLive();
+     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
+@@ -93,6 +95,7 @@ export function makeServerProviderLayer(
+       Layer.provide(kiloAdapterLayer),
+       Layer.provide(openCodeAdapterLayer),
+       Layer.provide(piAdapterLayer),
++      Layer.provide(copilotAdapterLayer),
+       Layer.provideMerge(providerSessionDirectoryLayer),
+     );
