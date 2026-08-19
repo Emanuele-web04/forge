@@ -64,7 +64,10 @@ export const PROVIDER_DESCRIPTORS = [
     displayName: PROVIDER_DISPLAY_NAMES.grok,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "grok login",
+      learnMoreHref: "https://grok.com/?_s=usage",
+    },
   },
   {
     kind: "droid",

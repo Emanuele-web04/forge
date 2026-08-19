@@ -1,9 +1,11 @@
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
+import { formatUsd } from "./parse.ts";
 import { parseClaudeUsage } from "./providers/claude.ts";
 import { parseCodexUsage } from "./providers/codex.ts";
 import { parseCursorUsage } from "./providers/cursor.ts";
+import { parseGrokUsage } from "./providers/grok.ts";
 
 const NOW_MS = 1_738_000_000_000;
 
@@ -99,5 +101,104 @@ describe("parseCursorUsage", () => {
     expect(usageLine(snapshot, "On-demand")?.value).toContain("60.00");
     // remaining = (5000 - 1200) / 100 = $38.00 of $50.00
     expect(usageLine(snapshot, "Credits")?.value).toContain("38.00");
+  });
+});
+
+const GROK_WEEKLY_START = "2026-08-17T23:14:37.093714+00:00";
+const GROK_WEEKLY_END = "2026-08-24T23:14:37.093714+00:00";
+const GROK_WEEKLY_RESETS_AT = new Date(GROK_WEEKLY_END).toISOString();
+
+function grokWeeklyBilling(config: Record<string, unknown> = {}) {
+  return {
+    config: {
+      currentPeriod: {
+        type: "USAGE_PERIOD_TYPE_WEEKLY",
+        start: GROK_WEEKLY_START,
+        end: GROK_WEEKLY_END,
+      },
+      creditUsagePercent: 44,
+      onDemandCap: { val: 0 },
+      onDemandUsed: { val: 0 },
+      prepaidBalance: { val: 0 },
+      isUnifiedBillingUser: true,
+      billingPeriodEnd: GROK_WEEKLY_END,
+      ...config,
+    },
+  };
+}
+
+describe("parseGrokUsage", () => {
+  it("maps a weekly Heavy snapshot without zero-value extra lines", () => {
+    const snapshot = parseGrokUsage({
+      billing: grokWeeklyBilling(),
+      planName: "SuperGrok Heavy",
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.provider).toBe("grok");
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.planName).toBe("SuperGrok Heavy");
+    expect(limit(snapshot, "Weekly")?.usedPercent).toBe(44);
+    expect(limit(snapshot, "Weekly")?.windowDurationMins).toBe(10_080);
+    expect(limit(snapshot, "Weekly")?.resetsAt).toBe(GROK_WEEKLY_RESETS_AT);
+    expect(usageLine(snapshot, "Credits")).toBeUndefined();
+    expect(usageLine(snapshot, "On-demand")).toBeUndefined();
+  });
+
+  it("formats extra credits and on-demand amounts from cents", () => {
+    const snapshot = parseGrokUsage({
+      billing: grokWeeklyBilling({
+        prepaidBalance: { val: 1_250 },
+        onDemandCap: { val: 5_000 },
+        onDemandUsed: { val: 300 },
+      }),
+      planName: "SuperGrok Heavy",
+      nowMs: NOW_MS,
+    });
+
+    const credits = usageLine(snapshot, "Credits");
+    const onDemand = usageLine(snapshot, "On-demand");
+    expect(credits?.value).toContain(formatUsd(12.5));
+    expect(onDemand?.value).toContain(formatUsd(3));
+    expect(onDemand?.value).toContain(formatUsd(50));
+  });
+
+  it("treats a weekly period without creditUsagePercent as 0% used", () => {
+    const config = { ...grokWeeklyBilling().config };
+    delete (config as { creditUsagePercent?: number }).creditUsagePercent;
+    const snapshot = parseGrokUsage({
+      billing: { config },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(limit(snapshot, "Weekly")?.usedPercent).toBe(0);
+    expect(limit(snapshot, "Weekly")?.resetsAt).toBe(GROK_WEEKLY_RESETS_AT);
+  });
+
+  it("keeps a display-ready planName", () => {
+    const snapshot = parseGrokUsage({
+      billing: grokWeeklyBilling(),
+      planName: "SuperGrok Heavy",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.planName).toBe("SuperGrok Heavy");
+  });
+
+  it("maps compact plan aliases to SuperGrok Heavy", () => {
+    expect(
+      parseGrokUsage({
+        billing: grokWeeklyBilling(),
+        planName: "heavy",
+        nowMs: NOW_MS,
+      }).planName,
+    ).toBe("SuperGrok Heavy");
+    expect(
+      parseGrokUsage({
+        billing: grokWeeklyBilling(),
+        planName: "supergrokheavy",
+        nowMs: NOW_MS,
+      }).planName,
+    ).toBe("SuperGrok Heavy");
   });
 });
