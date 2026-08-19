@@ -25,13 +25,29 @@ jobs:
       - run: bun install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      - run: python .automation.py
-      - run: |
-          rm -f .automation.py .github/workflows/branch-worker.yml
-          bun run fmt
-      - run: |
+      - name: Transform and diagnose
+        shell: bash
+        run: |
+          set +e
+          python .automation.py > /tmp/automation.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            git reset --hard HEAD
+            cp /tmp/automation.log .automation-error.log
+            echo "failed" > .automation-result
+          else
+            rm -f .automation.py .automation-touch .automation-error.log
+            echo "success" > .automation-result
+            bun run fmt >> /tmp/automation.log 2>&1
+            rm -f .github/workflows/branch-worker.yml
+          fi
+      - name: Commit result
+        run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "feat(provider): wire GitHub Copilot as a first-class provider"
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore: record Copilot wiring worker result"
           git push
