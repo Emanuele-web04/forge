@@ -57,6 +57,9 @@ describe("resolveCopilotAcpAuthMethodId", () => {
     );
 
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+    if (error._tag !== "AcpRequestError") {
+      throw error;
+    }
     expect(error.errorMessage).toContain("did not advertise an ACP authentication method");
   });
 });
@@ -147,6 +150,9 @@ describe("discoverCopilotAcpModels", () => {
     );
 
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+    if (error._tag !== "AcpRequestError") {
+      throw error;
+    }
     expect(error.errorMessage).toContain("did not advertise a model configuration option");
   });
 });
