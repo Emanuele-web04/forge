@@ -6,10 +6,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import type {
-  ProviderListModelsResult,
-  ProviderModelDescriptor,
-} from "@synara/contracts";
+import type { ProviderListModelsResult, ProviderModelDescriptor } from "@synara/contracts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import {
