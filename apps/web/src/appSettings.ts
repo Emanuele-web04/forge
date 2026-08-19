@@ -218,6 +218,12 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Local-only UI preference: let side panels (browser, diff, terminal, file, git, side
+  // chat) take the full window width. Off keeps the composer feasibility clamp that stops a
+  // drag as soon as the chat column can no longer render its composer, so the widest a panel
+  // can get is "chat still usable". On, the dock opens at full width and can be dragged edge
+  // to edge, collapsing the chat column out of view.
+  allowFullWidthPanels: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
