@@ -578,6 +578,41 @@ describe("synara_create_kanban_task", () => {
     const payload = jsonText(result) as { __errorText?: string };
     expect(payload.__errorText).toContain("creation failed");
   });
+
+  it("rejects concurrent writes past the per-caller in-flight cap", async () => {
+    const createdThread = makeSessionShell("thread-created", "project-a");
+    // Block runCreateThreads until every slot-holder is released, so the
+    // in-flight count stays at the cap while the over-cap call arrives.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools } = makeTools({
+      threads: [createdThread],
+      projects: [makeProjectShell("project-a", "Project A")],
+      runCreateThreads: () => Effect.promise(() => held.then(() => mcpOk({}))),
+    });
+    const tool = toolById(tools, "synara_create_kanban_task");
+    const args = { title: "Fix bug" };
+
+    // Fire 4 held calls (filling the cap) plus a 5th that must be rejected.
+    const heldResults = [
+      runHandler(tool, { ...args, requestId: "req-a" }),
+      runHandler(tool, { ...args, requestId: "req-b" }),
+      runHandler(tool, { ...args, requestId: "req-c" }),
+      runHandler(tool, { ...args, requestId: "req-d" }),
+    ];
+    // Yield so the held calls enter runCreateThreads and hold their slots.
+    await Promise.resolve();
+    const overCap = await runHandler(tool, { ...args, requestId: "req-e" });
+    expect(overCap.isError).toBe(true);
+    const overCapPayload = jsonText(overCap) as { __errorText?: string };
+    expect(overCapPayload.__errorText).toContain("Too many concurrent kanban write calls");
+
+    // Release the held calls so they settle and the process can exit.
+    release();
+    await Promise.allSettled(heldResults);
+  });
 });
 
 describe("synara_move_kanban_card", () => {

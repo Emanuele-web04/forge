@@ -28,7 +28,7 @@ import {
   readStringArg,
   ToolInputError,
 } from "./toolInput.ts";
-import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry } from "./toolRuntime.ts";
+import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry, type ToolContext } from "./toolRuntime.ts";
 import { summarizeThreadShell } from "./threadSummary.ts";
 
 /**
@@ -174,6 +174,81 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     interruptTurn,
   } = helpers;
 
+  /**
+   * Per-caller in-flight cap on kanban write tools (create/move). Each is a
+   * turn dispatch that spins up provider work; without a bound one agent could
+   * fan out unbounded concurrent dispatches from a single turn. The guard is
+   * per process-local session (an agent runs in one server process), rejects
+   * over the cap with a visible error rather than queuing, and is best-effort:
+   * a caller that keeps retrying after rejection still advances its own turn.
+   */
+  const MAX_CONCURRENT_KANBAN_WRITES_PER_CALLER = 4;
+  const inFlightWrites = new Map<string, number>();
+
+  /**
+   * Audit every kanban tool call: structured log with the tool name, the
+   * calling session, and the outcome (error vs. success). On success it also
+   * surfaces a couple of operationally-useful signals pulled from the MCP
+   * result text (board truncation, dispatched column) so board saturation and
+   * move patterns are observable without parsing JSON-RPC traffic by hand.
+   * The result is returned unchanged.
+   */
+  function withKanbanToolAudit(
+    toolName: string,
+    run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
+  ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
+    return (args, context) =>
+      run(args, context).pipe(
+        Effect.tap((result) => {
+          const textContent = result.content[0];
+          const payload = textContent?.type === "text" ? textContent.text : "";
+          const truncated = payload.includes('"truncated":true');
+          const outcome = result.isError
+            ? "error"
+            : truncated
+              ? "truncated"
+              : "ok";
+          return Effect.logInfo("agent_gateway.kanban_tool", {
+            tool: toolName,
+            callerSessionKey: context.callerSessionKey,
+            callerThreadId: context.callerThreadId,
+            outcome,
+          });
+        }),
+      );
+  }
+
+  /**
+   * Bound concurrent kanban write dispatches per caller. Acquires a slot
+   * before the write runs and releases it on success, failure, or interrupt.
+   * Over the cap the call fails fast with a tool error instead of dispatching
+   * more provider work.
+   */
+  function withKanbanWriteConcurrencyGuard(
+    run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
+  ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
+    return (args, context) =>
+      Effect.gen(function* () {
+        const sessionKey = context.callerSessionKey;
+        const active = inFlightWrites.get(sessionKey) ?? 0;
+        if (active >= MAX_CONCURRENT_KANBAN_WRITES_PER_CALLER) {
+          return mcpToolResultError(
+            `Too many concurrent kanban write calls (${active}) from this session; wait for in-flight create/move calls to settle.`,
+          );
+        }
+        inFlightWrites.set(sessionKey, active + 1);
+        return yield* run(args, context).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              const next = (inFlightWrites.get(sessionKey) ?? 1) - 1;
+              if (next <= 0) inFlightWrites.delete(sessionKey);
+              else inFlightWrites.set(sessionKey, next);
+            }),
+          ),
+        );
+      });
+  }
+
   const readBoard: ToolEntry = {
     requiredCapability: "thread:read",
     definition: {
@@ -189,7 +264,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       },
       annotations: { title: "Read the Synara kanban board", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args, context) =>
+    handler: withKanbanToolAudit("synara_read_kanban_board", (args, context) =>
       Effect.gen(function* () {
         const projectId = readStringArg(args, "projectId");
         const snapshot = yield* snapshotQuery
@@ -254,6 +329,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             : {}),
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+    ),
   };
 
   const readCard: ToolEntry = {
@@ -272,7 +348,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       },
       annotations: { title: "Read a Synara kanban card", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args, context) =>
+    handler: withKanbanToolAudit("synara_read_kanban_card", (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const thread = yield* requireThreadShell(threadId).pipe(
@@ -290,6 +366,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           callerThreadId: context.callerThreadId,
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+    ),
   };
 
   const createTask: ToolEntry = {
@@ -322,9 +399,10 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: true,
       },
     },
-    handler: (args, context) =>
-      Effect.suspend(() =>
-        Effect.gen(function* () {
+    handler: withKanbanWriteConcurrencyGuard(
+      withKanbanToolAudit("synara_create_kanban_task", (args, context) =>
+        Effect.suspend(() =>
+          Effect.gen(function* () {
           const caller = context.callerThreadId;
           const title = readStringArg(args, "title", { required: true })!;
           const description = readStringArg(args, "description");
@@ -378,6 +456,8 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           });
         }),
       ).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+        ),
+    ),
   };
 
   const moveCard: ToolEntry = {
@@ -410,9 +490,10 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: false,
       },
     },
-    handler: (args, context) =>
-      Effect.suspend(() =>
-        Effect.gen(function* () {
+    handler: withKanbanWriteConcurrencyGuard(
+      withKanbanToolAudit("synara_move_kanban_card", (args, context) =>
+        Effect.suspend(() =>
+          Effect.gen(function* () {
           const threadId = readStringArg(args, "threadId", { required: true })!;
           const target = readStringArg(args, "target", { required: true })!;
           if (target !== "inProgress" && target !== "done") {
@@ -509,6 +590,8 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           });
         }),
       ).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+        ),
+    ),
   };
 
   return [readBoard, readCard, createTask, moveCard];
