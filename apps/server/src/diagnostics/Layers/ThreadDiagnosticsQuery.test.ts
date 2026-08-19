@@ -47,6 +47,10 @@ layer("ThreadDiagnosticsQuery", (it) => {
   it.effect("stores bounded structured incidents and reads only the requested thread", () =>
     Effect.gen(function* () {
       const diagnostics = yield* ThreadDiagnosticsQuery;
+      const now = Date.now();
+      // Retention deletes rows older than 30 days, so fixtures must stay inside that window.
+      const thread1OccurredAt = new Date(now - 2_000).toISOString();
+      const thread2OccurredAt = new Date(now - 1_000).toISOString();
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-1",
         source: "server",
@@ -54,7 +58,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         severity: "warning",
         code: "THREAD_STREAM_CAPACITY_EXCEEDED",
         detail: { reason: "thread-capacity", activeThreads: 16 },
-        occurredAt: "2026-07-20T10:00:00.000Z",
+        occurredAt: thread1OccurredAt,
       });
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-2",
@@ -62,7 +66,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         kind: "ws.stream-admission-rejected",
         severity: "warning",
         detail: { reason: "duplicate" },
-        occurredAt: "2026-07-20T10:00:01.000Z",
+        occurredAt: thread2OccurredAt,
       });
 
       const incidents = yield* diagnostics.listOperationalDiagnostics({
