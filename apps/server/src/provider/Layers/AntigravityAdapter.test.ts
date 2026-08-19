@@ -23,12 +23,15 @@ import {
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
   buildAntigravityTurnPrompt,
+  detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
   hookScriptSource,
   makeAntigravityRuntimeEventBase,
   makeAntigravityAdapterLive,
+  matchAntigravityTrackedTaskId,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
+  parseAntigravitySystemMessage,
   readCompleteAntigravityLines,
   resolveAntigravityCliModelLabel,
   runAntigravityHelperProcess,
@@ -372,7 +375,7 @@ describe("Antigravity CLI integration helpers", () => {
         {
           command: "/usr/local/bin/agy",
           args: ["plugin", "install", pluginDir],
-          options: { timeoutMs: 30_000 },
+          options: { timeoutMs: 45_000 },
         },
       ]);
       expect(
@@ -1717,5 +1720,112 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Antigravity background task helpers (#752)", () => {
+  it("parses system message task ids and exit codes", () => {
+    expect(parseAntigravitySystemMessage("plain assistant text")).toBeNull();
+    expect(parseAntigravitySystemMessage(undefined)).toBeNull();
+
+    const success = parseAntigravitySystemMessage(
+      "<SYSTEM_MESSAGE> Task id 'task-abc123' exited with code 0",
+    );
+    expect(success).toMatchObject({
+      isSystemMessage: true,
+      taskId: "task-abc123",
+      exitCode: 0,
+      isFailure: false,
+    });
+
+    const failure = parseAntigravitySystemMessage(
+      '<SYSTEM_MESSAGE> sender=task-9f2 Task id "task-9f2" exited with code 1',
+    );
+    expect(failure).toMatchObject({
+      isSystemMessage: true,
+      taskId: "task-9f2",
+      sender: "task-9f2",
+      exitCode: 1,
+      isFailure: true,
+    });
+
+    const senderOnly = parseAntigravitySystemMessage("<SYSTEM_MESSAGE> sender=task-x77 done");
+    expect(senderOnly).toMatchObject({ isSystemMessage: true, taskId: "task-x77" });
+  });
+
+  it("detects background task starts from run_command tool output", () => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev" },
+        {
+          toolOutput: "Task id 'task-42' is now running in the background",
+        },
+      ),
+    ).toEqual({
+      taskId: "task-42",
+      description: "npm run dev",
+      isBackground: true,
+    });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev" },
+        {
+          result: "sent to the background",
+        },
+      ),
+    ).toEqual({ description: "npm run dev", isBackground: true });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { command: "npm run dev", WaitMsBeforeAsync: 1000 },
+        {},
+      ),
+    ).toEqual({ description: "npm run dev", isBackground: true });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev", WaitMsBeforeAsync: 1000 },
+        { toolOutput: "exited with code 0" },
+      ),
+    ).toBeNull();
+  });
+
+  it("detects schedule timers and ignores unrelated tools", () => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "schedule",
+        { Prompt: "remind me later" },
+        {
+          toolOutput: "Scheduled timer-77 created",
+        },
+      ),
+    ).toEqual({
+      taskId: "timer-77",
+      description: "remind me later",
+      isBackground: true,
+    });
+
+    expect(detectAntigravityBackgroundTaskStart("schedule", {})).toEqual({
+      description: "Scheduled timer",
+      isBackground: true,
+    });
+
+    expect(detectAntigravityBackgroundTaskStart("list_files")).toBeNull();
+  });
+
+  it("matches completion task ids against tracked tasks", () => {
+    const tracked = ["task-1", "task-2"];
+
+    expect(matchAntigravityTrackedTaskId("task-1", tracked)).toBe("task-1");
+    expect(matchAntigravityTrackedTaskId("job/task-2", tracked)).toBe("task-2");
+    expect(matchAntigravityTrackedTaskId("unknown-99", tracked)).toBeUndefined();
+    expect(matchAntigravityTrackedTaskId(undefined, ["task-solo"])).toBe("task-solo");
+    expect(matchAntigravityTrackedTaskId(undefined, tracked)).toBeUndefined();
+    expect(matchAntigravityTrackedTaskId("task-1", [])).toBeUndefined();
   });
 });
