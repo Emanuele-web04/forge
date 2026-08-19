@@ -51,6 +51,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        copilot: {
+          ...DEFAULT_SERVER_SETTINGS.providers.copilot,
+          binaryPath: "",
+        },
       },
     };
 
@@ -73,6 +77,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.kilo).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
+    expect(providerOptions.copilot).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -91,6 +96,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           serverUrl: "http://127.0.0.1:4096",
           experimentalWebSockets: true,
         },
+        copilot: {
+          ...DEFAULT_SERVER_SETTINGS.providers.copilot,
+          binaryPath: "/custom/bin/copilot",
+        },
       },
     };
 
@@ -104,6 +113,9 @@ describe("providerStartOptionsFromServerSettings", () => {
       binaryPath: "/custom/bin/opencode",
       serverUrl: "http://127.0.0.1:4096",
       experimentalWebSockets: true,
+    });
+    expect(providerOptions.copilot).toEqual({
+      binaryPath: "/custom/bin/copilot",
     });
   });
 });
