@@ -41,3 +41,11 @@ __screenshots__/
 /preload.js.map
 /bootstrap.js.map
 /decisions.tsv
+
+# Local kanban v2 e2e probe/seed scripts — scratch tooling for manual
+# verification against an isolated instance, not part of the shipped feature.
+/.e2e-probe/
+/apps/web/e2e-seed-prs.ts
+/apps/web/e2e-seed-state.ts
+/apps/web/e2e-wsdispatch.ts
+/apps/web/f1-derivation.ts
