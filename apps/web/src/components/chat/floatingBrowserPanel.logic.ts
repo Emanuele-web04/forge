@@ -2,7 +2,11 @@
 // Purpose: Pure placement, resize, and visibility rules for the floating browser host.
 // Layer: Chat surface UI logic
 
-import { BROWSER_FLOATING_PANEL_MARGIN_PX } from "@synara/shared/browserSession";
+import {
+  BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
+  BROWSER_AUTOMATION_VIEWPORT_WIDTH,
+  BROWSER_FLOATING_PANEL_MARGIN_PX,
+} from "@synara/shared/browserSession";
 
 export interface FloatingBrowserPanelRect {
   left: number;
@@ -24,6 +28,8 @@ export interface FloatingBrowserPanelSize {
 export type FloatingBrowserResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
 
 export const FLOATING_BROWSER_PANEL_MARGIN_PX = BROWSER_FLOATING_PANEL_MARGIN_PX;
+export const FLOATING_BROWSER_PANEL_ASPECT_RATIO =
+  BROWSER_AUTOMATION_VIEWPORT_WIDTH / BROWSER_AUTOMATION_VIEWPORT_HEIGHT;
 export const FLOATING_BROWSER_PANEL_DEFAULT_SIZE: FloatingBrowserPanelSize = {
   width: 320,
   height: 200,
@@ -34,7 +40,7 @@ export const FLOATING_BROWSER_PANEL_MIN_SIZE: FloatingBrowserPanelSize = {
 };
 export const FLOATING_BROWSER_PANEL_MAX_SIZE: FloatingBrowserPanelSize = {
   width: 760,
-  height: 620,
+  height: 475,
 };
 
 interface FloatingBrowserPanelConstraints {
@@ -47,6 +53,61 @@ interface FloatingBrowserPanelConstraints {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function heightForGuestWidth(width: number): number {
+  return Math.max(
+    1,
+    Math.round((width * BROWSER_AUTOMATION_VIEWPORT_HEIGHT) / BROWSER_AUTOMATION_VIEWPORT_WIDTH),
+  );
+}
+
+function widthForGuestHeight(height: number): number {
+  return Math.max(
+    1,
+    Math.round((height * BROWSER_AUTOMATION_VIEWPORT_WIDTH) / BROWSER_AUTOMATION_VIEWPORT_HEIGHT),
+  );
+}
+
+function hugGuestAspectSize(
+  preferred: FloatingBrowserPanelSize,
+  constraints: FloatingBrowserPanelConstraints,
+  lock: "width" | "height" | "auto" = "auto",
+): FloatingBrowserPanelSize {
+  const fitFromWidth = (width: number): FloatingBrowserPanelSize => {
+    const nextWidth = clamp(width, constraints.minWidth, constraints.maxWidth);
+    let nextHeight = heightForGuestWidth(nextWidth);
+    if (nextHeight < constraints.minHeight || nextHeight > constraints.maxHeight) {
+      nextHeight = clamp(nextHeight, constraints.minHeight, constraints.maxHeight);
+      return {
+        width: clamp(widthForGuestHeight(nextHeight), constraints.minWidth, constraints.maxWidth),
+        height: nextHeight,
+      };
+    }
+    return { width: nextWidth, height: nextHeight };
+  };
+  const fitFromHeight = (height: number): FloatingBrowserPanelSize => {
+    const nextHeight = clamp(height, constraints.minHeight, constraints.maxHeight);
+    let nextWidth = widthForGuestHeight(nextHeight);
+    if (nextWidth < constraints.minWidth || nextWidth > constraints.maxWidth) {
+      nextWidth = clamp(nextWidth, constraints.minWidth, constraints.maxWidth);
+      return { width: nextWidth, height: heightForGuestWidth(nextWidth) };
+    }
+    return { width: nextWidth, height: nextHeight };
+  };
+
+  if (lock === "width") {
+    return fitFromWidth(preferred.width);
+  }
+  if (lock === "height") {
+    return fitFromHeight(preferred.height);
+  }
+
+  const widthLimited = fitFromWidth(Math.min(preferred.width, constraints.maxWidth));
+  if (widthLimited.height <= Math.min(preferred.height, constraints.maxHeight)) {
+    return widthLimited;
+  }
+  return fitFromHeight(Math.min(preferred.height, constraints.maxHeight));
 }
 
 function resolveAxisConstraints(
@@ -96,8 +157,15 @@ export function clampFloatingBrowserPanelRect(
     options.minSize ?? FLOATING_BROWSER_PANEL_MIN_SIZE,
     options.maxSize ?? FLOATING_BROWSER_PANEL_MAX_SIZE,
   );
-  const width = clamp(rect.width, constraints.minWidth, constraints.maxWidth);
-  const height = clamp(rect.height, constraints.minHeight, constraints.maxHeight);
+  const hugged = hugGuestAspectSize(
+    {
+      width: clamp(rect.width, constraints.minWidth, constraints.maxWidth),
+      height: clamp(rect.height, constraints.minHeight, constraints.maxHeight),
+    },
+    constraints,
+  );
+  const width = hugged.width;
+  const height = hugged.height;
   const maxLeft = Math.max(0, hostWidth - FLOATING_BROWSER_PANEL_MARGIN_PX - width);
   const maxTop = Math.max(0, hostHeight - FLOATING_BROWSER_PANEL_MARGIN_PX - height);
 
@@ -175,35 +243,39 @@ export function resizeFloatingBrowserPanelRect(
   const next = { ...clampedRect };
   const resizeWest = input.edge.includes("w");
   const resizeNorth = input.edge.includes("n");
-
+  const resizeEast = input.edge.includes("e");
+  const resizeSouth = input.edge.includes("s");
+  const proposedWidth = resizeWest
+    ? clampedRect.width - input.deltaX
+    : resizeEast
+      ? clampedRect.width + input.deltaX
+      : clampedRect.width;
+  const proposedHeight = resizeNorth
+    ? clampedRect.height - input.deltaY
+    : resizeSouth
+      ? clampedRect.height + input.deltaY
+      : clampedRect.height;
+  const lock: "width" | "height" =
+    resizeEast || resizeWest
+      ? resizeNorth || resizeSouth
+        ? Math.abs(proposedWidth / FLOATING_BROWSER_PANEL_ASPECT_RATIO - proposedHeight) <=
+          Math.abs(widthForGuestHeight(proposedHeight) - proposedWidth)
+          ? "width"
+          : "height"
+        : "width"
+      : "height";
+  const hugged = hugGuestAspectSize(
+    { width: proposedWidth, height: proposedHeight },
+    constraints,
+    lock,
+  );
+  next.width = hugged.width;
+  next.height = hugged.height;
   if (resizeWest) {
-    next.width = clamp(
-      clampedRect.width - input.deltaX,
-      constraints.minWidth,
-      constraints.maxWidth,
-    );
     next.left = clampedRect.left + clampedRect.width - next.width;
-  } else if (input.edge.includes("e")) {
-    next.width = clamp(
-      clampedRect.width + input.deltaX,
-      constraints.minWidth,
-      constraints.maxWidth,
-    );
   }
-
   if (resizeNorth) {
-    next.height = clamp(
-      clampedRect.height - input.deltaY,
-      constraints.minHeight,
-      constraints.maxHeight,
-    );
     next.top = clampedRect.top + clampedRect.height - next.height;
-  } else if (input.edge.includes("s")) {
-    next.height = clamp(
-      clampedRect.height + input.deltaY,
-      constraints.minHeight,
-      constraints.maxHeight,
-    );
   }
 
   return clampFloatingBrowserPanelRect(next, host, options);

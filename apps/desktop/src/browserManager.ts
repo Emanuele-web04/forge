@@ -1563,6 +1563,19 @@ export class DesktopBrowserManager {
     const requiresRenderer = activeRuntimeKey
       ? this.rendererOnlyRuntimeKeys.has(activeRuntimeKey)
       : false;
+    // Overlay occlusion used to send bounds:null, which dropped the renderer
+    // guest from the visible-automation boundary and made agent tools fail
+    // with BrowserHostUnavailable while the <webview> was still mounted.
+    if (
+      state.open &&
+      nextBounds === null &&
+      (input.surface === "renderer" || requiresRenderer) &&
+      activeRuntime &&
+      !activeRuntime.ownsWebContents
+    ) {
+      this.perfCounters.setPanelBoundsNoopSkips += 1;
+      return;
+    }
     this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
     this.setActiveBounds(input.threadId, nextBounds);
 
@@ -1582,17 +1595,23 @@ export class DesktopBrowserManager {
       activeRuntimeKey &&
       activeRuntime?.ownsWebContents
     ) {
-      this.destroyRuntime(input.threadId, activeTabId);
+      // Park the native view so the floating <webview> can paint, but keep the
+      // WebContents until attachWebview adopts the guest. Destroying here drops
+      // CDP and makes every in-flight agent tool miss the host.
+      if (activeRuntime.view) {
+        this.setRuntimeViewHidden(activeRuntime, true);
+      }
+      if (this.attachedRuntimeKey === activeRuntimeKey) {
+        this.attachedRuntimeKey = null;
+        this.attachedBoundsSignature = null;
+      }
       const activeTab = this.getTab(state, activeTabId);
-      if (activeTab) {
+      if (activeTab && activeTab.runtimeSurface !== "renderer") {
         activeTab.runtimeSurface = "renderer";
-        suspendTabState(activeTab);
         this.markThreadStateChanged(input.threadId);
         this.emitState(input.threadId);
       }
       this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
-      this.attachedRuntimeKey = null;
-      this.attachedBoundsSignature = null;
       this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
       return;
     }
@@ -2572,6 +2591,21 @@ export class DesktopBrowserManager {
   private claimAutomationTab(threadId: ThreadId, tab: BrowserTabState): boolean {
     const key = buildRuntimeKey(threadId, tab.id);
     this.automationRuntimeKeys.add(key);
+
+    const runtime = this.runtimes.get(key);
+    const rendererGuestAlive = Boolean(
+      runtime && !runtime.ownsWebContents && !runtime.webContents.isDestroyed(),
+    );
+    if (rendererGuestAlive || this.rendererOnlyRuntimeKeys.has(key)) {
+      // The floating/renderer guest is the page the user can see. Promoting to a
+      // native WebContentsView would destroy that CDP session mid-turn.
+      if (tab.runtimeSurface !== "renderer") {
+        tab.runtimeSurface = "renderer";
+        return true;
+      }
+      return false;
+    }
+
     this.rendererOnlyRuntimeKeys.delete(key);
     let didChange = false;
     if (tab.runtimeSurface !== "native") {
@@ -2579,7 +2613,6 @@ export class DesktopBrowserManager {
       didChange = true;
     }
 
-    const runtime = this.runtimes.get(key);
     if (runtime && !runtime.ownsWebContents) {
       this.destroyRuntime(threadId, tab.id, {
         preserveAutomationDownloadTracking: true,

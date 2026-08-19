@@ -564,25 +564,25 @@ describe("resolveBrowserChromeStatus", () => {
 });
 
 describe("floating browser webview presentation", () => {
-  it("scales the frozen guest into the card, then restores fill layout", () => {
-    const webview = { style: {} } as HTMLElement;
-    applyBrowserWebviewPresentation(webview, {
+  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
+    const stage = { style: {} } as HTMLElement;
+    applyBrowserWebviewPresentation(stage, {
       floating: true,
       slotWidth: 320,
       slotHeight: 220,
     });
-    expect(webview.style.width).toBe("1280px");
-    expect(webview.style.height).toBe("800px");
-    expect(webview.style.transform).toBe("scale(0.25)");
-    expect(webview.style.top).toBe("10px");
+    expect(stage.style.width).toBe("1280px");
+    expect(stage.style.height).toBe("800px");
+    expect(stage.style.transform).toBe("scale(0.25)");
+    expect(stage.style.top).toBe("10px");
 
-    applyBrowserWebviewPresentation(webview, {
+    applyBrowserWebviewPresentation(stage, {
       floating: false,
       slotWidth: 320,
       slotHeight: 220,
     });
-    expect(webview.style.width).toBe("100%");
-    expect(webview.style.height).toBe("100%");
-    expect(webview.style.transform).toBe("");
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
   });
 });

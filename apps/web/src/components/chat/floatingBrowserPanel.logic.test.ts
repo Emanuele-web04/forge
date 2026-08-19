@@ -25,7 +25,7 @@ describe("floating browser panel geometry", () => {
         { left: -100, top: 900, width: 900, height: 900 },
         { width: 400, height: 300 },
       ),
-    ).toEqual({ left: 12, top: 12, width: 376, height: 276 });
+    ).toEqual({ left: 12, top: 53, width: 376, height: 235 });
 
     expect(
       moveFloatingBrowserPanelRect(
@@ -33,7 +33,7 @@ describe("floating browser panel geometry", () => {
         { x: 2_000, y: 2_000 },
         { width: 1_000, height: 700 },
       ),
-    ).toEqual({ left: 508, top: 348, width: 480, height: 340 });
+    ).toEqual({ left: 508, top: 388, width: 480, height: 300 });
   });
 
   it("keeps the opposite corner fixed when north-west resizing hits minimum size", () => {
@@ -43,19 +43,29 @@ describe("floating browser panel geometry", () => {
       { width: 1_000, height: 700 },
     );
 
-    expect(resized).toEqual({ left: 360, top: 320, width: 320, height: 200 });
+    expect(resized).toEqual({ left: 360, top: 280, width: 320, height: 200 });
     expect(resized.left + resized.width).toBe(680);
-    expect(resized.top + resized.height).toBe(520);
+    expect(resized.top + resized.height).toBe(480);
   });
 
-  it("caps south-east resizing at the host and configured maximum", () => {
+  it("caps south-east resizing at the host and the 1280×800 guest aspect", () => {
     expect(
       resizeFloatingBrowserPanelRect(
-        { left: 16, top: 16, width: 480, height: 340 },
+        { left: 16, top: 16, width: 480, height: 300 },
         { edge: "se", deltaX: 2_000, deltaY: 2_000 },
         { width: 1_000, height: 700 },
       ),
-    ).toEqual({ left: 16, top: 16, width: 760, height: 620 });
+    ).toEqual({ left: 16, top: 16, width: 760, height: 475 });
+  });
+
+  it("keeps the frozen guest aspect when stretching one edge", () => {
+    expect(
+      resizeFloatingBrowserPanelRect(
+        { left: 40, top: 40, width: 320, height: 200 },
+        { edge: "s", deltaX: 0, deltaY: 120 },
+        { width: 1_000, height: 700 },
+      ),
+    ).toEqual({ left: 40, top: 40, width: 512, height: 320 });
   });
 });
 

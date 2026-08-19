@@ -153,9 +153,11 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const manager = new DesktopBrowserManager();
-    manager.setWindow({
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
-    } as never);
+    };
+    manager.setWindow(hostWindow as never);
     const opened = manager.open({ threadId: THREAD_ID });
     manager.setPanelBounds({
       threadId: THREAD_ID,
@@ -169,9 +171,57 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       surface: "renderer",
       bounds: { x: 40, y: 80, width: 320, height: 220 },
     });
-    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+    expect(nativeView.setVisible).toHaveBeenCalledWith(false);
     const next = manager.getState({ threadId: THREAD_ID });
     expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe("renderer");
+
+    const guest = Object.assign(new FakeWebContents(202), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
+      41,
+    );
+    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(
+      manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })
+        .webContents,
+    ).toBe(guest);
+    manager.dispose();
+  });
+
+  it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const state = manager.open({ threadId: THREAD_ID });
+    const tabId = state.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(203), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 203 }, 41);
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 40, y: 80, width: 320, height: 220 },
+    });
+
+    manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
+    const runtime = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
+
+    expect(runtime.webContents).toBe(guest);
+    expect(guest.close).not.toHaveBeenCalled();
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("renderer");
     manager.dispose();
   });
 
@@ -308,9 +358,11 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       guest,
     );
 
+    // Overlay occlusion used to send bounds:null; the adopted <webview> must
+    // stay the visible automation surface so resize/drag does not drop CDP.
     manager.setPanelBounds({ threadId: THREAD_ID, surface: "renderer", bounds: null });
-    expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /not currently visible/i,
+    expect(manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId }).webContents).toBe(
+      guest,
     );
   });
 

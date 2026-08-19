@@ -36,6 +36,7 @@ import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
   resolveCopyableBrowserTabUrl,
+  resolveFloatingBrowserGuestLayout,
 } from "@synara/shared/browserSession";
 import {
   BROWSER_COPY_LINK_TOAST_TITLE,
@@ -261,7 +262,8 @@ function setBrowserWebviewOverlayOcclusion(
   if (!webview) {
     return;
   }
-  webview.style.visibility = occluded ? "hidden" : "visible";
+  // Never use visibility:hidden on a <webview>. Electron unpaints or kills the
+  // guest, which shows as a black card and BrowserHostUnavailable to the agent.
   webview.style.pointerEvents = occluded ? "none" : "auto";
 }
 
@@ -606,6 +608,7 @@ export function BrowserPanel({
   const browserTabsBarRef = useRef<HTMLDivElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
+  const browserWebviewStageRef = useRef<HTMLDivElement | null>(null);
   const browserWebviewTabIdRef = useRef<string | null>(null);
   const browserWebviewWebContentsIdRef = useRef<number | null>(null);
   const detachedBrowserWebviewsRef = useRef(new WeakSet<BrowserWebviewElement>());
@@ -759,6 +762,11 @@ export function BrowserPanel({
           browserWebviewAttachKeyRef.current = null;
           browserWebviewAttachInFlightKeyRef.current = null;
         }
+        const stage = browserWebviewStageRef.current;
+        if (stage && stage.childElementCount === 0) {
+          stage.remove();
+          browserWebviewStageRef.current = null;
+        }
       }
     },
     [api, isLiveRuntime, threadId],
@@ -856,6 +864,16 @@ export function BrowserPanel({
       return;
     }
 
+    let stage = browserWebviewStageRef.current;
+    if (!stage) {
+      stage = document.createElement("div");
+      stage.dataset.floatingBrowserStage = "true";
+      browserWebviewStageRef.current = stage;
+    }
+    if (stage.parentElement !== host) {
+      host.append(stage);
+    }
+
     let webview = browserWebviewRef.current;
     if (!webview) {
       webview = document.createElement("webview") as BrowserWebviewElement;
@@ -863,6 +881,7 @@ export function BrowserPanel({
       webview.style.display = "flex";
       webview.style.width = "100%";
       webview.style.height = "100%";
+      webview.style.transform = "";
       webview.style.backgroundColor = "#0d0d0d";
       webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
       webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
@@ -878,11 +897,11 @@ export function BrowserPanel({
       webview.dataset.rendererGeneration = String(browserRendererGeneration);
       browserWebviewWebContentsIdRef.current = null;
       browserWebviewRef.current = webview;
-      host.append(webview);
-    } else if (webview.parentElement !== host) {
-      host.append(webview);
     }
-    applyBrowserWebviewPresentation(webview, {
+    if (webview.parentElement !== stage) {
+      stage.append(webview);
+    }
+    applyBrowserWebviewPresentation(stage, {
       floating: isFloatingMode,
       slotWidth: host.clientWidth,
       slotHeight: host.clientHeight,
@@ -1100,16 +1119,24 @@ export function BrowserPanel({
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
       const obscuredByOverlay =
-        browserPageError !== null ||
-        shouldOccludeBrowserWebview({
-          showLocalServersHome,
-          browserActionsMenuOpen,
-          hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
-        });
+        !isFloatingMode &&
+        (browserPageError !== null ||
+          shouldOccludeBrowserWebview({
+            showLocalServersHome,
+            browserActionsMenuOpen,
+            hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+          }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const webview = browserWebviewRef.current;
-      if (webview) {
+      const stage = browserWebviewStageRef.current;
+      if (stage) {
+        applyBrowserWebviewPresentation(stage, {
+          floating: isFloatingMode,
+          slotWidth: element.clientWidth,
+          slotHeight: element.clientHeight,
+        });
+      } else if (webview) {
         applyBrowserWebviewPresentation(webview, {
           floating: isFloatingMode,
           slotWidth: element.clientWidth,
@@ -1126,9 +1153,27 @@ export function BrowserPanel({
             // The native view is positioned in window DIPs, which only equal the CSS
             // pixels measured above while the shell sits at 100% zoom. Convert, or a
             // zoomed shell leaves the browser surface sized 1/zoom off its DOM slot.
+            const zoom = readDesktopZoomFactor();
+            if (isFloatingMode) {
+              // Keep the guest viewport frozen at 1280×800. Slot resize is CSS scale
+              // only, so main/CDP do not see a new page size on every drag frame.
+              const layout = resolveFloatingBrowserGuestLayout({
+                width: rect.width,
+                height: rect.height,
+              });
+              return resolveDesktopDipRectFromCssRect(
+                {
+                  x: rect.left + layout.x,
+                  y: rect.top + layout.y,
+                  width: layout.width,
+                  height: layout.height,
+                },
+                zoom,
+              );
+            }
             return resolveDesktopDipRectFromCssRect(
               { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-              readDesktopZoomFactor(),
+              zoom,
             );
           })();
       const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";

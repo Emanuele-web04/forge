@@ -627,20 +627,23 @@ export function resolveBrowserAddressSync(
 }
 
 export function applyBrowserWebviewPresentation(
-  webview: HTMLElement,
+  stage: HTMLElement,
   input: { floating: boolean; slotWidth: number; slotHeight: number },
 ): void {
+  // Scale a CSS stage around a frozen 1280×800 guest. Transforming the
+  // <webview> itself during drag/resize blacks the guest and can kill CDP.
   if (!input.floating) {
-    webview.style.position = "";
-    webview.style.left = "";
-    webview.style.top = "";
-    webview.style.width = "100%";
-    webview.style.height = "100%";
-    webview.style.transform = "";
-    webview.style.transformOrigin = "";
-    webview.style.borderRadius = "";
-    webview.style.clipPath = "";
-    webview.style.overflow = "";
+    stage.style.position = "absolute";
+    stage.style.inset = "0";
+    stage.style.left = "";
+    stage.style.top = "";
+    stage.style.width = "100%";
+    stage.style.height = "100%";
+    stage.style.transform = "";
+    stage.style.transformOrigin = "";
+    stage.style.borderRadius = "";
+    stage.style.clipPath = "";
+    stage.style.overflow = "hidden";
     return;
   }
 
@@ -648,14 +651,15 @@ export function applyBrowserWebviewPresentation(
     width: input.slotWidth,
     height: input.slotHeight,
   });
-  webview.style.position = "absolute";
-  webview.style.left = `${layout.x}px`;
-  webview.style.top = `${layout.y}px`;
-  webview.style.width = `${layout.width}px`;
-  webview.style.height = `${layout.height}px`;
-  webview.style.transform = layout.scale === 1 ? "" : `scale(${layout.scale})`;
-  webview.style.transformOrigin = "top left";
-  webview.style.borderRadius = "10px";
-  webview.style.clipPath = "inset(0 round 10px)";
-  webview.style.overflow = "hidden";
+  stage.style.position = "absolute";
+  stage.style.inset = "";
+  stage.style.left = `${layout.x}px`;
+  stage.style.top = `${layout.y}px`;
+  stage.style.width = `${layout.width}px`;
+  stage.style.height = `${layout.height}px`;
+  stage.style.transform = layout.scale === 1 ? "" : `scale(${layout.scale})`;
+  stage.style.transformOrigin = "top left";
+  stage.style.borderRadius = "10px";
+  stage.style.clipPath = "inset(0 round 10px)";
+  stage.style.overflow = "hidden";
 }

@@ -109,7 +109,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
 
   await vi.waitFor(() => {
     const rect = panelRect();
-    expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 250 });
+    expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 263 });
   });
 
   dispatchPointer(header, "pointerdown", 700, 380);
