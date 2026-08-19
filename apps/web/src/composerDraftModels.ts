@@ -211,6 +211,8 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
+    case "copilot":
+      return { provider, model };
   }
 }
 
