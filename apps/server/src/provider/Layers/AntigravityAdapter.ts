@@ -800,6 +800,7 @@ export function detectAntigravityBackgroundTaskStart(
       }
     }
     if (
+      postPayload !== undefined &&
       typeof args?.WaitMsBeforeAsync === "number" &&
       (!rawOutput || !/exited with code/iu.test(rawOutput))
     ) {
@@ -854,7 +855,6 @@ export function matchAntigravityTrackedTaskId(
       return id;
     }
   }
-  if (ids.length === 1) return ids[0];
   return undefined;
 }
 
@@ -1073,6 +1073,43 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }).pipe(Effect.asVoid);
     };
 
+    const completePendingBackgroundTasks = (
+      context: AntigravitySessionContext,
+      status: "completed" | "failed" | "stopped",
+      source: string,
+    ): void => {
+      for (const [taskId, tracked] of context.pendingBackgroundTasks) {
+        offer({
+          ...base(context),
+          type: "task.completed",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(taskId),
+            status,
+          },
+          raw: raw(source, { taskId, tracked, status }),
+        } satisfies ProviderRuntimeEvent);
+      }
+      context.pendingBackgroundTasks.clear();
+    };
+
+    const killPendingBackgroundTasks = (
+      context: AntigravitySessionContext,
+      source: string,
+    ): void => {
+      for (const [taskId, tracked] of context.pendingBackgroundTasks) {
+        offer({
+          ...base(context),
+          type: "task.updated",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(taskId),
+            status: "killed",
+          },
+          raw: raw(source, { taskId, tracked }),
+        } satisfies ProviderRuntimeEvent);
+      }
+      context.pendingBackgroundTasks.clear();
+    };
+
     /**
      * Emit a single terminal turn.completed for the active turn and mark the
      * session idle. Idempotent so process-close, interrupt, and stop-hook
@@ -1091,6 +1128,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return false;
       }
       const completionBase = base(context);
+      completePendingBackgroundTasks(
+        context,
+        input.state === "interrupted"
+          ? "stopped"
+          : input.state === "failed"
+            ? "failed"
+            : "completed",
+        "parent-turn-background-task-terminal",
+      );
       settleForeignConversations(context, {
         state: input.state,
         ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
@@ -1231,29 +1277,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           },
           raw: raw("transcript-tool-call", { stepIdx: stepIndex, name, args }),
         } satisfies ProviderRuntimeEvent);
-
-        const bgStart = detectAntigravityBackgroundTaskStart(name, args);
-        if (bgStart?.isBackground) {
-          const taskId = bgStart.taskId ?? `task-${context.nextBackgroundTaskId++}`;
-          if (!context.pendingBackgroundTasks.has(taskId)) {
-            context.pendingBackgroundTasks.set(taskId, {
-              taskId,
-              taskType: itemType,
-              ...(bgStart.description ? { description: bgStart.description } : {}),
-              startedAt: new Date().toISOString(),
-            });
-            offer({
-              ...base(context),
-              type: "task.started",
-              payload: {
-                taskId: RuntimeTaskId.makeUnsafe(taskId),
-                taskType: itemType,
-                ...(bgStart.description ? { description: bgStart.description } : {}),
-              },
-              raw: raw("transcript-background-task-started", { taskId, name, args }),
-            } satisfies ProviderRuntimeEvent);
-          }
-        }
       }
     };
 
@@ -1747,6 +1770,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         // alive by design to wait for the background completion and stream the
         // follow-up response; killing it aborts the task and fails the turn
         // with "Error: timeout waiting for response" (#752).
+        if (eventName === "stop") {
+          // A background completion can be committed to the transcript before
+          // its final stop hook reaches this file. Drain it before deciding
+          // whether the print process is still waiting on live work.
+          await readTranscript(context);
+        }
         if (
           eventName === "stop" &&
           context.activeProcess &&
@@ -1795,7 +1824,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (existing) {
           existing.stopped = true;
           existing.interrupted = true;
-          existing.pendingBackgroundTasks.clear();
+          killPendingBackgroundTasks(existing, "session-restart-background-task-killed");
           settleForeignConversations(existing, {
             state: "interrupted",
             raw: raw("session-restart", { threadId: input.threadId }),
@@ -2136,18 +2165,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
           return;
         }
-        for (const [taskId] of context.pendingBackgroundTasks) {
-          offer({
-            ...base(context),
-            type: "task.updated",
-            payload: {
-              taskId: RuntimeTaskId.makeUnsafe(taskId),
-              status: "killed",
-            },
-            raw: raw("interrupt-background-task-killed", { taskId }),
-          } satisfies ProviderRuntimeEvent);
-        }
-        context.pendingBackgroundTasks.clear();
+        killPendingBackgroundTasks(context, "interrupt-background-task-killed");
         const activeTurnId = turnId ?? context.activeTurnId;
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
@@ -2208,18 +2226,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (!context) return;
         context.stopped = true;
         context.interrupted = true;
-        for (const [taskId] of context.pendingBackgroundTasks) {
-          offer({
-            ...base(context),
-            type: "task.updated",
-            payload: {
-              taskId: RuntimeTaskId.makeUnsafe(taskId),
-              status: "killed",
-            },
-            raw: raw("session-stop-background-task-killed", { taskId }),
-          } satisfies ProviderRuntimeEvent);
-        }
-        context.pendingBackgroundTasks.clear();
+        killPendingBackgroundTasks(context, "session-stop-background-task-killed");
         settleForeignConversations(context, {
           state: "interrupted",
           raw: raw("session-stop", { threadId }),
