@@ -88,7 +88,7 @@ export function titleCase(value: string): string {
 }
 
 export function formatUsd(amount: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 2,
