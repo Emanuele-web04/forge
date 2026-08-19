@@ -9,6 +9,7 @@ import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { GitHubIcon } from "~/lib/icons";
 import {
   AntigravityIcon,
   ClaudeAI,
@@ -73,6 +74,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  copilot: GitHubIcon,
 };
 
 export function providerIconToneClassName(

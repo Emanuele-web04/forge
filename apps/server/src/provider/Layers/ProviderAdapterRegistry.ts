@@ -25,6 +25,7 @@ import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
+import { CopilotAdapter } from "../Services/CopilotAdapter.ts";
 
 export interface ProviderAdapterRegistryLiveOptions {
   readonly adapters?: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
@@ -45,6 +46,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* KiloAdapter,
             yield* OpenCodeAdapter,
             yield* PiAdapter,
+            yield* CopilotAdapter,
           ];
 
     for (const adapter of adapters) {

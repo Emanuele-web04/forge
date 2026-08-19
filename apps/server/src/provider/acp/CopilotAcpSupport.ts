@@ -22,7 +22,7 @@ export interface CopilotAcpRuntimeSettings {
 
 export interface CopilotAcpRuntimeInput extends Omit<
   AcpSessionRuntimeOptions,
-  "authMethodId" | "resolveAuthMethodId" | "spawn"
+  "authMethodId" | "resolveAuthMethodId" | "authentication" | "spawn"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly copilotSettings: CopilotAcpRuntimeSettings | null | undefined;
@@ -59,25 +59,10 @@ export function buildCopilotAcpSpawnInput(
  */
 export const resolveCopilotAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
-): Effect.Effect<string, AcpErrors.AcpError> =>
-  Effect.gen(function* () {
-    const authMethodIds = (initializeResult.authMethods ?? [])
-      .map((method) => method.id.trim())
-      .filter((id) => id.length > 0);
-    const authMethodId = authMethodIds[0];
-    if (authMethodId) {
-      return authMethodId;
-    }
-
-    return yield* new AcpErrors.AcpRequestError({
-      code: -32602,
-      errorMessage: "GitHub Copilot CLI did not advertise an ACP authentication method.",
-      data: {
-        authMethods: initializeResult.authMethods ?? [],
-        detail: "Run `copilot` and complete sign-in before starting a Synara Copilot session.",
-      },
-    });
-  });
+): Effect.Effect<string | undefined> =>
+  Effect.succeed(
+    (initializeResult.authMethods ?? []).map((method) => method.id.trim()).find(Boolean),
+  );
 
 export const makeCopilotAcpRuntime = (
   input: CopilotAcpRuntimeInput,
@@ -88,6 +73,7 @@ export const makeCopilotAcpRuntime = (
         ...input,
         spawn: buildCopilotAcpSpawnInput(input.copilotSettings, input.cwd),
         resolveAuthMethodId: resolveCopilotAcpAuthMethodId,
+        authentication: "when-advertised",
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

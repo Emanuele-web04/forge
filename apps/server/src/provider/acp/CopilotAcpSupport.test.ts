@@ -51,16 +51,11 @@ describe("resolveCopilotAcpAuthMethodId", () => {
     expect(methodId).toBe("github-login");
   });
 
-  it("fails with an actionable error when the ACP server advertises no auth method", async () => {
-    const error = await Effect.runPromise(
-      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
+  it("allows BYOK sessions when Copilot advertises no client-driven auth method", async () => {
+    const methodId = await Effect.runPromise(
+      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])),
     );
-
-    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
-    if (error._tag !== "AcpRequestError") {
-      throw error;
-    }
-    expect(error.errorMessage).toContain("did not advertise an ACP authentication method");
+    expect(methodId).toBeUndefined();
   });
 });
 

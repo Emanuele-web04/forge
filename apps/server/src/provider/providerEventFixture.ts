@@ -86,6 +86,7 @@ const SAFE_UNTRUSTED_STRING_VALUES = new Set([
   "claudeAgent",
   "client",
   "codex",
+  "copilot",
   "complete",
   "completed",
   "cursor",

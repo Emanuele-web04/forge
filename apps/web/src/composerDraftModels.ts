@@ -38,6 +38,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "kilo",
   "opencode",
   "pi",
+  "copilot",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);

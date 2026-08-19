@@ -1,5 +1,5 @@
 /**
- * AcpAdapterLive - configurable stdio Agent Client Protocol provider.
+ * CopilotAdapterLive - GitHub Copilot CLI via ACP.
  *
  * This adapter intentionally implements only ACP-standard behavior. Agent
  * extensions stay optional and cannot become a prerequisite for the generic
@@ -9,9 +9,9 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import {
   ApprovalRequestId,
   EventId,
-  type AcpServerProviderSettings,
   type ProviderApprovalDecision,
   type ProviderComposerCapabilities,
+  type ProviderInteractionMode,
   type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -60,7 +60,6 @@ import {
   resolveRequestedAcpSessionModeId,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
-  resolveAcpToolCallTurnId,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
@@ -81,14 +80,18 @@ import {
 } from "../acp/AcpElicitationSupport.ts";
 import { parsePermissionRequest, type AcpSessionModeState } from "../acp/AcpRuntimeModel.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
-import { makeGenericAcpRuntime, type GenericAcpRuntimeSettings } from "../acp/GenericAcpSupport.ts";
+import {
+  discoverCopilotAcpModels,
+  makeCopilotAcpRuntime,
+  type CopilotAcpRuntimeSettings,
+} from "../acp/CopilotAcpSupport.ts";
 import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
-import { AcpAdapter, type AcpAdapterShape } from "../Services/AcpAdapter.ts";
+import { CopilotAdapter, type CopilotAdapterShape } from "../Services/CopilotAdapter.ts";
 
-const PROVIDER = "acp" as const;
+const PROVIDER = "copilot" as const;
 const RESUME_SCHEMA_VERSION = 1 as const;
 const ACP_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const ACP_TURN_SETTLE_DRAIN_POLL_MS = 25;
@@ -129,7 +132,7 @@ interface AcpSessionContext {
   session: ProviderSession;
   modeState: AcpSessionModeState | undefined;
   activeTurnId: TurnId | undefined;
-  activeInteractionMode: "default" | "plan" | undefined;
+  activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnHadAssistantContent: boolean;
   activeTurnFailedToolDetail: string | undefined;
   activeAssistantItemsWithContent: Set<string>;
@@ -161,38 +164,7 @@ function parseResumeCursor(raw: unknown): string | undefined {
     : undefined;
 }
 
-export function modelDescriptorsFromConfigOptions(
-  options: ReadonlyArray<Acp.SessionConfigOption>,
-): ProviderListModelsResult["models"] {
-  // ACP agents are expected to label model selectors with category="model",
-  // but a few clients only expose the stable option id. Accept both forms so
-  // generic discovery does not silently return an empty catalog.
-  const modelOption = options.find(
-    (option) => option.category === "model" || option.id.trim().toLowerCase() === "model",
-  );
-  if (!modelOption || modelOption.type !== "select") return [];
-  const entries = modelOption.options.flatMap((entry) =>
-    "value" in entry ? [entry] : entry.options,
-  );
-  return entries.flatMap((entry) => {
-    const slug = entry.value.trim();
-    if (!slug) return [];
-    const fallbackName = slug.includes("/")
-      ? slug
-      : slug.replace(/[-_]+/gu, " ").replace(/\b\w/gu, (char) => char.toUpperCase());
-    const name = entry.name.trim() || fallbackName;
-    const description = entry.description?.trim() || undefined;
-    return [
-      {
-        slug,
-        name,
-        ...(description ? { description } : {}),
-      },
-    ];
-  });
-}
-
-export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
+export function makeCopilotAdapter(settings: CopilotAcpRuntimeSettings = {}) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -261,7 +233,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
 
     const installInteractionHandlers = (
       acp: AcpSessionRuntimeShape,
-      input: Parameters<AcpAdapterShape["startSession"]>[0],
+      input: Parameters<CopilotAdapterShape["startSession"]>[0],
       getContext: () => AcpSessionContext | undefined,
       pendingApprovals: Map<ApprovalRequestId, PendingApproval>,
       pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>,
@@ -393,7 +365,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
       }
     };
 
-    const startSession: AcpAdapterShape["startSession"] = (input) =>
+    const startSession: CopilotAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -427,20 +399,17 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
           const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           let ctx: AcpSessionContext | undefined;
-          const configured = input.providerOptions?.acp;
+          const configured = input.providerOptions?.copilot;
           const resumeSessionId = parseResumeCursor(input.resumeCursor);
-          const effectiveSettings: GenericAcpRuntimeSettings = {
+          const effectiveSettings: CopilotAcpRuntimeSettings = {
             binaryPath: configured?.binaryPath ?? settings.binaryPath,
-            args: configured?.args ?? settings.args,
           };
-          const acp = yield* makeGenericAcpRuntime({
-            settings: effectiveSettings,
+          const acp = yield* makeCopilotAcpRuntime({
+            copilotSettings: effectiveSettings,
             childProcessSpawner,
             cwd,
-            options: {
-              clientInfo: { name: "Synara", version: "0.0.0" },
-              ...(resumeSessionId ? { resumeSessionId } : {}),
-            },
+            clientInfo: { name: "Synara", version: "0.0.0" },
+            ...(resumeSessionId ? { resumeSessionId } : {}),
           }).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.mapError((error) =>
@@ -548,7 +517,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
                   event._tag === "ToolCallUpdated"
                     ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
                     : undefined;
-                const eventTurnId = resolveAcpToolCallTurnId(activeTurnId, mappedToolTurnId);
+                const eventTurnId = mappedToolTurnId ?? activeTurnId;
                 if (!eventTurnId) return;
                 switch (event._tag) {
                   case "AssistantItemStarted":
@@ -737,7 +706,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         }).pipe(Effect.scoped),
       );
 
-    const sendTurn: AcpAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: CopilotAdapterShape["sendTurn"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -881,7 +850,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
                     ...(failedToolDetail ? { failedToolDetail } : {}),
                   });
                   if (!hadAssistantContent && result.stopReason !== "cancelled") {
-                    yield* Effect.logWarning("acp.turn_completed_without_content", {
+                    yield* Effect.logWarning("copilot.turn_completed_without_content", {
                       threadId: input.threadId,
                       turnId,
                       stopReason: result.stopReason ?? null,
@@ -925,7 +894,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         }),
       );
 
-    const interruptTurn: AcpAdapterShape["interruptTurn"] = (threadId, turnId) =>
+    const interruptTurn: CopilotAdapterShape["interruptTurn"] = (threadId, turnId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -938,7 +907,11 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         }),
       );
 
-    const respondToRequest: AcpAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
+    const respondToRequest: CopilotAdapterShape["respondToRequest"] = (
+      threadId,
+      requestId,
+      decision,
+    ) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         const pending = ctx.pendingApprovals.get(requestId);
@@ -952,7 +925,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: AcpAdapterShape["respondToUserInput"] = (
+    const respondToUserInput: CopilotAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
       answers,
@@ -970,7 +943,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         yield* Deferred.succeed(pending.answers, answers);
       });
 
-    const readThread: AcpAdapterShape["readThread"] = (threadId) =>
+    const readThread: CopilotAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         return {
@@ -979,7 +952,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
           cwd: ctx.session.cwd ?? null,
         } satisfies ProviderThreadSnapshot;
       });
-    const rollbackThread: AcpAdapterShape["rollbackThread"] = (threadId, numTurns) =>
+    const rollbackThread: CopilotAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (!Number.isInteger(numTurns) || numTurns < 1) {
@@ -992,7 +965,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         ctx.turns.splice(Math.max(0, ctx.turns.length - numTurns));
         return { threadId, turns: ctx.turns, cwd: ctx.session.cwd ?? null };
       });
-    const stopSession: AcpAdapterShape["stopSession"] = (threadId) =>
+    const stopSession: CopilotAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -1000,16 +973,18 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
           if (ctx) yield* stopSessionInternal(ctx);
         }),
       );
-    const listSessions: AcpAdapterShape["listSessions"] = () =>
+    const listSessions: CopilotAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (ctx) => ({ ...ctx.session })));
-    const hasSession: AcpAdapterShape["hasSession"] = (threadId) =>
+    const hasSession: CopilotAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => sessions.get(threadId)?.stopped === false);
-    const stopAll: AcpAdapterShape["stopAll"] = () =>
+    const stopAll: CopilotAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
         discard: true,
       });
 
-    const getComposerCapabilities: NonNullable<AcpAdapterShape["getComposerCapabilities"]> = () =>
+    const getComposerCapabilities: NonNullable<
+      CopilotAdapterShape["getComposerCapabilities"]
+    > = () =>
       Effect.succeed({
         provider: PROVIDER,
         supportsSkillMentions: false,
@@ -1022,7 +997,7 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities);
 
-    const listModels: NonNullable<AcpAdapterShape["listModels"]> = (input) =>
+    const listModels: NonNullable<CopilotAdapterShape["listModels"]> = (input) =>
       Effect.gen(function* () {
         const cwd = resolveAcpSessionCwd({
           inputCwd: input.cwd,
@@ -1034,20 +1009,14 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
         }
         const scope = yield* Scope.make("sequential");
         return yield* Effect.gen(function* () {
-          const runtime = yield* makeGenericAcpRuntime({
-            settings: {
-              binaryPath: input.binaryPath ?? settings.binaryPath,
-              args: input.args ?? settings.args,
-            },
+          const runtime = yield* makeCopilotAcpRuntime({
+            copilotSettings: { binaryPath: input.binaryPath ?? settings.binaryPath },
             childProcessSpawner,
             cwd,
-            options: { clientInfo: { name: "Synara model discovery", version: "0.0.0" } },
+            clientInfo: { name: "Synara model discovery", version: "0.0.0" },
           }).pipe(Effect.provideService(Scope.Scope, scope));
-          const started = yield* runtime.start();
-          const models = modelDescriptorsFromConfigOptions(
-            started.sessionSetupResult.configOptions ?? [],
-          );
-          return { models, source: "acp", cached: false } satisfies ProviderListModelsResult;
+          yield* runtime.start();
+          return yield* discoverCopilotAcpModels(runtime);
         }).pipe(Effect.ensuring(Effect.ignore(Scope.close(scope, Exit.void))));
       }).pipe(
         Effect.scoped,
@@ -1084,20 +1053,12 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
       streamEvents: Stream.fromPubSub(eventBus),
       getComposerCapabilities,
       listModels,
-    } satisfies AcpAdapterShape;
+    } satisfies CopilotAdapterShape;
   });
 }
 
-export const AcpAdapterLive = Layer.effect(
-  AcpAdapter,
-  makeAcpAdapter({ binaryPath: "cline", args: ["--acp"] }),
-);
+export const CopilotAdapterLive = Layer.effect(CopilotAdapter, makeCopilotAdapter());
 
-export function makeAcpAdapterLive(
-  settings: Pick<AcpServerProviderSettings, "binaryPath" | "args"> = {
-    binaryPath: "cline",
-    args: ["--acp"],
-  },
-) {
-  return Layer.effect(AcpAdapter, makeAcpAdapter(settings));
+export function makeCopilotAdapterLive(settings: CopilotAcpRuntimeSettings = {}) {
+  return Layer.effect(CopilotAdapter, makeCopilotAdapter(settings));
 }

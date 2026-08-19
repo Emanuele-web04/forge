@@ -212,6 +212,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", PI_THINKING_LEVEL_OPTIONS) },
   }),
+  copilot: defineProviderOptionConfig<"copilot">({
+    primaryOptionKey: "reasoningEffort",
+    options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
