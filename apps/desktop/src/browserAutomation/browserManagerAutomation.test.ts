@@ -79,7 +79,7 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
-  it("uses the floating page zoom for native and renderer guests, then resets it", () => {
+  it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {
     const nativeWebContents = new FakeWebContents(101);
     const nativeView = {
       webContents: nativeWebContents,
@@ -155,6 +155,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const manager = new DesktopBrowserManager();
     manager.setWindow({
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      webContents: { id: 41 },
     } as never);
     const opened = manager.open({ threadId: THREAD_ID });
     manager.setPanelBounds({
@@ -169,9 +170,22 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       surface: "renderer",
       bounds: { x: 40, y: 80, width: 320, height: 220 },
     });
-    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
     const next = manager.getState({ threadId: THREAD_ID });
     expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe("renderer");
+
+    const rendererWebContents = Object.assign(new FakeWebContents(202), {
+      getType: () => "webview",
+      hostWebContents: { id: 41 },
+      session: browserSession,
+    });
+    fromId.mockReturnValue(rendererWebContents);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
+      41,
+    );
+    expect(nativeWebContents.close).toHaveBeenCalled();
     manager.dispose();
   });
 

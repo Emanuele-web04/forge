@@ -17,7 +17,12 @@ import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
 import { EllipsisIcon, PanelRightCloseIcon, XIcon } from "../../lib/icons";
 import { requestBrowserPanelBoundsSync } from "../../lib/browserPanelBoundsSync";
-import { createPanelResizeOverlay, removePanelResizeOverlay } from "../../lib/panelResize";
+import { DISCLOSURE_INNER_CLASS, disclosureWidthClassName } from "../../lib/disclosureMotion";
+import {
+  attachPanelPointerOverlaySession,
+  createPanelResizeOverlay,
+  removePanelResizeOverlay,
+} from "../../lib/panelResize";
 import { cn } from "../../lib/utils";
 import { IconButton } from "../ui/icon-button";
 import {
@@ -67,39 +72,6 @@ function hostSize(host: HTMLElement): FloatingBrowserPanelHostSize {
   return {
     width: host.clientWidth || rect.width,
     height: host.clientHeight || rect.height,
-  };
-}
-
-function attachFloatingPointerOverlaySession(
-  overlay: HTMLElement,
-  handlers: {
-    onMove: (event: PointerEvent) => void;
-    onRelease: () => void;
-    onAbort: () => void;
-  },
-): () => void {
-  const onMove = (event: PointerEvent) => {
-    if (event.buttons === 0) {
-      handlers.onAbort();
-      return;
-    }
-    handlers.onMove(event);
-  };
-  const onRelease = () => handlers.onRelease();
-  const onAbort = () => handlers.onAbort();
-
-  overlay.addEventListener("pointermove", onMove);
-  overlay.addEventListener("pointerup", onRelease);
-  overlay.addEventListener("pointercancel", onAbort);
-  window.addEventListener("blur", onAbort);
-  document.addEventListener("mouseleave", onAbort);
-
-  return () => {
-    overlay.removeEventListener("pointermove", onMove);
-    overlay.removeEventListener("pointerup", onRelease);
-    overlay.removeEventListener("pointercancel", onAbort);
-    window.removeEventListener("blur", onAbort);
-    document.removeEventListener("mouseleave", onAbort);
   };
 }
 
@@ -233,7 +205,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
 
     document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
-    detachPointerSession = attachFloatingPointerOverlaySession(resizeOverlay, {
+    detachPointerSession = attachPanelPointerOverlaySession(resizeOverlay, {
       onMove: onPointerMove,
       onRelease: finish,
       onAbort: finish,
@@ -298,7 +270,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       applyPanelRect(moveFloatingBrowserPanelRect(startRect, delta, hostSize(host)), host);
     };
 
-    detachPointerSession = attachFloatingPointerOverlaySession(resizeOverlay, {
+    detachPointerSession = attachPanelPointerOverlaySession(resizeOverlay, {
       onMove: onPointerMove,
       onRelease: finishWithRelease,
       onAbort: finishWithAbort,
@@ -360,8 +332,11 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
             >
               <EllipsisIcon className="size-3.5" />
             </IconButton>
-            {controlsOpen ? (
-              <>
+            <div
+              className={disclosureWidthClassName(controlsOpen, "w-[50px]")}
+              inert={!controlsOpen}
+            >
+              <div className={cn(DISCLOSURE_INNER_CLASS, "flex w-[50px] items-center gap-0.5")}>
                 <IconButton
                   type="button"
                   variant="ghost"
@@ -396,8 +371,8 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
                 >
                   <XIcon />
                 </IconButton>
-              </>
-            ) : null}
+              </div>
+            </div>
           </div>
         </div>
         {RESIZE_HANDLES.map(({ edge, className }) => (

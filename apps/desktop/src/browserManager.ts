@@ -404,7 +404,6 @@ export class DesktopBrowserManager {
   private window: BrowserWindow | null = null;
   private activeThreadId: ThreadId | null = null;
   private activeBounds: BrowserPanelBounds | null = null;
-  private activeContainerBounds: BrowserPanelBounds | null = null;
   private activeBoundsThreadId: ThreadId | null = null;
   private activePageZoomFactor = 1;
   private activePageZoomThreadId: ThreadId | null = null;
@@ -1551,7 +1550,6 @@ export class DesktopBrowserManager {
     this.perfCounters.setPanelBoundsCalls += 1;
     const state = this.getOrCreateState(input.threadId);
     const nextBounds = normalizeBounds(input.bounds);
-    this.activeContainerBounds = normalizeBounds(input.containerBounds ?? null);
     const nextPageZoomFactor = nextBounds
       ? normalizeBrowserPageZoomFactor(input.pageZoomFactor)
       : 1;
@@ -1584,18 +1582,14 @@ export class DesktopBrowserManager {
       activeRuntimeKey &&
       activeRuntime?.ownsWebContents
     ) {
-      this.destroyRuntime(input.threadId, activeTabId);
       const activeTab = this.getTab(state, activeTabId);
       if (activeTab) {
         activeTab.runtimeSurface = "renderer";
-        suspendTabState(activeTab);
         this.markThreadStateChanged(input.threadId);
         this.emitState(input.threadId);
       }
-      this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
-      this.attachedRuntimeKey = null;
-      this.attachedBoundsSignature = null;
-      this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
+      this.parkNativeRuntimeForRendererHandoff(activeRuntime);
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       return;
     }
 
@@ -1728,9 +1722,9 @@ export class DesktopBrowserManager {
     }
 
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
+    const adoptedUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const requiresLocalPreviewBootstrap =
-      isLocalFileUrl(expectedUrl) &&
-      this.sessionPolicy.resolveDisplayUrl(webContents.getURL()) !== expectedUrl;
+      isLocalFileUrl(expectedUrl) && adoptedUrl !== expectedUrl;
     if (requiresLocalPreviewBootstrap) {
       void this.loadTab(input.threadId, tab.id, {
         force: true,
@@ -1739,9 +1733,15 @@ export class DesktopBrowserManager {
       return this.snapshotThreadState(input.threadId, state);
     }
 
-    const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
+    const adoptedSuccessfully =
+      !webContents.isLoading() && Boolean(adoptedUrl) && adoptedUrl !== ABOUT_BLANK_URL;
+    const shouldClearLastError =
+      adoptedSuccessfully || tab.lastError === "This tab stopped unexpectedly.";
+    const didChange = tab.status !== LIVE_TAB_STATUS || (shouldClearLastError && tab.lastError !== null);
     tab.status = LIVE_TAB_STATUS;
-    tab.lastError = null;
+    if (shouldClearLastError) {
+      tab.lastError = null;
+    }
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(input.threadId);
@@ -2039,6 +2039,29 @@ export class DesktopBrowserManager {
     this.updatePopupWindowsForThread(threadId);
   }
 
+  // Keep the native WebContents alive until attachWebview adopts the renderer guest.
+  // Destroying it here would reload the page and lose in-memory layout.
+  private parkNativeRuntimeForRendererHandoff(runtime: LiveTabRuntime): void {
+    this.rendererOnlyRuntimeKeys.add(runtime.key);
+    if (!runtime.ownsWebContents) {
+      return;
+    }
+    if (this.attachedRuntimeKey === runtime.key) {
+      this.detachAttachedRuntime();
+      return;
+    }
+    if (runtime.view) {
+      this.setRuntimeViewHidden(runtime, true);
+      if (this.window) {
+        try {
+          this.window.contentView.removeChildView(runtime.view);
+        } catch {
+          // Already detached from the window hierarchy.
+        }
+      }
+    }
+  }
+
   // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
   // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
   private activateThreadForPendingRenderer(
@@ -2144,7 +2167,9 @@ export class DesktopBrowserManager {
       if (this.rendererOnlyRuntimeKeys.has(runtimeKey)) {
         const rendererRuntime = this.runtimes.get(runtimeKey);
         if (!rendererRuntime || rendererRuntime.ownsWebContents) {
-          if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, tab.id);
+          if (rendererRuntime?.ownsWebContents) {
+            this.parkNativeRuntimeForRendererHandoff(rendererRuntime);
+          }
           continue;
         }
       }
@@ -2408,7 +2433,9 @@ export class DesktopBrowserManager {
     if (this.rendererOnlyRuntimeKeys.has(runtimeKey)) {
       const rendererRuntime = this.runtimes.get(runtimeKey);
       if (!rendererRuntime || rendererRuntime.ownsWebContents) {
-        if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, activeTab.id);
+        if (rendererRuntime?.ownsWebContents) {
+          this.parkNativeRuntimeForRendererHandoff(rendererRuntime);
+        }
         this.activateThreadForPendingRenderer(
           threadId,
           bounds,
@@ -2736,6 +2763,14 @@ export class DesktopBrowserManager {
     });
 
     const didNavigate = () => {
+      const state = this.states.get(threadId);
+      const tab = state ? this.getTab(state, tabId) : null;
+      if (state && tab && tab.lastError !== null) {
+        tab.lastError = null;
+        syncThreadLastError(state);
+        this.markThreadStateChanged(threadId);
+        this.emitState(threadId);
+      }
       this.queueRuntimeStateSync(threadId, tabId);
     };
     webContents.on("did-navigate", didNavigate);
@@ -2750,14 +2785,6 @@ export class DesktopBrowserManager {
       isMainFrame: boolean,
     ) => {
       if (isMainFrame && !_isInPlace) {
-        const state = this.states.get(threadId);
-        const tab = state ? this.getTab(state, tabId) : null;
-        if (state && tab && tab.lastError !== null) {
-          tab.lastError = null;
-          syncThreadLastError(state);
-          this.markThreadStateChanged(threadId);
-          this.emitState(threadId);
-        }
         this.annotations.handleNavigation(threadId, tabId, webContents.id);
       }
     };

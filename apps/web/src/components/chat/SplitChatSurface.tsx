@@ -33,6 +33,7 @@ import { stripDiffSearchParams } from "../../diffRouteSearch";
 import {
   canComposerHandlePanelWidth,
   createPanelResizeOverlay,
+  attachPanelPointerOverlaySession,
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
@@ -165,6 +166,7 @@ function SplitPaneEmbeddedPanel(props: {
     const startWidth = wrapper.getBoundingClientRect().width;
     const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
     const resizeOverlay = createPanelResizeOverlay();
+    let detachPointerSession = () => {};
 
     const onPointerMove = (moveEvent: PointerEvent) => {
       const delta = startX - moveEvent.clientX;
@@ -176,20 +178,20 @@ function SplitPaneEmbeddedPanel(props: {
       setLocalStorageItem(storageKey, nextWidth, Schema.Finite);
     };
 
-    const onPointerUp = () => {
+    const finish = () => {
+      detachPointerSession();
       removePanelResizeOverlay(resizeOverlay);
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
-      resizeOverlay.removeEventListener("pointermove", onPointerMove);
-      resizeOverlay.removeEventListener("pointerup", onPointerUp);
-      resizeOverlay.removeEventListener("pointercancel", onPointerUp);
     };
 
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-    resizeOverlay.addEventListener("pointermove", onPointerMove);
-    resizeOverlay.addEventListener("pointerup", onPointerUp);
-    resizeOverlay.addEventListener("pointercancel", onPointerUp);
+    detachPointerSession = attachPanelPointerOverlaySession(resizeOverlay, {
+      onMove: onPointerMove,
+      onRelease: finish,
+      onAbort: finish,
+    });
   };
 
   if (!props.panelOpen || !props.threadId) {
@@ -623,6 +625,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const [floatingBrowserTarget, setFloatingBrowserTarget] = useState<FloatingBrowserTarget | null>(
     null,
   );
+  const dismissFloatingBrowser = () => {
+    setFloatingBrowserTarget(null);
+  };
   const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,
@@ -712,7 +717,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       floatingLeaf.panel.panel !== "browser",
     );
     if (floatingBrowserTarget !== null && !floatingBrowserIsStillValid) {
-      setFloatingBrowserTarget(null);
+      dismissFloatingBrowser();
     }
   }, [activeSplitView, floatingBrowserTarget]);
 
@@ -721,7 +726,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     const nextThreadId = leaf?.threadId ?? resolveSplitViewFocusedThreadId(activeSplitView);
     if (floatingBrowserTarget !== null && floatingBrowserTarget.paneId !== paneId) {
-      setFloatingBrowserTarget(null);
+      dismissFloatingBrowser();
     }
     setFocusedPane(activeSplitView.id, paneId);
     if (!nextThreadId || nextThreadId === props.routeThreadId) {
@@ -744,7 +749,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   ) => {
     if (!activeSplitView) return;
     if (patch.panel === "browser") {
-      setFloatingBrowserTarget(null);
+      dismissFloatingBrowser();
     }
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     if (!leaf) return;
@@ -797,7 +802,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
 
   const closeFloatingBrowser = (paneId: PaneId) => {
     if (floatingBrowserTarget?.paneId === paneId) {
-      setFloatingBrowserTarget(null);
+      dismissFloatingBrowser();
     }
   };
 
@@ -805,7 +810,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     if (!activeSplitView) return;
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     if (!leaf?.threadId) return;
-    setFloatingBrowserTarget(null);
+    dismissFloatingBrowser();
     updatePanePanelState(paneId, { panel: "browser" });
   };
 
@@ -988,7 +993,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     setFocusedPane(activeSplitView.id, paneId);
     if (leaf && leaf.threadId !== threadId) {
       if (floatingBrowserTarget?.paneId === paneId) {
-        setFloatingBrowserTarget(null);
+        dismissFloatingBrowser();
       }
       replacePaneThread(activeSplitView.id, paneId, threadId);
       setPanePanelState(activeSplitView.id, paneId, {

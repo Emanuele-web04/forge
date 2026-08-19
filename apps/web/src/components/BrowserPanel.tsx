@@ -1131,31 +1131,13 @@ export function BrowserPanel({
               readDesktopZoomFactor(),
             );
           })();
-      const floatingHost = isFloatingMode
-        ? element.closest<HTMLElement>("[data-floating-browser-host='true']")
-        : null;
-      const floatingHostRect = floatingHost?.getBoundingClientRect();
-      const containerBounds = floatingHostRect
-        ? resolveDesktopDipRectFromCssRect(
-            {
-              x: floatingHostRect.left,
-              y: floatingHostRect.top,
-              width: floatingHostRect.width,
-              height: floatingHostRect.height,
-            },
-            readDesktopZoomFactor(),
-          )
-        : null;
       const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
       // Native WebContentsViews and adopted renderer <webview>s share the same main-process
       // WebContents. Floating presentation is a CSS scale of the frozen 1280x800 guest, so
       // keep page zoom at 1 and avoid reflowing the live page as the card moves.
       const pageZoomFactor = 1;
-      const containerKey = containerBounds
-        ? `:container-${Math.round(containerBounds.x)}:${Math.round(containerBounds.y)}:${Math.round(containerBounds.width)}:${Math.round(containerBounds.height)}`
-        : "";
       const nextKey = bounds
-        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}${containerKey}`
+        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}`
         : `${surface}:hidden:zoom-${pageZoomFactor}`;
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
@@ -1165,7 +1147,7 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, containerBounds, surface, pageZoomFactor })
+        .setPanelBounds({ threadId, bounds, surface, pageZoomFactor })
         .catch(ignoreBrowserBoundsSyncError);
     };
 

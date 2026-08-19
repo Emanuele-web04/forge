@@ -53,12 +53,12 @@ function resolveAxisConstraints(
   hostLength: number,
   minLength: number,
   maxLength: number,
-): Pick<FloatingBrowserPanelConstraints, "minWidth" | "maxWidth"> {
+): { min: number; max: number } {
   const availableLength = Math.max(1, hostLength - FLOATING_BROWSER_PANEL_MARGIN_PX * 2);
   const resolvedMin = Math.min(minLength, availableLength);
   return {
-    minWidth: resolvedMin,
-    maxWidth: Math.max(resolvedMin, Math.min(maxLength, availableLength)),
+    min: resolvedMin,
+    max: Math.max(resolvedMin, Math.min(maxLength, availableLength)),
   };
 }
 
@@ -70,10 +70,10 @@ function resolveConstraints(
   const width = resolveAxisConstraints(host.width, minSize.width, maxSize.width);
   const height = resolveAxisConstraints(host.height, minSize.height, maxSize.height);
   return {
-    minWidth: width.minWidth,
-    maxWidth: width.maxWidth,
-    minHeight: height.minWidth,
-    maxHeight: height.maxWidth,
+    minWidth: width.min,
+    maxWidth: width.max,
+    minHeight: height.min,
+    maxHeight: height.max,
   };
 }
 

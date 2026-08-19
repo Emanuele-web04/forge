@@ -515,6 +515,13 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
     guest.emit("did-start-navigation", {}, "https://example.test/", false, true);
 
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBe("Connection refused.");
+
+    guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", "https://example.test/", true);
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBe("Connection refused.");
+
+    guest.currentUrl = "https://example.test/";
+    guest.emit("did-navigate");
     expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBeNull();
   });
 

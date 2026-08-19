@@ -98,3 +98,36 @@ export function removePanelResizeOverlay(overlay: HTMLDivElement): void {
   overlay.remove();
   notifyNativeSurfaceOcclusionChange();
 }
+
+export function attachPanelPointerOverlaySession(
+  overlay: HTMLElement,
+  handlers: {
+    onMove: (event: PointerEvent) => void;
+    onRelease: () => void;
+    onAbort: () => void;
+  },
+): () => void {
+  const onMove = (event: PointerEvent) => {
+    if (event.buttons === 0) {
+      handlers.onAbort();
+      return;
+    }
+    handlers.onMove(event);
+  };
+  const onRelease = () => handlers.onRelease();
+  const onAbort = () => handlers.onAbort();
+
+  overlay.addEventListener("pointermove", onMove);
+  overlay.addEventListener("pointerup", onRelease);
+  overlay.addEventListener("pointercancel", onAbort);
+  window.addEventListener("blur", onAbort);
+  document.addEventListener("mouseleave", onAbort);
+
+  return () => {
+    overlay.removeEventListener("pointermove", onMove);
+    overlay.removeEventListener("pointerup", onRelease);
+    overlay.removeEventListener("pointercancel", onAbort);
+    window.removeEventListener("blur", onAbort);
+    document.removeEventListener("mouseleave", onAbort);
+  };
+}
