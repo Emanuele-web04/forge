@@ -99,10 +99,10 @@ replace_exact(
 
 p = Path("apps/web/src/composerDraftStore.models.test.ts")
 s = p.read_text()
-old = "      pi: [],\n    },"
+old = "        pi: [],\n      },"
 if s.count(old) != 4:
     raise SystemExit(f"composerDraftStore model maps: expected 4, found {s.count(old)}")
-p.write_text(s.replace(old, "      pi: [],\n      copilot: [],\n    },"))
+p.write_text(s.replace(old, "        pi: [],\n        copilot: [],\n      },"))
 
 # Complete the ProviderKind switch. Copilot has no static model option object.
 replace_exact(
