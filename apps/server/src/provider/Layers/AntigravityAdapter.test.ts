@@ -1752,6 +1752,12 @@ describe("Antigravity background task helpers (#752)", () => {
 
     const senderOnly = parseAntigravitySystemMessage("<SYSTEM_MESSAGE> sender=task-x77 done");
     expect(senderOnly).toMatchObject({ isSystemMessage: true, taskId: "task-x77" });
+
+    expect(
+      parseAntigravitySystemMessage(
+        "<SYSTEM_MESSAGE> Task id 'task-clean' completed with 0 failed and no error",
+      ),
+    ).toMatchObject({ taskId: "task-clean", isFailure: false });
   });
 
   it("detects background task starts from run_command tool output", () => {
@@ -1796,6 +1802,22 @@ describe("Antigravity background task helpers (#752)", () => {
     ).toBeNull();
 
     expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "echo task-42" },
+        { toolOutput: "foreground command printed task-42 and exited with code 0" },
+      ),
+    ).toBeNull();
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev", WaitMsBeforeAsync: 1000 },
+        { failed: true },
+      ),
+    ).toBeNull();
+
+    expect(
       detectAntigravityBackgroundTaskStart("run_command", {
         CommandLine: "npm run dev",
         WaitMsBeforeAsync: 1000,
@@ -1822,6 +1844,16 @@ describe("Antigravity background task helpers (#752)", () => {
       description: "Scheduled timer",
       isBackground: true,
     });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "schedule",
+        { Prompt: "remind me later" },
+        {
+          error: "scheduler unavailable",
+        },
+      ),
+    ).toBeNull();
 
     expect(detectAntigravityBackgroundTaskStart("list_files")).toBeNull();
   });
@@ -1893,8 +1925,7 @@ describe("Antigravity background task helpers (#752)", () => {
                   conversationId: "conversation-background-stop",
                   transcriptPath: transcriptFile,
                 })}`,
-                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}}}',
-                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-42\' is now running in the background"}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
                 'stop\t{"stepIdx":2}',
                 "",
               ].join("\n"),
@@ -1949,6 +1980,8 @@ describe("Antigravity background task helpers (#752)", () => {
 
   it("settles pending background tasks on session replacement and process exit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-background-restart-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
     let eventFile: string | undefined;
     let child: ChildProcess | undefined;
     const spawnProcess = ((
@@ -1979,7 +2012,7 @@ describe("Antigravity background task helpers (#752)", () => {
                 event.type === "task.updated" ||
                 event.type === "task.completed",
             ),
-            Stream.take(4),
+            Stream.take(6),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -2011,9 +2044,43 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
+              `pre-invocation\t${JSON.stringify({
+                conversationId: "conversation-background-restart",
+                transcriptPath: transcriptFile,
+              })}\n`,
+            ),
+          );
+          yield* Effect.sleep("150 millis");
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              transcriptFile,
+              `${JSON.stringify({
+                step_index: 2,
+                type: "SYSTEM_MESSAGE",
+                content: "<SYSTEM_MESSAGE> Task id 'task-buffered' exited with code 0",
+              })}\n`,
+            ),
+          );
+          yield* Effect.sleep("150 millis");
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
               [
-                'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}}}',
-                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-exit\' is now running in the background"}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Effect.sleep("150 millis");
+          child?.emit("close", 0, null);
+          yield* Effect.sleep("50 millis");
+
+          yield* adapter.sendTurn({ threadId, input: "run final tests", attachments: [] });
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-exit\' is now running in the background"}',
                 "",
               ].join("\n"),
             ),
@@ -2029,12 +2096,18 @@ describe("Antigravity background task helpers (#752)", () => {
             "task.updated",
             "task.started",
             "task.completed",
+            "task.started",
+            "task.completed",
           ]);
           expect(taskEvents[1]?.payload).toMatchObject({
             taskId: "task-restart",
             status: "killed",
           });
           expect(taskEvents[3]?.payload).toMatchObject({
+            taskId: "task-1",
+            status: "completed",
+          });
+          expect(taskEvents[5]?.payload).toMatchObject({
             taskId: "task-exit",
             status: "failed",
           });
