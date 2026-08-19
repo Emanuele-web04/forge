@@ -225,6 +225,11 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara read the board",
     failed: "Synara couldn't read the board",
   },
+  synara_read_kanban_card: {
+    running: "Synara is reading a board card",
+    completed: "Synara read a board card",
+    failed: "Synara couldn't read a board card",
+  },
   synara_create_kanban_task: {
     running: "Synara is creating a board task",
     completed: "Synara created a board task",

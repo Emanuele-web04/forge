@@ -219,7 +219,7 @@ describe("agent gateway kanban tools", () => {
             startTurn: (() => Effect.succeed({})) as never,
             interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
           },
-        })[0]!,
+        }).find((entry) => entry.definition.name === "synara_read_kanban_board")!,
       });
 
       const response = yield* post(transport, "token-1", {
@@ -281,7 +281,7 @@ describe("agent gateway kanban tools", () => {
             }) as never,
             interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
           },
-        })[2]!,
+        }).find((entry) => entry.definition.name === "synara_move_kanban_card")!,
       });
 
       const response = yield* post(transport, "token-1", {

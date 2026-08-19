@@ -87,6 +87,17 @@ interface ReadKanbanCard {
   column: KanbanColumnV2Key;
 }
 
+/**
+ * Hard cap on the cards `synara_read_kanban_board` will materialize and
+ * serialize into one MCP response. The board read loads the durable shell
+ * snapshot and derives a card for every non-archived thread in JS; without a
+ * bound a single workspace with tens of thousands of threads would hydrate
+ * them all into one multi-MB JSON blob (memory + latency). When the live card
+ * count exceeds this cap the read stops and reports `truncated: true` so a
+ * caller can fall back to scoped reads (synara_read_kanban_card) instead.
+ */
+const MAX_CARDS_PER_BOARD = 500;
+
 function deriveCard(thread: OrchestrationThreadShell, now: number): ReadKanbanCard {
   const pr = thread.lastKnownPr ?? null;
   const input = toKanbanThreadDerivationInput(thread);
@@ -185,6 +196,8 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           .getShellSnapshot()
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         const at = now();
+        let emittedCardCount = 0;
+        let truncated = false;
         const projects = snapshot.projects
           .filter((project) => (projectId ? project.id === projectId : true))
           .filter((project) =>
@@ -205,8 +218,16 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             for (const thread of snapshot.threads) {
               if (thread.projectId !== project.id) continue;
               if ((thread.archivedAt ?? null) !== null) continue;
+              // Stop materializing once the board-wide cap is reached: the
+              // response stays bounded and the `truncated` flag tells the
+              // caller the board is incomplete (scoped reads are the fallback).
+              if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
+                truncated = true;
+                break;
+              }
               const card = deriveCard(thread, at);
               columnBuckets[card.column].push(card);
+              emittedCardCount += 1;
             }
             for (const bucket of Object.values(columnBuckets)) {
               bucket.sort((a, b) => (a.summary.updatedAt < b.summary.updatedAt ? 1 : -1));
@@ -224,6 +245,48 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         return mcpToolResultJson({
           projects,
           asOf: new Date(at).toISOString(),
+          callerThreadId: context.callerThreadId,
+          truncated,
+          ...(truncated
+            ? {
+                truncatedReason: `Board read capped at ${MAX_CARDS_PER_BOARD} cards; use synara_read_kanban_card for a single thread.`,
+              }
+            : {}),
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const readCard: ToolEntry = {
+    requiredCapability: "thread:read",
+    definition: {
+      name: "synara_read_kanban_card",
+      description:
+        "Read a single Kanban card by thread id: its column (Draft, In Progress, Awaiting you, Done), provider/model, branch/worktree, PR state, thread summary, and attention flags. Bounded and cheap — reads one thread shell rather than the whole board, so prefer it to check a single card's state without loading synara_read_kanban_board. Column and attention derive from the same shared model as the board UI.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: { type: "string", description: "Thread id of the card to read." },
+        },
+        required: ["threadId"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Read a Synara kanban card", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId", { required: true })!;
+        const thread = yield* requireThreadShell(threadId).pipe(
+          Effect.mapError((error) => new ToolInputError(errorText(error))),
+        );
+        if ((thread.archivedAt ?? null) !== null) {
+          return yield* Effect.fail(
+            new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
+          );
+        }
+        const card = deriveCard(thread, now());
+        return mcpToolResultJson({
+          card,
+          asOf: new Date(now()).toISOString(),
           callerThreadId: context.callerThreadId,
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -448,5 +511,5 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       ).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
-  return [readBoard, createTask, moveCard];
+  return [readBoard, readCard, createTask, moveCard];
 }

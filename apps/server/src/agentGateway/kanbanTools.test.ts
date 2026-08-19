@@ -387,6 +387,100 @@ describe("synara_read_kanban_board", () => {
     expect(card?.model).toBe("gpt-5.6-sol");
     expect(card?.summary).toBeTruthy();
   });
+
+  it("caps the board at MAX_CARDS_PER_BOARD and reports truncated", async () => {
+    // 501 threads (one over the cap) across two projects.
+    const threads: OrchestrationThreadShell[] = [];
+    for (let index = 0; index < 501; index += 1) {
+      threads.push(makeThreadShell(`thread-${index}`, "project-a"));
+    }
+    const { tools } = makeTools({
+      threads,
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
+    const payload = jsonText(result) as {
+      truncated: boolean;
+      truncatedReason?: string;
+      projects: Array<{ columns: Array<{ cards: unknown[] }> }>;
+    };
+    expect(payload.truncated).toBe(true);
+    expect(payload.truncatedReason).toContain("synara_read_kanban_card");
+    const totalCards = payload.projects[0]!.columns.reduce(
+      (sum, column) => sum + column.cards.length,
+      0,
+    );
+    expect(totalCards).toBe(500);
+  });
+
+  it("does not report truncated under the cap", async () => {
+    const { tools } = makeTools({
+      threads: [makeThreadShell("thread-draft", "project-a")],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
+    const payload = jsonText(result) as { truncated: boolean };
+    expect(payload.truncated).toBe(false);
+  });
+});
+
+describe("synara_read_kanban_card", () => {
+  it("returns the single card with column and attention flags", async () => {
+    const waiting = makeSessionShell("thread-waiting", "project-a", {
+      hasPendingApprovals: true,
+    });
+    const { tools } = makeTools({
+      threads: [waiting],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
+      threadId: "thread-waiting",
+    });
+    const payload = jsonText(result) as {
+      card: { threadId: string; column: string; attention: string[]; model: string };
+      asOf: string;
+      callerThreadId: string;
+    };
+    expect(payload.card.threadId).toBe("thread-waiting");
+    expect(payload.card.column).toBe("awaitingYou");
+    expect(payload.card.attention).toContain("awaiting-approval");
+    expect(payload.card.model).toBe("gpt-5.6-sol");
+    expect(payload.asOf).toBe(NOW_ISO);
+    expect(payload.callerThreadId).toBe("thread-caller");
+  });
+
+  it("rejects a missing thread with an error result", async () => {
+    const { tools } = makeTools({
+      threads: [],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
+      threadId: "thread-missing",
+    });
+    expect(result.isError).toBe(true);
+    const payload = jsonText(result) as { __errorText?: string };
+    expect(payload.__errorText).toContain("thread-missing");
+  });
+
+  it("rejects an archived thread", async () => {
+    const archived = makeThreadShell("thread-archived", "project-a", {
+      archivedAt: NOW_ISO,
+    });
+    const { tools } = makeTools({
+      threads: [archived],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
+      threadId: "thread-archived",
+    });
+    expect(result.isError).toBe(true);
+    const payload = jsonText(result) as { __errorText?: string };
+    expect(payload.__errorText).toContain("archived");
+  });
 });
 
 describe("synara_create_kanban_task", () => {
