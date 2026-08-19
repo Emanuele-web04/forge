@@ -401,9 +401,8 @@ export function makeCopilotAdapter(settings: CopilotAcpRuntimeSettings = {}) {
           let ctx: AcpSessionContext | undefined;
           const configured = input.providerOptions?.copilot;
           const resumeSessionId = parseResumeCursor(input.resumeCursor);
-          const effectiveSettings: CopilotAcpRuntimeSettings = {
-            binaryPath: configured?.binaryPath ?? settings.binaryPath,
-          };
+          const binaryPath = configured?.binaryPath ?? settings.binaryPath;
+          const effectiveSettings: CopilotAcpRuntimeSettings = binaryPath ? { binaryPath } : {};
           const acp = yield* makeCopilotAcpRuntime({
             copilotSettings: effectiveSettings,
             childProcessSpawner,
@@ -1009,8 +1008,9 @@ export function makeCopilotAdapter(settings: CopilotAcpRuntimeSettings = {}) {
         }
         const scope = yield* Scope.make("sequential");
         return yield* Effect.gen(function* () {
+          const binaryPath = input.binaryPath ?? settings.binaryPath;
           const runtime = yield* makeCopilotAcpRuntime({
-            copilotSettings: { binaryPath: input.binaryPath ?? settings.binaryPath },
+            copilotSettings: binaryPath ? { binaryPath } : {},
             childProcessSpawner,
             cwd,
             clientInfo: { name: "Synara model discovery", version: "0.0.0" },
