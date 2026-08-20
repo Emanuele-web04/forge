@@ -1363,11 +1363,17 @@ export const ThreadTurnStartCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
-  // Server-only (quit resume): accept the turn only while the thread is still exactly
-  // as recorded — same latest turn, not archived, nothing in flight, not completed on
-  // its own. Clients cannot set it: ClientThreadTurnStartCommand omits the field, so
-  // decoding strips any spoofed value.
-  resumePrecondition: Schema.optional(Schema.Struct({ expectedLatestTurnId: TurnId })),
+  // Server-only (quit resume): accept the turn only while the thread is not archived,
+  // has nothing in flight, and no turn finished on its own since the record was
+  // taken (the recorded turn itself, or any later one). Clients cannot set it:
+  // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
+  resumePrecondition: Schema.optional(
+    Schema.Struct({
+      /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+      recordedTurnId: Schema.NullOr(TurnId),
+      recordedAt: IsoDateTime,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 

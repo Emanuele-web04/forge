@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 import { decideOrchestrationCommand } from "./decider.ts";
 
 const NOW = "2026-07-19T00:00:00.000Z";
+const RECORDED_AT = "2026-07-18T23:00:00.000Z";
+const BEFORE_RECORD = "2026-07-18T22:00:00.000Z";
 const THREAD_ID = ThreadId.makeUnsafe("thread-resume");
 const RECORDED_TURN_ID = TurnId.makeUnsafe("turn-recorded");
 
@@ -58,18 +60,19 @@ function makeReadModel(input: {
 function makeLatestTurn(
   state: OrchestrationLatestTurn["state"],
   id: TurnId = RECORDED_TURN_ID,
+  completedAt: string = NOW,
 ): OrchestrationLatestTurn {
   return {
     turnId: id,
     state,
     requestedAt: NOW,
     startedAt: NOW,
-    completedAt: state === "running" ? null : NOW,
+    completedAt: state === "running" ? null : completedAt,
     assistantMessageId: null,
   };
 }
 
-function resumeTurnStart(): OrchestrationCommand {
+function resumeTurnStart(recordedTurnId: TurnId | null = RECORDED_TURN_ID): OrchestrationCommand {
   return {
     type: "thread.turn.start",
     commandId: CommandId.makeUnsafe("cmd-resume"),
@@ -83,16 +86,29 @@ function resumeTurnStart(): OrchestrationCommand {
     dispatchMode: "queue",
     interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     runtimeMode: "full-access",
-    resumePrecondition: { expectedLatestTurnId: RECORDED_TURN_ID },
+    resumePrecondition: { recordedTurnId, recordedAt: RECORDED_AT },
     createdAt: NOW,
   };
 }
 
-const decide = (readModel: OrchestrationReadModel) =>
-  decideOrchestrationCommand({ command: resumeTurnStart(), readModel });
+const decide = (readModel: OrchestrationReadModel, recordedTurnId?: TurnId | null) =>
+  decideOrchestrationCommand({ command: resumeTurnStart(recordedTurnId), readModel });
 
-const expectRejected = async (readModel: OrchestrationReadModel, detail: string) => {
-  const error = await Effect.runPromise(Effect.flip(decide(readModel)));
+const expectAccepted = async (
+  readModel: OrchestrationReadModel,
+  recordedTurnId?: TurnId | null,
+) => {
+  const decided = await Effect.runPromise(decide(readModel, recordedTurnId));
+  const events = Array.isArray(decided) ? decided : [decided];
+  expect(events.map((event) => event.type)).toContain("thread.turn-start-requested");
+};
+
+const expectRejected = async (
+  readModel: OrchestrationReadModel,
+  detail: string,
+  recordedTurnId?: TurnId | null,
+) => {
+  const error = await Effect.runPromise(Effect.flip(decide(readModel, recordedTurnId)));
   expect(error).toMatchObject({
     _tag: "OrchestrationCommandInvariantError",
     commandType: "thread.turn.start",
@@ -101,18 +117,29 @@ const expectRejected = async (readModel: OrchestrationReadModel, detail: string)
 };
 
 describe("decider thread.turn.start resumePrecondition", () => {
-  it("accepts the continuation while the recorded turn is still the latest and ended by interruption", async () => {
-    const decided = await Effect.runPromise(
-      decide(makeReadModel({ latestTurn: makeLatestTurn("interrupted") })),
-    );
-    const events = Array.isArray(decided) ? decided : [decided];
-    expect(events.map((event) => event.type)).toContain("thread.turn-start-requested");
+  it("accepts the continuation while the recorded turn ended by interruption", async () => {
+    await expectAccepted(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }));
   });
 
-  it("rejects when the thread moved on to another turn", async () => {
+  it("accepts a chat that was still connecting when recorded", async () => {
+    await expectAccepted(makeReadModel({ latestTurn: null }), null);
+    await expectAccepted(
+      makeReadModel({
+        latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-older"), BEFORE_RECORD),
+      }),
+      null,
+    );
+  });
+
+  it("rejects when a newer turn completed on its own since the record", async () => {
     await expectRejected(
       makeReadModel({ latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-newer")) }),
-      "Thread 'thread-resume' moved on after it was remembered for resume.",
+      "Thread 'thread-resume' finished on its own; there is nothing to resume.",
+    );
+    await expectRejected(
+      makeReadModel({ latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-newer")) }),
+      "Thread 'thread-resume' finished on its own; there is nothing to resume.",
+      null,
     );
   });
 

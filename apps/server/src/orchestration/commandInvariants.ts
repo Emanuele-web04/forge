@@ -479,39 +479,48 @@ export function requireNonNegativeInteger(input: {
 
 export type ThreadResumePreconditionViolation =
   | "thread-archived"
-  | "turn-changed"
   | "turn-completed"
   | "turn-in-flight";
 
 export interface ThreadResumePrecondition {
-  readonly expectedLatestTurnId: TurnId;
+  /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+  readonly recordedTurnId: TurnId | null;
+  readonly recordedAt: string;
 }
 
 /**
  * Shared by the boot-time quit-resume planner and the decider: a chat remembered
- * at quit is continued only while the thread is still exactly as it was recorded
- * — not archived, same latest turn, nothing in flight — and that turn did not
- * finish on its own (a naturally completed turn has nothing to continue; an
- * interrupted or errored one does).
+ * at quit is continued only while the thread is not archived, has nothing in
+ * flight, and no turn finished on its own since the record was taken — neither
+ * the recorded turn (it was running then, so it can only have completed later)
+ * nor any newer one. A turn that completed before the record is the previous
+ * turn of a chat that was still connecting and does not count; an interrupted or
+ * errored turn is exactly what a continuation is for.
  */
 export function threadResumePreconditionViolation(
   thread: {
     readonly archivedAt?: string | null | undefined;
     readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
-    readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null;
+    readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state" | "completedAt"> | null;
   },
   precondition: ThreadResumePrecondition,
 ): ThreadResumePreconditionViolation | null {
   if (thread.archivedAt != null) {
     return "thread-archived";
   }
-  if ((thread.latestTurn?.turnId ?? null) !== precondition.expectedLatestTurnId) {
-    return "turn-changed";
-  }
   if (threadHasInFlightTurn(thread)) {
     return "turn-in-flight";
   }
-  if (thread.latestTurn?.state === "completed") {
+  const latestTurn = thread.latestTurn;
+  if (
+    latestTurn !== null &&
+    latestTurn.state === "completed" &&
+    (latestTurn.turnId === precondition.recordedTurnId ||
+      // A completed turn without a completion time is unknowable; stay on the
+      // side of not sending an unwanted message.
+      latestTurn.completedAt === null ||
+      latestTurn.completedAt >= precondition.recordedAt)
+  ) {
     return "turn-completed";
   }
   return null;
@@ -524,8 +533,6 @@ export function threadResumePreconditionDetail(
   switch (violation) {
     case "thread-archived":
       return `Thread '${threadId}' was archived after it was remembered for resume.`;
-    case "turn-changed":
-      return `Thread '${threadId}' moved on after it was remembered for resume.`;
     case "turn-completed":
       return `Thread '${threadId}' finished on its own; there is nothing to resume.`;
     case "turn-in-flight":
