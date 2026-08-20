@@ -3877,6 +3877,23 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   }
 }
 
+function hideDesktopWindowForImmediateQuit(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      window.setSkipTaskbar(true);
+    }
+    window.hide();
+  } catch (error: unknown) {
+    writeDesktopLogHeader(
+      `hide window for quit failed message=${formatErrorMessage(error)}`,
+    );
+  }
+}
+
 // Keeps Electron alive long enough for backend finalizers to reap provider child processes.
 async function shutdownDesktopRuntime(reason: string): Promise<void> {
   if (desktopShutdownPromise) {
@@ -3884,6 +3901,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
+  hideDesktopWindowForImmediateQuit();
   writeDesktopLogHeader(`${reason} shutdown start`);
   const shutdown = runAfterDesktopShutdown(
     stopBackendAndWaitForExit(),

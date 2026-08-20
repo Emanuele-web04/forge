@@ -95,43 +95,17 @@ export function runningChatsQuitCopy(
   };
 }
 
-export function runningChatIdsStillActive(
-  state: RunningChatsQuitStoreSlice,
-  chatIds: ReadonlyArray<string>,
-): boolean {
-  if (chatIds.length === 0) {
-    return false;
-  }
-  const runningIds = new Set(listRunningChatsFromDesktopStore(state).map((chat) => chat.id));
-  return chatIds.some((id) => runningIds.has(id));
-}
-
-export const RUNNING_CHATS_QUIT_STOP_TIMEOUT_MS = 5000;
-const RUNNING_CHATS_QUIT_STOP_POLL_MS = 50;
-
 export async function stopRunningChatsForQuit(input: {
   readonly chats: ReadonlyArray<Pick<RunningChatQuitSummary, "id">>;
-  readonly dispatchInterrupt: (threadId: string) => Promise<void>;
-  readonly isStillRunning: () => boolean;
-  readonly nowMs?: () => number;
-  readonly sleep?: (ms: number) => Promise<void>;
-  readonly timeoutMs?: number;
+  readonly dispatchInterrupt: (threadId: string) => Promise<void> | void;
 }): Promise<void> {
   if (input.chats.length === 0) {
     return;
   }
 
-  await Promise.allSettled(input.chats.map((chat) => input.dispatchInterrupt(chat.id)));
-  if (!input.isStillRunning()) {
-    return;
-  }
-
-  const nowMs = input.nowMs ?? Date.now;
-  const sleep = input.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = nowMs() + (input.timeoutMs ?? RUNNING_CHATS_QUIT_STOP_TIMEOUT_MS);
-  while (input.isStillRunning() && nowMs() < deadline) {
-    await sleep(RUNNING_CHATS_QUIT_STOP_POLL_MS);
-  }
+  await Promise.allSettled(
+    input.chats.map((chat) => Promise.resolve(input.dispatchInterrupt(chat.id))),
+  );
 }
 
 function compareRunningChatSummaries(

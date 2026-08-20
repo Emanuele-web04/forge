@@ -4,7 +4,6 @@ import {
   isRunningChatForQuit,
   listRunningChatsFromDesktopStore,
   runningChatDisplayTitle,
-  runningChatIdsStillActive,
   runningChatsQuitCopy,
   stopRunningChatsForQuit,
 } from "./runningChatsQuitConfirmation";
@@ -70,22 +69,12 @@ describe("running chats quit confirmation", () => {
     });
   });
 
-  it("reports whether listed chats are still running", () => {
-    const state = {
-      sidebarThreadSummaryById: {
-        a: { id: "a", title: "Sidebar running", session: { status: "running" } },
-        idle: { id: "idle", title: "Idle", session: { status: "ready" } },
-      },
-    };
-    expect(runningChatIdsStillActive(state, ["a"])).toBe(true);
-    expect(runningChatIdsStillActive(state, ["idle"])).toBe(false);
-    expect(runningChatIdsStillActive(state, [])).toBe(false);
-  });
-
-  it("interrupts running chats and waits until they settle", async () => {
+  it("interrupts running chats without waiting for them to settle", async () => {
     const interrupted: string[] = [];
-    let stillRunning = true;
-    const sleepCalls: number[] = [];
+    let settleInterrupt: (() => void) | undefined;
+    const hanging = new Promise<void>((resolve) => {
+      settleInterrupt = resolve;
+    });
 
     const stopping = stopRunningChatsForQuit({
       chats: [
@@ -94,37 +83,25 @@ describe("running chats quit confirmation", () => {
       ],
       dispatchInterrupt: async (threadId) => {
         interrupted.push(threadId);
+        if (threadId === "b") {
+          await hanging;
+        }
       },
-      isStillRunning: () => stillRunning,
-      nowMs: () => 0,
-      sleep: async (ms) => {
-        sleepCalls.push(ms);
-        stillRunning = false;
-      },
-      timeoutMs: 200,
     });
 
-    await stopping;
     expect(interrupted).toEqual(["a", "b"]);
-    expect(sleepCalls).toEqual([50]);
+    settleInterrupt?.();
+    await stopping;
   });
 
-  it("still quits if interrupt dispatch fails or the wait times out", async () => {
-    let now = 0;
+  it("still returns if interrupt dispatch fails", async () => {
     await expect(
       stopRunningChatsForQuit({
         chats: [{ id: "a", title: "One" }],
         dispatchInterrupt: async () => {
           throw new Error("rpc failed");
         },
-        isStillRunning: () => true,
-        nowMs: () => now,
-        sleep: async () => {
-          now += 50;
-        },
-        timeoutMs: 80,
       }),
     ).resolves.toBeUndefined();
-    expect(now).toBeGreaterThanOrEqual(80);
   });
 });

@@ -8,7 +8,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   listRunningChatsFromDesktopStore,
-  runningChatIdsStillActive,
   stopRunningChatsForQuit,
   type RunningChatQuitSummary,
 } from "~/lib/runningChatsQuitConfirmation";
@@ -45,28 +44,23 @@ export function RunningChatsQuitCoordinator() {
         return;
       }
 
+      // Stop in the background so the window can close immediately.
       void stopRunningChatsForQuit({
         chats: chatsToStop,
-        dispatchInterrupt: async (threadId) => {
+        dispatchInterrupt: (threadId) => {
           const api = readNativeApi();
           if (!api) {
             return;
           }
-          await api.orchestration.dispatchCommand({
+          return api.orchestration.dispatchCommand({
             type: "thread.turn.interrupt",
             commandId: newCommandId(),
             threadId: ThreadId.makeUnsafe(threadId),
             createdAt: new Date().toISOString(),
           });
         },
-        isStillRunning: () =>
-          runningChatIdsStillActive(
-            useStore.getState(),
-            chatsToStop.map((chat) => chat.id),
-          ),
-      }).finally(() => {
-        reply(true);
       });
+      reply(true);
     },
     [chats],
   );
