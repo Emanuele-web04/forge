@@ -1883,6 +1883,10 @@ describe("Antigravity background task helpers (#752)", () => {
     let eventFile: string | undefined;
     let child: ChildProcess | undefined;
     let teardownCalls = 0;
+    let resolveTeardown = (): void => undefined;
+    const teardownObserved = new Promise<void>((resolve) => {
+      resolveTeardown = resolve;
+    });
     const spawnProcess = ((
       _command: string,
       _args: readonly string[],
@@ -1904,31 +1908,18 @@ describe("Antigravity background task helpers (#752)", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
-          const firstTaskStarted = yield* Deferred.make<void>();
-          const secondTaskStarted = yield* Deferred.make<void>();
-          const firstTaskCompleted = yield* Deferred.make<void>();
-          const secondTaskCompleted = yield* Deferred.make<void>();
-          const taskEventsFiber = yield* adapter.streamEvents.pipe(
-            Stream.tap((event) => {
-              if (event.type === "task.started" && event.payload.taskId === "task-1") {
-                return Deferred.succeed(firstTaskStarted, undefined);
-              }
-              if (event.type === "task.started" && event.payload.taskId === "task-2") {
-                return Deferred.succeed(secondTaskStarted, undefined);
-              }
-              if (event.type === "task.completed" && event.payload.taskId === "task-1") {
-                return Deferred.succeed(firstTaskCompleted, undefined);
-              }
-              if (event.type === "task.completed" && event.payload.taskId === "task-2") {
-                return Deferred.succeed(secondTaskCompleted, undefined);
-              }
-              return Effect.void;
-            }),
-            Stream.filter(
-              (event) => event.type === "task.started" || event.type === "task.completed",
+          const toolsCompleted = yield* Deferred.make<void>();
+          const runtimeTaskEvents: string[] = [];
+          let completedTools = 0;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type.startsWith("task.")) runtimeTaskEvents.push(event.type);
+                if (event.type === "item.completed" && ++completedTools === 2) {
+                  yield* Deferred.succeed(toolsCompleted, undefined);
+                }
+              }),
             ),
-            Stream.take(4),
-            Stream.runCollect,
             Effect.forkChild,
           );
           const threadId = ThreadId.makeUnsafe("thread-antigravity-background-stop");
@@ -1949,27 +1940,23 @@ describe("Antigravity background task helpers (#752)", () => {
                   conversationId: "conversation-background-stop",
                   transcriptPath: transcriptFile,
                 })}`,
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}}}',
                 'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}}}',
                 'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
-                'stop\t{"stepIdx":3}',
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-real-a"}}}',
+                'stop\t{"stepIdx":4}',
                 "",
               ].join("\n"),
             ),
           );
-          yield* Effect.all([Deferred.await(firstTaskStarted), Deferred.await(secondTaskStarted)], {
-            discard: true,
-          }).pipe(Effect.timeout("2 seconds"));
+          yield* Deferred.await(toolsCompleted).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(0);
 
           yield* Effect.sync(() => {
             fsSync.appendFileSync(
               transcriptFile,
               [
-                JSON.stringify({
-                  step_index: 4,
-                  type: "SYSTEM_MESSAGE",
-                  content: "<SYSTEM_MESSAGE> Task id 'task-real-a' exited with code 0",
-                }),
                 JSON.stringify({
                   step_index: 5,
                   type: "SYSTEM_MESSAGE",
@@ -1980,27 +1967,10 @@ describe("Antigravity background task helpers (#752)", () => {
             );
             fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":6}\n');
           });
-          yield* Effect.all(
-            [Deferred.await(firstTaskCompleted), Deferred.await(secondTaskCompleted)],
-            { discard: true },
-          ).pipe(Effect.timeout("2 seconds"));
-
-          const taskEvents = Array.from(
-            yield* Fiber.join(taskEventsFiber).pipe(Effect.timeout("2 seconds")),
-          );
-          expect(taskEvents.map((event) => event.type)).toEqual([
-            "task.started",
-            "task.started",
-            "task.completed",
-            "task.completed",
-          ]);
-          expect(taskEvents.map((event) => event.payload.taskId)).toEqual([
-            "task-1",
-            "task-2",
-            "task-1",
-            "task-2",
-          ]);
+          yield* Effect.promise(() => teardownObserved).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(1);
+          expect(runtimeTaskEvents).toEqual([]);
+          yield* Fiber.interrupt(eventsFiber);
 
           child?.emit("close", 0, null);
           yield* Effect.sleep("25 millis");
@@ -2012,6 +1982,7 @@ describe("Antigravity background task helpers (#752)", () => {
               spawnProcess,
               teardownProcessTree: async () => {
                 teardownCalls += 1;
+                resolveTeardown();
               },
             }).pipe(
               Layer.provideMerge(
@@ -2074,7 +2045,7 @@ describe("Antigravity background task helpers (#752)", () => {
                   event.type === "item.completed" && event.payload.itemType === "assistant_message"
                     ? Deferred.succeed(completionBuffered, undefined)
                     : Effect.void,
-                  event.type === "task.completed" && event.payload.taskId === "task-1"
+                  event.type === "task.completed" && event.payload.taskId === "task-buffered"
                     ? Deferred.succeed(bufferedTaskCompleted, undefined)
                     : Effect.void,
                   event.type === "turn.completed"
@@ -2155,7 +2126,7 @@ describe("Antigravity background task helpers (#752)", () => {
             fs.appendFile(
               eventFile!,
               [
-                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-buffered\' is now running in the background"}',
                 "",
               ].join("\n"),
             ),
@@ -2193,7 +2164,7 @@ describe("Antigravity background task helpers (#752)", () => {
             status: "killed",
           });
           expect(taskEvents[3]?.payload).toMatchObject({
-            taskId: "task-1",
+            taskId: "task-buffered",
             status: "completed",
           });
           expect(taskEvents[5]?.payload).toMatchObject({

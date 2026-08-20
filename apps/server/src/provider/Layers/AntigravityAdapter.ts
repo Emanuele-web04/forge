@@ -101,7 +101,6 @@ type StoredTurn = {
 
 export type AntigravityTrackedBackgroundTask = {
   readonly taskId: string;
-  readonly providerTaskId?: string;
   readonly taskType: string;
   readonly description?: string;
   readonly startedAt: string;
@@ -136,14 +135,16 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
+  hookPollPromise?: Promise<void>;
   processedTranscriptBytes: number;
   processedTranscriptPath?: string | undefined;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
   nextToolSequence: number;
   pendingBackgroundTasks: Map<string, AntigravityTrackedBackgroundTask>;
+  pendingAnonymousBackgroundTasks: number;
   pendingBackgroundTaskCompletions: AntigravitySystemMessageInfo[];
-  nextBackgroundTaskId: number;
+  latestBackgroundCompletionStepIndex?: number;
   /**
    * Conversations owned by spawned subagents, keyed by conversation id.
    * The capture hook is installed globally, so a subagent CLI spawned by the
@@ -164,7 +165,6 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
-  stopAwaitingBackgroundTasks: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
 };
@@ -1101,6 +1101,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         } satisfies ProviderRuntimeEvent);
       }
       context.pendingBackgroundTasks.clear();
+      context.pendingAnonymousBackgroundTasks = 0;
       context.pendingBackgroundTaskCompletions.length = 0;
     };
 
@@ -1120,27 +1121,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         } satisfies ProviderRuntimeEvent);
       }
       context.pendingBackgroundTasks.clear();
+      context.pendingAnonymousBackgroundTasks = 0;
       context.pendingBackgroundTaskCompletions.length = 0;
     };
 
     const backgroundCompletionCandidate = (
       message: AntigravitySystemMessageInfo,
     ): string | undefined => message.taskId ?? message.sender;
-
-    const matchTrackedBackgroundTaskId = (
-      context: AntigravitySessionContext,
-      candidateId: string | undefined,
-    ): string | undefined => {
-      const direct = matchAntigravityTrackedTaskId(
-        candidateId,
-        context.pendingBackgroundTasks.keys(),
-      );
-      if (direct || !candidateId) return direct;
-      for (const task of context.pendingBackgroundTasks.values()) {
-        if (task.providerTaskId === undefined) return task.taskId;
-      }
-      return undefined;
-    };
 
     const settleTrackedBackgroundTask = (
       context: AntigravitySessionContext,
@@ -1172,11 +1159,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       taskType: string,
       source: { readonly name: string; readonly args?: Record<string, unknown> },
     ): void => {
-      const taskId = start.taskId ?? `task-${context.nextBackgroundTaskId++}`;
+      if (!start.taskId) {
+        if (context.pendingBackgroundTaskCompletions.length > 0) {
+          context.pendingBackgroundTaskCompletions.shift();
+        } else {
+          context.pendingAnonymousBackgroundTasks += 1;
+        }
+        return;
+      }
+      const taskId = start.taskId;
       if (context.pendingBackgroundTasks.has(taskId)) return;
       context.pendingBackgroundTasks.set(taskId, {
         taskId,
-        ...(start.taskId ? { providerTaskId: start.taskId } : {}),
         taskType,
         ...(start.description ? { description: start.description } : {}),
         startedAt: new Date().toISOString(),
@@ -1194,7 +1188,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
       const completionIndex = context.pendingBackgroundTaskCompletions.findIndex(
         (message) =>
-          matchTrackedBackgroundTaskId(context, backgroundCompletionCandidate(message)) === taskId,
+          matchAntigravityTrackedTaskId(
+            backgroundCompletionCandidate(message),
+            context.pendingBackgroundTasks.keys(),
+          ) === taskId,
       );
       if (completionIndex < 0) return;
       const [completion] = context.pendingBackgroundTaskCompletions.splice(completionIndex, 1);
@@ -1203,14 +1200,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
     const teardownStoppedTurnIfIdle = (context: AntigravitySessionContext): void => {
       if (
-        !context.stopAwaitingBackgroundTasks ||
         !context.activeProcess ||
         context.turnTerminalEmitted ||
-        context.pendingBackgroundTasks.size > 0
+        context.pendingBackgroundTasks.size > 0 ||
+        context.pendingAnonymousBackgroundTasks > 0
       ) {
         return;
       }
-      context.stopAwaitingBackgroundTasks = false;
       const child = context.activeProcess;
       void teardownProcessTree(child).catch(() => {
         try {
@@ -1257,7 +1253,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }),
       });
       context.turnTerminalEmitted = true;
-      context.stopAwaitingBackgroundTasks = false;
       delete context.activeProcess;
       delete context.activeTurnId;
       const {
@@ -1405,9 +1400,20 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       );
       if (systemMessage?.isSystemMessage) {
         const candidateId = backgroundCompletionCandidate(systemMessage);
-        const matchedTaskId = matchTrackedBackgroundTaskId(context, candidateId);
+        if (candidateId && typeof stepIndex === "number") {
+          context.latestBackgroundCompletionStepIndex = Math.max(
+            context.latestBackgroundCompletionStepIndex ?? -1,
+            stepIndex,
+          );
+        }
+        const matchedTaskId = matchAntigravityTrackedTaskId(
+          candidateId,
+          context.pendingBackgroundTasks.keys(),
+        );
         if (matchedTaskId) {
           settleTrackedBackgroundTask(context, matchedTaskId, systemMessage);
+        } else if (candidateId && context.pendingAnonymousBackgroundTasks > 0) {
+          context.pendingAnonymousBackgroundTasks -= 1;
         } else if (candidateId) {
           context.pendingBackgroundTaskCompletions.push(systemMessage);
           if (context.pendingBackgroundTaskCompletions.length > 32) {
@@ -1662,9 +1668,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
     };
 
-    const pollHookFile = async (context: AntigravitySessionContext) => {
+    const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
+      let latestStopStepIndex: number | undefined;
+      let sawStopWithoutStepIndex = false;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
         batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
@@ -1851,6 +1859,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   },
                   raw: raw("background-task-killed", { taskId: matchedId }),
                 } satisfies ProviderRuntimeEvent);
+              } else if (action === "kill" && targetTaskId) {
+                context.pendingAnonymousBackgroundTasks = Math.max(
+                  0,
+                  context.pendingAnonymousBackgroundTasks - 1,
+                );
               }
             }
           }
@@ -1861,10 +1874,30 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         // alive by design to wait for the background completion and stream the
         // follow-up response; killing it aborts the task and fails the turn
         // with "Error: timeout waiting for response" (#752).
-        if (eventName === "stop") context.stopAwaitingBackgroundTasks = true;
+        if (eventName === "stop") {
+          if (stepIndex === undefined) {
+            sawStopWithoutStepIndex = true;
+          } else {
+            latestStopStepIndex = Math.max(latestStopStepIndex ?? -1, stepIndex);
+          }
+        }
       }
       await readTranscript(context);
-      teardownStoppedTurnIfIdle(context);
+      const completionStepIndex = context.latestBackgroundCompletionStepIndex;
+      const stopFollowsLatestCompletion =
+        latestStopStepIndex !== undefined
+          ? latestStopStepIndex > (completionStepIndex ?? -1)
+          : sawStopWithoutStepIndex && completionStepIndex === undefined;
+      if (stopFollowsLatestCompletion) teardownStoppedTurnIfIdle(context);
+    };
+
+    const pollHookFile = (context: AntigravitySessionContext): Promise<void> => {
+      if (context.hookPollPromise) return context.hookPollPromise;
+      const poll = pollHookFileOnce(context).finally(() => {
+        if (context.hookPollPromise === poll) delete context.hookPollPromise;
+      });
+      context.hookPollPromise = poll;
+      return poll;
     };
 
     const startSession: AntigravityAdapterShape["startSession"] = (input) =>
@@ -1939,15 +1972,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           pendingTools: [],
           nextToolSequence: 0,
           pendingBackgroundTasks: new Map(),
+          pendingAnonymousBackgroundTasks: 0,
           pendingBackgroundTaskCompletions: [],
-          nextBackgroundTaskId: 1,
           foreignConversations: new Map(),
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
           sawAssistant: false,
           interrupted: false,
           stopped: false,
-          stopAwaitingBackgroundTasks: false,
           turnTerminalEmitted: false,
         };
         sessions.set(input.threadId, context);
@@ -2064,14 +2096,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.processedSteps.clear();
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
+        context.pendingAnonymousBackgroundTasks = 0;
         context.pendingBackgroundTaskCompletions.length = 0;
+        delete context.latestBackgroundCompletionStepIndex;
         context.nextToolSequence = 0;
         context.foreignConversations.clear();
         context.surfacedToolCallCounts.clear();
         context.hookToolCallCounts.clear();
         context.sawAssistant = false;
         context.interrupted = false;
-        context.stopAwaitingBackgroundTasks = false;
         context.turnTerminalEmitted = false;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
