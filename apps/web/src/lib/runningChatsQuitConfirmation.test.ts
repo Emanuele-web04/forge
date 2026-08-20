@@ -156,7 +156,7 @@ describe("running chats quit confirmation", () => {
     expect(interrupted).toEqual(["a"]);
   });
 
-  it("falls back to plain interrupts when recording does not ack in time", async () => {
+  it("falls back to plain interrupts when recording does not ack in time, without waiting on them", async () => {
     const interrupted: string[] = [];
 
     await expect(
@@ -164,6 +164,8 @@ describe("running chats quit confirmation", () => {
         chats: [{ id: "a" }],
         dispatchInterrupt: (threadId) => {
           interrupted.push(threadId);
+          // A hanging interrupt (unresponsive server) must not hold the quit.
+          return new Promise(() => {});
         },
         resume: {
           prepare: () => new Promise(() => {}),
@@ -173,6 +175,17 @@ describe("running chats quit confirmation", () => {
     ).resolves.toEqual({ resumeRecorded: false });
 
     expect(interrupted).toEqual(["a"]);
+  });
+
+  it("survives an interrupt dispatcher that throws synchronously", async () => {
+    await expect(
+      stopRunningChatsForQuit({
+        chats: [{ id: "a" }],
+        dispatchInterrupt: () => {
+          throw new Error("sync failure");
+        },
+      }),
+    ).resolves.toEqual({ resumeRecorded: false });
   });
 
   it("skips recording entirely when there is nothing running", async () => {

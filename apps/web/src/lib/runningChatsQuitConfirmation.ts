@@ -142,9 +142,12 @@ export async function stopRunningChatsForQuit(
     }
   }
 
-  await Promise.allSettled(
-    threadIds.map((threadId) => Promise.resolve(input.dispatchInterrupt(threadId))),
-  );
+  // Fire-and-forget: the window must close as soon as the outcome is known, and an
+  // interrupt RPC against an unresponsive server could otherwise hold quit for its
+  // full transport timeout.
+  for (const threadId of threadIds) {
+    void new Promise((resolve) => resolve(input.dispatchInterrupt(threadId))).catch(() => {});
+  }
   return { resumeRecorded: false };
 }
 
