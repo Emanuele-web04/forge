@@ -34,6 +34,8 @@ export interface RunningChatsQuitDecision {
 
 export interface RunningChatsQuitDialogProps {
   readonly chats: ReadonlyArray<RunningChatQuitSummary> | null;
+  /** Quit was confirmed and is being finalized; the dialog stays visible but inert. */
+  readonly quitting?: boolean;
   readonly onStay: () => void;
   readonly onQuit: (decision: RunningChatsQuitDecision) => void;
 }
@@ -48,7 +50,12 @@ const BODY_CLASS =
 const FOOTER_CLASS = "relative flex items-center gap-2 px-3 py-2";
 const KEY_HINT_CLASS = "text-[11px] font-normal tabular-nums opacity-55";
 
-export function RunningChatsQuitDialog({ chats, onStay, onQuit }: RunningChatsQuitDialogProps) {
+export function RunningChatsQuitDialog({
+  chats,
+  quitting = false,
+  onStay,
+  onQuit,
+}: RunningChatsQuitDialogProps) {
   const copy = chats && chats.length > 0 ? runningChatsQuitCopy(chats, APP_DISPLAY_NAME) : null;
 
   return (
@@ -70,7 +77,12 @@ export function RunningChatsQuitDialog({ chats, onStay, onQuit }: RunningChatsQu
             )}
           >
             {copy && chats ? (
-              <RunningChatsQuitDialogContent chats={chats} copy={copy} onQuit={onQuit} />
+              <RunningChatsQuitDialogContent
+                chats={chats}
+                copy={copy}
+                quitting={quitting}
+                onQuit={onQuit}
+              />
             ) : null}
           </AlertDialogPrimitive.Popup>
         </AlertDialogViewport>
@@ -83,10 +95,12 @@ export function RunningChatsQuitDialog({ chats, onStay, onQuit }: RunningChatsQu
 function RunningChatsQuitDialogContent({
   chats,
   copy,
+  quitting,
   onQuit,
 }: {
   readonly chats: ReadonlyArray<RunningChatQuitSummary>;
   readonly copy: RunningChatsQuitCopy;
+  readonly quitting: boolean;
   readonly onQuit: (decision: RunningChatsQuitDecision) => void;
 }) {
   const { settings, updateSettings } = useAppSettings();
@@ -129,6 +143,7 @@ function RunningChatsQuitDialogContent({
           <Checkbox
             id={resumeCheckboxId}
             checked={resume}
+            disabled={quitting}
             onCheckedChange={(checked) => {
               updateSettings({ resumeChatsAfterQuit: checked === true });
             }}
@@ -137,6 +152,7 @@ function RunningChatsQuitDialogContent({
         </label>
         <div className="ml-auto flex items-center gap-2">
           <AlertDialogClose
+            disabled={quitting}
             render={<Button variant="ghost" size="sm" className={cn(uiFont, "gap-1.5")} />}
           >
             {copy.stayLabel}
@@ -147,6 +163,7 @@ function RunningChatsQuitDialogContent({
             variant="default"
             size="sm"
             className={cn(uiFont, "gap-1.5")}
+            disabled={quitting}
             onClick={() => onQuit({ resume })}
           >
             {copy.quitLabel}

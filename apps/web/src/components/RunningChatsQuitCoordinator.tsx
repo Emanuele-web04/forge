@@ -21,6 +21,9 @@ import { RunningChatsQuitDialog, type RunningChatsQuitDecision } from "./Running
 
 export function RunningChatsQuitCoordinator() {
   const [chats, setChats] = useState<ReadonlyArray<RunningChatQuitSummary> | null>(null);
+  // True while the resume record is being written: the dialog stays up (inert) so the
+  // user does not see a bare window for the bounded wait before the desktop hides it.
+  const [quitting, setQuitting] = useState(false);
   const pendingRequestIdRef = useRef<string | null>(null);
 
   const settle = useCallback(
@@ -32,7 +35,9 @@ export function RunningChatsQuitCoordinator() {
       const allow = decision != null;
       const chatsToStop = allow ? chats : null;
       pendingRequestIdRef.current = null;
-      setChats(null);
+      if (!decision?.resume) {
+        setChats(null);
+      }
 
       const reply = (allowQuit: boolean) => {
         window.desktopBridge?.replyQuitConfirmation({
@@ -82,7 +87,12 @@ export function RunningChatsQuitCoordinator() {
       if (decision.resume) {
         // The resume record must be durable before the desktop is allowed to stop the
         // backend; the wait is bounded so quit stays snappy even if the server is slow.
-        void stopped.finally(() => reply(true));
+        setQuitting(true);
+        void stopped.finally(() => {
+          reply(true);
+          setQuitting(false);
+          setChats(null);
+        });
         return;
       }
       // Interrupt in the background so the window can close immediately.
@@ -117,5 +127,12 @@ export function RunningChatsQuitCoordinator() {
     });
   }, []);
 
-  return <RunningChatsQuitDialog chats={chats} onStay={() => settle(null)} onQuit={settle} />;
+  return (
+    <RunningChatsQuitDialog
+      chats={chats}
+      quitting={quitting}
+      onStay={() => settle(null)}
+      onQuit={settle}
+    />
+  );
 }
