@@ -15,6 +15,7 @@ import {
   type QuitResumeThread,
 } from "./quitResume.ts";
 
+const RECORD_ID = "record-1";
 const RECORDED_AT = "2026-06-14T10:00:00.000Z";
 const NOW = "2026-06-14T10:05:00.000Z";
 const PROMPT = "Synara was closed while this chat was still running. Continue where you left off.";
@@ -51,6 +52,7 @@ const makeRecord = (
   threads: ReadonlyArray<{ threadId: string; turnId: string | null }>,
 ): QuitResumeRecord => ({
   version: 1,
+  recordId: RECORD_ID,
   recordedAt: RECORDED_AT,
   continuationPrompt: PROMPT,
   threads: threads.map((entry) => ({
@@ -73,11 +75,13 @@ describe("buildQuitResumeRecord", () => {
         makeThread("b", { latestTurn: null }),
         makeThread("c", { deletedAt: "2026-06-14T09:30:00.000Z" }),
       ],
+      recordId: RECORD_ID,
       now: RECORDED_AT,
     });
 
     expect(record).toEqual({
       version: 1,
+      recordId: RECORD_ID,
       recordedAt: RECORDED_AT,
       continuationPrompt: PROMPT,
       threads: [
@@ -94,17 +98,23 @@ describe("buildQuitInterruptCommand", () => {
       buildQuitInterruptCommand({
         threadId: threadId("a"),
         turnId: turnId("a-turn"),
+        recordId: RECORD_ID,
         recordedAt: RECORDED_AT,
       }),
     ).toEqual({
       type: "thread.turn.interrupt",
-      commandId: `quit-resume-interrupt:a:${RECORDED_AT}`,
+      commandId: `quit-resume-interrupt:${RECORD_ID}:a`,
       threadId: threadId("a"),
       turnId: turnId("a-turn"),
       createdAt: RECORDED_AT,
     });
     expect(
-      buildQuitInterruptCommand({ threadId: threadId("b"), turnId: null, recordedAt: RECORDED_AT }),
+      buildQuitInterruptCommand({
+        threadId: threadId("b"),
+        turnId: null,
+        recordId: RECORD_ID,
+        recordedAt: RECORDED_AT,
+      }),
     ).not.toHaveProperty("turnId");
   });
 });
@@ -122,10 +132,10 @@ describe("planQuitResumeTurns", () => {
     expect(plan.commands).toEqual([
       {
         type: "thread.turn.start",
-        commandId: `quit-resume:a:${RECORDED_AT}`,
+        commandId: `quit-resume:${RECORD_ID}:a`,
         threadId: threadId("a"),
         message: {
-          messageId: `quit-resume:a:${RECORDED_AT}`,
+          messageId: `quit-resume:${RECORD_ID}:a`,
           role: "user",
           text: PROMPT,
           attachments: [],

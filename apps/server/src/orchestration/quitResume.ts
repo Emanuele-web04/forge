@@ -37,6 +37,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Effect, FileSystem, Option, Schema } from "effect";
+import { randomUUID } from "node:crypto";
 
 import { writeFileStringAtomically } from "../atomicWrite";
 import { ServerConfig } from "../config";
@@ -45,6 +46,8 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 
 export const QuitResumeRecord = Schema.Struct({
   version: Schema.Literal(1),
+  /** Unique per quit; command/message ids derive from it so replays dedup and quits never collide. */
+  recordId: TrimmedNonEmptyString,
   recordedAt: IsoDateTime,
   continuationPrompt: TrimmedNonEmptyString.check(Schema.isMaxLength(QUIT_RESUME_MAX_PROMPT_CHARS)),
   threads: Schema.Array(
@@ -65,7 +68,13 @@ type ThreadTurnInterruptCommand = Extract<
   { readonly type: "thread.turn.interrupt" }
 >;
 
-/** Read-model thread fields the pure planners inspect (a superset is fine). */
+/** Read-model thread fields needed to snapshot a thread into the record. */
+export type QuitResumeRecordableThread = Pick<
+  OrchestrationThread,
+  "id" | "deletedAt" | "latestTurn"
+>;
+
+/** Read-model thread fields the boot-time planner inspects (a superset is fine). */
 export type QuitResumeThread = Pick<
   OrchestrationThread,
   | "id"
@@ -102,7 +111,8 @@ export interface QuitResumePlan {
  */
 export function buildQuitResumeRecord(input: {
   readonly request: OrchestrationPrepareQuitResumeInput;
-  readonly threads: ReadonlyArray<Pick<OrchestrationThread, "id" | "deletedAt" | "latestTurn">>;
+  readonly threads: ReadonlyArray<QuitResumeRecordableThread>;
+  readonly recordId: string;
   readonly now: string;
 }): QuitResumeRecord {
   const threadsById = new Map(input.threads.map((thread) => [thread.id, thread] as const));
@@ -121,6 +131,7 @@ export function buildQuitResumeRecord(input: {
   }
   return {
     version: 1,
+    recordId: input.recordId,
     recordedAt: input.now,
     continuationPrompt: input.request.continuationPrompt,
     threads,
@@ -130,11 +141,12 @@ export function buildQuitResumeRecord(input: {
 export function buildQuitInterruptCommand(input: {
   readonly threadId: ThreadId;
   readonly turnId: TurnId | null;
+  readonly recordId: string;
   readonly recordedAt: string;
 }): ThreadTurnInterruptCommand {
   return {
     type: "thread.turn.interrupt",
-    commandId: CommandId.makeUnsafe(`quit-resume-interrupt:${input.threadId}:${input.recordedAt}`),
+    commandId: CommandId.makeUnsafe(`quit-resume-interrupt:${input.recordId}:${input.threadId}`),
     threadId: input.threadId,
     ...(input.turnId !== null ? { turnId: input.turnId } : {}),
     createdAt: input.recordedAt,
@@ -198,7 +210,7 @@ export function planQuitResumeTurns(input: {
       skip(entry.threadId, "turn-in-flight");
       continue;
     }
-    const key = `quit-resume:${entry.threadId}:${input.record.recordedAt}`;
+    const key = `quit-resume:${input.record.recordId}:${entry.threadId}`;
     commands.push({
       type: "thread.turn.start",
       commandId: CommandId.makeUnsafe(key),
@@ -260,20 +272,18 @@ export const prepareQuitResume = (input: {
   readonly request: OrchestrationPrepareQuitResumeInput;
   readonly recordPath: string;
   readonly getReadModel: () => Effect.Effect<
-    {
-      readonly threads: ReadonlyArray<Pick<OrchestrationThread, "id" | "deletedAt" | "latestTurn">>;
-    },
+    { readonly threads: ReadonlyArray<QuitResumeRecordableThread> },
     never
   >;
   readonly dispatch: (command: OrchestrationCommand) => Effect.Effect<unknown, unknown>;
 }): Effect.Effect<OrchestrationPrepareQuitResumeResult, unknown> =>
   Effect.gen(function* () {
     const readModel = yield* input.getReadModel();
-    const now = new Date().toISOString();
     const record = buildQuitResumeRecord({
       request: input.request,
       threads: readModel.threads,
-      now,
+      recordId: randomUUID(),
+      now: new Date().toISOString(),
     });
     yield* persistQuitResumeRecord({ path: input.recordPath, record });
     yield* Effect.logInfo("recorded running chats for resume after quit", {
@@ -288,6 +298,7 @@ export const prepareQuitResume = (input: {
             buildQuitInterruptCommand({
               threadId: entry.threadId,
               turnId: entry.turnId,
+              recordId: record.recordId,
               recordedAt: record.recordedAt,
             }),
           )
