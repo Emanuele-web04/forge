@@ -193,6 +193,68 @@ describe("mergeDynamicModelOptions", () => {
       },
     ]);
   });
+
+  it("orders discovered Claude models by the curated catalog, not by CLI order", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: [
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+          { slug: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+        ],
+        dynamicModels: [
+          { slug: "default", name: "Default (recommended)" },
+          { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+          { slug: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual([
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5",
+    ]);
+  });
+
+  it("keeps discovered Claude models the catalog does not know yet at the top", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: [
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+        dynamicModels: [
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+          { slug: "claude-opus-6", name: "Claude Opus 6" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["claude-opus-6", "claude-fable-5", "claude-opus-5"]);
+  });
+
+  it("treats the live Grok CLI catalog as authoritative", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "grok",
+        staticOptions: [
+          { slug: "grok-4.6", name: "Grok 4.6" },
+          { slug: "grok-4.5", name: "Grok 4.5" },
+          { slug: "grok-build", name: "Grok 4.3" },
+          { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
+      }),
+    ).toEqual([
+      { slug: "grok-4.6", name: "Grok 4.6" },
+      { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
+    ]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {

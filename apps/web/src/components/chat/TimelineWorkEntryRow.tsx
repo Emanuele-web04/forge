@@ -76,14 +76,16 @@ import {
 } from "../../lib/toolCallLabel";
 import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
+import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
 
 const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+// Rest tone is the shared quiet-label gray (same one the composer pickers use for
+// their effort/thinking labels) so a tool row and the picker below it read as one
+// muted tone; hover still lifts the whole row to full foreground.
 const WORK_ROW_MUTED_HOVER_TONE: Record<"tool-row" | "file-row", string> = {
-  "tool-row":
-    "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
-  "file-row":
-    "text-muted-foreground/70 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+  "tool-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground`,
+  "file-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground`,
 };
 const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, { additions: number; deletions: number }> =
   new Map();
@@ -689,7 +691,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
-                      className="truncate font-medium leading-5 text-muted-foreground/72"
+                      className={cn("truncate font-medium leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}
                       style={{ fontSize: `${rowFontSizePx}px` }}
                     >
                       <span data-work-entry-display-text="true">{heading}</span>
@@ -703,7 +705,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       isStreaming={false}
                       className="leading-relaxed"
                       style={{
-                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
+                        color: MUTED_LABEL_TEXT_COLOR,
                         fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
                         lineHeight: compact ? "18px" : "19px",
                       }}
@@ -935,7 +937,7 @@ function ToolDetailsDisclosure(props: {
       {props.children}
       <DisclosureChevron
         open={open}
-        className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
+        className="text-muted-foreground/70 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
       />
     </button>
   );

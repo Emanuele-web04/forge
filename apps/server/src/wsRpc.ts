@@ -219,7 +219,9 @@ interface ProcessTableRow {
 }
 
 function redactAndTruncateProcessArgs(args: string): string {
-  const redacted = redactSensitiveProcessArgs(args);
+  const redacted = redactSensitiveProcessArgs(args, {
+    truncateSensitiveEnvironmentRemainder: true,
+  });
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;
@@ -1128,6 +1130,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.search(input), "Failed to search workspace entries"),
         [WS_METHODS.projectsSearchContent]: (input) =>
           rpcEffect(workspaceEntries.searchContent(input), "Failed to search workspace content"),
+        [WS_METHODS.projectsPrewarmSearchIndex]: (input) =>
+          rpcEffect(
+            workspaceEntries.prewarmSearchIndex(input),
+            "Failed to prewarm workspace search index",
+          ),
         [WS_METHODS.projectsDiscoverScripts]: (input) =>
           rpcEffect(workspaceEntries.discoverScripts(input), "Failed to discover project scripts"),
         [WS_METHODS.projectsSearchLocalEntries]: (input) =>

@@ -43,6 +43,8 @@ export interface ParsedLsofListener {
 export interface LocalServerProcessInfo {
   readonly ppid: number;
   readonly commandLine: string;
+  /** Unredacted process-table text retained only for internal classification. */
+  readonly rawCommandLine?: string;
 }
 
 interface DevServerCandidateInput {
@@ -251,16 +253,20 @@ export function parseLsofCwdOutput(output: string): Map<number, string> {
   return cwdByPid;
 }
 
-function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
+export function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
   const rows = new Map<number, LocalServerProcessInfo>();
   for (const line of output.split(/\r?\n/g)) {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/);
     if (!match) {
       continue;
     }
+    const rawCommandLine = match[3] ?? "";
     rows.set(Number(match[1]), {
       ppid: Number(match[2]),
-      commandLine: redactSensitiveProcessArgs(match[3] ?? "").slice(0, MAX_PROCESS_ARGS_CHARS),
+      commandLine: redactSensitiveProcessArgs(rawCommandLine, {
+        truncateSensitiveEnvironmentRemainder: true,
+      }).slice(0, MAX_PROCESS_ARGS_CHARS),
+      rawCommandLine,
     });
   }
   return rows;
@@ -328,8 +334,9 @@ function processLineageCommandLines(
     if (!processInfo) {
       break;
     }
-    if (processInfo.commandLine) {
-      commandLines.push(processInfo.commandLine);
+    const commandLine = processInfo.rawCommandLine ?? processInfo.commandLine;
+    if (commandLine) {
+      commandLines.push(commandLine);
     }
     if (processInfo.ppid <= 1) {
       break;

@@ -62,7 +62,7 @@ export const BrowserEffectingTabInvocationCommon = closedStruct({
 
 const BrowserUrl = described(
   BoundedUtf8String(8_192, 1),
-  "Absolute HTTP or HTTPS URL, bounded to 8 KiB; other schemes are rejected by browser policy.",
+  "Absolute HTTP or HTTPS URL, bounded to 8 KiB. Localhost and other local addresses are fully supported. Other schemes (e.g. file:) are rejected as tool input only — the integrated browser itself can open local HTML files when the user enters them in its address bar.",
 );
 const BrowserAnnotationId = described(
   BoundedUtf8String(128, 1).check(

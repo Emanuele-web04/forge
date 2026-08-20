@@ -118,6 +118,7 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
@@ -128,7 +129,7 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
-import { formatShortTimestamp } from "../../timestampFormat";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
   textContainsInlineTerminalContextLabels,
@@ -1133,18 +1134,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [onTrailHighlightsChange],
   );
+  // Scroll events can fire several times per frame (smooth scrolls, streaming
+  // re-sticks); the trail-highlight derivation is coalesced to one per frame.
+  // At-end ownership stays synchronous: ChatView's auto-follow layout effect
+  // reads it via a ref in the same frame, and a deferred update would let a
+  // scheduled scrollToEnd override a user gesture that just scrolled away.
+  const listScrollFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (listScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(listScrollFrameRef.current);
+        listScrollFrameRef.current = null;
+      }
+    };
+  }, []);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
-      if (state) {
-        tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
-        if (!state.isAtEnd) {
-          clearTailExpansionScrollTimers();
-        }
-        onIsAtEndChange?.(state.isAtEnd);
-        emitTrailHighlightsForViewport(state.start, state.end);
+      if (!state) {
+        return;
       }
+      tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
+      if (!state.isAtEnd) {
+        clearTailExpansionScrollTimers();
+      }
+      onIsAtEndChange?.(state.isAtEnd);
+      if (listScrollFrameRef.current !== null) {
+        return;
+      }
+      listScrollFrameRef.current = window.requestAnimationFrame(() => {
+        listScrollFrameRef.current = null;
+        const frameState = readLegendListState(resolvedListRef);
+        if (frameState) {
+          emitTrailHighlightsForViewport(frameState.start, frameState.end);
+        }
+      });
     },
     [
       clearTailExpansionScrollTimers,
@@ -1371,7 +1396,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
                     <button
                       type="button"
-                      className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      className={cn(
+                        "font-system-ui transition-colors duration-150 hover:text-foreground",
+                        MUTED_LABEL_TEXT_CLASS_NAME,
+                      )}
                       style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                       onClick={() => handleToggleWorkGroup(groupId)}
                     >
@@ -1397,7 +1425,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
                   <button
                     type="button"
-                    className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                    className={cn(
+                      "font-system-ui transition-colors duration-150 hover:text-foreground",
+                      MUTED_LABEL_TEXT_CLASS_NAME,
+                    )}
                     style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                     onClick={() => handleToggleWorkGroup(groupId)}
                   >
@@ -1418,7 +1449,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           }
           return (
             <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
-              <div className="text-muted-foreground/80">
+              <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
@@ -1639,7 +1670,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatMessageFooterStyle}
                     >
                       <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
                       </p>
                       <div className="flex items-center gap-2">
                         {displayedUserMessage.copyText && (
@@ -1782,7 +1813,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               : null;
           const assistantMeta = [
             isTerminalAssistantMessage
-              ? formatShortTimestamp(row.message.createdAt, timestampFormat)
+              ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
           ]
             .filter((value): value is string => Boolean(value))
@@ -1893,7 +1924,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <div className="py-0.5">
                           <button
                             type="button"
-                            className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                            className={cn(
+                              "transition-colors duration-150 hover:text-foreground",
+                              MUTED_LABEL_TEXT_CLASS_NAME,
+                            )}
                             style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                             onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                           >
@@ -1917,7 +1951,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           <div className="py-0.5">
                             <button
                               type="button"
-                              className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                              className={cn(
+                                "transition-colors duration-150 hover:text-foreground",
+                                MUTED_LABEL_TEXT_CLASS_NAME,
+                              )}
                               style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                               onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                             >
@@ -1976,7 +2013,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ) : (
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
-                className="text-muted-foreground/80"
+                className={MUTED_LABEL_TEXT_CLASS_NAME}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -2051,7 +2088,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // -ml-0.5 optically aligns the leading "W" with the reply
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
-                      className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
+                      className={cn(
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
+                        MUTED_LABEL_TEXT_CLASS_NAME,
+                      )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
                       <span>
@@ -2061,7 +2101,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
-                        className="text-muted-foreground/55"
+                        className="text-muted-foreground/70"
                       />
                     </CollapsibleTrigger>
                     <CollapsiblePanel>
@@ -2322,9 +2362,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   goalAchievement !== null) && (
                   // Turn-end actions read Copy → Fork → Pin → time and stay visible at
                   // rest: they belong to a settled turn, so hiding them behind hover made
-                  // the whole row feel undiscoverable.
+                  // the whole row feel undiscoverable. The leading button pulls left by
+                  // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
+                  // glyph, not the invisible hit area, aligns with the message text.
                   <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground"
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]"
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
@@ -2397,7 +2439,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               tone, size, and full-width divider, but counting up live. -ml-0.5
               optically aligns the leading "W" with the reply text below. */}
           <div
-            className="-ml-0.5 pb-2 text-muted-foreground/70"
+            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
             Working for{" "}
@@ -2413,7 +2455,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
+          className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {workingLabel}

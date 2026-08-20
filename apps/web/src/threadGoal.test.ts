@@ -16,7 +16,9 @@ describe("dispatchThreadGoal", () => {
   it("sets and clears the persisted goal through thread.meta.update", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
 
-    await dispatchThreadGoal("thread-server" as never, "Ship the complete feature");
+    await dispatchThreadGoal("thread-server" as never, "Ship the complete feature", {
+      startBehavior: "defer",
+    });
     await dispatchThreadGoal("thread-server" as never, "");
 
     expect(dispatchCommand).toHaveBeenCalledTimes(2);
@@ -24,6 +26,7 @@ describe("dispatchThreadGoal", () => {
       type: "thread.meta.update",
       threadId: "thread-server",
       goal: "Ship the complete feature",
+      goalStartBehavior: "defer",
     });
     expect(dispatchCommand.mock.calls[1]?.[0]).toMatchObject({
       type: "thread.meta.update",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { expandProjectHomePath, joinProjectPath } from "./projectPaths";
+import { expandProjectHomePath, isFilesystemBrowseQuery, joinProjectPath } from "./projectPaths";
 
 describe("joinProjectPath", () => {
   it.each([
@@ -22,5 +22,15 @@ describe("expandProjectHomePath", () => {
     ["~/Developer", null, "~/Developer"],
   ])("expands %s against %s", (value, homeDir, expected) => {
     expect(expandProjectHomePath(value, homeDir)).toBe(expected);
+  });
+});
+
+describe("isFilesystemBrowseQuery", () => {
+  it("recognizes a Windows-style home path on Windows", () => {
+    expect(isFilesystemBrowseQuery("~\\Developer", "Win32")).toBe(true);
+  });
+
+  it("does not treat a Windows-style home path as a browse query on macOS", () => {
+    expect(isFilesystemBrowseQuery("~\\Developer", "MacIntel")).toBe(false);
   });
 });

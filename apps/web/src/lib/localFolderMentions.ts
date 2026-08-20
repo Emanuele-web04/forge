@@ -5,6 +5,8 @@
 
 export const LOCAL_FOLDER_MENTION_NAME = "local";
 
+const UNC_SHARE_ROOT_PATTERN = /^(\\\\[^\\/]+[\\/][^\\/]+)(?:[\\/]|$)/;
+
 export function matchesLocalFolderMentionShortcut(query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) {
@@ -17,6 +19,7 @@ export function isLocalFolderMentionQuery(query: string): boolean {
   const normalizedQuery = query.trim();
   if (normalizedQuery.startsWith("/")) return true;
   if (/^[A-Za-z]:[\\/]/.test(normalizedQuery)) return true;
+  if (UNC_SHARE_ROOT_PATTERN.test(normalizedQuery)) return true;
   if (normalizedQuery.startsWith("~/") || normalizedQuery.startsWith("~\\")) return true;
   return false;
 }
@@ -37,6 +40,11 @@ export function getLocalFolderBrowseRootPath(
   const windowsRootMatch = /^[A-Za-z]:[\\/]/.exec(normalizedHomeDir);
   if (windowsRootMatch) {
     return windowsRootMatch[0].replace(/\//g, "\\");
+  }
+
+  const uncShareRootMatch = UNC_SHARE_ROOT_PATTERN.exec(normalizedHomeDir);
+  if (uncShareRootMatch?.[1]) {
+    return `${uncShareRootMatch[1].replace(/\//g, "\\")}\\`;
   }
 
   if (normalizedHomeDir.startsWith("/")) {

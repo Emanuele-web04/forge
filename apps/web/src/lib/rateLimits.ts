@@ -32,6 +32,13 @@ export interface VisibleRateLimitRow {
   windowDurationMins?: number;
 }
 
+/** Activity kinds that carry account rate-limit payloads. Shared with the store selector
+ *  that narrows usage subscribers to these activities, so the two stay in sync. */
+export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "account.rate-limits.updated",
+  "account.rate-limited",
+]);
+
 const WINDOW_ORDER = new Map([
   ["5h", 0],
   ["Weekly", 1],
@@ -282,10 +289,7 @@ export function deriveAccountRateLimits(
 
   for (const thread of threads) {
     for (const activity of thread.activities) {
-      if (
-        activity.kind !== "account.rate-limits.updated" &&
-        activity.kind !== "account.rate-limited"
-      ) {
+      if (!ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS.has(activity.kind)) {
         continue;
       }
 

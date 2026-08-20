@@ -22,7 +22,7 @@ import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import {
   arraysShallowEqual,
   capThreadActivities,
-  dedupeActivitiesById,
+  dedupeActivitiesByIdAfterAppend,
   deepEqualJson,
   mapProjects,
   mapSpaces,
@@ -743,9 +743,15 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
   }
 
   if (previousThread?.activities !== nextThread.activities) {
-    const activities = capThreadActivities(dedupeActivitiesById(nextThread.activities));
     const previousIds = nextState.activityIdsByThreadId?.[nextThread.id];
     const previousById = nextState.activityByThreadId?.[nextThread.id];
+    const activities = capThreadActivities(
+      dedupeActivitiesByIdAfterAppend(
+        nextThread.activities,
+        previousThread?.activities,
+        previousById,
+      ),
+    );
     const slice = buildNormalizedSlice(
       activities,
       activityId,
@@ -1126,18 +1132,20 @@ function commitThreadProjection(
     updateSidebarSummary?: boolean;
   },
 ): AppState {
+  const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
+  const previousSummary = state.sidebarThreadSummaryById[threadId];
+  // Skip deriving the thread entirely when the summary is pinned to its previous value —
+  // this runs on the streaming hot path where most flushes change no summary input.
+  if (!shouldUpdateSidebarSummary && previousSummary !== undefined) {
+    return state;
+  }
+
   const nextThread = getThreadFromState(state, threadId);
   if (!nextThread) {
     return state;
   }
 
-  const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
-
-  const previousSummary = state.sidebarThreadSummaryById[threadId];
-  const nextSummary =
-    shouldUpdateSidebarSummary || previousSummary === undefined
-      ? buildSidebarThreadSummary(nextThread, previousSummary)
-      : previousSummary;
+  const nextSummary = buildSidebarThreadSummary(nextThread, previousSummary);
 
   if (nextSummary === previousSummary) {
     return state;

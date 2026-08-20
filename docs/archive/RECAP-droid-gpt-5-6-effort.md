@@ -17,7 +17,7 @@ The Droid composer could not show reasoning effort choices for runtime-only GPT-
 | `apps/web/src/components/chat/runtimeModelCapabilities.ts`       | ✏️ Modified | Allows Droid to consume runtime-discovered reasoning efforts        |
 | `apps/web/src/components/chat/composerProviderRegistry.tsx`      | ✏️ Modified | Validates Droid dispatch options against runtime-aware capabilities |
 | `apps/web/src/components/chat/composerProviderRegistry.test.tsx` | ✏️ Modified | Covers GPT-5.6 effort visibility, selection, and dispatch           |
-| `docs/RECAP-droid-gpt-5-6-effort.md`                             | ✅ Created  | Records the implementation and verification                         |
+| `docs/archive/RECAP-droid-gpt-5-6-effort.md`                     | ✅ Created  | Records the implementation and verification                         |
 
 ---
 

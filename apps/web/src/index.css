@@ -103,7 +103,6 @@
      without duplicating sidebar markup or class strings. */
   .app-sidebar-surface {
     background: var(--app-sidebar-surface, var(--card));
-    box-shadow: var(--app-sidebar-shadow, none);
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
     backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
@@ -127,38 +126,22 @@
      square content edge. The visible seam belongs to the content surface; the
      SidebarRail remains only the resize hit-area so a second line is never drawn. */
 
-  /* Seam tokens + soft depth, side-agnostic so each value lives in ONE place. The route
-     reads as a raised surface over the sidebar without rounding the dividing edge.
-       • --seam-line   : color of the straight vertical divider; the content-seam
-                         SidebarRail intensifies it on hover (rule below).
-       • --seam-shadow-*: the depth shadow. Geometry (blur/spread) is shared here; only the
-                         horizontal direction (--seam-shadow-x) and the alpha (light vs dark)
-                         change. The default x=0 is a harmless fallback if no sidebar side is
-                         resolved; real surfaces always set a side below.
-     Keep the shadow subtle: dark mode needs more alpha to register over the dark sidebar.
-     The route surface's overflow:hidden never clips this outset shadow, so it lands on
-     the sidebar; when the sidebar is collapsed the seam sits at the window edge and the
-     shadow simply falls off-screen. */
+  /* Seam token, side-agnostic so the value lives in ONE place. The route separates from
+     the sidebar with a flat 1px divider only — no depth shadow is cast onto the sidebar.
+       • --seam-line : color of the straight vertical divider; the content-seam
+                       SidebarRail intensifies it on hover (rule below). */
   .chat-content-card {
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
     --seam-line: --alpha(var(--color-black) / 12%);
-    --seam-shadow-color: rgba(0, 0, 0, 0.1);
-    --seam-shadow-x: 0px;
-    /* Soft, low-spread depth: a modest blur + negative spread keeps the shadow near the
-       seam edge rather than fanning across the sidebar, just enough to lift the surface. */
-    box-shadow: var(--seam-shadow-x) 0 12px -10px var(--seam-shadow-color);
-    transition: box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark .chat-content-card {
-    --seam-shadow-color: rgba(0, 0, 0, 0.36);
     --seam-line: --alpha(var(--color-white) / 8%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
-    --seam-shadow-x: -6.5px;
     border-radius: 0;
   }
 
@@ -184,17 +167,9 @@
     --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
   }
 
-  /* Sidebar collapsed (offcanvas): drop the divider and depth because the content
-     fills the window edge-to-edge. Use the direct-child combinator so the nested
-     right dock cannot drive the main content seam. */
-  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
-    .chat-content-card {
-    /* Fade the depth shadow via its color token rather than `box-shadow: none` —
-       Chromium snaps box-shadow to/from `none`, but keeping the geometry and only
-       driving the color to transparent interpolates cleanly with the slide. */
-    --seam-shadow-color: transparent;
-  }
-
+  /* Sidebar collapsed (offcanvas): drop the divider because the content fills the
+     window edge-to-edge. Use the direct-child combinator so the nested right dock
+     cannot drive the main content seam. */
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
     .chat-content-card::before {
     opacity: 0;
@@ -423,8 +398,7 @@
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.025);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 48%, transparent);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -534,7 +508,6 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.024);
     --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
@@ -2456,6 +2429,39 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
+/* Raised-chrome outline — the single border shared by every surface that floats over
+   the transcript as a solid card: the composer input shell and its attached banners,
+   the stacked rail above it, the docked Environment panel, and kanban cards. These all
+   drew the same color before this token existed (the light recipe below; plain
+   `--border` in dark), so they live on one knob and cannot drift apart again.
+
+   `--surface-border-strength` thins that base color toward transparent. Lower it to
+   make the whole raised-chrome outline recede; 100% restores the full-weight border.
+   Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
+   they are transient overlays, not part of this raised-card family. */
+:root {
+  --surface-border-strength: 72%;
+  --surface-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
+      var(--surface-border-strength),
+    transparent
+  );
+  /* Light keeps rail and input identical; only dark splits them (see below). */
+  --composer-stacked-border: var(--surface-border);
+}
+
+.dark {
+  --surface-border: color-mix(in srgb, var(--border) var(--surface-border-strength), transparent);
+  /* The stacked rail reads as a translucent continuation of the input shell, so it
+     runs at half the heavy token — matching the live-changes strip. */
+  --composer-stacked-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--surface-border-strength),
+    transparent
+  );
+}
+
 /* Composer shell/surface corner geometry — single source of truth so radius
    tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
 :root {
@@ -2708,15 +2714,15 @@ diffs-container {
 
 /* Fixed width — only the composer model/effort/provider pickers opt in. */
 .composer-picker-menu-fixed.composer-picker-menu--normal {
-  width: 13rem;
-  min-width: 13rem;
-  max-width: min(13rem, 92vw);
+  width: 14.5rem;
+  min-width: 14.5rem;
+  max-width: min(14.5rem, 92vw);
 }
 
 .composer-picker-menu-fixed.composer-picker-menu--small {
-  width: 10rem;
-  min-width: 10rem;
-  max-width: min(10rem, 92vw);
+  width: 11.25rem;
+  min-width: 11.25rem;
+  max-width: min(11.25rem, 92vw);
 }
 
 /* Size-aware option rows inside composer picker shells. */

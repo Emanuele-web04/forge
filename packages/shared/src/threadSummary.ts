@@ -49,6 +49,40 @@ function compareActivitiesByOrder(
   );
 }
 
+type OrderableActivity = Pick<OrchestrationThreadActivity, "createdAt" | "id" | "sequence">;
+
+const orderedActivitiesCache = new WeakMap<
+  ReadonlyArray<OrderableActivity>,
+  ReadonlyArray<OrderableActivity>
+>();
+
+function isActivityOrderStable(activities: ReadonlyArray<OrderableActivity>): boolean {
+  for (let index = 1; index < activities.length; index += 1) {
+    if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Store activity arrays are immutable and appended in order, so the common case is already
+// sorted; a linear pre-check plus a per-array cache avoids re-copying and re-sorting the full
+// list on every summary recomputation (this runs per store flush while a thread streams).
+function orderedActivities<TActivity extends OrderableActivity>(
+  activities: ReadonlyArray<TActivity>,
+): ReadonlyArray<TActivity> {
+  const cached = orderedActivitiesCache.get(activities);
+  if (cached) {
+    return cached as ReadonlyArray<TActivity>;
+  }
+
+  const ordered = isActivityOrderStable(activities)
+    ? activities
+    : [...activities].toSorted(compareActivitiesByOrder);
+  orderedActivitiesCache.set(activities, ordered);
+  return ordered;
+}
+
 function toPayloadRecord(payload: unknown): Record<string, unknown> | null {
   return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
 }
@@ -191,8 +225,7 @@ export function derivePendingThreadRequestIds(input: {
 }): PendingThreadRequestIds {
   const openApprovals = new Map<string, string>();
   const openUserInputs = new Map<string, string>();
-  const orderedActivities = [...input.activities].toSorted(compareActivitiesByOrder);
-  for (const activity of orderedActivities) {
+  for (const activity of orderedActivities(input.activities)) {
     const payload = toPayloadRecord(activity.payload);
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;

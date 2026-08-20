@@ -11,8 +11,9 @@ import { useLayoutEffect } from "react";
 
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
+import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
-import { isMacNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
+import { isMacNavigatorPlatform } from "~/lib/utils";
 
 /**
  * Class name backed by `index.css` (not Tailwind) so the gutter survives zoom
@@ -103,13 +104,13 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
 }
 
 /**
- * Tailwind padding that clears the Windows caption-button cluster.
+ * Tailwind padding that clears the frameless caption-button cluster.
  *
- * On Windows the Electron shell is frameless (`frame: false`, see apps/desktop
- * main) and the renderer owns the minimize/maximize/close buttons. They are
- * rendered ONCE as a viewport-fixed cluster pinned to the window's top-right
- * corner (see {@link DesktopWindowControls} mounted in the root route), mirroring
- * how macOS insets its traffic lights at the top-left.
+ * On Windows/Linux the Electron shell can be frameless (`frame: false`, see
+ * apps/desktop main) and the renderer owns the minimize/maximize/close buttons.
+ * They are rendered ONCE as a viewport-fixed cluster pinned to the window's
+ * top-right corner (see {@link DesktopWindowControls} mounted in the root route),
+ * mirroring how macOS insets its traffic lights at the top-left.
  *
  * Each caption button is 46px wide (matching {@link CHAT_SURFACE_HEADER_HEIGHT_PX}),
  * so the three-button cluster spans 138px. Any top bar that can sit flush against
@@ -125,15 +126,16 @@ export const DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS = "pr-[138px]! sm:pr-[
 
 /**
  * Pure helper: should a top bar at the right edge of the desktop window reserve
- * space for the Windows caption buttons? Unlike the macOS traffic lights (whose
+ * space for the custom caption buttons? Unlike the macOS traffic lights (whose
  * column is usually owned by the sidebar), the caption cluster always floats at
- * the window's top-right, so every right-flush chrome surface reserves the gutter.
+ * the window's top-right, so every right-flush chrome surface reserves the gutter
+ * whenever the live window is frameless.
  */
 export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
   isElectron: boolean;
-  isWindowsDesktop: boolean;
+  customTitleBarActive: boolean;
 }): boolean {
-  return input.isElectron && input.isWindowsDesktop;
+  return input.isElectron && input.customTitleBarActive;
 }
 
 /**
@@ -144,11 +146,10 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
  * right edge: chat header, workspace header, plugin nav, the right dock header, etc.
  */
 export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
-  const isWindowsDesktop =
-    typeof navigator !== "undefined" ? isWindowsPlatform(navigator.platform) : false;
+  const customTitleBarActive = useDesktopCustomTitleBarActive();
   return shouldReserveDesktopTopBarWindowControlsGutter({
     isElectron,
-    isWindowsDesktop,
+    customTitleBarActive,
   })
     ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS
     : null;

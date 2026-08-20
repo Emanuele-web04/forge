@@ -77,11 +77,18 @@ type CodexAuth = CodexOAuthState | { kind: "api-key" };
 
 function authFilePaths(ctx: ProviderUsageContext): string[] {
   const paths: string[] = [];
+  const push = (value: string) => {
+    if (!paths.includes(value)) paths.push(value);
+  };
   if (ctx.env.CODEX_HOME) {
-    paths.push(nodePath.join(ctx.env.CODEX_HOME, "auth.json"));
+    push(nodePath.join(ctx.env.CODEX_HOME, "auth.json"));
   }
-  paths.push(nodePath.join(ctx.homeDir, ".config", "codex", "auth.json"));
-  paths.push(nodePath.join(ctx.homeDir, ".codex", "auth.json"));
+  const configHome = ctx.env.XDG_CONFIG_HOME?.trim();
+  if (configHome) {
+    push(nodePath.join(configHome, "codex", "auth.json"));
+  }
+  push(nodePath.join(ctx.homeDir, ".config", "codex", "auth.json"));
+  push(nodePath.join(ctx.homeDir, ".codex", "auth.json"));
   return paths;
 }
 

@@ -138,7 +138,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserInvalidLocator: "The browser locator is invalid.",
   BrowserInputUnsupported:
     "The requested browser input is unsupported. Use a supported browser action.",
-  BrowserNavigationBlocked: "Browser navigation was blocked by policy.",
+  BrowserNavigationBlocked:
+    "Browser navigation was rejected: browser tools accept only http/https URLs (localhost is allowed) or a resolvable annotationId. The user can open local HTML files from the integrated browser's address bar.",
   BrowserNetworkBlocked: "The browser network request was blocked by policy.",
   BrowserNavigationFailed: "Browser navigation failed before a confirmed result was available.",
   BrowserPopupBlocked: "The browser popup was blocked by policy.",

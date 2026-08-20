@@ -22,6 +22,140 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.7.2",
+    date: "Aug 15",
+    features: [
+      {
+        id: "ios-simulator-pane",
+        title: "Build and test iOS apps beside the conversation",
+        description:
+          "The new iOS Simulator pane gives you and supported agents one live, interactive device surface inside Synara.",
+        details:
+          "On macOS, Synara can boot and attach simulators, stream their display, install and launch apps, tap, swipe, type, press hardware controls, save screenshots, record the view, and inspect accessibility elements. The source-shipped helper compiles with your selected Xcode, runs in a constrained sandbox, drops slow frames instead of blocking RPC traffic, and reclaims Synara-owned devices after crashes.",
+      },
+      {
+        id: "persistent-autonomous-goals",
+        title: "Give a thread a goal and let it keep going",
+        description:
+          "Persistent goals stay visible, timed, and active across turns, with pause, resume, achievement, and recovery controls.",
+        details:
+          "Use /goal or the stacked composer panel to set an objective. Synara carries it through provider turns, restarts, retries, and subagent steering, records completed goals, and can automatically start the next continuation after clean completion. Queued user work, approvals, Plan mode, interrupts, failures, timeouts, and repeated blockers all have explicit priority and pause rules so autonomy does not become an uncontrolled loop.",
+      },
+      {
+        id: "stacked-pull-requests",
+        title: "See and manage the whole pull-request stack",
+        description:
+          "Pull-request rows and details now understand stack position, order, readiness, navigation, and merge outcomes.",
+        details:
+          "Stack badges show where each PR sits, the detail view opens an ordered navigator, and merge copy accounts for drafts, conflicts, and incomplete stack data. Synara uses GitHub's asynchronous merge path when available, falls back safely where needed, and refreshes repository-wide PR state after a stack mutation.",
+      },
+      {
+        id: "evidence-first-debug-mode",
+        title: "Debug with an evidence-first workflow",
+        description:
+          "A new Debug mode guides the selected agent through observe, reproduce, investigate, fix, and verify.",
+        details:
+          "Debug is available from the mode menu and /debug, persists across drafts, turns, forks, handoffs, queues, and restarts, and keeps the current runtime permissions. It budgets its instructions across providers, asks structured reproduction questions where supported, and explicitly prevents unverified success claims or invisible assumptions about external state.",
+      },
+      {
+        id: "workspace-file-and-code-search",
+        title: "Search files and code across the workspace",
+        description:
+          "Open files by name with Cmd/Ctrl+P or search matching source lines with Cmd/Ctrl+Shift+F.",
+        details:
+          "The new command palette ranks file-name matches and provides bounded, grep-style content results with path, line number, and matching text. Search respects the workspace index and ignored files, skips binary content, stays scoped to the active project, and opens the selected result in the right-dock file pane.",
+      },
+      {
+        id: "universal-native-forks",
+        title: "Fork from the exact message across more providers",
+        description:
+          "Message-level forks now preserve their source visually and use native provider forks wherever the runtime supports them.",
+        details:
+          "Claude, Cursor, Droid, Grok, and OpenCode join Codex with centralized capability checks, timeouts, cleanup, cursor handling, and in-flight-turn protection. A source divider links back to the original conversation, turn counts and resumability metadata survive, and retained transcript reconstruction remains the safe fallback when native forking is unavailable.",
+      },
+      {
+        id: "automation-failure-controls",
+        title: "Automations explain failures and stop on your terms",
+        description:
+          "Choose how many consecutive failures an automation should tolerate, or let it keep retrying indefinitely.",
+        details:
+          "Failure counts, disable reasons, and timestamps are now durable; a successful run resets the count, hitting the threshold requires an explicit re-enable, and manual reruns keep the evidence intact. Inline creation and editing fields, clearer risk confirmation, optimistic concurrency, and visible disabled-state explanations make the policy easier to understand and safer to change.",
+      },
+      {
+        id: "large-history-and-streaming-performance",
+        title: "Large histories start faster and live output does less work",
+        description:
+          "Projector replay and the visible streaming pipeline received a measured performance pass.",
+        details:
+          "SQLite replay now keeps its primary-key range scan and uses bounded cache and memory-map settings; on the documented 2.9 GB fixture, a lagging replay fell from several minutes to about 24 seconds. Streaming text commits are batched, bottom-follow keys stay stable, layout reads and scroll work are coalesced, store selectors are narrower, and a production-path benchmark now covers the complete event-to-transcript pipeline.",
+      },
+      {
+        id: "truthful-provider-activity",
+        title: "Provider activity stays visible even when it is unfamiliar",
+        description:
+          "Oversized and previously unmapped runtime events no longer disappear or quarantine an otherwise healthy session.",
+        details:
+          "Large event payloads are bounded and truncated while retaining their diagnostic meaning, unknown events surface through a safe fallback row, stale-generation terminal events settle the owning turn, and OpenCode tool titles and lifecycle detail parsing are normalized before persistence.",
+      },
+      {
+        id: "ordered-transcript-progress",
+        title: "Transcript progress reads in the order it happened",
+        description:
+          "Assistant text, tools, reasoning, task progress, change summaries, and footer actions now form a clearer sequence.",
+        details:
+          "Text segments interleave with tool rows using provider event order, compacted reasoning stays anchored to its first update, repeated task-list updates collapse into one progressing row, the turn changes card appears before footer actions, and streamed text no longer repeatedly re-arms bottom-stick or redundant highlight scrolling.",
+      },
+      {
+        id: "safer-drafts-branches-and-git-actions",
+        title: "Drafts, branches, diffs, and Git actions keep their context",
+        description:
+          "Switching tasks or repositories is less likely to lose a draft, branch, diff selection, or action explanation.",
+        details:
+          "New-chat drafts survive thread switches, local branches remain attached during resume, branch mismatches settle before send, Pull appears when upstream is ahead, Git diff previews follow the selected file, worktree cancellation stays durable, and the shared commit/push/PR dialog keeps disabled reasons while presenting more direct primary actions.",
+      },
+      {
+        id: "provider-model-and-usage-resilience",
+        title: "Model and usage discovery fails smaller",
+        description:
+          "One malformed model or very large local Codex archive no longer destabilizes an entire catalogue or usage refresh.",
+        details:
+          "Synara isolates invalid descriptors, warms every available provider catalogue for new threads, shows installed providers, exposes Pi's maximum thinking level, and turns unknown rate-limit windows into readable labels. Codex usage scans now read archives backward in bounded 64 KiB chunks and skip oversized records without loading entire session files into memory.",
+      },
+      {
+        id: "adjustable-chat-and-file-actions",
+        title: "Tune the reading width and act on file links",
+        description:
+          "Choose a focused, standard, or wide chat column and use context actions directly from file references.",
+        details:
+          "Chat width is persisted as a visual preference, while Markdown file links can copy their path, open in Synara, or reveal supported workspace references. File and snippet search use the same direct-to-file workflow for a more consistent navigation path.",
+      },
+      {
+        id: "desktop-platform-polish",
+        title: "Desktop behavior is more native across macOS and Windows",
+        description:
+          "Dock and taskbar icons, terminal startup, updater shutdown, timestamps, and action glyphs received a platform-focused pass.",
+        details:
+          "macOS can follow appearance with a dark dock icon, Windows refreshes its taskbar icon after runtime changes and starts Bun PTYs reliably, updater failures no longer erase quit intent, and message metadata now adds day or date context when a time alone would be ambiguous. Sidebar and turn-action icons were simplified and aligned.",
+      },
+      {
+        id: "replay-and-queue-recovery",
+        title: "Interrupted and replayed work converges more reliably",
+        description:
+          "Queue promotion, snapshot replay, terminal settlement, and goal recovery now preserve durable ordering through restarts and races.",
+        details:
+          "Queued turns can be promoted replay-safely, stalled projection cursors escape permanent resnapshot loops, superseded projections retain retry backoff, terminal sessions can retry eligible goals, and pause or blocked transitions fence automatic continuation before user interrupts or newer work can be overtaken.",
+      },
+      {
+        id: "release-pipeline-hardening",
+        title: "Release publication has stricter, clearer gates",
+        description:
+          "The release workflow now uses least-privilege permissions, clean-lane checks, deterministic Windows setup, and scoped unsigned exceptions.",
+        details:
+          "Publication policy is explicit about when a release can proceed, Windows dependency installation is stabilized, and an unsigned Windows build must still pass packaging, provenance, startup smoke, and artifact-upload checks under an exact version-scoped exception.",
+      },
+    ],
+  },
+  {
     version: "0.7.1",
     date: "Aug 9",
     features: [
