@@ -1952,7 +1952,6 @@ describe("Antigravity background task helpers (#752)", () => {
                 'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}}}',
                 'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
                 'post-tool\t{"stepIdx":3,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-real-a"}}}',
-                'stop\t{"stepIdx":4}',
                 "",
               ].join("\n"),
             ),
@@ -1965,7 +1964,6 @@ describe("Antigravity background task helpers (#752)", () => {
               transcriptFile,
               [
                 JSON.stringify({
-                  step_index: 5,
                   type: "SYSTEM_MESSAGE",
                   content: "<SYSTEM_MESSAGE> Task id 'task-real-b' exited with code 0",
                 }),
@@ -1977,6 +1975,7 @@ describe("Antigravity background task helpers (#752)", () => {
                 "",
               ].join("\n"),
             );
+            fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":4}\n');
           });
           yield* Deferred.await(followupObserved).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(0);
@@ -2140,6 +2139,118 @@ describe("Antigravity background task helpers (#752)", () => {
     }
   });
 
+  it("ignores a hook poll that resumes after session replacement", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stale-poll-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+
+    let eventFile: string | undefined;
+    let blockedEventFile: string | undefined;
+    let replacementEventFile: string | undefined;
+    let hookReadBlocked = false;
+    let resolveHookReadStarted = (): void => undefined;
+    const hookReadStarted = new Promise<void>((resolve) => {
+      resolveHookReadStarted = resolve;
+    });
+    let releaseHookRead = (): void => undefined;
+    const hookReadRelease = new Promise<void>((resolve) => {
+      releaseHookRead = resolve;
+    });
+    let resolveReplacementPoll = (): void => undefined;
+    const replacementPollObserved = new Promise<void>((resolve) => {
+      resolveReplacementPoll = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const readCompleteLines: NonNullable<
+      AntigravityAdapterDependencies["readCompleteLines"]
+    > = async (filePath, offset) => {
+      const batch = await readCompleteAntigravityLines(filePath, offset);
+      if (filePath === blockedEventFile && !hookReadBlocked) {
+        hookReadBlocked = true;
+        resolveHookReadStarted();
+        await hookReadRelease;
+      }
+      if (filePath === replacementEventFile) resolveReplacementPoll();
+      return batch;
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const staleTaskIds: string[] = [];
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "task.started") staleTaskIds.push(event.payload.taskId);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-stale-poll");
+          const sessionInput = {
+            provider: "antigravity" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          };
+          yield* adapter.startSession(sessionInput);
+          yield* adapter.sendTurn({ threadId, input: "start a task", attachments: [] });
+          blockedEventFile = eventFile;
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              blockedEventFile!,
+              [
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-stale\' is now running in the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Effect.promise(() => hookReadStarted).pipe(Effect.timeout("2 seconds"));
+
+          yield* adapter.startSession(sessionInput);
+          releaseHookRead();
+          yield* adapter.sendTurn({ threadId, input: "replacement turn", attachments: [] });
+          replacementEventFile = eventFile;
+          yield* Effect.promise(() => replacementPollObserved).pipe(Effect.timeout("2 seconds"));
+
+          expect(staleTaskIds).toEqual([]);
+          yield* Fiber.interrupt(eventsFiber);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              readCompleteLines,
+              spawnProcess,
+              teardownProcessTree: async () => undefined,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "stale-poll-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("settles pending background tasks on session replacement and process exit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-background-restart-"));
     const transcriptFile = path.join(root, "transcript.jsonl");
@@ -2268,7 +2379,8 @@ describe("Antigravity background task helpers (#752)", () => {
             fs.appendFile(
               eventFile!,
               [
-                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-buffered\' is now running in the background"}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-buffered\' is now running in the background"}',
                 "",
               ].join("\n"),
             ),

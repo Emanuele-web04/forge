@@ -144,6 +144,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   pendingBackgroundTasks: Map<string, AntigravityTrackedBackgroundTask>;
   pendingAnonymousBackgroundTasks: number;
   pendingBackgroundTaskCompletions: AntigravitySystemMessageInfo[];
+  backgroundCompletionSequence: number;
   latestBackgroundCompletionStepIndex?: number;
   /**
    * Conversations owned by spawned subagents, keyed by conversation id.
@@ -1161,12 +1162,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       taskType: string,
       source: { readonly name: string; readonly args?: Record<string, unknown> },
     ): void => {
+      if (context.stopped) return;
       if (!start.taskId) {
-        if (context.pendingBackgroundTaskCompletions.length > 0) {
-          context.pendingBackgroundTaskCompletions.shift();
-        } else {
-          context.pendingAnonymousBackgroundTasks += 1;
-        }
+        context.pendingAnonymousBackgroundTasks += 1;
         return;
       }
       const taskId = start.taskId;
@@ -1390,6 +1388,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     };
 
     const processTranscriptStep = (context: AntigravitySessionContext, step: TranscriptStep) => {
+      if (context.stopped) return;
       const stepIndex = step.step_index;
       if (typeof stepIndex === "number") {
         if (context.processedSteps.has(stepIndex)) return;
@@ -1402,11 +1401,16 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       );
       if (systemMessage?.isSystemMessage) {
         const candidateId = backgroundCompletionCandidate(systemMessage);
-        if (candidateId && typeof stepIndex === "number") {
-          context.latestBackgroundCompletionStepIndex = Math.max(
-            context.latestBackgroundCompletionStepIndex ?? -1,
-            stepIndex,
-          );
+        if (candidateId) {
+          context.backgroundCompletionSequence += 1;
+          if (typeof stepIndex === "number") {
+            context.latestBackgroundCompletionStepIndex = Math.max(
+              context.latestBackgroundCompletionStepIndex ?? -1,
+              stepIndex,
+            );
+          } else {
+            delete context.latestBackgroundCompletionStepIndex;
+          }
         }
         const matchedTaskId = matchAntigravityTrackedTaskId(
           candidateId,
@@ -1465,6 +1469,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       } catch {
         return;
       }
+      if (context.stopped) return;
       context.processedTranscriptBytes = batch.nextOffset;
       context.processedTranscriptPath = context.transcriptPath;
       const steps = batch.lines.flatMap((line) => {
@@ -1670,7 +1675,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
-      const completionStepIndexBeforePoll = context.latestBackgroundCompletionStepIndex;
+      const completionSequenceBeforePoll = context.backgroundCompletionSequence;
       let latestStopStepIndex: number | undefined;
       let sawStopWithoutStepIndex = false;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
@@ -1679,8 +1684,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       } catch {
         return;
       }
+      if (context.stopped) return;
       context.processedHookBytes = batch.nextOffset;
       for (const line of batch.lines) {
+        if (context.stopped) return;
         const tab = line.indexOf("\t");
         if (tab < 0) continue;
         const eventName = line.slice(0, tab);
@@ -1883,12 +1890,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
       }
       await readTranscript(context);
+      if (context.stopped) return;
       const completionStepIndex = context.latestBackgroundCompletionStepIndex;
+      const completionObservedDuringPoll =
+        context.backgroundCompletionSequence > completionSequenceBeforePoll;
       const indexedStopFollowsLatestCompletion =
-        latestStopStepIndex !== undefined && latestStopStepIndex > (completionStepIndex ?? -1);
+        latestStopStepIndex !== undefined &&
+        (completionStepIndex !== undefined
+          ? latestStopStepIndex > completionStepIndex
+          : !completionObservedDuringPoll);
       const unindexedStopFollowsLatestCompletion =
-        sawStopWithoutStepIndex &&
-        (completionStepIndex === undefined || completionStepIndexBeforePoll !== undefined);
+        sawStopWithoutStepIndex && !completionObservedDuringPoll;
       const stopFollowsLatestCompletion =
         indexedStopFollowsLatestCompletion || unindexedStopFollowsLatestCompletion;
       if (stopFollowsLatestCompletion) teardownStoppedTurnIfIdle(context);
@@ -1977,6 +1989,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           pendingBackgroundTasks: new Map(),
           pendingAnonymousBackgroundTasks: 0,
           pendingBackgroundTaskCompletions: [],
+          backgroundCompletionSequence: 0,
           foreignConversations: new Map(),
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
@@ -2101,6 +2114,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.pendingTools = [];
         context.pendingAnonymousBackgroundTasks = 0;
         context.pendingBackgroundTaskCompletions.length = 0;
+        context.backgroundCompletionSequence = 0;
         delete context.latestBackgroundCompletionStepIndex;
         context.nextToolSequence = 0;
         context.foreignConversations.clear();
