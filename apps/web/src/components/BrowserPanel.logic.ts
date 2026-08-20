@@ -252,6 +252,13 @@ export interface BrowserChromeStatus {
   label: string;
 }
 
+// The address field and tab pills share one chrome-control surface so the whole row reads
+// as a single cohesive control: matching height, radius, border width, and type scale.
+export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
+// The address field's filled look, reused by the active tab so the selected tab visually
+// matches the search input (same border tone + faint fill).
+export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
+
 export function browserAnnotationDraftFromCommittedEvent(
   event: Extract<BrowserAnnotationEvent, { kind: "committed" }>,
 ): Omit<BrowserAnnotationDraft, "ordinal"> {
