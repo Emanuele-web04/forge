@@ -4,7 +4,9 @@ import {
   isRunningChatForQuit,
   listRunningChatsFromDesktopStore,
   runningChatDisplayTitle,
+  runningChatIdsStillActive,
   runningChatsQuitCopy,
+  stopRunningChatsForQuit,
 } from "./runningChatsQuitConfirmation";
 
 describe("running chats quit confirmation", () => {
@@ -66,5 +68,63 @@ describe("running chats quit confirmation", () => {
       stayLabel: "Cancel",
       quitLabel: "Quit",
     });
+  });
+
+  it("reports whether listed chats are still running", () => {
+    const state = {
+      sidebarThreadSummaryById: {
+        a: { id: "a", title: "Sidebar running", session: { status: "running" } },
+        idle: { id: "idle", title: "Idle", session: { status: "ready" } },
+      },
+    };
+    expect(runningChatIdsStillActive(state, ["a"])).toBe(true);
+    expect(runningChatIdsStillActive(state, ["idle"])).toBe(false);
+    expect(runningChatIdsStillActive(state, [])).toBe(false);
+  });
+
+  it("interrupts running chats and waits until they settle", async () => {
+    const interrupted: string[] = [];
+    let stillRunning = true;
+    const sleepCalls: number[] = [];
+
+    const stopping = stopRunningChatsForQuit({
+      chats: [
+        { id: "a", title: "One" },
+        { id: "b", title: "Two" },
+      ],
+      dispatchInterrupt: async (threadId) => {
+        interrupted.push(threadId);
+      },
+      isStillRunning: () => stillRunning,
+      nowMs: () => 0,
+      sleep: async (ms) => {
+        sleepCalls.push(ms);
+        stillRunning = false;
+      },
+      timeoutMs: 200,
+    });
+
+    await stopping;
+    expect(interrupted).toEqual(["a", "b"]);
+    expect(sleepCalls).toEqual([50]);
+  });
+
+  it("still quits if interrupt dispatch fails or the wait times out", async () => {
+    let now = 0;
+    await expect(
+      stopRunningChatsForQuit({
+        chats: [{ id: "a", title: "One" }],
+        dispatchInterrupt: async () => {
+          throw new Error("rpc failed");
+        },
+        isStillRunning: () => true,
+        nowMs: () => now,
+        sleep: async () => {
+          now += 50;
+        },
+        timeoutMs: 80,
+      }),
+    ).resolves.toBeUndefined();
+    expect(now).toBeGreaterThanOrEqual(80);
   });
 });

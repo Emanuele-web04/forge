@@ -3,12 +3,17 @@
 // Layer: Root web coordinator
 // Depends on: Desktop bridge quit IPC and the orchestration store.
 
+import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   listRunningChatsFromDesktopStore,
+  runningChatIdsStillActive,
+  stopRunningChatsForQuit,
   type RunningChatQuitSummary,
 } from "~/lib/runningChatsQuitConfirmation";
+import { newCommandId } from "~/lib/utils";
+import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 
 import { RunningChatsQuitDialog } from "./RunningChatsQuitDialog";
@@ -17,19 +22,54 @@ export function RunningChatsQuitCoordinator() {
   const [chats, setChats] = useState<ReadonlyArray<RunningChatQuitSummary> | null>(null);
   const pendingRequestIdRef = useRef<string | null>(null);
 
-  const settle = useCallback((allow: boolean) => {
-    const requestId = pendingRequestIdRef.current;
-    if (!requestId) {
-      return;
-    }
-    pendingRequestIdRef.current = null;
-    setChats(null);
-    window.desktopBridge?.replyQuitConfirmation({
-      requestId,
-      phase: "decision",
-      allow,
-    });
-  }, []);
+  const settle = useCallback(
+    (allow: boolean) => {
+      const requestId = pendingRequestIdRef.current;
+      if (!requestId) {
+        return;
+      }
+      const chatsToStop = allow ? chats : null;
+      pendingRequestIdRef.current = null;
+      setChats(null);
+
+      const reply = (allowQuit: boolean) => {
+        window.desktopBridge?.replyQuitConfirmation({
+          requestId,
+          phase: "decision",
+          allow: allowQuit,
+        });
+      };
+
+      if (!allow || chatsToStop == null || chatsToStop.length === 0) {
+        reply(allow);
+        return;
+      }
+
+      void stopRunningChatsForQuit({
+        chats: chatsToStop,
+        dispatchInterrupt: async (threadId) => {
+          const api = readNativeApi();
+          if (!api) {
+            return;
+          }
+          await api.orchestration.dispatchCommand({
+            type: "thread.turn.interrupt",
+            commandId: newCommandId(),
+            threadId: ThreadId.makeUnsafe(threadId),
+            createdAt: new Date().toISOString(),
+          });
+        },
+        isStillRunning: () =>
+          runningChatIdsStillActive(
+            useStore.getState(),
+            chatsToStop.map((chat) => chat.id),
+          ),
+      }).finally(() => {
+        reply(true);
+      });
+    },
+    [chats],
+  );
 
   useEffect(() => {
     const subscribe = window.desktopBridge?.onQuitConfirmationRequest;
