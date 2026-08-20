@@ -366,7 +366,11 @@ describe("quit resume record file", () => {
         const next = yield* claimQuitResumeRecord(path);
         const fs = yield* FileSystem.FileSystem;
         const leftovers = yield* fs.exists(`${path}.claimed`);
-        return { nothing, claimed, afterClaim, next, leftovers };
+        // A private copy left by a crash mid-claim is never mistaken for a record.
+        yield* fs.writeFileString(`${path}.claimed`, JSON.stringify(first));
+        const stale = yield* claimQuitResumeRecord(path);
+        const staleRemoved = !(yield* fs.exists(`${path}.claimed`));
+        return { nothing, claimed, afterClaim, next, leftovers, stale, staleRemoved };
       }),
     );
 
@@ -375,6 +379,8 @@ describe("quit resume record file", () => {
     expect(result.afterClaim).toEqual({ kind: "absent" });
     expect(result.next).toEqual({ kind: "record", record: second });
     expect(result.leftovers).toBe(false);
+    expect(result.stale).toEqual({ kind: "absent" });
+    expect(result.staleRemoved).toBe(true);
   });
 
   it("prepareQuitResume records in-flight threads, interrupts them, and drops the record if the quit never happens", async () => {

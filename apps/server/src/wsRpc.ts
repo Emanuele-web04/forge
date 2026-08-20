@@ -932,12 +932,16 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.prepareQuitResume]: (input) =>
           rpcEffect(
-            prepareQuitResume({
-              request: input,
-              recordPath: config.quitResumeStatePath,
-              getReadModel: orchestrationEngine.getReadModel,
-              dispatch: dispatchOrchestrationCommand,
-            }),
+            // Gated as a whole (not just its dispatches) so the record can never be
+            // written while startup is still claiming the previous quit's record.
+            runtimeStartup.enqueueCommand(
+              prepareQuitResume({
+                request: input,
+                recordPath: config.quitResumeStatePath,
+                getReadModel: orchestrationEngine.getReadModel,
+                dispatch: dispatchOrchestrationCommand,
+              }),
+            ),
             "Failed to prepare chats for resume after quit",
           ),
         [ORCHESTRATION_WS_METHODS.reconcileProviderDelivery]: (input) =>
