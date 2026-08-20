@@ -364,13 +364,12 @@ describe("quit resume record file", () => {
         // A quit prepared while boot is still running must keep its own record.
         yield* persistQuitResumeRecord({ path, record: second });
         const next = yield* claimQuitResumeRecord(path);
-        const fs = yield* FileSystem.FileSystem;
-        const leftovers = yield* fs.exists(`${path}.claimed`);
-        // A private copy left by a crash mid-claim is never mistaken for a record.
-        yield* fs.writeFileString(`${path}.claimed`, JSON.stringify(first));
-        const stale = yield* claimQuitResumeRecord(path);
-        const staleRemoved = !(yield* fs.exists(`${path}.claimed`));
-        return { nothing, claimed, afterClaim, next, leftovers, stale, staleRemoved };
+        yield* persistQuitResumeRecord({ path, record: first });
+        const concurrent = yield* Effect.all(
+          [claimQuitResumeRecord(path), claimQuitResumeRecord(path)],
+          { concurrency: "unbounded" },
+        );
+        return { nothing, claimed, afterClaim, next, concurrent };
       }),
     );
 
@@ -378,9 +377,8 @@ describe("quit resume record file", () => {
     expect(result.claimed).toEqual({ kind: "record", record: first });
     expect(result.afterClaim).toEqual({ kind: "absent" });
     expect(result.next).toEqual({ kind: "record", record: second });
-    expect(result.leftovers).toBe(false);
-    expect(result.stale).toEqual({ kind: "absent" });
-    expect(result.staleRemoved).toBe(true);
+    expect(result.concurrent.filter((entry) => entry.kind === "record")).toHaveLength(1);
+    expect(result.concurrent.filter((entry) => entry.kind === "absent")).toHaveLength(1);
   });
 
   it("prepareQuitResume records in-flight threads, interrupts them, and drops the record if the quit never happens", async () => {
@@ -439,5 +437,42 @@ describe("quit resume record file", () => {
     ]);
     expect(dispatched[1]).not.toHaveProperty("turnId");
     expect(result.abandoned).toEqual({ kind: "absent" });
+  });
+
+  it("acknowledges the durable record without waiting for best-effort interrupts", async () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        run(
+          Effect.gen(function* () {
+            const config = yield* ServerConfig;
+            const prepared = yield* prepareQuitResume({
+              request: {
+                threadIds: [threadId("a")],
+                continuationPrompt: PROMPT,
+              },
+              recordPath: config.quitResumeStatePath,
+              getReadModel: () => Effect.succeed({ threads: [makeRunningThread("a")] }),
+              dispatch: () => Effect.never,
+              abandonAfter: Duration.hours(1),
+            });
+            const persisted = yield* readQuitResumeRecord(config.quitResumeStatePath);
+            yield* clearQuitResumeRecord(config.quitResumeStatePath);
+            return { prepared, persisted };
+          }),
+        ),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("prepareQuitResume waited for an interrupt")),
+            250,
+          );
+        }),
+      ]);
+
+      expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
+      expect(result.persisted.kind).toBe("record");
+    } finally {
+      clearTimeout(timeout);
+    }
   });
 });

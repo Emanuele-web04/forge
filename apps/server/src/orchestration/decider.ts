@@ -1681,10 +1681,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      // A quit-resume command is planned just before commands are admitted.
+      // Respect settings changed before its serialized dispatch instead of
+      // replaying the planner's stale permission or interaction mode.
+      const runtimeMode =
+        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+      const interactionMode =
+        command.resumePrecondition === undefined
+          ? command.interactionMode
+          : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
         command,
         command.modelSelection ?? targetThread.modelSelection,
-        command.runtimeMode,
+        runtimeMode,
       );
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1751,8 +1760,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
-        runtimeMode: command.runtimeMode,
-        interactionMode: command.interactionMode,
+        runtimeMode,
+        interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;

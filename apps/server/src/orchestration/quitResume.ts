@@ -71,6 +71,14 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
  */
 export const QUIT_RESUME_ABANDON_AFTER_MS = 30_000;
 
+/** Sleep without keeping the Node process alive during a normal desktop shutdown. */
+const sleepUnref = (duration: Duration.Input) =>
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), Duration.toMillis(duration));
+    timer.unref();
+    return Effect.sync(() => clearTimeout(timer));
+  });
+
 export const QuitResumeRecord = Schema.Struct({
   version: Schema.Literal(1),
   /** Unique per quit; command/message ids derive from it so replays dedup and quits never collide. */
@@ -306,19 +314,17 @@ export const readQuitResumeRecord = (
 
 /**
  * Take exclusive ownership of whatever record is at `path`: an atomic rename to a
- * private path (so a second process claiming the same state dir can win at most
- * once), read it, remove the private copy. `absent` when there was nothing to
- * claim. A private copy left behind by a crash mid-claim is discarded first —
- * its resume was already lost by then and it must never be mistaken for a fresh
- * record.
+ * claimant-unique private path (so a second process claiming the same state dir
+ * can win at most once without deleting the first claimant's file), read it,
+ * then remove the private copy. `absent` when there was nothing to claim. A
+ * private copy left behind by a crash is never mistaken for a fresh record.
  */
 export const claimQuitResumeRecord = (
   path: string,
 ): Effect.Effect<QuitResumeRecordRead, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const claimedPath = `${path}.claimed`;
-    yield* clearQuitResumeRecord(claimedPath).pipe(Effect.ignore);
+    const claimedPath = `${path}.${process.pid}.${randomUUID()}.claimed`;
     const exists = yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
     if (!exists) {
       return { kind: "absent" } as const;
@@ -396,7 +402,7 @@ export const prepareQuitResume = (input: {
       threadIds: record.threads.map((entry) => entry.threadId),
     });
 
-    yield* Effect.sleep(input.abandonAfter ?? Duration.millis(QUIT_RESUME_ABANDON_AFTER_MS)).pipe(
+    yield* sleepUnref(input.abandonAfter ?? Duration.millis(QUIT_RESUME_ABANDON_AFTER_MS)).pipe(
       Effect.andThen(clearQuitResumeRecordIfOwned(input.recordPath, record.recordId)),
       Effect.flatMap((cleared) =>
         cleared
@@ -413,6 +419,9 @@ export const prepareQuitResume = (input: {
       Effect.forkDetach,
     );
 
+    // The durable write is the RPC acknowledgement contract. Interrupts are
+    // best-effort and must not make the renderer miss its bounded quit wait;
+    // process shutdown itself will stop any provider command that remains live.
     yield* Effect.forEach(
       record.threads,
       (entry) =>
@@ -433,8 +442,8 @@ export const prepareQuitResume = (input: {
               }),
             ),
           ),
-      { discard: true },
-    );
+      { discard: true, concurrency: "unbounded" },
+    ).pipe(Effect.forkDetach);
 
     return {
       recordedThreadIds: record.threads.map((entry) => entry.threadId),

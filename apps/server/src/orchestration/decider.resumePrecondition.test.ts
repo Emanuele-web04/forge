@@ -25,6 +25,8 @@ function makeReadModel(input: {
   readonly session?: OrchestrationSession | null;
   readonly latestTurn?: OrchestrationLatestTurn | null;
   readonly archivedAt?: string;
+  readonly runtimeMode?: OrchestrationReadModel["threads"][number]["runtimeMode"];
+  readonly interactionMode?: OrchestrationReadModel["threads"][number]["interactionMode"];
 }): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
@@ -37,8 +39,8 @@ function makeReadModel(input: {
         projectId: ProjectId.makeUnsafe("project-resume"),
         title: "Resume",
         modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
+        interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: input.runtimeMode ?? "full-access",
         branch: null,
         worktreePath: null,
         createdAt: NOW,
@@ -162,5 +164,27 @@ describe("decider thread.turn.start resumePrecondition", () => {
       makeReadModel({ latestTurn: makeLatestTurn("interrupted"), archivedAt: NOW }),
       "Thread 'thread-resume' was archived after it was remembered for resume.",
     );
+  });
+
+  it("uses permission and interaction modes changed before the serialized resume dispatch", async () => {
+    const decided = await Effect.runPromise(
+      decide(
+        makeReadModel({
+          latestTurn: makeLatestTurn("interrupted"),
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        }),
+      ),
+    );
+    const events = Array.isArray(decided) ? decided : [decided];
+    const requested = events.find((event) => event.type === "thread.turn-start-requested");
+
+    expect(requested).toMatchObject({
+      type: "thread.turn-start-requested",
+      payload: {
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+    });
   });
 });
