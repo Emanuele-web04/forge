@@ -3933,9 +3933,9 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 function isMainRendererAvailable(): boolean {
   return Boolean(
     mainWindow &&
-      !mainWindow.isDestroyed() &&
-      !mainWindow.webContents.isDestroyed() &&
-      !mainWindow.webContents.isCrashed(),
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed() &&
+    !mainWindow.webContents.isCrashed(),
   );
 }
 
