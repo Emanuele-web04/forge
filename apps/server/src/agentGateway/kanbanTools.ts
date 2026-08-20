@@ -506,6 +506,11 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               Effect.mapError((error) => new ToolInputError(errorText(error))),
             );
             yield* assertCallerMayDriveThread(caller, card);
+            if ((card.archivedAt ?? null) !== null) {
+              return yield* Effect.fail(
+                new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
+              );
+            }
             const at = now();
             const cardView = deriveCard(card, at);
             const currentColumn = cardView.column;

@@ -847,6 +847,47 @@ describe("synara_move_kanban_card", () => {
     expect(started).toHaveLength(0);
   });
 
+  it("rejects an archived thread for target inProgress", async () => {
+    const archived = makeThreadShell("thread-archived", "project-a", {
+      archivedAt: NOW_ISO,
+    });
+    const { tools, started, interrupted } = makeTools({
+      threads: [archived],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
+      threadId: "thread-archived",
+      target: "inProgress",
+      message: "hi",
+    });
+    expect(result.isError).toBe(true);
+    const payload = jsonText(result) as { __errorText?: string };
+    expect(payload.__errorText).toContain("archived");
+    expect(started).toHaveLength(0);
+    expect(interrupted).toHaveLength(0);
+  });
+
+  it("rejects an archived thread for target done", async () => {
+    const archived = makeThreadShell("thread-archived", "project-a", {
+      archivedAt: NOW_ISO,
+    });
+    const { tools, started, interrupted } = makeTools({
+      threads: [archived],
+      projects: [makeProjectShell("project-a", "Project A")],
+    });
+
+    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
+      threadId: "thread-archived",
+      target: "done",
+    });
+    expect(result.isError).toBe(true);
+    const payload = jsonText(result) as { __errorText?: string };
+    expect(payload.__errorText).toContain("archived");
+    expect(started).toHaveLength(0);
+    expect(interrupted).toHaveLength(0);
+  });
+
   it("returns an error result when the interrupt dispatch fails", async () => {
     const running = makeSessionShell("thread-live", "project-a", {
       latestTurn: {
