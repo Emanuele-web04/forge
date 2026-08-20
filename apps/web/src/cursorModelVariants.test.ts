@@ -176,4 +176,49 @@ describe("collapseCursorModelVariants", () => {
       },
     ]);
   });
+
+  it("defaults collapsed Cursor Grok variants to high and keeps fast as a toggle", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "grok-4.6-low",
+          name: "Cursor Grok 4.6 Low",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+        },
+        {
+          slug: "grok-4.6-high",
+          name: "Cursor Grok 4.6 High",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "grok-4.6-low-fast",
+          name: "Cursor Grok 4.6 Low Fast",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+          supportsFastMode: true,
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "grok-4.6",
+        name: "Cursor Grok 4.6",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        defaultReasoningEffort: "high",
+        supportsFastMode: true,
+      },
+    ]);
+  });
 });

@@ -69,6 +69,38 @@ describe("threadHandoff", () => {
     expect(imported!.text).not.toContain("<assistant_selection>");
   });
 
+  it("imports only the transcript through the requested message", () => {
+    const message = (id: string, role: "user" | "assistant", text: string) => ({
+      id: MessageId.makeUnsafe(id),
+      role,
+      text,
+      createdAt: "2026-07-23T10:00:00.000Z",
+      streaming: false as const,
+      source: "native" as const,
+    });
+    const thread = {
+      messages: [
+        message("m1", "user", "first ask"),
+        message("m2", "assistant", "first answer"),
+        message("m3", "user", "second ask"),
+        message("m4", "assistant", "second answer"),
+      ],
+    };
+
+    const scoped = buildThreadHandoffImportedMessages(thread, {
+      throughMessageId: MessageId.makeUnsafe("m2"),
+    });
+    expect(scoped.map((imported) => imported.text)).toEqual(["first ask", "first answer"]);
+
+    // No cutoff (and an unknown cutoff) keeps the whole importable transcript.
+    expect(buildThreadHandoffImportedMessages(thread)).toHaveLength(4);
+    expect(
+      buildThreadHandoffImportedMessages(thread, {
+        throughMessageId: MessageId.makeUnsafe("missing"),
+      }),
+    ).toHaveLength(4);
+  });
+
   it("does not import a source provider's configured context window", () => {
     const activity = (kind: string): OrchestrationThreadActivity => ({
       id: EventId.makeUnsafe(`activity-${kind}`),

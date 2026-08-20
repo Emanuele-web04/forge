@@ -718,6 +718,14 @@ export function projectEvent(
                 ? { threadMarkers: payload.threadMarkers }
                 : {}),
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+              ...(payload.goalStartedAt !== undefined
+                ? { goalStartedAt: payload.goalStartedAt }
+                : {}),
+              ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
+              ...(payload.goalAchievements !== undefined
+                ? { goalAchievements: payload.goalAchievements }
+                : {}),
               updatedAt: payload.updatedAt,
             }),
           };

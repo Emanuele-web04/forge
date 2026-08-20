@@ -73,6 +73,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
   },
   {
+    id: "general:automation-run-threads",
+    section: "general",
+    title: "Automation runs",
+    keywords:
+      "Show the thread each standalone automation run creates in the sidebar. hide automation run threads clutter scheduled",
+  },
+  {
     id: "general:environment-default-open",
     section: "general",
     title: "Open by default",
@@ -151,6 +158,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
   {
+    id: "appearance:custom-title-bar",
+    section: "appearance",
+    title: "Use custom title bar",
+    keywords:
+      "frameless window system title bar Windows Linux caption controls minimize maximize close chrome",
+    target: null,
+  },
+  {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",
@@ -162,6 +177,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "UI density",
     keywords:
       "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size. compact comfortable",
+  },
+  {
+    id: "appearance:chat-width",
+    section: "appearance",
+    title: "Chat width",
+    keywords:
+      "Control how wide the chat column grows so tables and wide content get more room. standard wide full",
   },
   {
     id: "appearance:base-font-size",

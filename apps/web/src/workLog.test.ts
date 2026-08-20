@@ -97,6 +97,184 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
   });
 
+  it("collapses task-list snapshots into one progressing row per turn", () => {
+    const taskListActivity = (
+      id: string,
+      createdAt: string,
+      tasks: Array<{ task: string; status: string }>,
+    ) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks },
+      });
+    const activities: OrchestrationThreadActivity[] = [
+      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", [
+        { task: "Implement inline editing", status: "inProgress" },
+        { task: "Run verification", status: "pending" },
+      ]),
+      makeActivity({
+        id: "tool-between",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        turnId: "turn-1",
+      }),
+      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", [
+        { task: "Implement inline editing", status: "completed" },
+        { task: "Run verification", status: "inProgress" },
+      ]),
+      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", [
+        { task: "Implement inline editing", status: "completed" },
+        { task: "Run verification", status: "completed" },
+      ]),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    const taskListEntries = entries.filter((entry) => entry.activityKind === "turn.tasks.updated");
+    expect(taskListEntries).toHaveLength(1);
+    // Anchored at the first snapshot (stable id/createdAt), showing the latest state.
+    expect(taskListEntries[0]?.id).toBe("tasks-1");
+    expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
+    expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
+    expect(taskListEntries[0]?.detail).toBeUndefined();
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
+  });
+
+  it("labels task-list rows with progress and the in-progress task", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: "turn-1",
+          payload: {
+            tasks: [
+              { task: "Workstream A server: failure tolerance", status: "completed" },
+              { task: "Implementing inline editing UI", status: "inProgress" },
+              { task: "Final verification pass", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entry?.label).toBe("1 out of 3 tasks completed");
+    expect(entry?.detail).toBe("Implementing inline editing UI");
+    expect(entry?.toolTitle).toBeUndefined();
+  });
+
+  it("keeps separate task-list rows for separate turns", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "tasks-turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { tasks: [{ task: "Second turn work", status: "inProgress" }] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-turn-1", "tasks-turn-2"]);
+  });
+
+  it("keeps turnless task-list snapshots independent across unknown turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-turnless-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "tasks-turnless-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        payload: { tasks: [{ task: "Later turn work", status: "inProgress" }] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-turnless-1", "tasks-turnless-2"]);
+  });
+
+  it("keeps the generic label for a task-list snapshot without readable tasks", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-empty",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: "turn-1",
+          payload: { tasks: [] },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entry?.label).toBe("Tasks updated");
+  });
+
+  it("keeps the progressed label when a later snapshot clears the task list", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-progressed",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [
+            { task: "Implement inline editing", status: "completed" },
+            { task: "Run verification", status: "inProgress" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "tasks-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("tasks-progressed");
+    expect(entries[0]?.label).toBe("1 out of 2 tasks completed");
+    expect(entries[0]?.detail).toBe("Run verification");
+  });
+
   it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

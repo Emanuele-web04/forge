@@ -24,6 +24,7 @@ import {
   ProviderStartOptions,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
+  THREAD_GOAL_MAX_CHARS,
   THREAD_MARKER_LABEL_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -792,6 +793,22 @@ it.effect("rejects oversized thread notes payloads", () =>
     const failed = yield* decodeThreadMetaUpdatedPayload({
       threadId: "thread-1",
       notes: "x".repeat(THREAD_NOTES_MAX_CHARS + 1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
+  }),
+);
+
+it.effect("rejects oversized thread goal payloads", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      goal: "x".repeat(THREAD_GOAL_MAX_CHARS + 1),
       updatedAt: "2026-01-01T00:00:00.000Z",
     }).pipe(
       Effect.match({

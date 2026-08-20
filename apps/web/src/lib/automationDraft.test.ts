@@ -189,6 +189,30 @@ describe("automation draft warnings", () => {
     expect(hasBlockingAutomationDraftWarnings(standaloneWarnings, standaloneIds)).toBe(true);
   });
 
+  it("mentions a manual schedule without blocking submission", () => {
+    const warnings = buildAutomationDraftWarnings({
+      schedule: { type: "manual" },
+      mode: "standalone",
+      runtimeMode: "approval-required",
+      worktreeMode: "worktree",
+      hasEphemeralContext: false,
+      generatedConfidence: null,
+      generatedNeedsConfirmation: false,
+      prompt: "Summarize open reviews.",
+    });
+
+    expect(warnings).toMatchObject([
+      {
+        id: "missing-schedule",
+        title: "Manual runs only",
+        detail: "This automation only runs when you press Run now.",
+        requiresAcknowledgement: false,
+      },
+      { id: "worktree-cleanup", requiresAcknowledgement: false },
+    ]);
+    expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(false);
+  });
+
   it("does not show worktree cleanup risk for heartbeat runs", () => {
     const warnings = buildAutomationDraftWarnings({
       schedule: { type: "interval", everySeconds: 300 },

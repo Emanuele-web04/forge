@@ -48,6 +48,8 @@ it.effect("defaults automation runtime mode to approval-required", () =>
     assert.isNull(parsed.proposalState);
     assert.strictEqual(parsed.notificationPolicy, "all");
     assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.isUndefined(parsed.stopAfterConsecutiveFailures);
+    assert.isUndefined(parsed.stopOnError);
   }),
 );
 
@@ -92,7 +94,6 @@ it.effect("decodes legacy automation definitions without completion policies", (
       mode: "heartbeat",
       targetThreadId: "thread-1",
       maxIterations: null,
-      stopOnError: true,
       minimumIntervalSeconds: 60,
       maxRuntimeSeconds: 3600,
       retryPolicy: { type: "none" },
@@ -110,6 +111,10 @@ it.effect("decodes legacy automation definitions without completion policies", (
     assert.isNull(parsed.proposalState);
     assert.strictEqual(parsed.notificationPolicy, "all");
     assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.strictEqual(parsed.stopAfterConsecutiveFailures, 3);
+    assert.strictEqual(parsed.consecutiveFailureCount, 0);
+    assert.isNull(parsed.disabledReason);
+    assert.isNull(parsed.disabledAt);
   }),
 );
 

@@ -1,4 +1,7 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
+  THREAD_GOAL_MAX_CHARS,
+  type MessageId,
   type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
@@ -23,9 +26,14 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommandArgs,
+  parseSideSlashCommandArgs,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
-import { buildThreadHandoffImportedMessages } from "../lib/threadHandoff";
+import {
+  buildThreadHandoffImportedMessages,
+  resolveThreadHandoffModelSelection,
+} from "../lib/threadHandoff";
 import { toastManager } from "../components/ui/toast";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
@@ -36,6 +44,8 @@ import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
 import {
   createOrJoinSidechat,
   createSidechatThread,
@@ -63,6 +73,7 @@ export function useComposerSlashCommands(input: {
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
   canOfferSideCommand: boolean;
+  sidechatTargetProviders: ReadonlyArray<ProviderKind>;
   canOfferExportCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
@@ -114,6 +125,7 @@ export function useComposerSlashCommands(input: {
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferSideCommand,
+    sidechatTargetProviders,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
@@ -247,8 +259,123 @@ export function useComposerSlashCommands(input: {
     [fastModeEnabled, supportsFastSlashCommand, setFastModeFromSlashCommand],
   );
 
+  const persistThreadGoal = useCallback(
+    async (goal: string): Promise<boolean> => {
+      if (!isServerThread && activeThread) {
+        // Draft threads have no server row yet: stage the goal locally so the
+        // header shows it immediately, then the first send persists it right
+        // after `thread.create` promotes the draft.
+        const draftStore = useComposerDraftStore.getState();
+        if (draftStore.getDraftThread(activeThread.id)) {
+          draftStore.setDraftThreadContext(activeThread.id, { goal });
+          return true;
+        }
+      }
+      if (!isServerThread || !activeThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Thread goal is unavailable",
+          description: "Open a thread before setting a goal.",
+        });
+        return false;
+      }
+
+      try {
+        await dispatchThreadGoal(activeThread.id, goal);
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update thread goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+        return false;
+      }
+    },
+    [activeThread, isServerThread],
+  );
+
+  const clearThreadGoal = useCallback(async () => {
+    if (await persistThreadGoal("")) {
+      toastManager.add({ type: "success", title: "Thread goal cleared" });
+    }
+  }, [persistThreadGoal]);
+
+  const setThreadGoalPaused = useCallback(
+    async (paused: boolean): Promise<boolean> => {
+      if (!isServerThread || !activeThread) {
+        return false;
+      }
+      try {
+        await dispatchThreadGoalPaused(activeThread.id, paused);
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: paused ? "Could not pause the thread goal" : "Could not resume the thread goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+        return false;
+      }
+    },
+    [activeThread, isServerThread],
+  );
+
+  const runGoalSlashCommand = useCallback(
+    async (args: string) => {
+      const action = parseGoalSlashCommandArgs(args);
+      if (action.action === "show") {
+        const currentGoal = activeThread?.goal?.trim();
+        toastManager.add(
+          currentGoal
+            ? { type: "info", title: "Thread goal", description: currentGoal }
+            : { type: "info", title: "No thread goal is set" },
+        );
+        return;
+      }
+      if (action.action === "too-long") {
+        toastManager.add({
+          type: "warning",
+          title: "Thread goal is too long",
+          description: `Keep the goal within ${THREAD_GOAL_MAX_CHARS.toLocaleString()} characters.`,
+        });
+        return;
+      }
+      if (action.action === "clear") {
+        await clearThreadGoal();
+        return;
+      }
+      if (action.action === "pause" || action.action === "resume") {
+        const paused = action.action === "pause";
+        if (await setThreadGoalPaused(paused)) {
+          toastManager.add({
+            type: "success",
+            title: `Thread goal ${paused ? "paused" : "resumed"}`,
+          });
+        }
+        return;
+      }
+      if (action.action === "edit") {
+        const currentGoal = activeThread?.goal?.trim() ?? "";
+        editorActions.setComposerPromptValue(`/goal ${currentGoal}`);
+        editorActions.scheduleComposerFocus();
+        return;
+      }
+      if (await persistThreadGoal(action.goal)) {
+        toastManager.add({ type: "success", title: "Thread goal updated" });
+      }
+    },
+    [activeThread?.goal, clearThreadGoal, editorActions, persistThreadGoal, setThreadGoalPaused],
+  );
+
   const createForkThreadFromSlashCommand = useCallback(
-    async (inputOptions?: { target?: ForkSlashCommandTarget }) => {
+    async (inputOptions?: {
+      target?: ForkSlashCommandTarget;
+      /** Fork from a specific turn: imports the transcript up to (and including) this message. */
+      throughMessageId?: MessageId | null;
+    }) => {
       const api = readNativeApi();
       if (!api || !activeProject || !activeThread || !isServerThread) {
         toastManager.add({
@@ -259,7 +386,9 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread);
+      const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
+        throughMessageId: inputOptions?.throughMessageId ?? null,
+      });
 
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -308,9 +437,9 @@ export function useComposerSlashCommands(input: {
     ],
   );
 
-  const sidechatCreationBySourceThreadIdRef = useRef(new Map<ThreadId, SidechatCreationFlight>());
+  const sidechatCreationByKeyRef = useRef(new Map<string, SidechatCreationFlight>());
   const createSidechatFromSlashCommand = useCallback(
-    (inputOptions?: { initialPrompt?: string }): Promise<true> => {
+    (inputOptions?: { initialPrompt?: string; targetProvider?: ProviderKind }): Promise<true> => {
       const api = readNativeApi();
       if (
         !api ||
@@ -327,16 +456,28 @@ export function useComposerSlashCommands(input: {
         return Promise.resolve(true);
       }
 
+      const targetProvider = inputOptions?.targetProvider ?? null;
+      const sidechatModelSelection =
+        targetProvider && targetProvider !== selectedModelSelection.provider
+          ? resolveThreadHandoffModelSelection({
+              sourceThread: activeThread,
+              targetProvider,
+              projectDefaultModelSelection: activeProject.defaultModelSelection,
+              stickyModelSelectionByProvider:
+                useComposerDraftStore.getState().stickyModelSelectionByProvider,
+            })
+          : selectedModelSelection;
+
       return createOrJoinSidechat({
-        inFlightBySourceThreadId: sidechatCreationBySourceThreadIdRef.current,
-        sourceThreadId: activeThread.id,
+        inFlightByKey: sidechatCreationByKeyRef.current,
+        flightKey: `${activeThread.id}:${sidechatModelSelection.provider}`,
         initialPrompt: inputOptions?.initialPrompt,
         startCreation: (initialPrompt) =>
           createSidechatThread({
             api,
             project: activeProject,
             sourceThread: activeThread,
-            selectedModelSelection,
+            selectedModelSelection: sidechatModelSelection,
             initialPrompt,
             openSidechat: (sidechatThreadId) => {
               useRightDockStore.getState().openPane(activeThread.id, {
@@ -350,7 +491,7 @@ export function useComposerSlashCommands(input: {
           sendSidechatPrompt({
             api,
             threadId: sidechatThreadId,
-            selectedModelSelection,
+            selectedModelSelection: sidechatModelSelection,
             prompt,
           }),
         onCreationResult: (result) => {
@@ -512,10 +653,13 @@ export function useComposerSlashCommands(input: {
     [editorActions, selectedProvider, runCodexReviewStart],
   );
 
-  const handleForkTargetSelection = useCallback(
-    async (target: ForkSlashCommandTarget) => {
+  const runForkThread = useCallback(
+    async (inputOptions: {
+      target: ForkSlashCommandTarget;
+      throughMessageId?: MessageId | null;
+    }) => {
       try {
-        await createForkThreadFromSlashCommand({ target });
+        await createForkThreadFromSlashCommand(inputOptions);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -528,6 +672,22 @@ export function useComposerSlashCommands(input: {
       }
     },
     [createForkThreadFromSlashCommand],
+  );
+
+  const handleForkTargetSelection = useCallback(
+    async (target: ForkSlashCommandTarget) => {
+      await runForkThread({ target });
+    },
+    [runForkThread],
+  );
+
+  // Footer fork action: stays in the current environment (a worktree-backed thread
+  // reuses its worktree) and carries the transcript up to the clicked turn.
+  const handleForkFromMessage = useCallback(
+    (messageId: MessageId) => {
+      void runForkThread({ target: "local", throughMessageId: messageId });
+    },
+    [runForkThread],
   );
 
   const checkClaudeFastSlashCommandAvailability = useCallback(async (): Promise<boolean> => {
@@ -671,6 +831,11 @@ export function useComposerSlashCommands(input: {
         setIsSlashStatusDialogOpen(true);
         return true;
       }
+      if (slashInvocation.command === "goal") {
+        editorActions.clearComposerSlashDraft();
+        await runGoalSlashCommand(slashInvocation.args);
+        return true;
+      }
       if (slashInvocation.command === "subagents") {
         editorActions.setComposerPromptValue(buildSubagentsPrompt(slashInvocation.args));
         return true;
@@ -764,9 +929,29 @@ export function useComposerSlashCommands(input: {
           });
           return true;
         }
+        const { targetProvider, prompt, unavailableProvider } = parseSideSlashCommandArgs(
+          slashInvocation.args,
+          {
+            currentProvider: selectedModelSelection.provider,
+            availableTargetProviders: sidechatTargetProviders,
+          },
+        );
+        if (unavailableProvider) {
+          toastManager.add({
+            type: "warning",
+            title: `${PROVIDER_DISPLAY_NAMES[unavailableProvider]} is unavailable for Side`,
+            description: "Enable and sign in to that provider, then run /side again.",
+          });
+          return true;
+        }
+        // Hoisted out of the `try` below: React Compiler cannot lower `?:` inside
+        // a try block and would bail out of compiling this whole hook.
+        const sidechatOptions = targetProvider
+          ? { initialPrompt: prompt, targetProvider }
+          : { initialPrompt: prompt };
         try {
           editorActions.clearComposerSlashDraft();
-          await createSidechatFromSlashCommand({ initialPrompt: slashInvocation.args });
+          await createSidechatFromSlashCommand(sidechatOptions);
         } catch (error) {
           toastManager.add({
             type: "error",
@@ -793,10 +978,13 @@ export function useComposerSlashCommands(input: {
       openFeedbackDialog,
       openReviewTargetPicker,
       selectedProvider,
+      selectedModelSelection.provider,
+      sidechatTargetProviders,
       supportsTextNativeReviewCommand,
       runCodexReviewStart,
       runExportSlashCommand,
       runFastSlashCommand,
+      runGoalSlashCommand,
     ],
   );
 
@@ -807,8 +995,8 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
-      if (item.command === "model") {
-        const replacement = "/model ";
+      if (item.command === "model" || item.command === "goal" || item.command === "automation") {
+        const replacement = `/${item.command} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -822,26 +1010,9 @@ export function useComposerSlashCommands(input: {
         );
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
-        }
-        return;
-      }
-
-      if (item.command === "automation") {
-        const replacement = "/automation ";
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = editorActions.applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (wasPromptReplacementApplied(applied)) {
-          editorActions.setComposerHighlightedItemId(null);
-          editorActions.scheduleComposerFocus();
+          if (item.command !== "model") {
+            editorActions.scheduleComposerFocus();
+          }
         }
         return;
       }
@@ -1019,11 +1190,14 @@ export function useComposerSlashCommands(input: {
   );
 
   return {
+    handleForkFromMessage,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
     setIsSlashStatusDialogOpen,
     handleStandaloneSlashCommand,
     handleSlashCommandSelection,
+    clearThreadGoal,
+    setThreadGoalPaused,
   };
 }

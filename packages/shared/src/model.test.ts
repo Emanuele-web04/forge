@@ -10,7 +10,9 @@ import {
   MODEL_OPTIONS,
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
-  GROK_REASONING_EFFORT_OPTIONS,
+  GROK_4_5_REASONING_EFFORTS,
+  GROK_4_6_REASONING_EFFORTS,
+  GROK_BUILD_REASONING_EFFORTS,
 } from "@synara/contracts";
 
 import {
@@ -28,6 +30,7 @@ import {
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
+  normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
   normalizePiModelOptions,
@@ -41,6 +44,7 @@ import {
   getProviderOptionDescriptors,
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
+  resolveGrokEffortFamily,
 } from "./model";
 
 describe("Git text generation defaults", () => {
@@ -102,6 +106,8 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("grok-latest", "grok")).toBe("grok-build");
     expect(normalizeModelSlug("grok-code-fast-1", "grok")).toBe("grok-build-0.1");
     expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
+    expect(normalizeModelSlug("4.5", "grok")).toBe("grok-4.5");
+    expect(normalizeModelSlug("grok-4.6", "grok")).toBe("grok-4.6");
   });
 });
 
@@ -347,10 +353,15 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
 
-  it("returns Grok effort options for Grok Build models", () => {
-    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
-    expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
-    expect(values("grok", "grok-4.5")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+  it("returns Grok Build effort options for grok-build models", () => {
+    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
+    expect(values("grok", "grok-build")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
+  });
+
+  it("returns Grok 4.5 and 4.6 CLI effort ladders", () => {
+    expect(values("grok", "grok-4.5")).toEqual([...GROK_4_5_REASONING_EFFORTS]);
+    expect(values("grok", "grok-4.6")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
+    expect(values("grok", "grok-4.7")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -370,6 +381,15 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       label: "Extra High",
       controlSource: "api-effort",
     });
+    expect(
+      getModelCapabilities("grok", "grok-4.6").reasoningEffortLevels.find(
+        (l) => l.value === "xhigh",
+      ),
+    ).toMatchObject({
+      value: "xhigh",
+      label: "Extra High",
+      description: "Highest effort and reasoning level",
+    });
   });
 });
 
@@ -384,6 +404,8 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build-0.1"))).toBe("low");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build"))).toBe("low");
+    expect(getDefaultEffort(getModelCapabilities("grok", "grok-4.5"))).toBe("high");
+    expect(getDefaultEffort(getModelCapabilities("grok", "grok-4.6"))).toBe("high");
   });
 });
 
@@ -400,9 +422,26 @@ describe("hasEffortLevel", () => {
     expect(hasEffortLevel(codexCaps, "xhigh")).toBe(true);
     expect(hasEffortLevel(codexCaps, "max")).toBe(false);
 
-    const grokCaps = getModelCapabilities("grok", "grok-build-0.1");
-    expect(hasEffortLevel(grokCaps, "high")).toBe(true);
-    expect(hasEffortLevel(grokCaps, "xhigh")).toBe(false);
+    const grokBuildCaps = getModelCapabilities("grok", "grok-build-0.1");
+    expect(hasEffortLevel(grokBuildCaps, "high")).toBe(true);
+    expect(hasEffortLevel(grokBuildCaps, "xhigh")).toBe(false);
+
+    const grok46Caps = getModelCapabilities("grok", "grok-4.6");
+    expect(hasEffortLevel(grok46Caps, "xhigh")).toBe(true);
+    expect(hasEffortLevel(grok46Caps, "none")).toBe(false);
+  });
+});
+
+describe("resolveGrokEffortFamily", () => {
+  it("classifies grok-build, Grok 4.5, and Grok 4.6+ ladders", () => {
+    expect(resolveGrokEffortFamily("grok-build")).toBe("build");
+    expect(resolveGrokEffortFamily("grok-build-0.1")).toBe("build");
+    expect(resolveGrokEffortFamily("grok-code-fast-1")).toBe("build");
+    expect(resolveGrokEffortFamily("grok-4.3")).toBe("build");
+    expect(resolveGrokEffortFamily("grok-4.5")).toBe("4.5");
+    expect(resolveGrokEffortFamily("grok-4.6")).toBe("4.6");
+    expect(resolveGrokEffortFamily("grok-4.7")).toBe("4.6");
+    expect(resolveGrokEffortFamily("custom/grok-fast")).toBe("build");
   });
 });
 
@@ -439,6 +478,21 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "high",
     });
+
+    const grok46 = getProviderOptionDescriptors({
+      provider: "grok",
+      caps: getModelCapabilities("grok", "grok-4.6"),
+      selections: { reasoningEffort: "xhigh" },
+    });
+    expect(grok46.find((descriptor) => descriptor.id === "reasoningEffort")).toMatchObject({
+      type: "select",
+      currentValue: "xhigh",
+    });
+    expect(
+      getProviderOptionCurrentLabel(
+        grok46.find((descriptor) => descriptor.id === "reasoningEffort"),
+      ),
+    ).toBe("Extra High");
   });
 
   it("maps Pi reasoning controls onto the thinkingLevel option", () => {
@@ -860,6 +914,34 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 });
 
+describe("normalizeCursorModelOptions", () => {
+  it("sends the selected Cursor Grok effort even when it is the model default", () => {
+    expect(
+      normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "high", fastMode: true }),
+    ).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(normalizeCursorModelOptions("grok-4.6", { fastMode: true })).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+  });
+
+  it("keeps a non-default Cursor Grok effort when fast mode is enabled", () => {
+    expect(
+      normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "low", fastMode: true }),
+    ).toEqual({
+      reasoningEffort: "low",
+      fastMode: true,
+    });
+  });
+});
+
 describe("normalizeGrokModelOptions", () => {
   it("drops default Grok reasoning effort options and preserves supported overrides", () => {
     expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "low" })).toBeUndefined();
@@ -873,9 +955,12 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
-    expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
-      reasoningEffort: "high",
+    expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toBeUndefined();
+    expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "high" })).toBeUndefined();
+    expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "xhigh" })).toEqual({
+      reasoningEffort: "xhigh",
     });
+    expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "none" })).toBeUndefined();
   });
 });
 

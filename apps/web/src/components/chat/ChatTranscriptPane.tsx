@@ -58,7 +58,9 @@ interface ChatTranscriptPaneProps {
   pinnedMessageIds?: ReadonlySet<MessageId>;
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
+  onForkFromMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  goalAchievements?: ComponentProps<typeof MessagesTimeline>["goalAchievements"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
   tailAnchorScrollInFlightRef?: ComponentProps<
@@ -129,7 +131,9 @@ export function ChatTranscriptPane({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
+  onForkFromMessage,
   threadMarkers,
+  goalAchievements,
   enteringUserMessageIds,
   tailAnchorMessageId,
   tailAnchorScrollInFlightRef,
@@ -234,7 +238,9 @@ export function ChatTranscriptPane({
             {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
+            {...(onForkFromMessage ? { onForkFromMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            {...(goalAchievements ? { goalAchievements } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             tailAnchorMessageId={tailAnchorMessageId ?? null}
             {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}

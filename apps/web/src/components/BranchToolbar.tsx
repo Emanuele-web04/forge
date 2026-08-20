@@ -151,6 +151,7 @@ export interface BranchToolbarProps {
   className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
+  threadDetailReady: boolean;
   onHandoffToWorktree?: () => void;
   onHandoffToLocal?: () => void;
   handoffBusy?: boolean;
@@ -288,6 +289,7 @@ export default function BranchToolbar({
   className,
   onEnvModeChange,
   envLocked,
+  threadDetailReady,
   onHandoffToWorktree,
   onHandoffToLocal,
   handoffBusy: handoffBusyProp,
@@ -636,7 +638,11 @@ export default function BranchToolbar({
         )}
 
         {showBranchSelector ? (
+          /* ChatView stays mounted while the route switches threads. Reset the selector's
+             optimistic checkout state at that boundary so a previous thread cannot paint its
+             branch while the new thread's workspace query is resolving. */
           <BranchToolbarBranchSelector
+            key={threadId}
             activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
@@ -644,6 +650,7 @@ export default function BranchToolbar({
             effectiveEnvMode={effectiveEnvMode}
             envLocked={envLocked}
             hasServerThread={hasServerThread}
+            isThreadSettled={serverThread?.settledAt != null || !threadDetailReady}
             onSetThreadWorkspace={setThreadWorkspace}
             variant={variant}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}

@@ -12,10 +12,10 @@ The goal was to investigate why Synara could appear to consume many gigabytes of
 
 ## Files Affected
 
-| File                                     | Status   | Role                                                           |
-| ---------------------------------------- | -------- | -------------------------------------------------------------- |
-| `apps/desktop/src/main.ts`               | Modified | Waits for backend cleanup during app quit and signal shutdown. |
-| `docs/RECAP-desktop-backend-shutdown.md` | Created  | Captures the implementation recap.                             |
+| File                                             | Status   | Role                                                           |
+| ------------------------------------------------ | -------- | -------------------------------------------------------------- |
+| `apps/desktop/src/main.ts`                       | Modified | Waits for backend cleanup during app quit and signal shutdown. |
+| `docs/archive/RECAP-desktop-backend-shutdown.md` | Created  | Captures the implementation recap.                             |
 
 ---
 

@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -11,7 +15,10 @@ import { describe, expect, it } from "vitest";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import {
+  makeSqlitePersistenceLive,
+  SqlitePersistenceMemory,
+} from "../../persistence/Layers/Sqlite.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -20,7 +27,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
-async function createSystem() {
+async function createSystem(dbPath?: string) {
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-pinned-roundtrip-test-",
   });
@@ -29,7 +36,7 @@ async function createSystem() {
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(OrchestrationEventStoreLive),
     Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
-    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(dbPath ? makeSqlitePersistenceLive(dbPath) : SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -44,7 +51,92 @@ async function createSystem() {
   };
 }
 
-describe("pinned messages round-trip", () => {
+describe("thread annotations round-trip", () => {
+  it("persists a thread goal into detail, full snapshots, and shell snapshots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-goal-roundtrip-"));
+    const dbPath = path.join(stateDir, "state.sqlite");
+    let system = await createSystem(dbPath);
+    const createdAt = "2026-06-06T00:00:00.000Z";
+    const projectId = ProjectId.makeUnsafe("project-goal");
+    const threadId = ThreadId.makeUnsafe("thread-goal");
+
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-goal"),
+          projectId,
+          title: "Goal project",
+          workspaceRoot: "/tmp/project-goal",
+          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-thread-goal"),
+          threadId,
+          projectId,
+          title: "Goal thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-set"),
+          threadId,
+          goal: "Ship the complete thread-goal feature",
+        }),
+      );
+
+      const detail = Option.getOrNull(await system.run(system.query.getThreadDetailById(threadId)));
+      const snapshot = await system.run(system.query.getSnapshot());
+      const shellSnapshot = await system.run(system.query.getShellSnapshot());
+
+      expect(detail?.goal).toBe("Ship the complete thread-goal feature");
+      expect(snapshot.threads.find((thread) => thread.id === threadId)?.goal).toBe(detail?.goal);
+      expect(shellSnapshot.threads.find((thread) => thread.id === threadId)?.goal).toBe(
+        detail?.goal,
+      );
+      expect(shellSnapshot.threads.find((thread) => thread.id === threadId)?.goalStartedAt).toBe(
+        detail?.goalStartedAt,
+      );
+      expect(
+        shellSnapshot.threads.find((thread) => thread.id === threadId)?.goalPausedAt,
+      ).toBeNull();
+
+      await system.dispose();
+      system = await createSystem(dbPath);
+      const restartedDetail = Option.getOrNull(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(restartedDetail?.goal).toBe("Ship the complete thread-goal feature");
+
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-clear"),
+          threadId,
+          goal: "",
+        }),
+      );
+      const clearedDetail = Option.getOrNull(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(clearedDetail?.goal).toBe("");
+    } finally {
+      await system.dispose();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists pinned-message commands into projected thread detail and snapshots", async () => {
     const system = await createSystem();
     const createdAt = "2026-06-06T00:00:00.000Z";

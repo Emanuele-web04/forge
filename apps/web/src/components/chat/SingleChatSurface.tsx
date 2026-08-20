@@ -8,6 +8,7 @@ import {
   type ReactNode,
   startTransition,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -58,6 +59,7 @@ import {
   WorkspaceFileOpenerContext,
   type WorkspaceFileOpener,
 } from "../../lib/workspaceFileOpener";
+import { requestExplorerReveal } from "../../explorerRevealRequestStore";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveActivePane,
@@ -105,6 +107,7 @@ import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneSt
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
 import {
   collectParentDirectoryPaths,
   resolveFilePreviewWorkspaceRoot,
@@ -285,6 +288,8 @@ export function SingleChatSurface(props: {
   const [editorDiffFiles, setEditorDiffFiles] = useState<ReadonlyArray<FileDiffMetadata>>([]);
   const [editorDiffFilesLoading, setEditorDiffFilesLoading] = useState(false);
   const [editorDiffOptionsControl, setEditorDiffOptionsControl] = useState<ReactNode | null>(null);
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [searchPaletteMode, setSearchPaletteMode] = useState<WorkspaceSearchPaletteMode>("files");
 
   const activePane = resolveActivePane(dockState);
   const {
@@ -336,6 +341,50 @@ export function SingleChatSurface(props: {
       diffFilePath: filePath ?? null,
     });
   };
+
+  // Stable identities: these feed memoized result rows in the search palette,
+  // so recreating them per render would defeat the rows' React.memo bailout.
+  const handleOpenWorkspaceSearchFile = useCallback(
+    (relativePath: string) => {
+      requestImmediateDockHydration("file");
+      openPane(props.threadId, { kind: "file", filePath: relativePath });
+    },
+    [requestImmediateDockHydration, openPane, props.threadId],
+  );
+
+  const handleOpenWorkspaceSearchDirectory = useCallback(
+    (relativePath: string) => {
+      requestImmediateDockHydration("explorer");
+      openPane(props.threadId, { kind: "explorer" });
+      requestExplorerReveal(props.threadId, relativePath);
+    },
+    [requestImmediateDockHydration, openPane, props.threadId],
+  );
+
+  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
+  // snippet (content) search. Registered with capture so it wins over page-level
+  // defaults (print, browser find) while the chat surface is mounted.
+  useEffect(() => {
+    // Editor view returns before rendering the palette, so leave its shortcuts
+    // available to the editor instead of swallowing them invisibly.
+    if (editorViewActive) return;
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.repeat || event.altKey) return;
+      const isPrimaryModifier = event.ctrlKey || event.metaKey;
+      if (!isPrimaryModifier) return;
+      const key = event.key.toLowerCase();
+      if (key !== "p" && key !== "f") return;
+      if (key === "f" && !event.shiftKey) return;
+      if (key === "p" && event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [editorViewActive]);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -866,6 +915,7 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
             <DockExplorerPane
+              threadId={props.threadId}
               workspaceRoot={workspaceRoot}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
@@ -1100,6 +1150,14 @@ export function SingleChatSurface(props: {
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
           renderPane={renderDockPane}
+        />
+        <WorkspaceSearchPalette
+          open={searchPaletteOpen}
+          mode={searchPaletteMode}
+          onOpenChange={setSearchPaletteOpen}
+          cwd={workspaceRoot}
+          onOpenFile={handleOpenWorkspaceSearchFile}
+          onOpenDirectory={handleOpenWorkspaceSearchDirectory}
         />
       </div>
     </WorkspaceFileOpenerContext.Provider>

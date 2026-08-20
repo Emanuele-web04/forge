@@ -5,13 +5,11 @@
 
 import { useEffect } from "react";
 import { useAppSettings } from "../appSettings";
-import { isMacPlatform } from "../lib/utils";
+import { isMacNavigatorPlatform } from "../lib/utils";
 
 export function useNativeFontSmoothing() {
   const { settings } = useAppSettings();
-  const shouldApply =
-    settings.enableNativeFontSmoothing &&
-    isMacPlatform(typeof navigator === "undefined" ? "" : navigator.platform);
+  const shouldApply = settings.enableNativeFontSmoothing && isMacNavigatorPlatform();
 
   useEffect(() => {
     const rootStyle = document.documentElement.style;

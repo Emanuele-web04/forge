@@ -5,6 +5,7 @@ import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
+  resolveAvailableProviderPreference,
   resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
 
@@ -181,6 +182,44 @@ describe("isProviderUsable", () => {
     expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
       true,
     );
+  });
+});
+
+describe("resolveAvailableProviderPreference", () => {
+  it("keeps an installed preferred provider", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [READY_STATUS],
+      }),
+    ).toBe("antigravity");
+  });
+
+  it("falls back to the first visible authenticated provider in picker order", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [
+          BASE_STATUS,
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            authStatus: "unauthenticated",
+          },
+          { ...READY_STATUS, provider: "cursor" },
+        ],
+        providerOrder: ["claudeAgent", "cursor"],
+      }),
+    ).toBe("cursor");
+  });
+
+  it("preserves the preference while provider status is loading", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [],
+      }),
+    ).toBe("antigravity");
   });
 });
 

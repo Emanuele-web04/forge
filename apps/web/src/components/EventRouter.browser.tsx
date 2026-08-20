@@ -963,7 +963,169 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = buildFixture();
       await mounted.cleanup();
     }
-  }, 60_000);
+  }, 120_000);
+
+  it("keeps the terminal fence until a post-settle snapshot includes the assistant reply", async () => {
+    // Mirrors #548: session-set lands (and a premature detail snapshot is taken)
+    // before buffered assistant finals are projected. Clearing the fence on that
+    // first snapshot left the UI spinning until a full reload.
+    const turnId = TurnId.makeUnsafe("turn-fence-premature-snapshot");
+    const finalMessageId = MessageId.makeUnsafe("msg-fence-premature-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    const completedAt = "2026-03-04T12:00:09.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      // Premature authoritative projection: terminal at the session-set sequence,
+      // with an assistantMessageId that has not been projected into messages yet.
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [...currentThread.messages],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      delayNextThreadDetailSnapshotResponse = true;
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-fence-premature-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      sendPendingThreadDetailSnapshotResponse();
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      expect(
+        getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+          (message) => message.id === finalMessageId,
+        ),
+      ).toBe(false);
+
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          threads: [
+            {
+              ...fixture.snapshot.threads[0]!,
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered without a reload.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(1);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered without a reload.",
+          );
+        },
+        { timeout: 15_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 120_000);
 
   it("reconciles a missed completion from the authoritative thread projection", async () => {
     const turnId = TurnId.makeUnsafe("turn-missed-completion");

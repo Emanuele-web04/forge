@@ -15,6 +15,7 @@ import {
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
+import { useAppSettings } from "../../appSettings";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
@@ -165,7 +166,14 @@ export const ProjectPicker = memo(function ProjectPicker({
   const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
+  const { settings } = useAppSettings();
+  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
+  const sidebarThreads = useStore(
+    useMemo(
+      () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
+      [hideAutomationRunThreads],
+    ),
+  );
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -528,9 +536,6 @@ export const ProjectPicker = memo(function ProjectPicker({
         key={folder.cwd}
         index={index}
         value={folder.cwd}
-        onClick={() => {
-          handleSelectActiveFolder(folder);
-        }}
         className={cn(
           selected &&
             "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
@@ -553,6 +558,25 @@ export const ProjectPicker = memo(function ProjectPicker({
     );
   };
 
+  const handleValueChange = useCallback(
+    (selectedValue: string | null) => {
+      if (!selectedValue) return;
+      const activeFolder = activeFolderOptions.find((entry) => entry.cwd === selectedValue);
+      if (activeFolder) {
+        handleSelectActiveFolder(activeFolder);
+        return;
+      }
+      const localFolder = localFolderOptions.find((entry) => entry.absolutePath === selectedValue);
+      if (localFolder) {
+        if (onSelectWorkspaceRoot) {
+          onSelectWorkspaceRoot(localFolder.absolutePath);
+        }
+        setOpen(false);
+      }
+    },
+    [activeFolderOptions, handleSelectActiveFolder, localFolderOptions, onSelectWorkspaceRoot],
+  );
+
   return (
     <Combobox
       items={selectableDirectoryPaths}
@@ -560,6 +584,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       autoHighlight
       onOpenChange={handleOpenChange}
       open={open}
+      onValueChange={handleValueChange}
     >
       {renderTrigger ? (
         <ComboboxTrigger render={renderTrigger} />
@@ -702,10 +727,6 @@ export const ProjectPicker = memo(function ProjectPicker({
                     key={absolutePath}
                     index={filteredActiveFolderOptions.length + index}
                     value={absolutePath}
-                    onClick={() => {
-                      onSelectWorkspaceRoot?.(absolutePath);
-                      setOpen(false);
-                    }}
                     className={cn(
                       absolutePath === selectedWorkspaceRoot &&
                         "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",

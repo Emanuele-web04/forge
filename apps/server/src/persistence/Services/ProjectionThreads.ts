@@ -12,12 +12,15 @@ import {
   NonNegativeInt,
   OrchestrationThreadPullRequest,
   ThreadNotes,
+  ThreadGoal,
+  ThreadGoalAchievements,
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadHandoff,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
   ThreadId,
   TurnId,
@@ -46,9 +49,9 @@ export const ProjectionThread = Schema.Struct({
   createBranchFlowCompleted: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  creationSource: Schema.optional(
-    Schema.NullOr(Schema.Literals(["synara_mcp", "external_mcp", "provider_native"])),
-  ).pipe(Schema.withDecodingDefault(() => null)),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -70,6 +73,16 @@ export const ProjectionThread = Schema.Struct({
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
   threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
+  goal: Schema.NullOr(ThreadGoal),
+  goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalAchievements: Schema.optional(Schema.NullOr(ThreadGoalAchievements)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,

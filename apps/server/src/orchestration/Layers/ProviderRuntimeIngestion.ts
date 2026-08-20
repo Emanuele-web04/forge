@@ -38,6 +38,7 @@ import {
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { activeThreadGoal } from "../../provider/goalMode.ts";
 import {
   classifyTerminalTurnApplicability,
   isStartedTurnApplicable,
@@ -2273,6 +2274,44 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          if (isTerminalTurnEvent) {
+            // The command read model advances synchronously with goal tools.
+            // Reading it here prevents a fast terminal provider event from
+            // overtaking the projection of achieved/blocked/pause metadata.
+            const settledThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (candidate) => candidate.id === thread.id,
+            );
+            if (
+              settledThread &&
+              settledThread.deletedAt == null &&
+              settledThread.archivedAt == null &&
+              settledThread.parentThreadId == null &&
+              Boolean(activeThreadGoal(settledThread)?.trim()) &&
+              settledThread.goalPausedAt == null
+            ) {
+              if (event.type === "turn.completed" && runtimeTurnState(event) === "completed") {
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.goal.continue",
+                  commandId: providerCommandId(event, "goal-continue", thread.id),
+                  threadId: thread.id,
+                  goalStartedAt: settledThread.goalStartedAt ?? null,
+                  trigger: "turn-completed",
+                  ...(eventTurnId !== undefined ? { sourceTurnId: eventTurnId } : {}),
+                  createdAt: now,
+                });
+              } else {
+                // A failed, aborted, cancelled, or interrupted turn must stop
+                // autonomous resurrection until the user explicitly resumes.
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.meta.update",
+                  commandId: providerCommandId(event, "goal-auto-pause", thread.id),
+                  threadId: thread.id,
+                  goalPaused: true,
+                });
+              }
+            }
+          }
         }
       }
 

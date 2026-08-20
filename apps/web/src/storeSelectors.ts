@@ -3,8 +3,10 @@
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
+import { isAutomationRunThread } from "@synara/shared/automationMode";
 
 import type { AppState } from "./storeState";
+import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import type {
@@ -111,6 +113,80 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
     previousTurnDiffSummaryByThreadId = state.turnDiffSummaryByThreadId;
     previousThreads = getThreadsFromState(state);
     return previousThreads;
+  };
+}
+
+export interface AccountRateLimitThreadActivities {
+  readonly activities: Thread["activities"];
+}
+
+const EMPTY_RATE_LIMIT_THREADS: readonly AccountRateLimitThreadActivities[] = [];
+
+/** Threads narrowed to just their account rate-limit activities (the only input
+ *  `deriveAccountRateLimits` reads). Unlike `createAllThreadsSelector`, this ignores message
+ *  slices entirely and returns a reference-stable result while ordinary activities stream in:
+ *  the result only changes when a rate-limit activity itself is added, removed, or replaced.
+ *  Usage chips subscribe here so a streaming turn does not re-render them per store flush. */
+export function createAccountRateLimitThreadsSelector(): (
+  state: AppState,
+) => readonly AccountRateLimitThreadActivities[] {
+  let previousThreadIds: AppState["threadIds"] | undefined;
+  let previousActivityIdsByThreadId: AppState["activityIdsByThreadId"] | undefined;
+  let previousActivityByThreadId: AppState["activityByThreadId"] | undefined;
+  let previousResult: readonly AccountRateLimitThreadActivities[] = EMPTY_RATE_LIMIT_THREADS;
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousActivityIdsByThreadId === state.activityIdsByThreadId &&
+      previousActivityByThreadId === state.activityByThreadId
+    ) {
+      return previousResult;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousActivityIdsByThreadId = state.activityIdsByThreadId;
+    previousActivityByThreadId = state.activityByThreadId;
+
+    const nextResult: AccountRateLimitThreadActivities[] = [];
+    for (const threadId of state.threadIds ?? []) {
+      const activityIds = state.activityIdsByThreadId?.[threadId];
+      const activityById = state.activityByThreadId?.[threadId];
+      if (!activityIds || activityIds.length === 0 || !activityById) {
+        continue;
+      }
+      let matched: Thread["activities"][number][] | undefined;
+      for (const activityId of activityIds) {
+        const activity = activityById[activityId];
+        if (activity && ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS.has(activity.kind)) {
+          (matched ??= []).push(activity);
+        }
+      }
+      if (matched) {
+        nextResult.push({ activities: matched });
+      }
+    }
+
+    // Rate-limit activities are rare, so nearly every activity append lands here with an
+    // element-wise identical result; keep the previous reference to spare subscribers.
+    const unchanged =
+      nextResult.length === previousResult.length &&
+      nextResult.every((entry, entryIndex) => {
+        const previousEntry = previousResult[entryIndex];
+        return (
+          previousEntry !== undefined &&
+          entry.activities.length === previousEntry.activities.length &&
+          entry.activities.every(
+            (activity, activityIndex) => previousEntry.activities[activityIndex] === activity,
+          )
+        );
+      });
+    if (unchanged) {
+      return previousResult;
+    }
+
+    previousResult = nextResult.length > 0 ? nextResult : EMPTY_RATE_LIMIT_THREADS;
+    return previousResult;
   };
 }
 
@@ -290,9 +366,28 @@ export function createComposerThreadMentionSourcesSelector(): (
   };
 }
 
-export function createSidebarDisplayThreadsSelector(): (
-  state: AppState,
-) => readonly SidebarThreadSummary[] {
+export interface SidebarThreadVisibilityOptions {
+  /** Drop the per-run threads standalone automations create (pinned ones stay). */
+  readonly hideAutomationRunThreads?: boolean;
+}
+
+/**
+ * Whether a thread row belongs in user-facing thread lists (sidebar tree, Kanban,
+ * project picker). Housekeeping consumers that must see every thread (retention,
+ * spaces controller, search) read the unfiltered summaries selector instead.
+ */
+export function isSidebarThreadVisible(
+  thread: SidebarThreadSummary,
+  options?: SidebarThreadVisibilityOptions,
+): boolean {
+  if (!options?.hideAutomationRunThreads) return true;
+  if (thread.isPinned) return true;
+  return !isAutomationRunThread(thread);
+}
+
+export function createSidebarDisplayThreadsSelector(
+  options?: SidebarThreadVisibilityOptions,
+): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
   let previousDisplaySummaries: readonly SidebarThreadSummary[] = [];
@@ -305,7 +400,10 @@ export function createSidebarDisplayThreadsSelector(): (
 
     previousSummaries = sidebarSummaries;
     previousDisplaySummaries = sidebarSummaries.filter(
-      (thread) => !thread.parentThreadId && thread.archivedAt == null,
+      (thread) =>
+        !thread.parentThreadId &&
+        thread.archivedAt == null &&
+        isSidebarThreadVisible(thread, options),
     );
     return previousDisplaySummaries;
   };
@@ -315,9 +413,9 @@ export function createSidebarDisplayThreadsSelector(): (
 // child (subagent) threads so buildProjectThreadTree can nest them under
 // their parent row behind the "N subagents" expand toggle. Flat consumers
 // (pinned rows, search palette) should keep using the display selector.
-export function createSidebarTreeThreadsSelector(): (
-  state: AppState,
-) => readonly SidebarThreadSummary[] {
+export function createSidebarTreeThreadsSelector(
+  options?: SidebarThreadVisibilityOptions,
+): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
   let previousTreeSummaries: readonly SidebarThreadSummary[] = [];
@@ -329,7 +427,9 @@ export function createSidebarTreeThreadsSelector(): (
     }
 
     previousSummaries = sidebarSummaries;
-    previousTreeSummaries = sidebarSummaries.filter((thread) => thread.archivedAt == null);
+    previousTreeSummaries = sidebarSummaries.filter(
+      (thread) => thread.archivedAt == null && isSidebarThreadVisible(thread, options),
+    );
     return previousTreeSummaries;
   };
 }

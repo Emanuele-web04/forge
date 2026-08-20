@@ -45,6 +45,49 @@ const StoredRowSchema = Schema.Struct({
 });
 const decodeStoredRow = Schema.decodeUnknownEffect(StoredRowSchema);
 
+/**
+ * Longest-prefix string truncation that never splits a UTF-8 code point.
+ * Returns the whole string when it already fits.
+ */
+export const truncateUtf8ToBytes = (value: string, maxBytes: number): string => {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.byteLength <= maxBytes) return value;
+  let prefixEnd = maxBytes;
+  while (prefixEnd > 0 && ((encoded[prefixEnd] ?? 0) & 0xc0) === 0x80) {
+    prefixEnd -= 1;
+  }
+  return encoded.subarray(0, prefixEnd).toString("utf8");
+};
+
+/**
+ * Budget assigned to every string leaf so a single oversized field (typically a
+ * provider tool result copied verbatim into `payload.detail` or `payload.data`)
+ * never exhausts the durable journal budget by itself.
+ */
+const JOURNAL_STRING_LEAF_BUDGET_BYTES = 64 * 1024;
+
+/**
+ * Shrink every string leaf inside a runtime event payload to the per-leaf
+ * budget, recursing through records and arrays. Non-string leaves are kept:
+ * they are either small structural fields or values with no safe truncation.
+ */
+export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return truncateUtf8ToBytes(value, JOURNAL_STRING_LEAF_BUDGET_BYTES);
+  }
+  if (Array.isArray(value)) {
+    return value.map(shrinkRuntimeEventStrings);
+  }
+  if (value !== null && typeof value === "object") {
+    const shrunk: Record<string, unknown> = {};
+    for (const [key, leaf] of Object.entries(value as Record<string, unknown>)) {
+      shrunk[key] = shrinkRuntimeEventStrings(leaf);
+    }
+    return shrunk;
+  }
+  return value;
+};
+
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
     const eventJson = yield* encodeEvent(event).pipe(
@@ -55,31 +98,40 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
       return { event, eventJson };
     }
 
-    if (event.raw !== undefined) {
-      const compactedEvent = {
-        ...event,
-        raw: {
-          source: event.raw.source,
-          ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
-          ...(event.raw.messageType !== undefined ? { messageType: event.raw.messageType } : {}),
-          payload: {
-            synaraTruncated: true,
-            reason: "provider runtime event exceeded the durable journal size limit",
-            originalBytes,
-          },
-        },
-      } satisfies ProviderRuntimeEvent;
-      const compactedJson = yield* encodeEvent(compactedEvent).pipe(
-        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
-      );
-      if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-        return { event: compactedEvent, eventJson: compactedJson };
-      }
+    // Shrink oversized string leaves so one huge tool output no longer strands
+    // the live item in quarantine. The raw payload is replaced by a forensics
+    // marker (its own copy of the tool output would otherwise re-blow the
+    // budget), while source/method/messageType survive for diagnostics.
+    const compactedEvent = {
+      ...event,
+      payload: shrinkRuntimeEventStrings(event.payload),
+      ...(event.raw !== undefined
+        ? {
+            raw: {
+              source: event.raw.source,
+              ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
+              ...(event.raw.messageType !== undefined
+                ? { messageType: event.raw.messageType }
+                : {}),
+              payload: {
+                synaraTruncated: true,
+                reason: "provider runtime event exceeded the durable journal size limit",
+                originalBytes,
+              },
+            },
+          }
+        : {}),
+    } as ProviderRuntimeEvent;
+    const compactedJson = yield* encodeEvent(compactedEvent).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
+    );
+    if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+      return { event: compactedEvent, eventJson: compactedJson };
     }
 
     return yield* new PersistenceDecodeError({
       operation: "ProviderRuntimeEvent.append",
-      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after raw payload compaction.`,
+      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after payload truncation and raw compaction.`,
     });
   });
 
