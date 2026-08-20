@@ -12,6 +12,7 @@ import type {
   ProjectId,
   SpaceId,
   ThreadId,
+  TurnId,
 } from "@synara/contracts";
 import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import {
@@ -474,4 +475,60 @@ export function requireNonNegativeInteger(input: {
       `${input.field} must be an integer greater than or equal to 0.`,
     ),
   );
+}
+
+export type ThreadResumePreconditionViolation =
+  | "thread-archived"
+  | "turn-changed"
+  | "turn-completed"
+  | "turn-in-flight";
+
+export interface ThreadResumePrecondition {
+  readonly expectedLatestTurnId: TurnId;
+}
+
+/**
+ * Shared by the boot-time quit-resume planner and the decider: a chat remembered
+ * at quit is continued only while the thread is still exactly as it was recorded
+ * — not archived, same latest turn, nothing in flight — and that turn did not
+ * finish on its own (a naturally completed turn has nothing to continue; an
+ * interrupted or errored one does).
+ */
+export function threadResumePreconditionViolation(
+  thread: {
+    readonly archivedAt?: string | null | undefined;
+    readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
+    readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null;
+  },
+  precondition: ThreadResumePrecondition,
+): ThreadResumePreconditionViolation | null {
+  if (thread.archivedAt != null) {
+    return "thread-archived";
+  }
+  if ((thread.latestTurn?.turnId ?? null) !== precondition.expectedLatestTurnId) {
+    return "turn-changed";
+  }
+  if (threadHasInFlightTurn(thread)) {
+    return "turn-in-flight";
+  }
+  if (thread.latestTurn?.state === "completed") {
+    return "turn-completed";
+  }
+  return null;
+}
+
+export function threadResumePreconditionDetail(
+  threadId: ThreadId,
+  violation: ThreadResumePreconditionViolation,
+): string {
+  switch (violation) {
+    case "thread-archived":
+      return `Thread '${threadId}' was archived after it was remembered for resume.`;
+    case "turn-changed":
+      return `Thread '${threadId}' moved on after it was remembered for resume.`;
+    case "turn-completed":
+      return `Thread '${threadId}' finished on its own; there is nothing to resume.`;
+    case "turn-in-flight":
+      return `Thread '${threadId}' already has a turn in flight.`;
+  }
 }

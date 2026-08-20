@@ -63,6 +63,8 @@ import {
   requireThreadNotArchived,
   threadHasInFlightTurn,
   threadHasCheckpointRevertInProgress,
+  threadResumePreconditionDetail,
+  threadResumePreconditionViolation,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -1658,6 +1660,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.resumePrecondition !== undefined) {
+        // Quit-resume continuations are only valid while the thread is exactly as
+        // it was recorded; checked here so it holds inside the serialized dispatch.
+        const violation = threadResumePreconditionViolation(
+          targetThread,
+          command.resumePrecondition,
+        );
+        if (violation !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: threadResumePreconditionDetail(command.threadId, violation),
+          });
+        }
+      }
       if (threadHasCheckpointRevertInProgress(targetThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
