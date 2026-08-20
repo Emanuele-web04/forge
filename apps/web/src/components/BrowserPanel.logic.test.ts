@@ -17,9 +17,10 @@ import {
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
-  applyBrowserWebviewPageZoom,
-  applyBrowserWebviewPresentation,
   applyFloatingBrowserChromeSlotStyle,
+  applyBrowserWebviewPresentation,
+  handoffBrowserGuestToDockedSurface,
+  isBrowserRendererGuestHitTarget,
   isBrowserPanelBoundsHiddenKey,
   resolveBrowserRendererGuestSlotStyle,
   shouldAssignBrowserWebviewSrc,
@@ -527,6 +528,25 @@ describe("hasObscuringHitStackElementAboveSurface", () => {
   });
 });
 
+describe("isBrowserRendererGuestHitTarget", () => {
+  it("treats the parked renderer guest as the live surface, not an overlay", () => {
+    expect(isBrowserRendererGuestHitTarget({ tagName: "WEBVIEW" })).toBe(true);
+    expect(
+      isBrowserRendererGuestHitTarget({
+        tagName: "DIV",
+        closest: (selector: string) =>
+          selector.includes("data-browser-guest-thread") ? ({} as Element) : null,
+      }),
+    ).toBe(true);
+    expect(
+      isBrowserRendererGuestHitTarget({
+        tagName: "DIV",
+        closest: () => null,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("browserAddressDisplayValue", () => {
   it("hides about:blank for new tabs", () => {
     expect(browserAddressDisplayValue({ url: "about:blank" })).toBe("");
@@ -721,18 +741,48 @@ describe("floating browser webview presentation", () => {
     expect(webview.style.clipPath).toBe("inset(0 round 12px)");
   });
 
-  it("applies miniature page zoom onto the renderer webview", () => {
-    const setZoomFactor = vi.fn();
-    applyBrowserWebviewPageZoom({ setZoomFactor } as HTMLElement, 0.25);
-    expect(setZoomFactor).toHaveBeenCalledWith(0.25);
-    applyBrowserWebviewPageZoom({ setZoomFactor } as HTMLElement, Number.NaN);
-    expect(setZoomFactor).toHaveBeenLastCalledWith(1);
+  it("resets miniature zoom and clipping when the guest is handed to the sidebar", () => {
+    const attributes: Record<string, string> = {};
+    const webview = {
+      style: {
+        overflow: "hidden",
+        clipPath: "inset(0 round 12px)",
+        width: "100%",
+        height: "100%",
+      },
+      setZoomFactor: vi.fn(),
+    } as HTMLElement & { setZoomFactor: ReturnType<typeof vi.fn> };
+    const stage = { style: {}, firstElementChild: webview, querySelector: () => webview } as unknown as HTMLElement;
+    const slot = {
+      style: {},
+      querySelector(selector: string) {
+        return selector === "webview" ? webview : stage;
+      },
+      getAttribute(name: string) {
+        return attributes[name] ?? null;
+      },
+      setAttribute(name: string, value: string) {
+        attributes[name] = value;
+      },
+    } as unknown as HTMLElement;
+    handoffBrowserGuestToDockedSurface({
+      slot,
+      host: { left: 40, top: 80, width: 480, height: 640 },
+      stage,
+      webview,
+    });
+    expect(webview.setZoomFactor).toHaveBeenCalledWith(1);
+    expect(webview.style.overflow).toBe("");
+    expect(webview.style.clipPath).toBe("");
+    expect(slot.style.left).toBe("40px");
+    expect(slot.style.width).toBe("480px");
+    expect(slot.style.height).toBe("640px");
   });
 });
 
 describe("floating browser webview presentation restore", () => {
   it("restores docked layout", () => {
-    const webview = { style: {} } as HTMLElement;
+    const webview = { style: { overflow: "hidden", clipPath: "inset(0 round 12px)" } } as HTMLElement;
     const stage = { style: {}, firstElementChild: webview } as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: false,
@@ -743,6 +793,8 @@ describe("floating browser webview presentation restore", () => {
     expect(stage.style.height).toBe("100%");
     expect(stage.style.borderRadius).toBe("");
     expect(stage.style.clipPath).toBe("");
+    expect(webview.style.overflow).toBe("");
+    expect(webview.style.clipPath).toBe("");
   });
 });
 

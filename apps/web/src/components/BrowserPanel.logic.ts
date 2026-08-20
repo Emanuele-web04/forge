@@ -99,12 +99,24 @@ interface BrowserPanelRendererHandoffOptions {
 export const BROWSER_RENDERER_GUEST_SLOT_Z_INDEX = "40";
 export const FLOATING_BROWSER_CHROME_SLOT_Z_INDEX = "50";
 export const FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE = "data-floating-browser-chrome-thread";
+export const FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE = "data-floating-browser-chrome-expanded";
 export const FLOATING_BROWSER_CHROME_COLLAPSED_WIDTH_PX = 32;
 export const FLOATING_BROWSER_CHROME_EXPANDED_WIDTH_PX = 86;
 export const FLOATING_BROWSER_CHROME_WIDTH_PX = FLOATING_BROWSER_CHROME_EXPANDED_WIDTH_PX;
 export const FLOATING_BROWSER_CHROME_HEIGHT_PX = 32;
 export const FLOATING_BROWSER_CHROME_INSET_PX = 8;
-export const FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE = "data-floating-browser-chrome-expanded";
+
+export function isBrowserRendererGuestHitTarget(element: { tagName?: string; closest?: (selector: string) => Element | null }): boolean {
+  const tagName = element.tagName?.toLowerCase();
+  if (tagName === "webview") {
+    return true;
+  }
+  return (
+    element.closest?.(`[${BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE}]`) != null ||
+    element.closest?.(`#${BROWSER_RENDERER_PARKING_CONTAINER_ID}`) != null ||
+    element.closest?.(`[${FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE}]`) != null
+  );
+}
 
 export interface BrowserRendererGuestSlotBox {
   readonly left: number;
@@ -470,13 +482,50 @@ export function setFloatingBrowserChromeMenuOpen(webview: HTMLElement, open: boo
   );
 }
 
-export function nudgeFloatingBrowserChromeNativeView(slot: HTMLElement): void {
+export function nudgeElectronWebviewNativeView(slot: HTMLElement): void {
   const webview = slot.querySelector("webview");
-  if (!(webview instanceof HTMLElement)) {
+  if (!webview || !("style" in webview)) {
     return;
   }
-  webview.style.transform =
-    webview.style.transform === "translateZ(0px)" ? "translateZ(0.01px)" : "translateZ(0px)";
+  const guest = webview as HTMLElement;
+  guest.style.transform =
+    guest.style.transform === "translateZ(0px)" ? "translateZ(0.01px)" : "translateZ(0px)";
+}
+
+export function nudgeFloatingBrowserChromeNativeView(slot: HTMLElement): void {
+  nudgeElectronWebviewNativeView(slot);
+}
+
+export function handoffBrowserGuestToDockedSurface(input: {
+  slot: HTMLElement;
+  host: BrowserRendererGuestSlotBox;
+  stage?: HTMLElement | null;
+  webview?: HTMLElement | null;
+}): void {
+  applyBrowserRendererGuestSlotStyle(input.slot, input.host, { borderRadius: "0px" });
+  input.slot.style.border = "";
+  input.slot.style.boxShadow = "";
+  const stage =
+    input.stage ??
+    input.slot.querySelector<HTMLElement>("[data-floating-browser-stage='true']");
+  if (stage) {
+    applyBrowserWebviewPresentation(stage, {
+      floating: false,
+      slotWidth: input.host.width,
+      slotHeight: input.host.height,
+    });
+  }
+  const webview = input.webview ?? input.slot.querySelector("webview");
+  if (webview && "style" in webview) {
+    const guest = webview as HTMLElement;
+    guest.style.width = "100%";
+    guest.style.height = "100%";
+    guest.style.overflow = "";
+    guest.style.clipPath = "";
+    guest.style.borderRadius = "";
+    applyBrowserWebviewPageZoom(guest, 1);
+  }
+  nudgeElectronWebviewNativeView(input.slot);
 }
 
 export function ensureFloatingBrowserChromeWebview(slot: HTMLElement): HTMLElement {
@@ -1049,6 +1098,7 @@ export function applyBrowserWebviewPresentation(
       const guest = webview as HTMLElement;
       guest.style.borderRadius = "";
       guest.style.clipPath = "";
+      guest.style.overflow = "";
     }
     return;
   }

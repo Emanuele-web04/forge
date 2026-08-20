@@ -71,8 +71,13 @@ import {
   applyBrowserRendererGuestSlotStyle,
   applyBrowserWebviewPageZoom,
   applyBrowserWebviewPresentation,
+  BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE,
+  BROWSER_RENDERER_PARKING_CONTAINER_ID,
+  FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE,
   getBrowserRendererGuestSlot,
+  handoffBrowserGuestToDockedSurface,
   hasObscuringHitStackElementAboveSurface,
+  isBrowserRendererGuestHitTarget,
   isBrowserPanelBoundsHiddenKey,
   normalizeBrowserAddressInput,
   readFloatingBrowserPanelBorderRadius,
@@ -192,6 +197,10 @@ const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='toast-viewport']",
   "[data-slot='toast-viewport-anchored']",
   "[data-slot='toast-positioner']",
+  `[${BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE}]`,
+  `#${BROWSER_RENDERER_PARKING_CONTAINER_ID}`,
+  `[${FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE}]`,
+  "webview",
 ].join(", ");
 
 interface BrowserViewportPerfCounters {
@@ -339,6 +348,9 @@ function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
 }
 
 function candidateObscuresNativeBrowser(candidate: HTMLElement, element: HTMLElement): boolean {
+  if (isBrowserRendererGuestHitTarget(candidate)) {
+    return false;
+  }
   if (candidate === element || candidate.contains(element) || element.contains(candidate)) {
     return false;
   }
@@ -375,7 +387,8 @@ function hasTopLayerDomObstruction(element: HTMLElement): boolean {
       hasObscuringHitStackElementAboveSurface(hitElements, {
         isSurfaceBoundary: (hitElement) =>
           hitElement === element ||
-          (hitElement instanceof HTMLElement && element.contains(hitElement)),
+          (hitElement instanceof HTMLElement &&
+            (element.contains(hitElement) || isBrowserRendererGuestHitTarget(hitElement))),
         isNonObscuring: (hitElement) =>
           hitElement instanceof HTMLElement &&
           isNativeBrowserNonObscuringOverlayElement(hitElement),
@@ -837,7 +850,8 @@ export function BrowserPanel({
         if (webview.parentElement !== parkStage) {
           parkStage.append(webview);
         }
-        layoutBrowserRendererGuestSlot(slot, null, isFloatingMode);
+        layoutBrowserRendererGuestSlot(slot, null, false);
+        applyBrowserWebviewPageZoom(webview, 1);
         browserPanelRendererHandoff.parkGuest(threadId, {
           tabId,
           webContentsId,
@@ -1037,7 +1051,18 @@ export function BrowserPanel({
         : {}),
     });
     if (!isFloatingMode) {
-      layoutBrowserRendererGuestSlot(slot, host, false);
+      const rect = host.getBoundingClientRect();
+      handoffBrowserGuestToDockedSurface({
+        slot,
+        host: {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        },
+        stage,
+        webview,
+      });
     }
 
     const initialUrl = activeTabInitialUrlRef.current;
@@ -1279,38 +1304,47 @@ export function BrowserPanel({
       // While the local-servers home is up, force the browser surface hidden instead of
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
+      const occlusionSurface =
+        !isFloatingMode && !usesNativeRuntime ? getBrowserRendererGuestSlot(threadId) : element;
       const obscuredByOverlay =
         !isFloatingMode &&
         (browserPageError !== null ||
           shouldOccludeBrowserWebview({
             showLocalServersHome,
             browserActionsMenuOpen,
-            hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+            hasObscuringOverlay: hasNativeBrowserObscuringOverlay(occlusionSurface),
           }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const webview = browserWebviewRef.current;
       const stage = browserWebviewStageRef.current;
+      const rect = element.getBoundingClientRect();
       if (!isFloatingMode) {
-        layoutBrowserRendererGuestSlot(getBrowserRendererGuestSlot(threadId), element, false);
-      }
-      if (stage) {
+        handoffBrowserGuestToDockedSurface({
+          slot: getBrowserRendererGuestSlot(threadId),
+          host: {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+          stage,
+          webview,
+        });
+      } else if (stage) {
         applyBrowserWebviewPresentation(stage, {
-          floating: isFloatingMode,
+          floating: true,
           slotWidth: element.clientWidth,
           slotHeight: element.clientHeight,
-          ...(isFloatingMode
-            ? { borderRadius: readFloatingBrowserPanelBorderRadius(element) }
-            : {}),
+          borderRadius: readFloatingBrowserPanelBorderRadius(element),
         });
       } else if (webview) {
         applyBrowserWebviewPresentation(webview, {
-          floating: isFloatingMode,
+          floating: true,
           slotWidth: element.clientWidth,
           slotHeight: element.clientHeight,
         });
       }
-      const rect = element.getBoundingClientRect();
       const bounds = obscuredByOverlay
         ? null
         : (() => {

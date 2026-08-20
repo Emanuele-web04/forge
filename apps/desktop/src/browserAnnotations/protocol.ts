@@ -81,6 +81,10 @@ export type AnnotationGuestCommand =
       readonly version: 1;
       readonly kind: "refresh-document";
       readonly documentToken: string;
+    }
+  | {
+      readonly version: 1;
+      readonly kind: "announce-ready";
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

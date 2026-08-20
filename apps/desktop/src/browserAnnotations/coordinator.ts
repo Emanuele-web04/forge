@@ -24,6 +24,7 @@ import {
   parseAnnotationGuestMessage,
   parseBrowserAnnotationTheme,
   parseBrowserAnnotationMarkers,
+  type AnnotationGuestCommand,
 } from "./protocol";
 
 export interface BrowserAnnotationRuntime {
@@ -94,6 +95,7 @@ export class BrowserAnnotationCoordinator {
   private readonly sessionsByRuntimeKey = new Map<string, ActiveSession>();
   private readonly projectionsByRuntimeKey = new Map<string, MarkerProjection>();
   private readonly invalidatedDocumentRuntimeKeys = new Set<string>();
+  private readonly pendingReadyByWebContentsId = new Map<number, unknown>();
   private readonly listeners = new Set<BrowserAnnotationEventListener>();
   private readonly committedAnnotationIds = new Set<string>();
   private readonly affinityByAnnotationId = new Map<string, BrowserAnnotationAffinity>();
@@ -210,7 +212,14 @@ export class BrowserAnnotationCoordinator {
 
   handleGuestMessage(sender: WebContents, rawMessage: unknown): void {
     const runtime = this.options.resolveRuntimeByWebContentsId(sender.id);
-    if (!runtime || runtime.webContents !== sender || sender.isDestroyed()) return;
+    if (!runtime || runtime.webContents !== sender || sender.isDestroyed()) {
+      const message = parseAnnotationGuestMessage(rawMessage);
+      if (message?.kind === "ready" && !sender.isDestroyed()) {
+        this.pendingReadyByWebContentsId.set(sender.id, rawMessage);
+      }
+      return;
+    }
+    this.pendingReadyByWebContentsId.delete(sender.id);
     const message = parseAnnotationGuestMessage(rawMessage);
     if (!message) return;
     const key = runtimeKey(runtime.threadId, runtime.tabId);
@@ -371,20 +380,51 @@ export class BrowserAnnotationCoordinator {
   recoverNavigation(threadId: ThreadId, tabId: string, webContentsId: number): void {
     const key = runtimeKey(threadId, tabId);
     if (!this.invalidatedDocumentRuntimeKeys.has(key)) return;
-    const documentState = this.documentsByRuntimeKey.get(key);
+    this.requestDocumentReady(threadId, tabId, webContentsId);
+  }
+
+  /**
+   * Replays a guest `ready` that arrived before this WebContents was bound to a
+   * logical tab, then asks the overlay to announce again when that handshake was
+   * lost (handoff, zoom, or a runtime replace of the same guest).
+   */
+  adoptAttachedWebContents(webContents: WebContents): void {
+    const pending = this.pendingReadyByWebContentsId.get(webContents.id);
+    if (pending === undefined) return;
+    this.pendingReadyByWebContentsId.delete(webContents.id);
+    this.handleGuestMessage(webContents, pending);
+  }
+
+  requestDocumentReady(threadId: ThreadId, tabId: string, webContentsId: number): void {
     const runtime = this.options.resolveRuntimeByWebContentsId(webContentsId);
     if (
-      !documentState ||
-      documentState.webContentsId !== webContentsId ||
       !runtime ||
+      runtime.threadId !== threadId ||
+      runtime.tabId !== tabId ||
       runtime.webContents.isDestroyed()
     ) {
       return;
     }
-    runtime.webContents.send(BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, {
+    const key = runtimeKey(threadId, tabId);
+    const documentState = this.documentsByRuntimeKey.get(key);
+    if (
+      documentState &&
+      documentState.webContentsId === webContentsId &&
+      !this.invalidatedDocumentRuntimeKeys.has(key)
+    ) {
+      return;
+    }
+    if (documentState && documentState.webContentsId === webContentsId) {
+      this.sendGuestCommand(runtime, {
+        version: BROWSER_ANNOTATION_PROTOCOL_VERSION,
+        kind: "refresh-document",
+        documentToken: documentState.document.token,
+      });
+      return;
+    }
+    this.sendGuestCommand(runtime, {
       version: BROWSER_ANNOTATION_PROTOCOL_VERSION,
-      kind: "refresh-document",
-      documentToken: documentState.document.token,
+      kind: "announce-ready",
     });
   }
 
@@ -420,6 +460,9 @@ export class BrowserAnnotationCoordinator {
       this.documentsByRuntimeKey.delete(key);
     }
     this.invalidatedDocumentRuntimeKeys.delete(key);
+    if (reason === "destroyed") {
+      this.pendingReadyByWebContentsId.delete(webContentsId);
+    }
   }
 
   clearProjection(threadId: ThreadId, tabId: string): void {
@@ -434,9 +477,24 @@ export class BrowserAnnotationCoordinator {
     this.documentsByRuntimeKey.clear();
     this.projectionsByRuntimeKey.clear();
     this.invalidatedDocumentRuntimeKeys.clear();
+    this.pendingReadyByWebContentsId.clear();
     this.listeners.clear();
     this.committedAnnotationIds.clear();
     this.affinityByAnnotationId.clear();
+  }
+
+  private sendGuestCommand(
+    runtime: BrowserAnnotationRuntime,
+    command: AnnotationGuestCommand,
+  ): void {
+    if (runtime.webContents.isDestroyed() || typeof runtime.webContents.send !== "function") {
+      return;
+    }
+    try {
+      runtime.webContents.send(BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, command);
+    } catch {
+      // The guest can disappear between attach and overlay handshake.
+    }
   }
 
   private finishSession(

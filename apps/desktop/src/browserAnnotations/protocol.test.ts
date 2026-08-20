@@ -67,6 +67,7 @@ describe("browser annotation protocol", () => {
         theme,
       }),
     ).toBe(true);
+    expect(isGuestAnnotationCommand({ version: 1, kind: "announce-ready" })).toBe(true);
     expect(
       parseBrowserAnnotationTheme({
         ...theme,

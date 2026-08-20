@@ -1391,7 +1391,13 @@ function initializeOverlay(): void {
 }
 
 ipcRenderer.on(BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, (_event, rawCommand: unknown) => {
-  if (!isGuestAnnotationCommand(rawCommand) || rawCommand.documentToken !== documentToken) return;
+  if (!isGuestAnnotationCommand(rawCommand)) return;
+  if (rawCommand.kind === "announce-ready") {
+    if (host) sendReady();
+    else initializeOverlay();
+    return;
+  }
+  if (rawCommand.documentToken !== documentToken) return;
   initializeOverlay();
   if (rawCommand.kind === "start") {
     activeSession = { sessionId: rawCommand.sessionId };

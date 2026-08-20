@@ -1736,6 +1736,12 @@ export class DesktopBrowserManager {
       this.attachRuntime(runtime, bounds, this.getVisiblePageZoomFactor(input.threadId));
     }
 
+    // Guest `ready` can fire before this bind, and zoom/reparent can invalidate
+    // the overlay without a real navigation. Re-adopt or re-ask so annotate
+    // does not stay stuck on "page is not ready".
+    this.annotations.adoptAttachedWebContents(webContents);
+    this.annotations.requestDocumentReady(input.threadId, tab.id, webContents.id);
+
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
     const requiresLocalPreviewBootstrap =
       isLocalFileUrl(expectedUrl) &&
@@ -2807,13 +2813,22 @@ export class DesktopBrowserManager {
 
     const didStartNavigation = (
       _event: Electron.Event,
-      _url: string,
-      _isInPlace: boolean,
+      url: string,
+      isInPlace: boolean,
       isMainFrame: boolean,
     ) => {
-      if (isMainFrame && !_isInPlace) {
-        this.annotations.handleNavigation(threadId, tabId, webContents.id);
+      if (!isMainFrame || isInPlace) {
+        return;
       }
+      const state = this.states.get(threadId);
+      const tab = state ? this.getTab(state, tabId) : null;
+      const committedUrl = tab ? normalizeUrlInput(tab.lastCommittedUrl ?? tab.url) : "";
+      // Zoom and webview reparent can emit a main-frame start for the current
+      // URL. Invalidating then would leave annotate stuck until a real load.
+      if (committedUrl !== "" && normalizeUrlInput(url) === committedUrl) {
+        return;
+      }
+      this.annotations.handleNavigation(threadId, tabId, webContents.id);
     };
     webContents.on("did-start-navigation", didStartNavigation);
     runtime.listenerDisposers.push(() => {
