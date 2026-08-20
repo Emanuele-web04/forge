@@ -74,7 +74,10 @@ export const QUIT_RESUME_ABANDON_AFTER_MS = 30_000;
 /** Sleep without keeping the Node process alive during a normal desktop shutdown. */
 const sleepUnref = (duration: Duration.Input) =>
   Effect.callback<void>((resume) => {
-    const timer = setTimeout(() => resume(Effect.void), Duration.toMillis(duration));
+    const timer = setTimeout(
+      () => resume(Effect.void),
+      Duration.toMillis(Duration.fromInputUnsafe(duration)),
+    );
     timer.unref();
     return Effect.sync(() => clearTimeout(timer));
   });
