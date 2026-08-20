@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import {
   getDefaultModel,
+  normalizeGrokModelOptions,
   normalizeModelSlug,
   resolveModelSlugForProvider,
   resolveSelectableModel,
@@ -475,7 +476,7 @@ export function normalizeModelSelection(
         : provider === "antigravity"
           ? modelOptions?.antigravity
           : provider === "grok"
-            ? modelOptions?.grok
+            ? normalizeGrokModelOptions(model, modelOptions?.grok)
             : provider === "droid"
               ? modelOptions?.droid
               : provider === "kilo"
@@ -600,11 +601,14 @@ export function legacySyncModelSelectionOptions(
   if (modelSelection === null) {
     return null;
   }
-  const options = modelOptions?.[modelSelection.provider];
+  const normalizedOptions =
+    modelSelection.provider === "grok"
+      ? normalizeGrokModelOptions(modelSelection.model, modelOptions?.grok)
+      : modelOptions?.[modelSelection.provider];
   return makeModelSelection(
     modelSelection.provider,
     modelSelection.model,
-    options,
+    normalizedOptions,
     modelSelection.provider === "claudeAgent" ? modelSelection.supportsAutoMode : undefined,
   );
 }
@@ -654,7 +658,11 @@ export function legacyToModelSelectionByProvider(
         const model =
           modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
         if (model) {
-          result[provider] = makeModelSelection(provider, model, options);
+          result[provider] = makeModelSelection(
+            provider,
+            model,
+            provider === "grok" ? normalizeGrokModelOptions(model, modelOptions.grok) : options,
+          );
         }
       }
     }

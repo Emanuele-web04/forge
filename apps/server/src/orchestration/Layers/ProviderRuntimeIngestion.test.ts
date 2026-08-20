@@ -1050,6 +1050,101 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("requests another goal turn after a clean active-goal completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-active-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-goal"),
+        threadId: asThreadId("thread-1"),
+        goal: "Finish every requirement",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-active-goal-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-active-goal-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((collected) => Array.from(collected)),
+      ),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "thread.goal-continuation-requested",
+        payload: expect.objectContaining({
+          threadId: asThreadId("thread-1"),
+          sourceTurnId: turnId,
+          trigger: "turn-completed",
+        }),
+      }),
+    );
+  });
+
+  it("pauses an active goal instead of continuing after an interrupted completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-interrupted-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-interrupted-goal"),
+        threadId: asThreadId("thread-1"),
+        goal: "Do not resurrect after interrupt",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-interrupted-goal-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-interrupted-goal-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "interrupted" && entry.goalPausedAt != null,
+    );
+    expect(thread.goalPausedAt).toBeTruthy();
+    await harness.drain();
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((collected) => Array.from(collected)),
+      ),
+    );
+    expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(false);
+  });
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = new Date().toISOString();

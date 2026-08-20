@@ -9,6 +9,7 @@ import type {
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@synara/contracts";
+import { PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
@@ -64,7 +65,9 @@ const DEFAULT_SEARCH_LOCAL_ENTRIES_LIMIT = 50;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME = 10_000;
 const DEFAULT_SEARCH_CONTENT_LIMIT = 50;
 const DEFAULT_SEARCH_CONTENT_STALE_TIME = 10_000;
-const SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
+// Mirrors the schema bound in contracts: below this length the server would
+// reject the request at decode time, so the query must stay disabled.
+export const SEARCH_CONTENT_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
 const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
 const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
@@ -85,6 +88,21 @@ const EMPTY_SEARCH_CONTENT_RESULT: ProjectSearchContentResult = {
   truncated: false,
 };
 const ABSOLUTE_LOCAL_READ_CWD = "/";
+
+// Fire-and-forget warm-up of the server's workspace search index, called when
+// the search palette opens so the first keystroke's query never pays for a
+// cold index build. Failures are irrelevant: the search itself builds the
+// index anyway, just later.
+export function prewarmProjectSearchIndex(cwd: string | null): void {
+  if (!cwd) return;
+  try {
+    void ensureNativeApi()
+      .projects.prewarmSearchIndex({ cwd })
+      .catch(() => undefined);
+  } catch {
+    // Native API not ready yet — nothing to warm.
+  }
+}
 
 export function isLocalPreviewGrantUsable(
   grant: Pick<ProjectCreateLocalFilePreviewGrantResult, "expiresAt"> | null | undefined,

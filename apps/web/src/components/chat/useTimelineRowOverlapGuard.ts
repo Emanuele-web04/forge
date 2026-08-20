@@ -55,24 +55,73 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRowsRef = useRef(new Set<HTMLElement>());
 
-  const closeOverlaps = useCallback(() => {
-    const containers = new Set<HTMLElement>();
+  const closeOverlaps = useCallback((entries?: readonly ResizeObserverEntry[]) => {
+    // Inline-style reads only — no forced layout yet.
+    const containerTops = new Map<HTMLElement, number>();
     for (const row of observedRowsRef.current) {
       if (!row.isConnected) {
         continue;
       }
       const container = resolvePositionedContainer(row);
-      if (container) {
-        containers.add(container);
+      if (!container || containerTops.has(container)) {
+        continue;
       }
-    }
-
-    const placed: { container: HTMLElement; top: number; height: number }[] = [];
-    for (const container of containers) {
       const top = Number.parseFloat(container.style.top);
       if (!Number.isFinite(top) || top < OUT_OF_VIEW_THRESHOLD_PX) {
         continue;
       }
+      containerTops.set(container, top);
+    }
+    if (containerTops.size < 2) {
+      return;
+    }
+
+    // Fast path: while text streams, the only row changing size each frame is
+    // the growing tail. A resize confined to the single bottom-most placed
+    // container cannot intrude on anything (nothing is placed below it, and
+    // this guard only ever pushes rows down), so the measurement pass — the
+    // one getBoundingClientRect per frame — is skipped entirely.
+    if (entries !== undefined) {
+      let maxTop = Number.NEGATIVE_INFINITY;
+      let maxTopCount = 0;
+      for (const top of containerTops.values()) {
+        if (top > maxTop) {
+          maxTop = top;
+          maxTopCount = 1;
+        } else if (top === maxTop) {
+          maxTopCount += 1;
+        }
+      }
+      if (maxTopCount === 1) {
+        let onlyBottomMostResized = true;
+        for (const entry of entries) {
+          const target = entry.target;
+          if (!(target instanceof HTMLElement) || !target.isConnected) {
+            continue;
+          }
+          const container = resolvePositionedContainer(target);
+          // Rows outside a placed container (parked/recycled) can't intrude
+          // on the visible layout — same as being dropped from `placed` below.
+          if (!container) {
+            continue;
+          }
+          const top = containerTops.get(container);
+          if (top === undefined) {
+            continue;
+          }
+          if (top !== maxTop) {
+            onlyBottomMostResized = false;
+            break;
+          }
+        }
+        if (onlyBottomMostResized) {
+          return;
+        }
+      }
+    }
+
+    const placed: { container: HTMLElement; top: number; height: number }[] = [];
+    for (const [container, top] of containerTops) {
       const height = container.getBoundingClientRect().height;
       if (height <= 0) {
         continue;

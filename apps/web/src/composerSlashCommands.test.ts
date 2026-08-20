@@ -16,6 +16,7 @@ import {
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
   parseGoalSlashCommandArgs,
+  parseSideSlashCommandArgs,
   providerSupportsTextNativeReviewCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
@@ -122,9 +123,12 @@ describe("composerSlashCommands", () => {
     });
   });
 
-  it("parses /goal show, clear, set, and length-limit actions", () => {
+  it("parses /goal controls, set, and length-limit actions", () => {
     expect(parseGoalSlashCommandArgs("")).toEqual({ action: "show" });
     expect(parseGoalSlashCommandArgs("  CLEAR  ")).toEqual({ action: "clear" });
+    expect(parseGoalSlashCommandArgs("pause")).toEqual({ action: "pause" });
+    expect(parseGoalSlashCommandArgs("RESUME")).toEqual({ action: "resume" });
+    expect(parseGoalSlashCommandArgs(" edit ")).toEqual({ action: "edit" });
     expect(parseGoalSlashCommandArgs("Ship the release safely")).toEqual({
       action: "set",
       goal: "Ship the release safely",
@@ -167,6 +171,43 @@ describe("composerSlashCommands", () => {
         interactionMode: "plan",
       }),
     ).toBe(false);
+  });
+
+  it("parses an optional leading provider token in /side args", () => {
+    const context = {
+      currentProvider: "claudeAgent",
+      availableTargetProviders: ["codex", "cursor"],
+    } as const;
+    expect(parseSideSlashCommandArgs("codex is this safe?", context)).toEqual({
+      targetProvider: "codex",
+      prompt: "is this safe?",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("Codex", context)).toEqual({
+      targetProvider: "codex",
+      prompt: "",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("claude compare this", context)).toEqual({
+      targetProvider: null,
+      prompt: "compare this",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("is this safe?", context)).toEqual({
+      targetProvider: null,
+      prompt: "is this safe?",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("", context)).toEqual({
+      targetProvider: null,
+      prompt: "",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("grok compare this", context)).toEqual({
+      targetProvider: null,
+      prompt: "compare this",
+      unavailableProvider: "grok",
+    });
   });
 
   it("only offers /side for a main-thread empty default composer", () => {
@@ -325,6 +366,7 @@ describe("composerSlashCommands", () => {
     });
 
     expect(commands).toEqual([
+      "fork",
       "side",
       "export",
       "goal",
@@ -334,6 +376,20 @@ describe("composerSlashCommands", () => {
       "blame-someone-else",
       "automation",
     ]);
+  });
+
+  it("omits the app-level /fork command for claude when the composer is not empty", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "claudeAgent",
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: false,
+        canOfferSideCommand: true,
+        canOfferExportCommand: true,
+      }),
+    ).not.toContain("fork");
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -452,8 +508,28 @@ describe("composerSlashCommands", () => {
     ]);
   });
 
-  it("treats claude aliases like /fork as provider-native collisions", () => {
-    expect(hasProviderNativeSlashCommand("claudeAgent", ["branch", "model"], "fork")).toBe(true);
+  it("treats claude aliases like /reset as provider-native collisions", () => {
     expect(hasProviderNativeSlashCommand("claudeAgent", ["clear"], "reset")).toBe(true);
+  });
+
+  it("keeps app-level /fork available on every provider despite native collisions", () => {
+    for (const provider of ["claudeAgent", "codex"] as const) {
+      const availableCommands = getAvailableComposerSlashCommands({
+        provider,
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+        canOfferSideCommand: true,
+        canOfferExportCommand: true,
+        providerNativeCommandNames: ["fork", "branch"],
+      });
+
+      expect(availableCommands).toContain("fork");
+      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "fork")).toBe(true);
+      // Native /branch stays independent: it is no longer aliased to /fork.
+      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "branch")).toBe(false);
+      expect(hasProviderNativeSlashCommand(provider, ["branch"], "fork")).toBe(false);
+    }
   });
 });

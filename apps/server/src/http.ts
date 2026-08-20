@@ -34,6 +34,7 @@ import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
@@ -808,6 +809,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),

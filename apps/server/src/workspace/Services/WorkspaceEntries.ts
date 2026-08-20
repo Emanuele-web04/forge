@@ -7,6 +7,8 @@ import type {
   ProjectDiscoverScriptsResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectPrewarmSearchIndexInput,
+  ProjectPrewarmSearchIndexResult,
   ProjectSearchContentInput,
   ProjectSearchContentResult,
   ProjectSearchEntriesInput,
@@ -25,6 +27,10 @@ export interface WorkspaceEntriesShape {
   readonly searchContent: (
     input: ProjectSearchContentInput,
   ) => Effect.Effect<ProjectSearchContentResult, WorkspaceEntriesError>;
+  // Fire-and-forget index warm-up; resolves before the build completes.
+  readonly prewarmSearchIndex: (
+    input: ProjectPrewarmSearchIndexInput,
+  ) => Effect.Effect<ProjectPrewarmSearchIndexResult, WorkspaceEntriesError>;
   readonly discoverScripts: (
     input: ProjectDiscoverScriptsInput,
   ) => Effect.Effect<ProjectDiscoverScriptsResult, WorkspaceEntriesError>;

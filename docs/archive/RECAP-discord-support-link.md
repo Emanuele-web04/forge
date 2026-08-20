@@ -12,11 +12,11 @@ The public support links now direct Synara users to the project's GitHub Issues 
 
 ## Files Affected
 
-| File                                      | Status      | Role                                                           |
-| ----------------------------------------- | ----------- | -------------------------------------------------------------- |
-| `README.md`                               | ✏️ Modified | Replaces the incorrect Discord support link with GitHub Issues |
-| `apps/marketing/src/layouts/Layout.astro` | ✏️ Modified | Replaces the website footer's Discord link with an Issues link |
-| `docs/RECAP-discord-support-link.md`      | ✅ Created  | Documents the support-link correction                          |
+| File                                         | Status      | Role                                                           |
+| -------------------------------------------- | ----------- | -------------------------------------------------------------- |
+| `README.md`                                  | ✏️ Modified | Replaces the incorrect Discord support link with GitHub Issues |
+| `apps/marketing/src/layouts/Layout.astro`    | ✏️ Modified | Replaces the website footer's Discord link with an Issues link |
+| `docs/archive/RECAP-discord-support-link.md` | ✅ Created  | Documents the support-link correction                          |
 
 ---
 

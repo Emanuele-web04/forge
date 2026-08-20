@@ -572,7 +572,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
     expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("size-[1.375em]");
+    expect(markup).toContain("size-[1.125em]");
   });
 
   it("keeps edit available and hides undo before a revert checkpoint exists", async () => {

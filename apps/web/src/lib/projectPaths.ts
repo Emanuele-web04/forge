@@ -127,6 +127,7 @@ export function isFilesystemBrowseQuery(value: string, platform = getNavigatorPl
     value.startsWith("..\\") ||
     value.startsWith("/") ||
     value.startsWith("~/") ||
+    (allowWindowsPaths && value.startsWith("~\\")) ||
     (allowWindowsPaths && isWindowsAbsolutePath(value))
   );
 }

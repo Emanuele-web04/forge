@@ -648,6 +648,15 @@ export const ThreadNotes = Schema.String.check(Schema.isMaxLength(THREAD_NOTES_M
 export type ThreadNotes = typeof ThreadNotes.Type;
 export const ThreadGoal = Schema.String.check(Schema.isMaxLength(THREAD_GOAL_MAX_CHARS));
 export type ThreadGoal = typeof ThreadGoal.Type;
+export const ThreadGoalStartBehavior = Schema.Literals(["start-if-idle", "defer"]);
+export type ThreadGoalStartBehavior = typeof ThreadGoalStartBehavior.Type;
+export const ThreadGoalContinuationTrigger = Schema.Literals([
+  "goal-updated",
+  "interaction-mode-updated",
+  "turn-completed",
+  "startup-recovery",
+]);
+export type ThreadGoalContinuationTrigger = typeof ThreadGoalContinuationTrigger.Type;
 /**
  * Goal pursuit timing. `goalStartedAt` is (re)stamped by the decider whenever a
  * non-empty goal is set and rebased on resume so `now - goalStartedAt` is always
@@ -1235,6 +1244,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
+  goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
   // Desired paused state; the decider stamps the authoritative goal timestamps.
   goalPaused: Schema.optional(Schema.Boolean),
   // Marks the active goal accomplished: the decider records a ThreadGoalAchievement
@@ -1582,6 +1592,16 @@ const ThreadSessionSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalContinueCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.continue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  goalStartedAt: Schema.NullOr(IsoDateTime),
+  trigger: ThreadGoalContinuationTrigger,
+  sourceTurnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessagesImportCommand = Schema.Struct({
   type: Schema.Literal("thread.messages.import"),
   commandId: CommandId,
@@ -1659,6 +1679,7 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadGoalContinueCommand,
   ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -1705,6 +1726,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
   "thread.task-background-requested",
@@ -1885,6 +1907,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
+  goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalAchievements: Schema.optional(ThreadGoalAchievements),
@@ -1951,6 +1974,7 @@ export const ThreadRuntimeModeSetPayload = Schema.Struct({
 
 export const ThreadInteractionModeSetPayload = Schema.Struct({
   threadId: ThreadId,
+  previousInteractionMode: Schema.optional(ProviderInteractionMode),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -1997,6 +2021,14 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 });
 
 export const ThreadTurnQueuedPayload = ThreadTurnStartRequestedPayload;
+
+export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  goalStartedAt: Schema.NullOr(IsoDateTime),
+  trigger: ThreadGoalContinuationTrigger,
+  sourceTurnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
@@ -2253,6 +2285,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-requested"),
     payload: ThreadTurnStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-continuation-requested"),
+    payload: ThreadGoalContinuationRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

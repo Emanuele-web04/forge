@@ -8,6 +8,7 @@ import {
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
   type CodexModelOptions,
+  type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
@@ -425,11 +426,53 @@ export function getModelCapabilities(
   }
   if (provider === "grok" && slug) {
     // Grok exposes reasoning effort as a provider-level CLI option, while its
-    // runtime model catalog contains only model ids. New models must inherit the
-    // provider ladder even before runtime discovery has returned their descriptor.
-    return MODEL_CAPABILITIES_INDEX.grok["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
+    // runtime model catalog contains only model ids. New models inherit the
+    // matching CLI ladder (grok-build vs Grok 4.5 vs Grok 4.6+) before discovery
+    // returns a descriptor.
+    return grokCapabilitiesForFamily(resolveGrokEffortFamily(slug));
   }
   return EMPTY_MODEL_CAPABILITIES;
+}
+
+export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
+  const slug = model.trim().toLowerCase();
+  if (
+    slug.includes("build") ||
+    slug.includes("code-fast") ||
+    slug === "grok-4" ||
+    slug === "grok-4.3" ||
+    slug.startsWith("grok-4.3-")
+  ) {
+    return "build";
+  }
+
+  const version = /grok-(\d+)\.(\d+)/u.exec(slug);
+  if (!version) {
+    // Preserve the legacy Grok Build ladder for custom or future aliases we
+    // cannot classify. Discovery can still opt known versioned models into
+    // the newer ladders without silently changing persisted custom models.
+    return "build";
+  }
+  const major = Number(version[1]);
+  const minor = Number(version[2]);
+  if (major < 4 || (major === 4 && minor <= 3)) {
+    return "build";
+  }
+  if (major === 4 && minor === 5) {
+    return "4.5";
+  }
+  return "4.6";
+}
+
+function grokCapabilitiesForFamily(family: "build" | "4.5" | "4.6"): ModelCapabilities {
+  const grokCaps = MODEL_CAPABILITIES_INDEX.grok;
+  if (family === "build") {
+    return grokCaps["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  if (family === "4.5") {
+    return grokCaps["grok-4.5"] ?? grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  return grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
 }
 
 export function isClaudeUltrathinkPrompt(text: string | null | undefined): boolean {
@@ -639,6 +682,43 @@ export function claudeSelectionRequiresRestart(
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
   return prev.maxEffort !== desired.maxEffort;
+}
+
+export function normalizeCursorModelOptions(
+  model: string | null | undefined,
+  modelOptions: CursorModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("cursor", model),
+): CursorModelOptions | undefined {
+  const defaultReasoningEffort = getDefaultEffort(capabilities);
+  const rawEffort = trimOrNull(modelOptions?.reasoningEffort);
+  // Cursor's fast variants use a different implicit default (Grok fast → low).
+  // Always send the UI-selected effort, including the composer default.
+  const reasoningEffort =
+    rawEffort && hasEffortLevel(capabilities, rawEffort)
+      ? rawEffort
+      : defaultReasoningEffort && hasEffortLevel(capabilities, defaultReasoningEffort)
+        ? defaultReasoningEffort
+        : undefined;
+  const rawContextWindow = trimOrNull(modelOptions?.contextWindow);
+  const defaultContextWindow = getDefaultContextWindow(capabilities);
+  const contextWindow =
+    rawContextWindow &&
+    hasContextWindowOption(capabilities, rawContextWindow) &&
+    rawContextWindow !== defaultContextWindow
+      ? rawContextWindow
+      : undefined;
+  const fastMode = capabilities.supportsFastMode ? modelOptions?.fastMode === true : undefined;
+  const thinking =
+    capabilities.supportsThinkingToggle && modelOptions?.thinking !== undefined
+      ? modelOptions.thinking
+      : undefined;
+  const nextOptions: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function normalizeGrokModelOptions(

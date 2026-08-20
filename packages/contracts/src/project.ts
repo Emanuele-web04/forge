@@ -106,9 +106,11 @@ export const ProjectSearchEntriesResult = Schema.Struct({
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
-const PROJECT_SEARCH_CONTENT_MAX_LIMIT = 100;
-const PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
-const PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH = 1024;
+// Exported so server and web enforce the same bounds the schema validates —
+// a drifted local copy turns into schema-decode failures instead of graceful UI.
+export const PROJECT_SEARCH_CONTENT_MAX_LIMIT = 100;
+export const PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
+export const PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH = 1024;
 
 export const ProjectSearchContentInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
@@ -133,6 +135,19 @@ export const ProjectSearchContentResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type ProjectSearchContentResult = typeof ProjectSearchContentResult.Type;
+
+// Fire-and-forget warm-up of the server's workspace search index. The search
+// palette calls this when it opens so the first keystroke's query doesn't pay
+// for the index build; the response returns before the build completes.
+export const ProjectPrewarmSearchIndexInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type ProjectPrewarmSearchIndexInput = typeof ProjectPrewarmSearchIndexInput.Type;
+
+export const ProjectPrewarmSearchIndexResult = Schema.Struct({
+  started: Schema.Boolean,
+});
+export type ProjectPrewarmSearchIndexResult = typeof ProjectPrewarmSearchIndexResult.Type;
 
 export const ProjectSearchLocalEntriesInput = Schema.Struct({
   rootPath: TrimmedNonEmptyString,

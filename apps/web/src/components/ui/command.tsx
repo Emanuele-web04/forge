@@ -14,6 +14,7 @@ import {
   AutocompleteItem,
   AutocompleteList,
   AutocompleteSeparator,
+  AutocompleteStatus,
 } from "~/components/ui/autocomplete";
 
 const CommandDialog = CommandDialogPrimitive.Root;
@@ -122,6 +123,20 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Autoco
   );
 }
 
+// Caller-gated status/empty message for `mode="none"` palettes, where
+// Autocomplete.Empty cannot self-gate (it needs Root's `items`). Renders a
+// polite live region as a SIBLING of CommandList so non-option content never
+// sits inside the listbox; keep it mounted and swap its children.
+function CommandStatus({ className, ...props }: React.ComponentProps<typeof AutocompleteStatus>) {
+  return (
+    <AutocompleteStatus
+      className={cn("p-1 font-normal", className)}
+      data-slot="command-status"
+      {...props}
+    />
+  );
+}
+
 function CommandEmpty({ className, ...props }: React.ComponentProps<typeof AutocompleteEmpty>) {
   return (
     <AutocompleteEmpty
@@ -223,4 +238,5 @@ export {
   CommandPanel,
   CommandSeparator,
   CommandShortcut,
+  CommandStatus,
 };

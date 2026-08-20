@@ -158,6 +158,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
   {
+    id: "appearance:custom-title-bar",
+    section: "appearance",
+    title: "Use custom title bar",
+    keywords:
+      "frameless window system title bar Windows Linux caption controls minimize maximize close chrome",
+    target: null,
+  },
+  {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",

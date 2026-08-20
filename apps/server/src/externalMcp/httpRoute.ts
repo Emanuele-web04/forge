@@ -18,7 +18,11 @@ import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
 import { verifyExternalMcpTransportCredential } from "./credentialVerification.ts";
 import { makeExternalMcpExecutionAdmission } from "./executionAdmission.ts";
-import { computeExternalMcpRuntimeProof, externalMcpRuntimeSecret } from "./runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+  externalMcpRuntimeSecret,
+} from "./runtimeProof.ts";
 
 export const EXTERNAL_MCP_PATH = "/mcp/external";
 // A maximal 100k-character prompt still fits when every character needs JSON
@@ -322,8 +326,10 @@ const runtimeChallenge = HttpRouter.add(
   "POST",
   "/api/mcp/external/runtime-challenge",
   Effect.gen(function* () {
-    if (!(yield* localExternalMcpEnabled)) return disabledResponse();
-    const input = yield* decodeRuntimeChallenge(yield* readManagementBody).pipe(
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const input = yield* decodeRuntimeChallenge({
+      nonce: request.headers[EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER],
+    }).pipe(
       Effect.mapError(() => ({ message: "Invalid runtime challenge.", status: 400 as const })),
     );
     return HttpServerResponse.jsonUnsafe({

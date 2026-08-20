@@ -15,6 +15,7 @@ import type {
 import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ModelSelection,
@@ -809,7 +810,7 @@ function makeHarnessLayer(
             ],
           },
         ],
-        grok: [{ slug: "grok-build", name: "Grok Build" }],
+        grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
         droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
         kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto" }],
         opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
@@ -1504,7 +1505,9 @@ describe("AgentGateway", () => {
         ["string", "null"],
       );
       assert.property(setThreadGoal?.inputSchema.properties, "achieved");
+      assert.property(setThreadGoal?.inputSchema.properties, "blocked");
       assert.include(setThreadGoal?.description ?? "", "achieved: true");
+      assert.include(setThreadGoal?.description ?? "", "blocked: true");
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");
@@ -2007,6 +2010,7 @@ describe("AgentGateway", () => {
         assert.strictEqual("parentThreadId" in create, false);
         assert.strictEqual("subagentNickname" in create, false);
         assert.equal(create.modelSelection.provider, "grok");
+        assert.equal(create.modelSelection.model, DEFAULT_MODEL_BY_PROVIDER.grok);
         // Project and runtime mode default from the calling thread.
         assert.equal(create.projectId, PROJECT_ID);
         assert.equal(create.runtimeMode, "approval-required");
@@ -4871,6 +4875,34 @@ describe("AgentGateway", () => {
       assert.isTrue(isToolError(response.result));
       assert.include(toolErrorText(response.result), "no active goal");
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("pauses an active goal when the agent reports a repeated blocker", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads.filter((thread) => thread.id !== "thread-child"),
+      makeThreadShell("thread-child", { goal: "Ship the gateway feature" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_goal",
+        args: { threadId: "thread-child", blocked: true },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(toolResultJson(response.result), {
+        threadId: "thread-child",
+        goal: "Ship the gateway feature",
+        blocked: true,
+        paused: true,
+      });
+      assert.deepInclude(harness.dispatched[0] as unknown as Record<string, unknown>, {
+        type: "thread.meta.update",
+        threadId: "thread-child",
+        goalPaused: true,
+      });
     }).pipe(Effect.provide(gatewayLayer));
   });
 

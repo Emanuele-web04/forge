@@ -3,7 +3,7 @@
 // Layer: UI styling helper
 // Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
 
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME, MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
 
@@ -55,8 +55,10 @@ export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-c
 /** Indents model row labels under collapsible group headers. */
 export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
 
-/** Muted accent text for effort labels and empty-landing folder names. */
-export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
+/** Muted accent text for effort labels and empty-landing folder names.
+ *  Aliases the shared quiet-label tone so the picker and the transcript tool rows
+ *  can never drift onto two different grays. */
+export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = MUTED_LABEL_TEXT_CLASS_NAME;
 
 // NOTE: Composer picker section headers (Effort, Thinking, Mode, …) now render
 // through the shared `MenuGroupLabel` primitive (../ui/menu) so they stay in
@@ -128,25 +130,24 @@ export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
   "group relative z-[1] chat-composer-shell transition-colors duration-200";
 
-/** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
-export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
-  "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
+/** The one border for raised chrome floating over the transcript: composer shell and
+ *  its attached banners, the Environment panel, kanban cards. Light and dark values
+ *  live on `--surface-border` in `index.css`, behind the shared
+ *  `--surface-border-strength` knob, so these surfaces can never drift apart. */
+export const RAISED_SURFACE_BORDER_CLASS_NAME = "border-[color:var(--surface-border)]";
 
 /** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
-export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
-  "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
-].join(" ");
+export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME =
+  "border-[color:var(--composer-stacked-border)]";
 
-/** Border + shadow chrome for raised opaque surfaces (composer shell, kanban cards):
- *  a real border follows squircle/corner-shape geometry more evenly than an outer
- *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
-export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+/** Border + shadow chrome for raised opaque surfaces (kanban cards): a real border
+ *  follows squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
+ *  Dark mode drops the border and leans on the shadow for separation. */
+export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
 /** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
- *  dark mode using the same `border-border` token as the Environment panel, instead
- *  of dropping to shadow-only separation. */
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
+ *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
 /** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
@@ -198,8 +199,10 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
   "relative overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground";
 
-/** Opaque Environment panel card — same rationale as the command menu (overlays transcript). */
-export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+/** Opaque Environment panel card — same rationale as the command menu (overlays transcript).
+ *  Docks alongside the composer, so it carries the shared raised-chrome border rather
+ *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
@@ -228,7 +231,7 @@ export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
   "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]";
 
-export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
+export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
@@ -243,7 +246,11 @@ export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size
 /** Font, size, and leading shared by the composer editor and its placeholder so the
  *  placeholder always aligns with typed text. Keep both surfaces on this one token. */
 export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
-/** Muted empty-state copy for the composer prompt editor. */
+/** Muted empty-state copy for the composer prompt editor.
+ *  Deliberately fainter than MUTED_LABEL_TEXT_CLASS_NAME and NOT aliased to it: a
+ *  placeholder sits in the exact position typed text will occupy, so at the label
+ *  tone it stops reading as an empty field and starts reading as content already
+ *  in the input. The quiet-label token is for chrome that sits *next to* text. */
 export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground/40";
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME =
   "min-h-[var(--app-density-composer-editor-min-height,2lh)]";

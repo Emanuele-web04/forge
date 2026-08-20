@@ -2506,12 +2506,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         {
           id: asThreadId("thread-worktree-active"),
           archivedAt: null,
+          deletedAt: null,
           worktreePath: "/tmp/wt/active",
           associatedWorktreePath: null,
         },
         {
           id: asThreadId("thread-worktree-deleted"),
           archivedAt: "2026-07-24T00:00:08.000Z",
+          deletedAt: "2026-07-24T00:00:09.000Z",
           worktreePath: "/tmp/wt/deleted",
           associatedWorktreePath: "/tmp/wt/deleted-assoc",
         },

@@ -21,7 +21,16 @@ export interface ProviderDescriptor {
   } | null;
 }
 
-export const PROVIDER_DESCRIPTORS = [
+type ExhaustiveProviderDescriptors<Descriptors extends readonly ProviderDescriptor[]> =
+  Exclude<ProviderKind, Descriptors[number]["kind"]> extends never ? Descriptors : never;
+
+function defineProviderDescriptors<const Descriptors extends readonly ProviderDescriptor[]>(
+  descriptors: ExhaustiveProviderDescriptors<Descriptors>,
+): Descriptors {
+  return descriptors;
+}
+
+export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
   {
     kind: "codex",
     displayName: PROVIDER_DISPLAY_NAMES.codex,
@@ -57,44 +66,62 @@ export const PROVIDER_DESCRIPTORS = [
     displayName: PROVIDER_DISPLAY_NAMES.antigravity,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "agy",
+      learnMoreHref: "https://antigravity.google",
+    },
   },
   {
     kind: "grok",
     displayName: PROVIDER_DISPLAY_NAMES.grok,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "grok login",
+      learnMoreHref: "https://console.x.ai",
+    },
   },
   {
     kind: "droid",
     displayName: PROVIDER_DISPLAY_NAMES.droid,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "droid",
+      learnMoreHref: "https://docs.factory.ai/pricing",
+    },
   },
   {
     kind: "kilo",
     displayName: PROVIDER_DISPLAY_NAMES.kilo,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "kilo",
+      learnMoreHref: "https://kilo.ai",
+    },
   },
   {
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "opencode auth login",
+      learnMoreHref: "https://opencode.ai",
+    },
   },
   {
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,
     supportsNativeTurnSteering: true,
-    usage: null,
+    usage: {
+      signInCommand: "pi",
+      learnMoreHref: "https://pi.dev",
+    },
   },
-] as const satisfies readonly ProviderDescriptor[];
+] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
   PROVIDER_DESCRIPTORS.map((descriptor) => [descriptor.kind, descriptor]),

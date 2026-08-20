@@ -398,4 +398,37 @@ describe("decider thread goal timing", () => {
     expect(achievements?.[0]?.goal).toBe("Objective 1");
     expect(achievements?.[19]?.goal).toBe("Objective 20");
   });
+
+  it("pauses an active goal atomically before interrupting its turn", async () => {
+    const now = new Date().toISOString();
+    let readModel = await createThreadReadModel(now);
+    const setEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-set-before-interrupt",
+      goal: "Finish the implementation",
+    });
+    readModel = await applyEvent(readModel, setEvent, 3);
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-interrupt-active-goal"),
+          threadId: THREAD_ID,
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    expect(Array.isArray(result)).toBe(true);
+    if (!Array.isArray(result)) return;
+    expect(result.map((event) => event.type)).toEqual([
+      "thread.meta-updated",
+      "thread.turn-interrupt-requested",
+    ]);
+    const pauseEvent = result[0];
+    expect(pauseEvent?.type).toBe("thread.meta-updated");
+    if (pauseEvent?.type !== "thread.meta-updated") return;
+    expect(pauseEvent.payload.goalPausedAt).toBe(pauseEvent.occurredAt);
+  });
 });
