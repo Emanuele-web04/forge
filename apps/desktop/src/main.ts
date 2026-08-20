@@ -3888,9 +3888,7 @@ function hideDesktopWindowForImmediateQuit(): void {
     }
     window.hide();
   } catch (error: unknown) {
-    writeDesktopLogHeader(
-      `hide window for quit failed message=${formatErrorMessage(error)}`,
-    );
+    writeDesktopLogHeader(`hide window for quit failed message=${formatErrorMessage(error)}`);
   }
 }
 

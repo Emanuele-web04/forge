@@ -91,6 +91,10 @@ export function RunningChatsQuitCoordinator() {
   }, []);
 
   return (
-    <RunningChatsQuitDialog chats={chats} onStay={() => settle(false)} onQuit={() => settle(true)} />
+    <RunningChatsQuitDialog
+      chats={chats}
+      onStay={() => settle(false)}
+      onQuit={() => settle(true)}
+    />
   );
 }

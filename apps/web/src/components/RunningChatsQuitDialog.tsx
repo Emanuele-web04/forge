@@ -66,7 +66,9 @@ export function RunningChatsQuitDialog({ chats, onStay, onQuit }: RunningChatsQu
                   {chats.map((chat) => (
                     <li key={chat.id} className="flex min-w-0 items-center gap-2">
                       <ThreadRunningSpinner />
-                      <span className={cn(uiFont, "truncate text-[12px] font-normal leading-[16px]")}>
+                      <span
+                        className={cn(uiFont, "truncate text-[12px] font-normal leading-[16px]")}
+                      >
                         {chat.title}
                       </span>
                     </li>

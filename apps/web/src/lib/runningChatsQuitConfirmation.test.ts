@@ -77,10 +77,7 @@ describe("running chats quit confirmation", () => {
     });
 
     const stopping = stopRunningChatsForQuit({
-      chats: [
-        { id: "a", title: "One" },
-        { id: "b", title: "Two" },
-      ],
+      chats: [{ id: "a" }, { id: "b" }],
       dispatchInterrupt: async (threadId) => {
         interrupted.push(threadId);
         if (threadId === "b") {
@@ -97,7 +94,7 @@ describe("running chats quit confirmation", () => {
   it("still returns if interrupt dispatch fails", async () => {
     await expect(
       stopRunningChatsForQuit({
-        chats: [{ id: "a", title: "One" }],
+        chats: [{ id: "a" }],
         dispatchInterrupt: async () => {
           throw new Error("rpc failed");
         },

@@ -97,7 +97,7 @@ export function runningChatsQuitCopy(
 
 export async function stopRunningChatsForQuit(input: {
   readonly chats: ReadonlyArray<Pick<RunningChatQuitSummary, "id">>;
-  readonly dispatchInterrupt: (threadId: string) => Promise<void> | void;
+  readonly dispatchInterrupt: (threadId: string) => Promise<unknown> | unknown;
 }): Promise<void> {
   if (input.chats.length === 0) {
     return;
