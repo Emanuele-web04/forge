@@ -6,6 +6,10 @@ import type {
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
+import {
+  parseQuitConfirmationRequest,
+  parseQuitConfirmationResponse,
+} from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
 
@@ -117,6 +121,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
+  },
+  onQuitConfirmationRequest: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const request = parseQuitConfirmationRequest(payload);
+      if (request) listener(request);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationRequest, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationRequest, wrappedListener);
+    };
+  },
+  replyQuitConfirmation: (response) => {
+    const parsed = parseQuitConfirmationResponse(response);
+    if (!parsed) return;
+    ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
   },
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);

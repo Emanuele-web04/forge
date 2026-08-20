@@ -22,6 +22,8 @@ export const DESKTOP_IPC_CHANNELS = {
   customTitleBarSetPreference: "desktop:custom-title-bar-set-preference",
   customTitleBarRelaunch: "desktop:custom-title-bar-relaunch",
   menuAction: "desktop:menu-action",
+  quitConfirmationRequest: "desktop:quit-confirmation-request",
+  quitConfirmationResponse: "desktop:quit-confirmation-response",
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
   updateCheck: "desktop:update-check",

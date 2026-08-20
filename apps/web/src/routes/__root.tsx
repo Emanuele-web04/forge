@@ -25,6 +25,7 @@ import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { FeedbackDialog } from "../components/FeedbackDialog";
@@ -249,12 +250,18 @@ function RootRouteView() {
   // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
   // so it also stays clickable while a modal is open.)
   const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+  const desktopChrome = (
+    <>
+      <RunningChatsQuitCoordinator />
+      {desktopWindowControls}
+    </>
+  );
 
   if (compatibilityIssue) {
     return (
       <>
         <TransportCompatibilityView issue={compatibilityIssue} />
-        {desktopWindowControls}
+        {desktopChrome}
       </>
     );
   }
@@ -269,7 +276,7 @@ function RootRouteView() {
             </p>
           </div>
         </div>
-        {desktopWindowControls}
+        {desktopChrome}
       </>
     );
   }
@@ -291,7 +298,7 @@ function RootRouteView() {
           <Outlet />
         </AnchoredToastProvider>
       </ToastProvider>
-      {desktopWindowControls}
+      {desktopChrome}
     </>
   );
 }

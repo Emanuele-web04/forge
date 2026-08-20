@@ -111,6 +111,10 @@ import {
   settleDeferredDesktopQuitAfterUpdaterFailure,
 } from "./desktopQuitIntent";
 import {
+  makeRunningChatsQuitGuard,
+  shouldPromptForRunningChatsBeforeQuit,
+} from "./runningChatsQuitGuard";
+import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -365,6 +369,7 @@ let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
+const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -3908,6 +3913,49 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 }
 
+function isMainRendererAvailable(): boolean {
+  return Boolean(
+    mainWindow &&
+      !mainWindow.isDestroyed() &&
+      !mainWindow.webContents.isDestroyed() &&
+      !mainWindow.webContents.isCrashed(),
+  );
+}
+
+async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
+  if (
+    !shouldPromptForRunningChatsBeforeQuit(reason) ||
+    runningChatsQuitGuard.hasAllowedQuit() ||
+    isQuitting ||
+    desktopShutdownPromise !== null ||
+    desktopShutdownComplete
+  ) {
+    requestGracefulAppQuit(reason);
+    return;
+  }
+
+  const window = mainWindow;
+  const allowed = await runningChatsQuitGuard.askRenderer({
+    send: (request) => {
+      if (!isMainRendererAvailable() || !window) {
+        throw new Error("Renderer unavailable.");
+      }
+      if (window.isMinimized()) {
+        window.restore();
+      }
+      window.show();
+      window.focus();
+      window.webContents.send(IPC.quitConfirmationRequest, request);
+    },
+    isRendererAvailable: isMainRendererAvailable,
+  });
+  if (!allowed) {
+    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    return;
+  }
+  requestGracefulAppQuit(reason);
+}
+
 function requestGracefulAppQuit(reason: string): void {
   if (isUpdaterInstallPreparing) {
     deferDesktopQuitUntilUpdaterSettles(reason);
@@ -3995,6 +4043,11 @@ function registerIpcHandlers(): void {
 
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
     return showDesktopConfirmDialog(message, owner);
+  });
+
+  ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
+  ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
+    runningChatsQuitGuard.receiveResponse(payload);
   });
 
   ipcMain.removeHandler(IPC.setTheme);
@@ -4501,7 +4554,17 @@ function createWindow(): BrowserWindow {
       })
     ) {
       event.preventDefault();
-      requestGracefulAppQuit("window-close");
+      void confirmRunningChatsThenQuit("window-close");
+      return;
+    }
+
+    if (
+      process.platform === "linux" &&
+      !desktopShutdownComplete &&
+      !isUpdaterQuitAndInstallInFlight
+    ) {
+      event.preventDefault();
+      void confirmRunningChatsThenQuit("window-close");
     }
   });
 
@@ -4840,7 +4903,7 @@ app.on("before-quit", (event) => {
   }
 
   event.preventDefault();
-  requestGracefulAppQuit("before-quit");
+  void confirmRunningChatsThenQuit("before-quit");
 });
 
 if (hasSingleInstanceLock) {
