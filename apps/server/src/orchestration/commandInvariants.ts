@@ -1,4 +1,5 @@
 import type {
+  ApprovalRequestId,
   OrchestrationCommand,
   OrchestrationLatestTurn,
   OrchestrationProject,
@@ -371,6 +372,36 @@ export function requireThread(input: {
       thread
         ? `Thread '${input.threadId}' was deleted and cannot handle command '${input.command.type}'.`
         : `Thread '${input.threadId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireApprovalNotResponded(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+  readonly requestId: ApprovalRequestId;
+  readonly lifecycleGeneration?: string;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const thread = findThreadById(input.readModel, input.threadId);
+  const interaction = thread?.pendingInteractions?.find(
+    (entry) =>
+      entry.interactionKind === "approval" &&
+      entry.requestId === input.requestId &&
+      (input.lifecycleGeneration === undefined ||
+        entry.lifecycleGeneration === input.lifecycleGeneration),
+  );
+  if (
+    interaction === undefined ||
+    interaction.status === "pending" ||
+    interaction.status === "retryable"
+  ) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Approval request '${input.requestId}' on thread '${input.threadId}' was already answered.`,
     ),
   );
 }

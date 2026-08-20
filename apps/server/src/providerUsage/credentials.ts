@@ -101,6 +101,8 @@ export async function refreshOAuthAccessToken(input: {
   allowedOrigins: ReadonlyArray<string>;
   refreshToken: string;
   clientId: string;
+  /** Google-style token endpoints require the confidential-client secret next to `client_id`. */
+  clientSecret?: string;
   scope?: string;
   /** OAuth token endpoints commonly require form encoding; JSON stays for the ones that don't. */
   bodyFormat?: "json" | "form";
@@ -111,6 +113,9 @@ export async function refreshOAuthAccessToken(input: {
     refresh_token: input.refreshToken,
     client_id: input.clientId,
   };
+  if (input.clientSecret) {
+    body.client_secret = input.clientSecret;
+  }
   if (input.scope) {
     body.scope = input.scope;
   }

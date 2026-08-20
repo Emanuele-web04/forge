@@ -8,6 +8,7 @@ import {
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
   type CodexModelOptions,
+  type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
@@ -681,6 +682,43 @@ export function claudeSelectionRequiresRestart(
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
   return prev.maxEffort !== desired.maxEffort;
+}
+
+export function normalizeCursorModelOptions(
+  model: string | null | undefined,
+  modelOptions: CursorModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("cursor", model),
+): CursorModelOptions | undefined {
+  const defaultReasoningEffort = getDefaultEffort(capabilities);
+  const rawEffort = trimOrNull(modelOptions?.reasoningEffort);
+  // Cursor's fast variants use a different implicit default (Grok fast → low).
+  // Always send the UI-selected effort, including the composer default.
+  const reasoningEffort =
+    rawEffort && hasEffortLevel(capabilities, rawEffort)
+      ? rawEffort
+      : defaultReasoningEffort && hasEffortLevel(capabilities, defaultReasoningEffort)
+        ? defaultReasoningEffort
+        : undefined;
+  const rawContextWindow = trimOrNull(modelOptions?.contextWindow);
+  const defaultContextWindow = getDefaultContextWindow(capabilities);
+  const contextWindow =
+    rawContextWindow &&
+    hasContextWindowOption(capabilities, rawContextWindow) &&
+    rawContextWindow !== defaultContextWindow
+      ? rawContextWindow
+      : undefined;
+  const fastMode = capabilities.supportsFastMode ? modelOptions?.fastMode === true : undefined;
+  const thinking =
+    capabilities.supportsThinkingToggle && modelOptions?.thinking !== undefined
+      ? modelOptions.thinking
+      : undefined;
+  const nextOptions: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function normalizeGrokModelOptions(

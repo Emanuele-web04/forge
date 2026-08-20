@@ -16,6 +16,7 @@ import {
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
   parseGoalSlashCommandArgs,
+  parseSideSlashCommandArgs,
   providerSupportsTextNativeReviewCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
@@ -170,6 +171,43 @@ describe("composerSlashCommands", () => {
         interactionMode: "plan",
       }),
     ).toBe(false);
+  });
+
+  it("parses an optional leading provider token in /side args", () => {
+    const context = {
+      currentProvider: "claudeAgent",
+      availableTargetProviders: ["codex", "cursor"],
+    } as const;
+    expect(parseSideSlashCommandArgs("codex is this safe?", context)).toEqual({
+      targetProvider: "codex",
+      prompt: "is this safe?",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("Codex", context)).toEqual({
+      targetProvider: "codex",
+      prompt: "",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("claude compare this", context)).toEqual({
+      targetProvider: null,
+      prompt: "compare this",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("is this safe?", context)).toEqual({
+      targetProvider: null,
+      prompt: "is this safe?",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("", context)).toEqual({
+      targetProvider: null,
+      prompt: "",
+      unavailableProvider: null,
+    });
+    expect(parseSideSlashCommandArgs("grok compare this", context)).toEqual({
+      targetProvider: null,
+      prompt: "compare this",
+      unavailableProvider: "grok",
+    });
   });
 
   it("only offers /side for a main-thread empty default composer", () => {

@@ -11,6 +11,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -114,7 +115,7 @@ describe("ensureIsolatedScratchWorkspace", () => {
         );
         expect(workspace).toBe(path.join(privateRoot, workspaceSegment));
       } finally {
-        rmSync(legacyRoot, { force: true });
+        unlinkSync(legacyRoot);
         rmSync(redirectedRoot, { recursive: true, force: true });
       }
     },
@@ -240,7 +241,7 @@ describe("ensureIsolatedScratchWorkspace", () => {
           /open without following symlinks/,
         );
       } finally {
-        rmSync(workspace, { force: true });
+        unlinkSync(workspace);
         rmSync(redirected, { recursive: true, force: true });
       }
     },

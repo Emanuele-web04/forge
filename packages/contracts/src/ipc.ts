@@ -511,6 +511,14 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+/** Windows/Linux frameless title bar preference vs the live BrowserWindow frame. */
+export interface DesktopCustomTitleBarState {
+  supported: boolean;
+  preference: boolean;
+  active: boolean;
+  restartRequired: boolean;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -555,6 +563,15 @@ export interface DesktopBridge {
     close: () => Promise<void>;
     getState: () => Promise<DesktopWindowState>;
     onState: (listener: (state: DesktopWindowState) => void) => () => void;
+  };
+  /**
+   * Windows/Linux only. `frame` is fixed at BrowserWindow creation, so changing
+   * the preference requires a relaunch before `active` catches up.
+   */
+  customTitleBar?: {
+    getState: () => Promise<DesktopCustomTitleBarState>;
+    setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
+    relaunch: () => Promise<void>;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */

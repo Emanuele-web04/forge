@@ -763,6 +763,65 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("dispatches the Cursor Grok default HIGH effort together with fast mode", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "grok-4.6",
+      runtimeModel: {
+        slug: "grok-4.6",
+        name: "Grok 4.6",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportsFastMode: true,
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        defaultReasoningEffort: "high",
+      },
+      prompt: "",
+      modelOptions: {
+        cursor: {
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "cursor",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+  });
+
+  it("dispatches the Cursor Grok default HIGH effort even when it matches the picker default", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "grok-4.6",
+      prompt: "",
+      modelOptions: {
+        cursor: {
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "cursor",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+  });
+
   it("drops stale Cursor context options once runtime metadata is authoritative", () => {
     const state = getComposerProviderState({
       provider: "cursor",

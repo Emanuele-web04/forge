@@ -102,6 +102,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
     },
   },
+  customTitleBar: {
+    getState: () => ipcRenderer.invoke(IPC.customTitleBarGetState),
+    setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
+    relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

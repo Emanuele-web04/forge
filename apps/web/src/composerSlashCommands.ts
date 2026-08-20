@@ -1,9 +1,11 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   THREAD_GOAL_MAX_CHARS,
   type GitBranch,
   type ProviderInteractionMode,
   type ProviderKind,
 } from "@synara/contracts";
+import { DEFAULT_PROVIDER_ORDER } from "./providerOrdering";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
@@ -207,7 +209,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   side: {
     command: "side",
     label: "/side",
-    description: "Open a guarded Side from this thread",
+    description: "Open a guarded Side from this thread, optionally on another provider",
     source: "app",
   },
   status: {
@@ -513,6 +515,48 @@ export function buildSlashReviewComposerPrompt(args: string): string {
       : basePrompt;
   }
   return `${basePrompt}\nFocus especially on: ${trimmedArgs}`;
+}
+
+export interface SideSlashCommandArgs {
+  targetProvider: ProviderKind | null;
+  prompt: string;
+  unavailableProvider: ProviderKind | null;
+}
+
+function matchSideProviderToken(token: string): ProviderKind | null {
+  const normalized = token.toLowerCase();
+  return (
+    DEFAULT_PROVIDER_ORDER.find(
+      (provider) =>
+        provider.toLowerCase() === normalized ||
+        PROVIDER_DISPLAY_NAMES[provider].toLowerCase() === normalized,
+    ) ?? null
+  );
+}
+
+// `/side [provider] [prompt]`: an optional leading provider token (kind or
+// display name) starts the sidechat on that provider.
+export function parseSideSlashCommandArgs(
+  args: string,
+  input: {
+    currentProvider: ProviderKind;
+    availableTargetProviders: ReadonlyArray<ProviderKind>;
+  },
+): SideSlashCommandArgs {
+  const trimmedArgs = args.trim();
+  const firstToken = trimmedArgs.split(/\s+/, 1)[0] ?? "";
+  const matchedProvider = firstToken.length > 0 ? matchSideProviderToken(firstToken) : null;
+  if (!matchedProvider) {
+    return { targetProvider: null, prompt: trimmedArgs, unavailableProvider: null };
+  }
+  const prompt = trimmedArgs.slice(firstToken.length).trim();
+  if (matchedProvider === input.currentProvider) {
+    return { targetProvider: null, prompt, unavailableProvider: null };
+  }
+  if (!input.availableTargetProviders.includes(matchedProvider)) {
+    return { targetProvider: null, prompt, unavailableProvider: matchedProvider };
+  }
+  return { targetProvider: matchedProvider, prompt, unavailableProvider: null };
 }
 
 // `/fork` optionally accepts only an explicit target shorthand like `/fork local`.

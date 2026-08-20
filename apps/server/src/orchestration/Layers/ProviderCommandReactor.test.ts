@@ -8618,17 +8618,20 @@ describe("ProviderCommandReactor", () => {
       resolvedAt: null,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.makeUnsafe("cmd-approval-respond-duplicate"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("approval-request-1"),
-        lifecycleGeneration: "approval-generation-1",
-        decision: "decline",
-        createdAt: now,
-      }),
+    const duplicateFailure = await Effect.runPromise(
+      harness.engine
+        .dispatch({
+          type: "thread.approval.respond",
+          commandId: CommandId.makeUnsafe("cmd-approval-respond-duplicate"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          requestId: asApprovalRequestId("approval-request-1"),
+          lifecycleGeneration: "approval-generation-1",
+          decision: "decline",
+          createdAt: now,
+        })
+        .pipe(Effect.flip),
     );
+    expect(duplicateFailure._tag).toBe("OrchestrationCommandInvariantError");
     await harness.drain();
     expect(harness.respondToRequest).toHaveBeenCalledTimes(1);
   });

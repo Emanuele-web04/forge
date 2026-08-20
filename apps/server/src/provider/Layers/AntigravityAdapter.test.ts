@@ -1,5 +1,6 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Effect, Fiber, Layer, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -23,12 +24,15 @@ import {
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
   buildAntigravityTurnPrompt,
+  detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
   hookScriptSource,
   makeAntigravityRuntimeEventBase,
   makeAntigravityAdapterLive,
+  matchAntigravityTrackedTaskId,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
+  parseAntigravitySystemMessage,
   readCompleteAntigravityLines,
   resolveAntigravityCliModelLabel,
   runAntigravityHelperProcess,
@@ -44,6 +48,10 @@ function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEn
     timeout: 5_000,
     ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {}),
   });
+}
+
+async function completeProcessTeardown() {
+  return { escalated: false, signalErrors: [] };
 }
 
 describe("Antigravity CLI model translation", () => {
@@ -372,7 +380,7 @@ describe("Antigravity CLI integration helpers", () => {
         {
           command: "/usr/local/bin/agy",
           args: ["plugin", "install", pluginDir],
-          options: { timeoutMs: 30_000 },
+          options: { timeoutMs: 45_000 },
         },
       ]);
       expect(
@@ -1708,6 +1716,730 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-transcript-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Antigravity background task helpers (#752)", () => {
+  it("parses system message task ids and exit codes", () => {
+    expect(parseAntigravitySystemMessage("plain assistant text")).toBeNull();
+    expect(parseAntigravitySystemMessage(undefined)).toBeNull();
+
+    const success = parseAntigravitySystemMessage(
+      "<SYSTEM_MESSAGE> Task id 'task-abc123' exited with code 0",
+    );
+    expect(success).toMatchObject({
+      isSystemMessage: true,
+      taskId: "task-abc123",
+      exitCode: 0,
+      isFailure: false,
+    });
+
+    const failure = parseAntigravitySystemMessage(
+      '<SYSTEM_MESSAGE> sender=task-9f2 Task id "task-9f2" exited with code 1',
+    );
+    expect(failure).toMatchObject({
+      isSystemMessage: true,
+      taskId: "task-9f2",
+      sender: "task-9f2",
+      exitCode: 1,
+      isFailure: true,
+    });
+
+    const senderOnly = parseAntigravitySystemMessage("<SYSTEM_MESSAGE> sender=task-x77 done");
+    expect(senderOnly).toMatchObject({ isSystemMessage: true, taskId: "task-x77" });
+
+    expect(
+      parseAntigravitySystemMessage(
+        "<SYSTEM_MESSAGE> Task id 'task-clean' completed with 0 failed and no error",
+      ),
+    ).toMatchObject({ taskId: "task-clean", isFailure: false });
+    expect(
+      parseAntigravitySystemMessage(
+        "<SYSTEM_MESSAGE> Task id 'task-tests' completed with 0 tests failed",
+      ),
+    ).toMatchObject({ taskId: "task-tests", isFailure: false });
+  });
+
+  it("detects background task starts from run_command tool output", () => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev" },
+        {
+          toolOutput: "Task id 'task-42' is now running in the background",
+        },
+      ),
+    ).toEqual({
+      taskId: "task-42",
+      description: "npm run dev",
+      isBackground: true,
+    });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev" },
+        {
+          result: "sent to the background",
+        },
+      ),
+    ).toEqual({ description: "npm run dev", isBackground: true });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { command: "npm run dev", WaitMsBeforeAsync: 1000 },
+        {},
+      ),
+    ).toEqual({ description: "npm run dev", isBackground: true });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev", WaitMsBeforeAsync: 1000 },
+        { toolOutput: "exited with code 0" },
+      ),
+    ).toBeNull();
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "echo task-42" },
+        { toolOutput: "foreground command printed task-42 and exited with code 0" },
+      ),
+    ).toBeNull();
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run dev", WaitMsBeforeAsync: 1000 },
+        { failed: true },
+      ),
+    ).toBeNull();
+
+    expect(
+      detectAntigravityBackgroundTaskStart("run_command", {
+        CommandLine: "npm run dev",
+        WaitMsBeforeAsync: 1000,
+      }),
+    ).toBeNull();
+  });
+
+  it("detects schedule timers and ignores unrelated tools", () => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "schedule",
+        { Prompt: "remind me later" },
+        {
+          toolOutput: "Scheduled timer-77 created",
+        },
+      ),
+    ).toEqual({
+      taskId: "timer-77",
+      description: "remind me later",
+      isBackground: true,
+    });
+
+    expect(detectAntigravityBackgroundTaskStart("schedule", {})).toEqual({
+      description: "Scheduled timer",
+      isBackground: true,
+    });
+
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "schedule",
+        { Prompt: "remind me later" },
+        {
+          error: "scheduler unavailable",
+        },
+      ),
+    ).toBeNull();
+
+    expect(detectAntigravityBackgroundTaskStart("list_files")).toBeNull();
+  });
+
+  it("matches completion task ids against tracked tasks", () => {
+    const tracked = ["task-1", "task-2"];
+
+    expect(matchAntigravityTrackedTaskId("task-1", tracked)).toBe("task-1");
+    expect(matchAntigravityTrackedTaskId("job/task-2", tracked)).toBe("task-2");
+    expect(matchAntigravityTrackedTaskId("unknown-99", tracked)).toBeUndefined();
+    expect(matchAntigravityTrackedTaskId(undefined, ["task-solo"])).toBe("task-solo");
+    expect(matchAntigravityTrackedTaskId("another-task", ["task-solo"])).toBeUndefined();
+    expect(matchAntigravityTrackedTaskId(undefined, tracked)).toBeUndefined();
+    expect(matchAntigravityTrackedTaskId("task-1", [])).toBeUndefined();
+  });
+
+  it("settles a completed background task before handling the final stop hook", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-background-stop-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    let teardownCalls = 0;
+    let resolveTeardown = (): void => undefined;
+    const teardownObserved = new Promise<void>((resolve) => {
+      resolveTeardown = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const toolsCompleted = yield* Deferred.make<void>();
+          const followupObserved = yield* Deferred.make<void>();
+          const runtimeTaskEvents: string[] = [];
+          let completedTools = 0;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type.startsWith("task.")) runtimeTaskEvents.push(event.type);
+                if (event.type === "item.completed" && ++completedTools === 2) {
+                  yield* Deferred.succeed(toolsCompleted, undefined);
+                }
+                if (
+                  event.type === "item.completed" &&
+                  event.payload.itemType === "assistant_message"
+                ) {
+                  yield* Deferred.succeed(followupObserved, undefined);
+                }
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-background-stop");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "run tests", attachments: [] });
+
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                `pre-invocation\t${JSON.stringify({
+                  conversationId: "conversation-background-stop",
+                  transcriptPath: transcriptFile,
+                })}`,
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}}}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-real-a"}}}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Deferred.await(toolsCompleted).pipe(Effect.timeout("2 seconds"));
+          expect(teardownCalls).toBe(0);
+
+          yield* Effect.sync(() => {
+            fsSync.appendFileSync(
+              transcriptFile,
+              [
+                JSON.stringify({
+                  type: "SYSTEM_MESSAGE",
+                  content: "<SYSTEM_MESSAGE> Task id 'task-real-b' exited with code 0",
+                }),
+                JSON.stringify({
+                  step_index: 6,
+                  type: "PLANNER_RESPONSE",
+                  content: "background work completed",
+                }),
+                "",
+              ].join("\n"),
+            );
+            fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":4}\n');
+          });
+          yield* Deferred.await(followupObserved).pipe(Effect.timeout("2 seconds"));
+          expect(teardownCalls).toBe(0);
+          yield* Effect.sync(() => fsSync.appendFileSync(eventFile!, "stop\t{}\n"));
+          yield* Effect.promise(() => teardownObserved).pipe(Effect.timeout("2 seconds"));
+          expect(teardownCalls).toBe(1);
+          expect(runtimeTaskEvents).toEqual([]);
+          yield* Fiber.interrupt(eventsFiber);
+
+          child?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree: async () => {
+                teardownCalls += 1;
+                resolveTeardown();
+                return completeProcessTeardown();
+              },
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-background-stop-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("performs a fresh final hook drain when the process closes during a poll", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-final-drain-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    let blockNextTranscriptRead = false;
+    let transcriptReadBlocked = false;
+    let resolveTranscriptReadStarted = (): void => undefined;
+    const transcriptReadStarted = new Promise<void>((resolve) => {
+      resolveTranscriptReadStarted = resolve;
+    });
+    let releaseTranscriptRead = (): void => undefined;
+    const transcriptReadRelease = new Promise<void>((resolve) => {
+      releaseTranscriptRead = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const readCompleteLines: NonNullable<
+      AntigravityAdapterDependencies["readCompleteLines"]
+    > = async (filePath, offset) => {
+      if (filePath === transcriptFile && blockNextTranscriptRead && !transcriptReadBlocked) {
+        transcriptReadBlocked = true;
+        resolveTranscriptReadStarted();
+        await transcriptReadRelease;
+      }
+      return readCompleteAntigravityLines(filePath, offset);
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const turnCompleted = yield* Deferred.make<void>();
+          const itemsObserved = yield* Deferred.make<void>();
+          const itemEventTypes: string[] = [];
+          const itemEventTitles: string[] = [];
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type === "item.started" || event.type === "item.completed") {
+                  itemEventTypes.push(event.type);
+                  itemEventTitles.push(event.payload.title ?? "");
+                  if (itemEventTypes.length === 2) {
+                    yield* Deferred.succeed(itemsObserved, undefined);
+                  }
+                }
+                if (event.type === "turn.completed") {
+                  yield* Deferred.succeed(turnCompleted, undefined);
+                }
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-final-drain");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "list files", attachments: [] });
+          blockNextTranscriptRead = true;
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              `pre-invocation\t${JSON.stringify({
+                conversationId: "conversation-final-drain",
+                transcriptPath: transcriptFile,
+              })}\n`,
+            ),
+          );
+          yield* Effect.promise(() => transcriptReadStarted).pipe(Effect.timeout("2 seconds"));
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"list_files","args":{"Path":"."}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"list_files","args":{"Path":"."}},"toolOutput":"ok"}',
+                'stop\t{"stepIdx":2}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          child?.emit("close", 0, null);
+          releaseTranscriptRead();
+
+          yield* Deferred.await(itemsObserved).pipe(Effect.timeout("2 seconds"));
+          yield* Deferred.await(turnCompleted).pipe(Effect.timeout("2 seconds"));
+          expect(itemEventTypes).toEqual(["item.started", "item.completed"]);
+          expect(itemEventTitles).toEqual(["list_files", "list_files"]);
+          yield* Fiber.interrupt(eventsFiber);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              readCompleteLines,
+              spawnProcess,
+              teardownProcessTree: completeProcessTeardown,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "final-drain-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a hook poll that resumes after session replacement", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stale-poll-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+
+    let eventFile: string | undefined;
+    let blockedEventFile: string | undefined;
+    let replacementEventFile: string | undefined;
+    let hookReadBlocked = false;
+    let resolveHookReadStarted = (): void => undefined;
+    const hookReadStarted = new Promise<void>((resolve) => {
+      resolveHookReadStarted = resolve;
+    });
+    let releaseHookRead = (): void => undefined;
+    const hookReadRelease = new Promise<void>((resolve) => {
+      releaseHookRead = resolve;
+    });
+    let resolveReplacementPoll = (): void => undefined;
+    const replacementPollObserved = new Promise<void>((resolve) => {
+      resolveReplacementPoll = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const readCompleteLines: NonNullable<
+      AntigravityAdapterDependencies["readCompleteLines"]
+    > = async (filePath, offset) => {
+      const batch = await readCompleteAntigravityLines(filePath, offset);
+      if (filePath === blockedEventFile && !hookReadBlocked) {
+        hookReadBlocked = true;
+        resolveHookReadStarted();
+        await hookReadRelease;
+      }
+      if (filePath === replacementEventFile) resolveReplacementPoll();
+      return batch;
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const staleTaskIds: string[] = [];
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "task.started") staleTaskIds.push(event.payload.taskId);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-stale-poll");
+          const sessionInput = {
+            provider: "antigravity" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          };
+          yield* adapter.startSession(sessionInput);
+          yield* adapter.sendTurn({ threadId, input: "start a task", attachments: [] });
+          blockedEventFile = eventFile;
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              blockedEventFile!,
+              [
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-stale\' is now running in the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Effect.promise(() => hookReadStarted).pipe(Effect.timeout("2 seconds"));
+
+          yield* adapter.startSession(sessionInput);
+          releaseHookRead();
+          yield* adapter.sendTurn({ threadId, input: "replacement turn", attachments: [] });
+          replacementEventFile = eventFile;
+          yield* Effect.promise(() => replacementPollObserved).pipe(Effect.timeout("2 seconds"));
+
+          expect(staleTaskIds).toEqual([]);
+          yield* Fiber.interrupt(eventsFiber);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              readCompleteLines,
+              spawnProcess,
+              teardownProcessTree: completeProcessTeardown,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "stale-poll-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles pending background tasks on session replacement and process exit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-background-restart-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const firstTaskStarted = yield* Deferred.make<void>();
+          const conversationReady = yield* Deferred.make<void>();
+          const completionBuffered = yield* Deferred.make<void>();
+          const bufferedTaskCompleted = yield* Deferred.make<void>();
+          const secondTurnCompleted = yield* Deferred.make<void>();
+          const exitTaskStarted = yield* Deferred.make<void>();
+          const taskEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.tap((event) =>
+              Effect.all(
+                [
+                  event.type === "task.started" && event.payload.taskId === "task-restart"
+                    ? Deferred.succeed(firstTaskStarted, undefined)
+                    : Effect.void,
+                  event.type === "thread.started" &&
+                  event.payload.providerThreadId === "conversation-background-restart"
+                    ? Deferred.succeed(conversationReady, undefined)
+                    : Effect.void,
+                  event.type === "item.completed" && event.payload.itemType === "assistant_message"
+                    ? Deferred.succeed(completionBuffered, undefined)
+                    : Effect.void,
+                  event.type === "task.completed" && event.payload.taskId === "task-buffered"
+                    ? Deferred.succeed(bufferedTaskCompleted, undefined)
+                    : Effect.void,
+                  event.type === "turn.completed"
+                    ? Deferred.succeed(secondTurnCompleted, undefined)
+                    : Effect.void,
+                  event.type === "task.started" && event.payload.taskId === "task-exit"
+                    ? Deferred.succeed(exitTaskStarted, undefined)
+                    : Effect.void,
+                ],
+                { discard: true },
+              ),
+            ),
+            Stream.filter(
+              (event) =>
+                event.type === "task.started" ||
+                event.type === "task.updated" ||
+                event.type === "task.completed",
+            ),
+            Stream.take(6),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-background-restart");
+          const sessionInput = {
+            provider: "antigravity" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          };
+          yield* adapter.startSession(sessionInput);
+          yield* adapter.sendTurn({ threadId, input: "run tests", attachments: [] });
+
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-restart\' is now running in the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Deferred.await(firstTaskStarted).pipe(Effect.timeout("2 seconds"));
+          yield* adapter.startSession(sessionInput);
+
+          yield* adapter.sendTurn({ threadId, input: "run more tests", attachments: [] });
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              `pre-invocation\t${JSON.stringify({
+                conversationId: "conversation-background-restart",
+                transcriptPath: transcriptFile,
+              })}\n`,
+            ),
+          );
+          yield* Deferred.await(conversationReady).pipe(Effect.timeout("2 seconds"));
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              transcriptFile,
+              [
+                JSON.stringify({
+                  step_index: 2,
+                  type: "SYSTEM_MESSAGE",
+                  content: "<SYSTEM_MESSAGE> Task id 'task-buffered' exited with code 0",
+                }),
+                JSON.stringify({
+                  step_index: 3,
+                  type: "PLANNER_RESPONSE",
+                  content: "buffer-ready",
+                }),
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Deferred.await(completionBuffered).pipe(Effect.timeout("2 seconds"));
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-buffered\' is now running in the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Deferred.await(bufferedTaskCompleted).pipe(Effect.timeout("2 seconds"));
+          child?.emit("close", 0, null);
+          yield* Deferred.await(secondTurnCompleted).pipe(Effect.timeout("2 seconds"));
+
+          yield* adapter.sendTurn({ threadId, input: "run final tests", attachments: [] });
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'post-tool\t{"stepIdx":3,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"Task id \'task-exit\' is now running in the background"}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          yield* Deferred.await(exitTaskStarted).pipe(Effect.timeout("2 seconds"));
+          child?.emit("close", 1, null);
+
+          const taskEvents = Array.from(
+            yield* Fiber.join(taskEventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(taskEvents.map((event) => event.type)).toEqual([
+            "task.started",
+            "task.updated",
+            "task.started",
+            "task.completed",
+            "task.started",
+            "task.completed",
+          ]);
+          expect(taskEvents[1]?.payload).toMatchObject({
+            taskId: "task-restart",
+            status: "killed",
+          });
+          expect(taskEvents[3]?.payload).toMatchObject({
+            taskId: "task-buffered",
+            status: "completed",
+          });
+          expect(taskEvents[5]?.payload).toMatchObject({
+            taskId: "task-exit",
+            status: "failed",
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree: completeProcessTeardown,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-background-restart-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),

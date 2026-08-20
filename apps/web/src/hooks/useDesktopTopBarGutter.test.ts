@@ -74,25 +74,25 @@ describe("shouldReserveDesktopTopBarWindowControlsGutter", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({
         isElectron: false,
-        isWindowsDesktop: true,
+        customTitleBarActive: true,
       }),
     ).toBe(false);
   });
 
-  it("never reserves a gutter for non-Windows desktop windows", () => {
+  it("never reserves a gutter when the live window still has a native frame", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({
         isElectron: true,
-        isWindowsDesktop: false,
+        customTitleBarActive: false,
       }),
     ).toBe(false);
   });
 
-  it("reserves a gutter for Windows Electron caption controls", () => {
+  it("reserves a gutter when the frameless custom title bar is active", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({
         isElectron: true,
-        isWindowsDesktop: true,
+        customTitleBarActive: true,
       }),
     ).toBe(true);
   });

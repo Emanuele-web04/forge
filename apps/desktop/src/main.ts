@@ -227,6 +227,12 @@ import {
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
+  readCustomTitleBarPreference,
+  resolveDesktopCustomTitleBarState,
+  resolveDesktopTitleBarFrameOptions,
+  writeCustomTitleBarPreference,
+} from "./desktopCustomTitleBar";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -279,6 +285,7 @@ const BASE_DIR =
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
+const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -333,6 +340,8 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+/** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
+let customTitleBarActive = false;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -4180,6 +4189,28 @@ function registerIpcHandlers(): void {
     return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
   });
 
+  ipcMain.removeHandler(IPC.customTitleBarGetState);
+  ipcMain.handle(IPC.customTitleBarGetState, async () => getDesktopCustomTitleBarState());
+
+  ipcMain.removeHandler(IPC.customTitleBarSetPreference);
+  ipcMain.handle(IPC.customTitleBarSetPreference, async (_event, rawEnabled: unknown) => {
+    if (typeof rawEnabled !== "boolean") {
+      return getDesktopCustomTitleBarState();
+    }
+    const state = getDesktopCustomTitleBarState();
+    if (!state.supported) {
+      return state;
+    }
+    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, rawEnabled);
+    return getDesktopCustomTitleBarState();
+  });
+
+  ipcMain.removeHandler(IPC.customTitleBarRelaunch);
+  ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
+    app.relaunch();
+    requestGracefulAppQuit("custom-title-bar-relaunch");
+  });
+
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
@@ -4294,23 +4325,34 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
-// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
-// so the toolbar can occupy the top edge instead of sitting below a native title bar.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows and
+// Linux can use a frameless shell with renderer-owned minimize/maximize/close controls
+// (see Settings → Appearance → Use custom title bar). `frame` is fixed at construction.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
-  if (process.platform === "win32") {
-    return { frame: false };
+  if (process.platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+      // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
+      // so the native lights and the renderer's leading toggle/arrow controls always share
+      // the same vertical center. Tune the height/radius there, never the raw px here.
+      trafficLightPosition: getMacTrafficLightPosition(),
+    };
   }
-  if (process.platform !== "darwin") {
-    return {};
-  }
-  return {
-    titleBarStyle: "hiddenInset",
-    // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
-    // so the native lights and the renderer's leading toggle/arrow controls always share
-    // the same vertical center. Tune the height/radius there, never the raw px here.
-    trafficLightPosition: getMacTrafficLightPosition(),
-  };
+  const preference = readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH);
+  const frameOptions = resolveDesktopTitleBarFrameOptions({
+    platform: process.platform,
+    preference,
+  });
+  customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
+  return frameOptions;
+}
+
+function getDesktopCustomTitleBarState() {
+  return resolveDesktopCustomTitleBarState({
+    platform: process.platform,
+    preference: readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH),
+    active: customTitleBarActive,
+  });
 }
 
 function createWindow(): BrowserWindow {

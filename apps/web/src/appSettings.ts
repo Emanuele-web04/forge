@@ -249,6 +249,10 @@ export const AppSettingsSchema = Schema.Struct({
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
+  // Local desktop preference: frameless custom title bar on Windows/Linux.
+  // Electron `frame` is fixed at window creation, so the desktop main process also
+  // persists this value and a relaunch is required for the live window to match.
+  useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.

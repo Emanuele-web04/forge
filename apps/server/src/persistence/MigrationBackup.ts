@@ -24,6 +24,7 @@ import {
   migrationEntries,
 } from "./Migrations.ts";
 
+/** Keep at most this many finished pre-migration SQLite backups (issue #618). */
 export const MIGRATION_BACKUP_RETENTION = 5;
 export const FAILED_MIGRATION_BUNDLE_RETENTION = 3;
 
