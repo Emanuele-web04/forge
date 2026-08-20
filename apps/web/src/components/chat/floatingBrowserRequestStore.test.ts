@@ -19,15 +19,15 @@ describe("floating browser request store", () => {
     store.request(THREAD_A);
     store.request(THREAD_B);
 
-    expect(selectFloatingBrowserRequested(THREAD_A)(useFloatingBrowserRequestStore.getState())).toBe(
-      true,
-    );
+    expect(
+      selectFloatingBrowserRequested(THREAD_A)(useFloatingBrowserRequestStore.getState()),
+    ).toBe(true);
     store.dismiss(THREAD_A);
-    expect(selectFloatingBrowserRequested(THREAD_A)(useFloatingBrowserRequestStore.getState())).toBe(
-      false,
-    );
-    expect(selectFloatingBrowserRequested(THREAD_B)(useFloatingBrowserRequestStore.getState())).toBe(
-      true,
-    );
+    expect(
+      selectFloatingBrowserRequested(THREAD_A)(useFloatingBrowserRequestStore.getState()),
+    ).toBe(false);
+    expect(
+      selectFloatingBrowserRequested(THREAD_B)(useFloatingBrowserRequestStore.getState()),
+    ).toBe(true);
   });
 });

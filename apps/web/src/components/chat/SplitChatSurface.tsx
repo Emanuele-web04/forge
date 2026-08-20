@@ -1011,9 +1011,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         showFloatingBrowser={shouldRenderFloatingBrowserPanel({
           hostThreadId: leaf.threadId,
           floatingThreadId:
-            floatingBrowserRequestedByThreadId[leaf.threadId ?? ""] === true
-              ? leaf.threadId
-              : null,
+            floatingBrowserRequestedByThreadId[leaf.threadId ?? ""] === true ? leaf.threadId : null,
           dockBrowserVisible: leaf.panel.panel === "browser",
           isFocused,
         })}

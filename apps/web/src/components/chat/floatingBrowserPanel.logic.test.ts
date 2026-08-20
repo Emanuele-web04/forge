@@ -88,12 +88,12 @@ describe("floating browser panel visibility", () => {
   });
 
   it("restores the card once a matching dock browser is no longer visible", () => {
-    expect(
-      shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true }),
-    ).toBe(false);
-    expect(
-      shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: false }),
-    ).toBe(true);
+    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true })).toBe(
+      false,
+    );
+    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: false })).toBe(
+      true,
+    );
   });
 });
 

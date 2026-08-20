@@ -1744,9 +1744,7 @@ export class DesktopBrowserManager {
     }
 
     const didChange =
-      tab.status !== LIVE_TAB_STATUS ||
-      tab.lastError !== null ||
-      tab.runtimeSurface !== "renderer";
+      tab.status !== LIVE_TAB_STATUS || tab.lastError !== null || tab.runtimeSurface !== "renderer";
     tab.status = LIVE_TAB_STATUS;
     tab.lastError = null;
     tab.runtimeSurface = "renderer";
