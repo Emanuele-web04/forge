@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   makeRunningChatsQuitGuard,
+  parseQuitConfirmationRequest,
   parseQuitConfirmationResponse,
+  quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
 
@@ -19,12 +21,46 @@ describe("running chats quit guard", () => {
     expect(shouldPromptForRunningChatsBeforeQuit("custom-title-bar-relaunch")).toBe(false);
   });
 
+  it("uses the native sheet on macOS and the in-app dialog elsewhere", () => {
+    expect(quitConfirmationPresentationForPlatform("darwin")).toBe("native");
+    expect(quitConfirmationPresentationForPlatform("win32")).toBe("in-app");
+    expect(quitConfirmationPresentationForPlatform("linux")).toBe("in-app");
+  });
+
+  it("parses quit requests and defaults unknown presentation to in-app", () => {
+    expect(parseQuitConfirmationRequest(null)).toBeNull();
+    expect(parseQuitConfirmationRequest({ requestId: "q1", presentation: "native" })).toEqual({
+      requestId: "q1",
+      presentation: "native",
+    });
+    expect(parseQuitConfirmationRequest({ requestId: "q1" })).toEqual({
+      requestId: "q1",
+      presentation: "in-app",
+    });
+  });
+
   it("rejects malformed renderer replies", () => {
     expect(parseQuitConfirmationResponse(null)).toBeNull();
     expect(parseQuitConfirmationResponse({ phase: "decision", allow: true })).toBeNull();
     expect(
       parseQuitConfirmationResponse({ requestId: "q1", phase: "ready", runningCount: "2" }),
     ).toBeNull();
+  });
+
+  it("parses ready replies with the running chat list", () => {
+    expect(
+      parseQuitConfirmationResponse({
+        requestId: "q1",
+        phase: "ready",
+        runningCount: 1,
+        chats: [{ id: "a", title: "Fix the tray" }, { id: 2 }],
+      }),
+    ).toEqual({
+      requestId: "q1",
+      phase: "ready",
+      runningCount: 1,
+      chats: [{ id: "a", title: "Fix the tray" }],
+    });
   });
 
   it("allows quit immediately when the renderer is unavailable", async () => {
@@ -48,7 +84,7 @@ describe("running chats quit guard", () => {
       isRendererAvailable: () => true,
     });
 
-    expect(send).toHaveBeenCalledWith({ requestId: "q1" });
+    expect(send).toHaveBeenCalledWith({ requestId: "q1", presentation: "in-app" });
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
     await expect(decision).resolves.toBe(true);
     expect(guard.hasAllowedQuit()).toBe(true);
@@ -117,5 +153,48 @@ describe("running chats quit guard", () => {
     await vi.advanceTimersByTimeAsync(200);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
     await expect(decision).resolves.toBe(false);
+  });
+
+  it("shows the native sheet after the renderer reports running chats", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const presentNativeConfirmation = vi.fn(async () => false);
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      presentation: "native",
+      presentNativeConfirmation,
+    });
+
+    guard.receiveResponse({
+      requestId: "q1",
+      phase: "ready",
+      runningCount: 1,
+      chats: [{ id: "a", title: "Fix the tray" }],
+    });
+
+    await expect(decision).resolves.toBe(false);
+    expect(presentNativeConfirmation).toHaveBeenCalledWith([{ id: "a", title: "Fix the tray" }]);
+    expect(guard.hasAllowedQuit()).toBe(false);
+  });
+
+  it("fails open if the native sheet presenter throws", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      presentation: "native",
+      presentNativeConfirmation: () => {
+        throw new Error("sheet failed");
+      },
+    });
+
+    guard.receiveResponse({
+      requestId: "q1",
+      phase: "ready",
+      runningCount: 1,
+      chats: [{ id: "a", title: "Fix the tray" }],
+    });
+
+    await expect(decision).resolves.toBe(true);
   });
 });

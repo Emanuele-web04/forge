@@ -1,5 +1,5 @@
 // FILE: RunningChatsQuitCoordinator.tsx
-// Purpose: Answers Electron quit requests with the in-app running-chats confirmation.
+// Purpose: Answers Electron quit requests with the running-chats confirmation.
 // Layer: Root web coordinator
 // Depends on: Desktop bridge quit IPC and the orchestration store.
 
@@ -45,12 +45,16 @@ export function RunningChatsQuitCoordinator() {
         return;
       }
 
-      pendingRequestIdRef.current = request.requestId;
       reply({
         requestId: request.requestId,
         phase: "ready",
         runningCount: running.length,
+        chats: running,
       });
+      if (request.presentation === "native") {
+        return;
+      }
+      pendingRequestIdRef.current = request.requestId;
       setChats(running);
     });
   }, []);

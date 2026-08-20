@@ -3,8 +3,6 @@
 // Layer: UI logic helper
 // Depends on: Sidebar-equivalent "working" signals (running/connecting/live tail).
 
-import { pluralize } from "@synara/shared/text";
-
 export interface RunningChatQuitCandidate {
   readonly id: string;
   readonly title: string;
@@ -87,23 +85,13 @@ export function listRunningChatsFromDesktopStore(
 
 export function runningChatsQuitCopy(
   chats: ReadonlyArray<RunningChatQuitSummary>,
+  appName = "Synara",
 ): RunningChatsQuitCopy {
-  const stayLabel = "Stay";
-  const quitLabel = "Quit";
-  if (chats.length === 1) {
-    return {
-      title: "A chat is still running",
-      description: `Synara is still working on "${chats[0]?.title ?? UNTITLED_CHAT_TITLE}". Quit anyway, or stay until it finishes?`,
-      stayLabel,
-      quitLabel,
-    };
-  }
-
   return {
-    title: "Chats are still running",
-    description: `Synara is still working on ${chats.length} ${pluralize(chats.length, "chat")}. Quit anyway, or stay until they finish?`,
-    stayLabel,
-    quitLabel,
+    title: chats.length === 1 ? "A chat is still running" : "Chats are still running",
+    description: `Work in progress will stop when ${appName} is closed.`,
+    stayLabel: "Cancel",
+    quitLabel: "Quit",
   };
 }
 

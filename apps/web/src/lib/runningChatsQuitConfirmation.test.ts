@@ -48,20 +48,22 @@ describe("running chats quit confirmation", () => {
   it("builds singular and plural English copy", () => {
     expect(runningChatsQuitCopy([{ id: "a", title: "Fix the tray" }])).toEqual({
       title: "A chat is still running",
-      description:
-        'Synara is still working on "Fix the tray". Quit anyway, or stay until it finishes?',
-      stayLabel: "Stay",
+      description: "Work in progress will stop when Synara is closed.",
+      stayLabel: "Cancel",
       quitLabel: "Quit",
     });
     expect(
-      runningChatsQuitCopy([
-        { id: "a", title: "One" },
-        { id: "b", title: "Two" },
-      ]),
+      runningChatsQuitCopy(
+        [
+          { id: "a", title: "One" },
+          { id: "b", title: "Two" },
+        ],
+        "Synara Canary",
+      ),
     ).toEqual({
       title: "Chats are still running",
-      description: "Synara is still working on 2 chats. Quit anyway, or stay until they finish?",
-      stayLabel: "Stay",
+      description: "Work in progress will stop when Synara Canary is closed.",
+      stayLabel: "Cancel",
       quitLabel: "Quit",
     });
   });
