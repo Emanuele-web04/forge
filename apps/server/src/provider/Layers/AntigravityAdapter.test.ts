@@ -1909,6 +1909,7 @@ describe("Antigravity background task helpers (#752)", () => {
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
           const toolsCompleted = yield* Deferred.make<void>();
+          const followupObserved = yield* Deferred.make<void>();
           const runtimeTaskEvents: string[] = [];
           let completedTools = 0;
           const eventsFiber = yield* adapter.streamEvents.pipe(
@@ -1917,6 +1918,12 @@ describe("Antigravity background task helpers (#752)", () => {
                 if (event.type.startsWith("task.")) runtimeTaskEvents.push(event.type);
                 if (event.type === "item.completed" && ++completedTools === 2) {
                   yield* Deferred.succeed(toolsCompleted, undefined);
+                }
+                if (
+                  event.type === "item.completed" &&
+                  event.payload.itemType === "assistant_message"
+                ) {
+                  yield* Deferred.succeed(followupObserved, undefined);
                 }
               }),
             ),
@@ -1962,11 +1969,18 @@ describe("Antigravity background task helpers (#752)", () => {
                   type: "SYSTEM_MESSAGE",
                   content: "<SYSTEM_MESSAGE> Task id 'task-real-b' exited with code 0",
                 }),
+                JSON.stringify({
+                  step_index: 6,
+                  type: "PLANNER_RESPONSE",
+                  content: "background work completed",
+                }),
                 "",
               ].join("\n"),
             );
-            fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":6}\n');
           });
+          yield* Deferred.await(followupObserved).pipe(Effect.timeout("2 seconds"));
+          expect(teardownCalls).toBe(0);
+          yield* Effect.sync(() => fsSync.appendFileSync(eventFile!, "stop\t{}\n"));
           yield* Effect.promise(() => teardownObserved).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(1);
           expect(runtimeTaskEvents).toEqual([]);
@@ -1988,6 +2002,134 @@ describe("Antigravity background task helpers (#752)", () => {
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-background-stop-" }),
               ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("performs a fresh final hook drain when the process closes during a poll", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-final-drain-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    let blockNextTranscriptRead = false;
+    let transcriptReadBlocked = false;
+    let resolveTranscriptReadStarted = (): void => undefined;
+    const transcriptReadStarted = new Promise<void>((resolve) => {
+      resolveTranscriptReadStarted = resolve;
+    });
+    let releaseTranscriptRead = (): void => undefined;
+    const transcriptReadRelease = new Promise<void>((resolve) => {
+      releaseTranscriptRead = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const readCompleteLines: NonNullable<
+      AntigravityAdapterDependencies["readCompleteLines"]
+    > = async (filePath, offset) => {
+      if (filePath === transcriptFile && blockNextTranscriptRead && !transcriptReadBlocked) {
+        transcriptReadBlocked = true;
+        resolveTranscriptReadStarted();
+        await transcriptReadRelease;
+      }
+      return readCompleteAntigravityLines(filePath, offset);
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const turnCompleted = yield* Deferred.make<void>();
+          const itemsObserved = yield* Deferred.make<void>();
+          const itemEventTypes: string[] = [];
+          const itemEventTitles: string[] = [];
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type === "item.started" || event.type === "item.completed") {
+                  itemEventTypes.push(event.type);
+                  itemEventTitles.push(event.payload.title);
+                  if (itemEventTypes.length === 2) {
+                    yield* Deferred.succeed(itemsObserved, undefined);
+                  }
+                }
+                if (event.type === "turn.completed") {
+                  yield* Deferred.succeed(turnCompleted, undefined);
+                }
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-final-drain");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "list files", attachments: [] });
+          blockNextTranscriptRead = true;
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              `pre-invocation\t${JSON.stringify({
+                conversationId: "conversation-final-drain",
+                transcriptPath: transcriptFile,
+              })}\n`,
+            ),
+          );
+          yield* Effect.promise(() => transcriptReadStarted).pipe(Effect.timeout("2 seconds"));
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"list_files","args":{"Path":"."}}}',
+                'post-tool\t{"stepIdx":1,"toolCall":{"name":"list_files","args":{"Path":"."}},"toolOutput":"ok"}',
+                'stop\t{"stepIdx":2}',
+                "",
+              ].join("\n"),
+            ),
+          );
+          child?.emit("close", 0, null);
+          releaseTranscriptRead();
+
+          yield* Deferred.await(itemsObserved).pipe(Effect.timeout("2 seconds"));
+          yield* Deferred.await(turnCompleted).pipe(Effect.timeout("2 seconds"));
+          expect(itemEventTypes).toEqual(["item.started", "item.completed"]);
+          expect(itemEventTitles).toEqual(["list_files", "list_files"]);
+          yield* Fiber.interrupt(eventsFiber);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              readCompleteLines,
+              spawnProcess,
+              teardownProcessTree: async () => undefined,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "final-drain-" })),
               Layer.provideMerge(NodeServices.layer),
             ),
           ),

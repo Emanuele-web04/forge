@@ -893,6 +893,7 @@ type AntigravityChildProcess = ChildProcess & {
 
 export interface AntigravityAdapterDependencies {
   readonly ensurePlugin?: typeof ensureCapturePlugin;
+  readonly readCompleteLines?: typeof readCompleteAntigravityLines;
   readonly teardownProcessTree?: typeof teardownChildProcessTree;
   readonly spawnProcess?: (
     command: string,
@@ -904,6 +905,7 @@ export interface AntigravityAdapterDependencies {
 const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {}) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
+    const readCompleteLines = dependencies.readCompleteLines ?? readCompleteAntigravityLines;
     const teardownProcessTree = dependencies.teardownProcessTree ?? teardownChildProcessTree;
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
@@ -1459,10 +1461,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (isInitialRead) context.processedTranscriptBytes = 0;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
-        batch = await readCompleteAntigravityLines(
-          context.transcriptPath,
-          context.processedTranscriptBytes,
-        );
+        batch = await readCompleteLines(context.transcriptPath, context.processedTranscriptBytes);
       } catch {
         return;
       }
@@ -1495,7 +1494,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
       if (!context.transcriptPath) return;
       try {
-        const batch = await readCompleteAntigravityLines(context.transcriptPath, 0);
+        const batch = await readCompleteLines(context.transcriptPath, 0);
         context.processedTranscriptBytes = batch.nextOffset;
         context.processedTranscriptPath = context.transcriptPath;
       } catch {
@@ -1671,11 +1670,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
+      const completionStepIndexBeforePoll = context.latestBackgroundCompletionStepIndex;
       let latestStopStepIndex: number | undefined;
       let sawStopWithoutStepIndex = false;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
-        batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
+        batch = await readCompleteLines(context.eventFile, context.processedHookBytes);
       } catch {
         return;
       }
@@ -1884,10 +1884,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       await readTranscript(context);
       const completionStepIndex = context.latestBackgroundCompletionStepIndex;
+      const indexedStopFollowsLatestCompletion =
+        latestStopStepIndex !== undefined && latestStopStepIndex > (completionStepIndex ?? -1);
+      const unindexedStopFollowsLatestCompletion =
+        sawStopWithoutStepIndex &&
+        (completionStepIndex === undefined || completionStepIndexBeforePoll !== undefined);
       const stopFollowsLatestCompletion =
-        latestStopStepIndex !== undefined
-          ? latestStopStepIndex > (completionStepIndex ?? -1)
-          : sawStopWithoutStepIndex && completionStepIndex === undefined;
+        indexedStopFollowsLatestCompletion || unindexedStopFollowsLatestCompletion;
       if (stopFollowsLatestCompletion) teardownStoppedTurnIfIdle(context);
     };
 
@@ -2211,6 +2214,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             // can begin, so an unconsumed bootstrap from this turn cannot cross
             // into the next turn's authority.
             releaseTurnGatewayLease(context, gatewaySessionLease);
+            const pollInFlightAtClose = context.hookPollPromise;
+            if (pollInFlightAtClose) {
+              await pollInFlightAtClose.catch(() => undefined);
+              if (!ownsTurn()) {
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+            }
             await pollHookFile(context).catch(() => undefined);
             if (!ownsTurn()) {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
