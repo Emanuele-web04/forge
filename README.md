@@ -30,12 +30,6 @@ To let a local MCP-capable app create and follow scoped Forkara tasks, see
 
 ## Providers
 
-Synara connects to the coding-agent runtimes installed and authenticated on your machine. The
-provider still owns its account, models, tools, permissions, and service; Synara owns the durable
-task, working environment, transcript, and review surfaces around that session.
-
-## Providers
-
 Forkara connects to the coding-agent runtimes installed and authenticated on your machine. The
 provider still owns its account, models, tools, permissions, and service; Forkara owns the durable
 task, working environment, transcript, and review surfaces around that session.
@@ -75,8 +69,8 @@ A few focused guides are also kept in this repository:
 
 - [Quickstart](docs/quickstart.md) — from installation to your first reviewed change in about five minutes.
 - [Core concepts](docs/core-concepts.md) — projects, tasks, environments, provider sessions, and Git ownership.
-- [Providers](docs/providers.md) — what Synara manages and what stays provider-owned.
-- [External MCP integrations](docs/external-mcp.md) — pair another local app with a scoped Synara task surface.
+- [Providers](docs/providers.md) — what Forkara manages and what stays provider-owned.
+- [External MCP integrations](docs/external-mcp.md) — pair another local app with a scoped Forkara task surface.
 
 ## Privacy
 
