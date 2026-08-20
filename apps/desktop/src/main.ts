@@ -115,7 +115,6 @@ import {
   quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
-import { showNativeRunningChatsQuitDialog } from "./runningChatsQuitNativeDialog";
 import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
@@ -3937,7 +3936,7 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   }
 
   const window = mainWindow;
-  const presentation = quitConfirmationPresentationForPlatform(process.platform);
+  const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
     send: (request) => {
       if (!isMainRendererAvailable() || !window) {
@@ -3952,18 +3951,6 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
     },
     isRendererAvailable: isMainRendererAvailable,
     presentation,
-    presentNativeConfirmation:
-      presentation === "native"
-        ? (chats) => {
-            const ownerWindow =
-              mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-            return showNativeRunningChatsQuitDialog({
-              ownerWindow,
-              appName: APP_DISPLAY_NAME,
-              chats,
-            });
-          }
-        : undefined,
   });
   if (!allowed) {
     writeDesktopLogHeader(`${reason} stayed because chats are still running`);

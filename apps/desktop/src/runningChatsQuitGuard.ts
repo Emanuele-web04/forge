@@ -16,10 +16,8 @@ export function shouldPromptForRunningChatsBeforeQuit(reason: string): boolean {
   return reason === "window-close" || reason === "before-quit";
 }
 
-export function quitConfirmationPresentationForPlatform(
-  platform: NodeJS.Platform,
-): DesktopQuitConfirmationPresentation {
-  return platform === "darwin" ? "native" : "in-app";
+export function quitConfirmationPresentationForPlatform(): DesktopQuitConfirmationPresentation {
+  return "in-app";
 }
 
 export function parseQuitConfirmationRequest(

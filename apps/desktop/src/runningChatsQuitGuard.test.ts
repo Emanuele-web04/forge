@@ -21,10 +21,8 @@ describe("running chats quit guard", () => {
     expect(shouldPromptForRunningChatsBeforeQuit("custom-title-bar-relaunch")).toBe(false);
   });
 
-  it("uses the native sheet on macOS and the in-app dialog elsewhere", () => {
-    expect(quitConfirmationPresentationForPlatform("darwin")).toBe("native");
-    expect(quitConfirmationPresentationForPlatform("win32")).toBe("in-app");
-    expect(quitConfirmationPresentationForPlatform("linux")).toBe("in-app");
+  it("uses the in-app dialog on every desktop platform", () => {
+    expect(quitConfirmationPresentationForPlatform()).toBe("in-app");
   });
 
   it("parses quit requests and defaults unknown presentation to in-app", () => {

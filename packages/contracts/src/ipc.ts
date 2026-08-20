@@ -525,7 +525,6 @@ export interface DesktopQuitConfirmationChat {
 /**
  * Renderer → main: first ack that the UI received the request, then the user's
  * Stay / Quit decision. `ready` with `runningCount === 0` is treated as allow.
- * On macOS, `ready` with running chats is enough for the native sheet.
  */
 export type DesktopQuitConfirmationResponse =
   | {

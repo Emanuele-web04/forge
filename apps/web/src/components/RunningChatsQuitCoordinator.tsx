@@ -51,9 +51,6 @@ export function RunningChatsQuitCoordinator() {
         runningCount: running.length,
         chats: running,
       });
-      if (request.presentation === "native") {
-        return;
-      }
       pendingRequestIdRef.current = request.requestId;
       setChats(running);
     });
