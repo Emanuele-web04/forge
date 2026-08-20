@@ -132,17 +132,11 @@ bun install
 bun run dev
 ```
 
-### Which providers can I use?
-
 ## Contributing
 
 Bug fixes, reliability improvements, performance work, documentation, and maintenance changes are welcome.
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a reproducible problem, [open an issue](https://github.com/Emanuele-web04/synara/issues/new/choose) with the Synara version, operating system, runtime, and relevant logs.
-
-## Project background
-
-Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop behavior, and product direction.
 
 ## License
 
