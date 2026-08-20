@@ -10,6 +10,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -296,6 +297,9 @@ export function SingleChatSurface(props: {
   const dismissFloatingBrowser = useCallback(() => {
     setFloatingBrowserThreadId(null);
   }, []);
+  useLayoutEffect(() => {
+    setFloatingBrowserThreadId(null);
+  }, [props.threadId]);
 
   const activePane = resolveActivePane(dockState);
   const floatingBrowserVisible = shouldRenderFloatingBrowserPanel({

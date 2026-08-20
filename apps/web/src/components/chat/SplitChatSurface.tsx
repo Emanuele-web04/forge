@@ -7,6 +7,7 @@ import {
   startTransition,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -628,6 +629,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const dismissFloatingBrowser = () => {
     setFloatingBrowserTarget(null);
   };
+  useLayoutEffect(() => {
+    setFloatingBrowserTarget(null);
+  }, [props.routeThreadId]);
   const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,

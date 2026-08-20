@@ -194,6 +194,84 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
+  it("adopts a renderer guest even when attach races ahead of bounds promotion", () => {
+    const nativeWebContents = new FakeWebContents(211);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 800, height: 600 },
+    });
+
+    const guest = Object.assign(new FakeWebContents(212), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    const attached = manager.attachWebview(
+      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 212 },
+      41,
+    );
+    expect(attached.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe(
+      "renderer",
+    );
+    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(
+      manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })
+        .webContents,
+    ).toBe(guest);
+    manager.dispose();
+  });
+
+  it("creates a native background runtime after the renderer guest detaches", async () => {
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(213), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 213 }, 41);
+    manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
+    manager.detachWebview({ threadId: THREAD_ID, tabId, webContentsId: 213 });
+
+    const backgroundWebContents = new FakeWebContents(214);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: backgroundWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+    });
+    const runtime = await manager.getAutomationRuntime(
+      { threadId: THREAD_ID, tabId },
+      { restore: false },
+    );
+    expect(runtime.webContents).toBe(backgroundWebContents);
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("native");
+    manager.dispose();
+  });
+
   it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {

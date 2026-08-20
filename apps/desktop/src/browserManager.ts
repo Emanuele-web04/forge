@@ -1598,20 +1598,7 @@ export class DesktopBrowserManager {
       // Park the native view so the floating <webview> can paint, but keep the
       // WebContents until attachWebview adopts the guest. Destroying here drops
       // CDP and makes every in-flight agent tool miss the host.
-      if (activeRuntime.view) {
-        this.setRuntimeViewHidden(activeRuntime, true);
-      }
-      if (this.attachedRuntimeKey === activeRuntimeKey) {
-        this.attachedRuntimeKey = null;
-        this.attachedBoundsSignature = null;
-      }
-      const activeTab = this.getTab(state, activeTabId);
-      if (activeTab && activeTab.runtimeSurface !== "renderer") {
-        activeTab.runtimeSurface = "renderer";
-        this.markThreadStateChanged(input.threadId);
-        this.emitState(input.threadId);
-      }
-      this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
+      this.promoteTabToRendererSurface(input.threadId, activeTabId);
       this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
       return;
     }
@@ -1681,12 +1668,6 @@ export class DesktopBrowserManager {
     if (state.activeTabId !== tab.id) {
       throw new Error("A visible browser webview can only attach to the active tab.");
     }
-    if (tab.runtimeSurface === "native") {
-      // A late renderer attach can race the state update that promotes a tab to
-      // background automation. Keep the native runtime canonical; the panel
-      // will remove this unused guest when it observes the new surface.
-      return this.snapshotThreadState(input.threadId, state);
-    }
     const webContents = electronWebContents.fromId(input.webContentsId);
     if (!webContents || webContents.isDestroyed()) {
       throw new Error("The visible browser webview is not available.");
@@ -1699,6 +1680,12 @@ export class DesktopBrowserManager {
     ) {
       throw new Error("The browser webview does not belong to this Synara window and partition.");
     }
+
+    // Promote before adopting. The floating panel's attach effect can run before
+    // setPanelBounds flips runtimeSurface; returning the still-native snapshot
+    // would let the UI treat the unused guest as attached while tools keep the
+    // hidden native page.
+    this.promoteTabToRendererSurface(input.threadId, tab.id);
 
     const key = buildRuntimeKey(input.threadId, tab.id);
     const existingRendererRuntime = this.findRendererRuntimeByWebContentsId(webContents.id);
@@ -1756,9 +1743,13 @@ export class DesktopBrowserManager {
       return this.snapshotThreadState(input.threadId, state);
     }
 
-    const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
+    const didChange =
+      tab.status !== LIVE_TAB_STATUS ||
+      tab.lastError !== null ||
+      tab.runtimeSurface !== "renderer";
     tab.status = LIVE_TAB_STATUS;
     tab.lastError = null;
+    tab.runtimeSurface = "renderer";
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(input.threadId);
@@ -1785,6 +1776,7 @@ export class DesktopBrowserManager {
     }
 
     this.destroyRuntime(input.threadId, input.tabId);
+    this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     const didChange = suspendTabState(tab) || syncThreadLastError(state);
     if (didChange) {
       this.markThreadStateChanged(input.threadId);
@@ -2054,6 +2046,29 @@ export class DesktopBrowserManager {
     this.resumeThread(threadId);
     this.attachActiveTab(threadId, bounds, { pageZoomFactor });
     this.updatePopupWindowsForThread(threadId);
+  }
+
+  // Marks a tab renderer-owned and parks any native view so a <webview> can
+  // attach without two pages racing. Does not destroy WebContents: in-flight
+  // agent tools keep CDP until attachWebview adopts the guest.
+  private promoteTabToRendererSurface(threadId: ThreadId, tabId: string): void {
+    const key = buildRuntimeKey(threadId, tabId);
+    const runtime = this.runtimes.get(key);
+    if (runtime?.ownsWebContents && runtime.view) {
+      this.setRuntimeViewHidden(runtime, true);
+    }
+    if (this.attachedRuntimeKey === key) {
+      this.attachedRuntimeKey = null;
+      this.attachedBoundsSignature = null;
+    }
+    this.rendererOnlyRuntimeKeys.add(key);
+    const state = this.states.get(threadId);
+    const tab = state ? this.getTab(state, tabId) : null;
+    if (tab && tab.runtimeSurface !== "renderer") {
+      tab.runtimeSurface = "renderer";
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
   }
 
   // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
@@ -2596,13 +2611,19 @@ export class DesktopBrowserManager {
     const rendererGuestAlive = Boolean(
       runtime && !runtime.ownsWebContents && !runtime.webContents.isDestroyed(),
     );
-    if (rendererGuestAlive || this.rendererOnlyRuntimeKeys.has(key)) {
+    if (rendererGuestAlive) {
       // The floating/renderer guest is the page the user can see. Promoting to a
       // native WebContentsView would destroy that CDP session mid-turn.
       if (tab.runtimeSurface !== "renderer") {
         tab.runtimeSurface = "renderer";
         return true;
       }
+      return false;
+    }
+    if (runtime?.ownsWebContents && !runtime.webContents.isDestroyed()) {
+      // A parked native page remains canonical until attachWebview adopts the
+      // visible guest. Keep the pending-renderer flag so attachActiveTab does
+      // not paint that view over the mounting <webview>.
       return false;
     }
 

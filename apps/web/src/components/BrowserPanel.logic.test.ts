@@ -18,6 +18,7 @@ import {
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
   applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -584,5 +585,13 @@ describe("floating browser webview presentation", () => {
     expect(stage.style.width).toBe("100%");
     expect(stage.style.height).toBe("100%");
     expect(stage.style.transform).toBe("");
+  });
+});
+
+describe("isBrowserPanelBoundsHiddenKey", () => {
+  it("detects hidden keys after the zoom suffix was added", () => {
+    expect(isBrowserPanelBoundsHiddenKey("renderer:hidden:zoom-1")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("native:hidden")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("renderer:12:40:800:600:zoom-1")).toBe(false);
   });
 });

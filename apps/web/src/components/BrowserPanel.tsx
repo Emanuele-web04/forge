@@ -74,6 +74,7 @@ import {
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
   applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -1213,7 +1214,9 @@ export function BrowserPanel({
         perfCountersRef.current.burstFrames += 1;
         const previousMeasuredKey = lastMeasuredBoundsKeyRef.current;
         syncBounds();
-        const measuredHidden = lastMeasuredBoundsKeyRef.current?.endsWith(":hidden") ?? false;
+        const measuredHidden = lastMeasuredBoundsKeyRef.current
+          ? isBrowserPanelBoundsHiddenKey(lastMeasuredBoundsKeyRef.current)
+          : false;
         if (!measuredHidden && lastMeasuredBoundsKeyRef.current === previousMeasuredKey) {
           burstStableFramesRef.current += 1;
         } else {

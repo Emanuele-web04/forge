@@ -626,6 +626,12 @@ export function resolveBrowserAddressSync(
   };
 }
 
+// Bounds keys used to include a bare ":hidden" suffix. Hidden keys now carry a
+// zoom token (`renderer:hidden:zoom-1`), so callers must not use endsWith(":hidden").
+export function isBrowserPanelBoundsHiddenKey(key: string): boolean {
+  return key.includes(":hidden");
+}
+
 export function applyBrowserWebviewPresentation(
   stage: HTMLElement,
   input: { floating: boolean; slotWidth: number; slotHeight: number },
