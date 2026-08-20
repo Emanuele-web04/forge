@@ -43,18 +43,6 @@ export const FLOATING_BROWSER_PANEL_MAX_SIZE: FloatingBrowserPanelSize = {
   height: 475,
 };
 
-interface FloatingBrowserPanelConstraints {
-  minWidth: number;
-  maxWidth: number;
-  minHeight: number;
-  maxHeight: number;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
-}
-
 function heightForGuestWidth(width: number): number {
   return Math.max(
     1,
@@ -67,6 +55,18 @@ function widthForGuestHeight(height: number): number {
     1,
     Math.round((height * BROWSER_AUTOMATION_VIEWPORT_WIDTH) / BROWSER_AUTOMATION_VIEWPORT_HEIGHT),
   );
+}
+
+interface FloatingBrowserPanelConstraints {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 function hugGuestAspectSize(

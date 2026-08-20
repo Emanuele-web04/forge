@@ -36,7 +36,7 @@ import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
   resolveCopyableBrowserTabUrl,
-  resolveFloatingBrowserGuestLayout,
+  resolveBrowserFloatingZoomFactor,
 } from "@synara/shared/browserSession";
 import {
   BROWSER_COPY_LINK_TOAST_TITLE,
@@ -68,13 +68,18 @@ import {
   createBrowserPanelHideScheduler,
   createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
-  hasObscuringHitStackElementAboveSurface,
-  normalizeBrowserAddressInput,
-  resolveBrowserChromeStatus,
-  resolveBrowserAddressSync,
-  shouldOccludeBrowserWebview,
+  applyBrowserRendererGuestSlotStyle,
+  applyBrowserWebviewPageZoom,
   applyBrowserWebviewPresentation,
+  getBrowserRendererGuestSlot,
+  hasObscuringHitStackElementAboveSurface,
   isBrowserPanelBoundsHiddenKey,
+  normalizeBrowserAddressInput,
+  readFloatingBrowserPanelBorderRadius,
+  resolveBrowserAddressSync,
+  resolveBrowserChromeStatus,
+  shouldAssignBrowserWebviewSrc,
+  shouldOccludeBrowserWebview,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -204,6 +209,7 @@ interface BrowserViewportPerfCounters {
 
 interface BrowserWebviewElement extends HTMLElement {
   getWebContentsId?: () => number;
+  setZoomFactor?: (factor: number) => void;
 }
 
 const VIEWPORT_TRANSITION_PROPERTIES = new Set([
@@ -254,6 +260,43 @@ function ignoreBrowserBoundsSyncError(): void {
 
 function ignoreBrowserWebviewDetachError(): void {
   // Renderer webview detach is best-effort cleanup; a stale/destroyed guest is already gone.
+}
+
+function layoutBrowserRendererGuestSlot(
+  slot: HTMLElement,
+  host: HTMLElement | null,
+  floating: boolean,
+): void {
+  const borderRadius =
+    floating && host ? readFloatingBrowserPanelBorderRadius(host) : "0px";
+  if (!host) {
+    applyBrowserRendererGuestSlotStyle(slot, null, { borderRadius });
+    slot.style.border = "";
+    slot.style.boxShadow = "";
+    return;
+  }
+  const rect = host.getBoundingClientRect();
+  applyBrowserRendererGuestSlotStyle(
+    slot,
+    {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+    { borderRadius },
+  );
+  if (floating) {
+    const panel = host.closest("[data-floating-browser-panel]");
+    if (panel instanceof HTMLElement) {
+      const styles = window.getComputedStyle(panel);
+      slot.style.border = styles.border;
+      slot.style.boxShadow = styles.boxShadow;
+    }
+  } else {
+    slot.style.border = "";
+    slot.style.boxShadow = "";
+  }
 }
 
 function setBrowserWebviewOverlayOcclusion(
@@ -716,24 +759,15 @@ export function BrowserPanel({
     }
   }, []);
 
-  // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
-  // removing the DOM node so main never keeps a stale webContents runtime.
-  const detachRendererBrowserWebview = useCallback(
-    (expectedWebview?: BrowserWebviewElement) => {
-      const webview = browserWebviewRef.current;
-      if (
-        !webview ||
-        (expectedWebview !== undefined && webview !== expectedWebview) ||
-        detachedBrowserWebviewsRef.current.has(webview)
-      ) {
+  const destroyRendererBrowserWebview = useCallback(
+    (webview: BrowserWebviewElement, tabId: string | null, webContentsIdHint: number | null) => {
+      if (detachedBrowserWebviewsRef.current.has(webview)) {
         return;
       }
       detachedBrowserWebviewsRef.current.add(webview);
 
-      const tabId = browserWebviewTabIdRef.current;
-
-      if (api && isLiveRuntime && tabId) {
-        let webContentsId = browserWebviewWebContentsIdRef.current ?? undefined;
+      if (api && tabId) {
+        let webContentsId = webContentsIdHint ?? undefined;
         try {
           webContentsId ??= webview.getWebContentsId?.();
         } catch {
@@ -755,7 +789,29 @@ export function BrowserPanel({
         webview.remove();
       } catch {
         ignoreBrowserWebviewDetachError();
-      } finally {
+      }
+    },
+    [api, threadId],
+  );
+
+  // Renderer-owned <webview>s are adopted by the desktop manager. Destroy the guest
+  // when the page is gone for good; otherwise park it so a dock/floating successor
+  // can reparent the same WebContents instead of reloading the URL.
+  const detachRendererBrowserWebview = useCallback(
+    (expectedWebview?: BrowserWebviewElement, destroyGuest = false) => {
+      const webview = browserWebviewRef.current;
+      if (
+        !webview ||
+        (expectedWebview !== undefined && webview !== expectedWebview) ||
+        detachedBrowserWebviewsRef.current.has(webview)
+      ) {
+        return;
+      }
+
+      const tabId = browserWebviewTabIdRef.current;
+      const webContentsId = browserWebviewWebContentsIdRef.current;
+      const stage = browserWebviewStageRef.current;
+      const releaseRefs = () => {
         if (browserWebviewRef.current === webview) {
           browserWebviewRef.current = null;
           browserWebviewTabIdRef.current = null;
@@ -763,14 +819,59 @@ export function BrowserPanel({
           browserWebviewAttachKeyRef.current = null;
           browserWebviewAttachInFlightKeyRef.current = null;
         }
-        const stage = browserWebviewStageRef.current;
-        if (stage && stage.childElementCount === 0) {
-          stage.remove();
+        if (stage && browserWebviewStageRef.current === stage) {
           browserWebviewStageRef.current = null;
         }
+      };
+
+      if (!destroyGuest && tabId) {
+        const slot = getBrowserRendererGuestSlot(threadId);
+        let parkStage = stage;
+        if (!parkStage) {
+          parkStage = document.createElement("div");
+          parkStage.dataset.floatingBrowserStage = "true";
+        }
+        if (parkStage.parentElement !== slot) {
+          slot.append(parkStage);
+        }
+        if (webview.parentElement !== parkStage) {
+          parkStage.append(webview);
+        }
+        layoutBrowserRendererGuestSlot(slot, null, isFloatingMode);
+        browserPanelRendererHandoff.parkGuest(threadId, {
+          tabId,
+          webContentsId,
+          stage: parkStage,
+          webview,
+          dispose: () => {
+            const liveSlot = getBrowserRendererGuestSlot(threadId);
+            if (webview.isConnected && liveSlot.contains(webview) && liveSlot.style.pointerEvents === "auto") {
+              return;
+            }
+            destroyRendererBrowserWebview(webview, tabId, webContentsId);
+            if (parkStage.childElementCount === 0) {
+              parkStage.remove();
+            }
+            if (liveSlot.childElementCount === 0) {
+              liveSlot.remove();
+            }
+          },
+        });
+        releaseRefs();
+        return;
       }
+
+      destroyRendererBrowserWebview(webview, tabId, webContentsId);
+      if (stage && stage.childElementCount === 0) {
+        stage.remove();
+      }
+      const slot = getBrowserRendererGuestSlot(threadId);
+      if (slot.childElementCount === 0) {
+        slot.remove();
+      }
+      releaseRefs();
     },
-    [api, isLiveRuntime, threadId],
+    [destroyRendererBrowserWebview, isFloatingMode, threadId],
   );
 
   useEffect(() => {
@@ -851,12 +952,12 @@ export function BrowserPanel({
   }, [activeTab]);
 
   useLayoutEffect(() => {
-    if (!api || !isLiveRuntime || !workspaceReady || !activeTabId) {
+    if (!api || !isLiveRuntime || !activeTabId) {
       return;
     }
 
     if (showLocalServersHome || usesNativeRuntime) {
-      detachRendererBrowserWebview();
+      detachRendererBrowserWebview(undefined, true);
       return;
     }
 
@@ -865,18 +966,43 @@ export function BrowserPanel({
       return;
     }
 
-    let stage = browserWebviewStageRef.current;
+    const slot = getBrowserRendererGuestSlot(threadId);
+    browserPanelRendererHandoff.takeParkedGuest(threadId);
+    const existingStage = slot.querySelector<HTMLDivElement>("[data-floating-browser-stage='true']");
+    const existingWebview = (existingStage?.querySelector("webview") ??
+      slot.querySelector("webview")) as BrowserWebviewElement | null;
+
+    let stage = existingStage ?? browserWebviewStageRef.current;
     if (!stage) {
       stage = document.createElement("div");
       stage.dataset.floatingBrowserStage = "true";
-      browserWebviewStageRef.current = stage;
     }
-    if (stage.parentElement !== host) {
-      host.append(stage);
+    if (stage.parentElement !== slot) {
+      slot.append(stage);
+    }
+    browserWebviewStageRef.current = stage;
+    if (existingWebview) {
+      browserWebviewRef.current = existingWebview;
+      browserWebviewTabIdRef.current =
+        existingWebview.dataset.tabId ?? browserWebviewTabIdRef.current;
+      try {
+        browserWebviewWebContentsIdRef.current = existingWebview.getWebContentsId?.() ?? null;
+      } catch {
+        browserWebviewWebContentsIdRef.current = browserWebviewWebContentsIdRef.current;
+      }
+      browserWebviewAttachKeyRef.current = null;
+      browserWebviewAttachInFlightKeyRef.current = null;
+    }
+
+    if (!isFloatingMode) {
+      layoutBrowserRendererGuestSlot(slot, host, false);
     }
 
     let webview = browserWebviewRef.current;
     if (!webview) {
+      if (!workspaceReady) {
+        return;
+      }
       webview = document.createElement("webview") as BrowserWebviewElement;
       webview.className = "h-full w-full";
       webview.style.display = "flex";
@@ -899,21 +1025,37 @@ export function BrowserPanel({
       browserWebviewWebContentsIdRef.current = null;
       browserWebviewRef.current = webview;
     }
-    if (webview.parentElement !== stage) {
+    if (webview.parentElement !== stage && stage !== webview) {
       stage.append(webview);
     }
     applyBrowserWebviewPresentation(stage, {
       floating: isFloatingMode,
       slotWidth: host.clientWidth,
       slotHeight: host.clientHeight,
+      ...(isFloatingMode
+        ? { borderRadius: readFloatingBrowserPanelBorderRadius(host) }
+        : {}),
     });
+    if (!isFloatingMode) {
+      layoutBrowserRendererGuestSlot(slot, host, false);
+    }
 
     const initialUrl = activeTabInitialUrlRef.current;
-    const shouldLoadInitialUrl = browserWebviewTabIdRef.current !== activeTabId;
+    const guestTabId = webview.dataset.tabId ?? null;
+    const shouldLoadInitialUrl = shouldAssignBrowserWebviewSrc({
+      activeTabId,
+      boundTabId: browserWebviewTabIdRef.current,
+      guestTabId,
+    });
     if (shouldLoadInitialUrl) {
       browserWebviewTabIdRef.current = activeTabId;
       browserWebviewAttachKeyRef.current = null;
       webview.dataset.tabId = activeTabId;
+    } else {
+      browserWebviewTabIdRef.current = activeTabId;
+      if (!webview.dataset.tabId) {
+        webview.dataset.tabId = activeTabId;
+      }
     }
 
     let cancelled = false;
@@ -1025,20 +1167,34 @@ export function BrowserPanel({
       tabId: activeTabId,
       isCurrent: (candidate) =>
         browserWebviewRef.current === candidate && browserWebviewTabIdRef.current === activeTabId,
-      detach: detachRendererBrowserWebview,
+      detach: (renderer) => detachRendererBrowserWebview(renderer, true),
       recover: ({ generation }) => {
         setBrowserRendererGeneration((current) => Math.max(current + 1, generation));
       },
     });
+
+    const applyGuestPageZoom = () => {
+      const host = browserViewportRef.current;
+      const width = host?.getBoundingClientRect().width ?? 0;
+      applyBrowserWebviewPageZoom(
+        webview,
+        isFloatingMode ? resolveBrowserFloatingZoomFactor(width) : 1,
+      );
+    };
 
     // Subscribe before assigning src: a cached/blank page may begin loading
     // synchronously, before getWebContentsId() becomes available. The bounded
     // backoff below makes that renderer-to-main handshake reliable even while
     // Electron throttles requestAnimationFrame in the background.
     webview.addEventListener("dom-ready", attachVisibleWebview);
+    webview.addEventListener("dom-ready", applyGuestPageZoom);
     webview.addEventListener("did-start-loading", attachVisibleWebview);
+    webview.addEventListener("did-finish-load", applyGuestPageZoom);
+    webview.addEventListener("did-navigate", applyGuestPageZoom);
+    webview.addEventListener("did-navigate-in-page", applyGuestPageZoom);
     webview.addEventListener("render-process-gone", handleRendererLoss);
     webview.addEventListener("destroyed", handleRendererLoss);
+    applyGuestPageZoom();
     if (shouldLoadInitialUrl) {
       webview.setAttribute(
         "src",
@@ -1053,7 +1209,11 @@ export function BrowserPanel({
         window.clearTimeout(attachRetryTimer);
       }
       webview.removeEventListener("dom-ready", attachVisibleWebview);
+      webview.removeEventListener("dom-ready", applyGuestPageZoom);
       webview.removeEventListener("did-start-loading", attachVisibleWebview);
+      webview.removeEventListener("did-finish-load", applyGuestPageZoom);
+      webview.removeEventListener("did-navigate", applyGuestPageZoom);
+      webview.removeEventListener("did-navigate-in-page", applyGuestPageZoom);
       webview.removeEventListener("render-process-gone", handleRendererLoss);
       webview.removeEventListener("destroyed", handleRendererLoss);
     };
@@ -1131,11 +1291,17 @@ export function BrowserPanel({
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const webview = browserWebviewRef.current;
       const stage = browserWebviewStageRef.current;
+      if (!isFloatingMode) {
+        layoutBrowserRendererGuestSlot(getBrowserRendererGuestSlot(threadId), element, false);
+      }
       if (stage) {
         applyBrowserWebviewPresentation(stage, {
           floating: isFloatingMode,
           slotWidth: element.clientWidth,
           slotHeight: element.clientHeight,
+          ...(isFloatingMode
+            ? { borderRadius: readFloatingBrowserPanelBorderRadius(element) }
+            : {}),
         });
       } else if (webview) {
         applyBrowserWebviewPresentation(webview, {
@@ -1155,33 +1321,18 @@ export function BrowserPanel({
             // pixels measured above while the shell sits at 100% zoom. Convert, or a
             // zoomed shell leaves the browser surface sized 1/zoom off its DOM slot.
             const zoom = readDesktopZoomFactor();
-            if (isFloatingMode) {
-              // Keep the guest viewport frozen at 1280×800. Slot resize is CSS scale
-              // only, so main/CDP do not see a new page size on every drag frame.
-              const layout = resolveFloatingBrowserGuestLayout({
-                width: rect.width,
-                height: rect.height,
-              });
-              return resolveDesktopDipRectFromCssRect(
-                {
-                  x: rect.left + layout.x,
-                  y: rect.top + layout.y,
-                  width: layout.width,
-                  height: layout.height,
-                },
-                zoom,
-              );
-            }
             return resolveDesktopDipRectFromCssRect(
               { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
               zoom,
             );
           })();
       const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
-      // Native WebContentsViews and adopted renderer <webview>s share the same main-process
-      // WebContents. Floating presentation is a CSS scale of the frozen 1280x800 guest, so
-      // keep page zoom at 1 and avoid reflowing the live page as the card moves.
-      const pageZoomFactor = 1;
+      // Fit the 1280px desktop page into the floating card without reflowing it
+      // as a tiny mobile viewport (which looks zoomed in).
+      const pageZoomFactor = isFloatingMode
+        ? resolveBrowserFloatingZoomFactor(rect.width)
+        : 1;
+      applyBrowserWebviewPageZoom(webview, pageZoomFactor);
       const nextKey = bounds
         ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}`
         : `${surface}:hidden:zoom-${pageZoomFactor}`;
@@ -1999,7 +2150,7 @@ export function BrowserPanel({
               className={cn(
                 "absolute overflow-hidden",
                 isFloatingMode ? "bg-transparent" : "bg-[#0d0d0d]",
-                isFloatingMode && "rounded-[10px] [clip-path:inset(0_round_10px)]",
+                isFloatingMode && "rounded-xl [clip-path:inset(0_round_12px)]",
                 "inset-0",
               )}
             />

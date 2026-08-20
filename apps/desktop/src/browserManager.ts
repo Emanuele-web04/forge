@@ -1599,7 +1599,12 @@ export class DesktopBrowserManager {
       // WebContents until attachWebview adopts the guest. Destroying here drops
       // CDP and makes every in-flight agent tool miss the host.
       this.promoteTabToRendererSurface(input.threadId, activeTabId);
-      this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
+      this.activateThreadForPendingRenderer(
+        input.threadId,
+        nextBounds,
+        nextPageZoomFactor,
+      );
+      this.attachRuntime(activeRuntime, nextBounds, nextPageZoomFactor);
       return;
     }
 
@@ -1728,7 +1733,7 @@ export class DesktopBrowserManager {
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     const runtime = this.runtimes.get(key);
     if (runtime && bounds) {
-      this.attachRuntime(runtime, bounds);
+      this.attachRuntime(runtime, bounds, this.getVisiblePageZoomFactor(input.threadId));
     }
 
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
@@ -2131,10 +2136,6 @@ export class DesktopBrowserManager {
 
   private setRuntimePageZoomFactor(runtime: LiveTabRuntime, pageZoomFactor: number): void {
     const nextPageZoomFactor = normalizeBrowserPageZoomFactor(pageZoomFactor);
-    if (this.runtimePageZoomFactors.get(runtime.key) === nextPageZoomFactor) {
-      return;
-    }
-
     try {
       runtime.webContents.setZoomFactor(nextPageZoomFactor);
     } catch {
@@ -2779,6 +2780,9 @@ export class DesktopBrowserManager {
     const didStopLoading = () => {
       this.queueRuntimeStateSync(threadId, tabId);
       this.annotations.recoverNavigation(threadId, tabId, webContents.id);
+      if (this.activeThreadId === threadId) {
+        this.setRuntimePageZoomFactor(runtime, this.getVisiblePageZoomFactor(threadId));
+      }
     };
     webContents.on("did-stop-loading", didStopLoading);
     runtime.listenerDisposers.push(() => {

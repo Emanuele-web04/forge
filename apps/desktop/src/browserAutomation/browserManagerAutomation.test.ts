@@ -170,6 +170,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       threadId: THREAD_ID,
       surface: "renderer",
       bounds: { x: 40, y: 80, width: 320, height: 220 },
+      pageZoomFactor: 0.25,
     });
     expect(nativeWebContents.close).not.toHaveBeenCalled();
     expect(nativeView.setVisible).toHaveBeenCalledWith(false);
@@ -186,6 +187,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
       41,
     );
+    expect(guest.setZoomFactor).toHaveBeenLastCalledWith(0.25);
     expect(nativeWebContents.close).toHaveBeenCalled();
     expect(
       manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })

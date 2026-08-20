@@ -7,8 +7,9 @@
 import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
+  FLOATING_BROWSER_CHROME_PARTITION,
+  normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
-  resolveFloatingBrowserGuestLayout,
 } from "@synara/shared/browserSession";
 import type {
   BrowserAnnotationEvent,
@@ -70,18 +71,151 @@ export interface BrowserPanelHideScheduler {
   readonly schedule: (threadId: string, hide: () => void) => void;
 }
 
+export const BROWSER_RENDERER_GUEST_PARK_MS = 8_000;
+export const BROWSER_RENDERER_PARKING_CONTAINER_ID = "synara-browser-renderer-parking";
+export const BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE = "data-browser-guest-thread";
+
+export interface ParkedBrowserRendererGuest {
+  readonly tabId: string;
+  readonly webContentsId: number | null;
+  readonly stage: HTMLElement;
+  readonly webview: HTMLElement;
+  readonly dispose: () => void;
+}
+
 export interface BrowserPanelRendererHandoff {
   readonly trackDetach: (threadId: string, detach: Promise<unknown>) => void;
   readonly waitForDetach: (threadId: string) => Promise<void>;
+  readonly parkGuest: (threadId: string, guest: ParkedBrowserRendererGuest) => void;
+  readonly takeParkedGuest: (threadId: string) => ParkedBrowserRendererGuest | null;
+}
+
+interface BrowserPanelRendererHandoffOptions {
+  readonly parkUntilMs?: number;
+  readonly setTimer?: (callback: () => void, delayMs: number) => BrowserPanelHideTimer;
+  readonly clearTimer?: (timer: BrowserPanelHideTimer) => void;
+}
+
+export const BROWSER_RENDERER_GUEST_SLOT_Z_INDEX = "40";
+export const FLOATING_BROWSER_CHROME_SLOT_Z_INDEX = "50";
+export const FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE = "data-floating-browser-chrome-thread";
+export const FLOATING_BROWSER_CHROME_COLLAPSED_WIDTH_PX = 32;
+export const FLOATING_BROWSER_CHROME_EXPANDED_WIDTH_PX = 86;
+export const FLOATING_BROWSER_CHROME_WIDTH_PX = FLOATING_BROWSER_CHROME_EXPANDED_WIDTH_PX;
+export const FLOATING_BROWSER_CHROME_HEIGHT_PX = 32;
+export const FLOATING_BROWSER_CHROME_INSET_PX = 8;
+export const FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE = "data-floating-browser-chrome-expanded";
+
+export interface BrowserRendererGuestSlotBox {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface BrowserRendererGuestSlotStyle {
+  readonly left: string;
+  readonly top: string;
+  readonly width: string;
+  readonly height: string;
+  readonly pointerEvents: "auto" | "none";
+  readonly borderRadius: string;
+  readonly clipPath: string;
+}
+
+/**
+ * Electron recreates a <webview> when its DOM parent changes, which reloads the
+ * page and drops in-memory form state. Keep the guest in one body slot and only
+ * change its fixed rectangle.
+ */
+export function resolveBrowserRendererGuestSlotStyle(
+  host: BrowserRendererGuestSlotBox | null,
+  options: { borderRadius?: string } = {},
+): BrowserRendererGuestSlotStyle {
+  const borderRadius = options.borderRadius ?? "0px";
+  if (!host || host.width <= 0 || host.height <= 0) {
+    return {
+      left: "-10000px",
+      top: "0px",
+      width: "1280px",
+      height: "800px",
+      pointerEvents: "none",
+      borderRadius,
+      clipPath: "none",
+    };
+  }
+  return {
+    left: `${host.left}px`,
+    top: `${host.top}px`,
+    width: `${host.width}px`,
+    height: `${host.height}px`,
+    pointerEvents: "auto",
+    borderRadius,
+    clipPath: borderRadius === "0px" ? "none" : `inset(0 round ${borderRadius})`,
+  };
+}
+
+export function applyBrowserRendererGuestSlotStyle(
+  slot: HTMLElement,
+  host: BrowserRendererGuestSlotBox | null,
+  options: { borderRadius?: string } = {},
+): void {
+  const next = resolveBrowserRendererGuestSlotStyle(host, options);
+  slot.style.position = "fixed";
+  slot.style.margin = "0";
+  slot.style.overflow = host ? "hidden" : "visible";
+  slot.style.zIndex = BROWSER_RENDERER_GUEST_SLOT_Z_INDEX;
+  slot.style.left = next.left;
+  slot.style.top = next.top;
+  slot.style.width = next.width;
+  slot.style.height = next.height;
+  slot.style.pointerEvents = next.pointerEvents;
+  slot.style.borderRadius = next.borderRadius;
+  slot.style.clipPath = next.clipPath;
+}
+
+export function readFloatingBrowserPanelBorderRadius(host: HTMLElement): string {
+  const panel = host.closest("[data-floating-browser-panel]");
+  if (!(panel instanceof HTMLElement)) {
+    return "0px";
+  }
+  const radius = window.getComputedStyle(panel).borderTopLeftRadius.trim();
+  return radius.length > 0 ? radius : "0px";
+}
+
+export function shouldAssignBrowserWebviewSrc(input: {
+  activeTabId: string;
+  boundTabId: string | null;
+  guestTabId: string | null;
+}): boolean {
+  const inferredBoundTabId = input.boundTabId ?? input.guestTabId;
+  return inferredBoundTabId !== input.activeTabId;
 }
 
 /**
  * Serializes renderer guest replacement across dock/floating BrowserPanel instances.
  * React can mount the replacement before the old panel's IPC cleanup has completed;
  * waiting here keeps browserManager's duplicate-runtime guard from stranding the guest.
+ *
+ * Park/take keeps the same <webview> WebContents alive across hosts so a sidebar
+ * handoff does not reload the page and drop in-memory form state. The guest node
+ * must stay under one parent: Electron destroys <webview> on reparent.
  */
-export function createBrowserPanelRendererHandoff(): BrowserPanelRendererHandoff {
+export function createBrowserPanelRendererHandoff(
+  options: BrowserPanelRendererHandoffOptions = {},
+): BrowserPanelRendererHandoff {
+  const parkUntilMs = options.parkUntilMs ?? BROWSER_RENDERER_GUEST_PARK_MS;
+  const setTimer =
+    options.setTimer ??
+    ((callback, delayMs) => globalThis.setTimeout(callback, delayMs) as BrowserPanelHideTimer);
+  const clearTimer =
+    options.clearTimer ??
+    ((timer) => globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>));
   const pendingByThreadId = new Map<string, Promise<void>>();
+  const parkedByThreadId = new Map<
+    string,
+    { guest: ParkedBrowserRendererGuest; timer: BrowserPanelHideTimer }
+  >();
 
   function trackDetach(threadId: string, detach: Promise<unknown>): void {
     const previous = pendingByThreadId.get(threadId);
@@ -101,7 +235,262 @@ export function createBrowserPanelRendererHandoff(): BrowserPanelRendererHandoff
     return pendingByThreadId.get(threadId) ?? Promise.resolve();
   }
 
-  return { trackDetach, waitForDetach };
+  function clearParked(threadId: string): ParkedBrowserRendererGuest | null {
+    const parked = parkedByThreadId.get(threadId);
+    if (!parked) {
+      return null;
+    }
+    parkedByThreadId.delete(threadId);
+    clearTimer(parked.timer);
+    return parked.guest;
+  }
+
+  function parkGuest(threadId: string, guest: ParkedBrowserRendererGuest): void {
+    const replaced = clearParked(threadId);
+    if (replaced && replaced.webview !== guest.webview) {
+      replaced.dispose();
+    }
+    const timer = setTimer(() => {
+      parkedByThreadId.delete(threadId);
+      guest.dispose();
+    }, parkUntilMs);
+    parkedByThreadId.set(threadId, { guest, timer });
+  }
+
+  function takeParkedGuest(threadId: string): ParkedBrowserRendererGuest | null {
+    return clearParked(threadId);
+  }
+
+  return { trackDetach, waitForDetach, parkGuest, takeParkedGuest };
+}
+
+export function getBrowserRendererParkingContainer(): HTMLElement {
+  const existing = document.getElementById(BROWSER_RENDERER_PARKING_CONTAINER_ID);
+  if (existing) {
+    return existing;
+  }
+  const container = document.createElement("div");
+  container.id = BROWSER_RENDERER_PARKING_CONTAINER_ID;
+  container.style.cssText = `position:fixed;inset:0;pointer-events:none;z-index:${FLOATING_BROWSER_CHROME_SLOT_Z_INDEX};`;
+  document.body.append(container);
+  return container;
+}
+
+export function getBrowserRendererGuestSlot(threadId: string): HTMLElement {
+  const container = getBrowserRendererParkingContainer();
+  for (const child of container.children) {
+    if (
+      child instanceof HTMLElement &&
+      child.getAttribute(BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE) === threadId
+    ) {
+      return child;
+    }
+  }
+  const slot = document.createElement("div");
+  slot.setAttribute(BROWSER_RENDERER_GUEST_THREAD_ATTRIBUTE, threadId);
+  applyBrowserRendererGuestSlotStyle(slot, null);
+  container.append(slot);
+  return slot;
+}
+
+function floatingBrowserChromeSlotWidth(slot: HTMLElement): number {
+  return slot.getAttribute(FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE) === "true"
+    ? FLOATING_BROWSER_CHROME_EXPANDED_WIDTH_PX
+    : FLOATING_BROWSER_CHROME_COLLAPSED_WIDTH_PX;
+}
+
+export function applyFloatingBrowserChromeSlotStyle(
+  slot: HTMLElement,
+  panel: BrowserRendererGuestSlotBox | null,
+  options: { expanded?: boolean } = {},
+): void {
+  if (options.expanded != null) {
+    slot.setAttribute(FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE, options.expanded ? "true" : "false");
+  }
+  const width = floatingBrowserChromeSlotWidth(slot);
+  slot.style.position = "fixed";
+  slot.style.margin = "0";
+  slot.style.overflow = "visible";
+  slot.style.zIndex = FLOATING_BROWSER_CHROME_SLOT_Z_INDEX;
+  slot.style.width = `${width}px`;
+  slot.style.height = `${FLOATING_BROWSER_CHROME_HEIGHT_PX}px`;
+  if (!panel || panel.width <= 0 || panel.height <= 0) {
+    slot.style.left = "-10000px";
+    slot.style.top = "0px";
+    slot.style.pointerEvents = "none";
+    return;
+  }
+  slot.style.left = `${panel.left + panel.width - FLOATING_BROWSER_CHROME_INSET_PX - width}px`;
+  slot.style.top = `${panel.top + FLOATING_BROWSER_CHROME_INSET_PX}px`;
+  slot.style.pointerEvents = "auto";
+}
+
+export function getFloatingBrowserChromeSlot(threadId: string): HTMLElement {
+  const container = getBrowserRendererParkingContainer();
+  for (const child of container.children) {
+    if (
+      child instanceof HTMLElement &&
+      child.getAttribute(FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE) === threadId
+    ) {
+      return child;
+    }
+  }
+  const slot = document.createElement("div");
+  slot.setAttribute(FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE, threadId);
+  applyFloatingBrowserChromeSlotStyle(slot, null);
+  container.append(slot);
+  return slot;
+}
+
+export const FLOATING_BROWSER_CHROME_SRCDOC = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      .pill {
+        position: absolute;
+        top: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, #fff 18%, transparent);
+        background: color-mix(in srgb, #18181b 90%, transparent);
+        box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+        backdrop-filter: blur(12px);
+        pointer-events: auto;
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        width: 0;
+        overflow: hidden;
+        transition: width 220ms ease-out;
+      }
+      body.open .actions { width: 50px; }
+      @media (prefers-reduced-motion: reduce) {
+        .actions { transition: none; }
+      }
+      button {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 24px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: #a1a1aa;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+      button:hover { background: rgb(255 255 255 / 0.08); color: #fafafa; }
+      #drag { cursor: grab; }
+      #drag:active { cursor: grabbing; }
+      svg { width: 14px; height: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="pill">
+      <button id="drag" type="button" title="Drag to move, click for actions" aria-label="Floating browser actions" aria-haspopup="true" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+      </button>
+      <div class="actions" id="actions">
+        <button id="pop" type="button" title="Open browser in sidebar" aria-label="Open browser in sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="M11 12H8"/><path d="m10 9-3 3 3 3"/></svg>
+        </button>
+        <button id="close" type="button" title="Close floating browser" aria-label="Close floating browser">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </div>
+    <script>
+      const api = window.synaraFloatingChrome;
+      const send = (type, payload) => api && api.send(type, payload);
+      const drag = document.getElementById("drag");
+      window.__synaraSetFloatingChrome = (open) => {
+        document.body.classList.toggle("open", Boolean(open));
+        drag.setAttribute("aria-expanded", open ? "true" : "false");
+        return Boolean(open);
+      };
+      window.__synaraToggleFloatingChrome = () =>
+        window.__synaraSetFloatingChrome(!document.body.classList.contains("open"));
+      if (api && api.onHost) {
+        api.onHost((payload) => {
+          if (payload && typeof payload.open === "boolean") {
+            window.__synaraSetFloatingChrome(payload.open);
+          }
+        });
+      }
+      drag.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        send("drag", { x: event.clientX, y: event.clientY, button: event.button });
+      });
+      document.getElementById("pop").addEventListener("click", (event) => {
+        event.stopPropagation();
+        document.body.classList.remove("open");
+        drag.setAttribute("aria-expanded", "false");
+        send("pop");
+      });
+      document.getElementById("close").addEventListener("click", (event) => {
+        event.stopPropagation();
+        send("close");
+      });
+    </script>
+  </body>
+</html>`;
+
+function floatingBrowserChromeGuest(
+  webview: HTMLElement,
+): HTMLElement & {
+  executeJavaScript?: (code: string) => Promise<unknown>;
+  send?: (channel: string, ...args: unknown[]) => void;
+} {
+  return webview as HTMLElement & {
+    executeJavaScript?: (code: string) => Promise<unknown>;
+    send?: (channel: string, ...args: unknown[]) => void;
+  };
+}
+
+export function setFloatingBrowserChromeMenuOpen(webview: HTMLElement, open: boolean): void {
+  const guest = floatingBrowserChromeGuest(webview);
+  guest.send?.("synara-floating-chrome-host", { open });
+  void guest.executeJavaScript?.(
+    `window.__synaraSetFloatingChrome && window.__synaraSetFloatingChrome(${open ? "true" : "false"})`,
+  );
+}
+
+export function nudgeFloatingBrowserChromeNativeView(slot: HTMLElement): void {
+  const webview = slot.querySelector("webview");
+  if (!(webview instanceof HTMLElement)) {
+    return;
+  }
+  webview.style.transform =
+    webview.style.transform === "translateZ(0px)" ? "translateZ(0.01px)" : "translateZ(0px)";
+}
+
+export function ensureFloatingBrowserChromeWebview(slot: HTMLElement): HTMLElement {
+  let webview = slot.querySelector("webview");
+  if (webview instanceof HTMLElement) {
+    return webview;
+  }
+  webview = document.createElement("webview");
+  webview.setAttribute("partition", FLOATING_BROWSER_CHROME_PARTITION);
+  webview.setAttribute("allowtransparency", "on");
+  webview.style.cssText = "display:flex;width:100%;height:100%;background:transparent;";
+  webview.setAttribute("src", `data:text/html;charset=utf-8,${encodeURIComponent(FLOATING_BROWSER_CHROME_SRCDOC)}`);
+  slot.append(webview);
+  return webview;
 }
 
 type BrowserPanelHideTimer = ReturnType<typeof globalThis.setTimeout>;
@@ -634,38 +1023,59 @@ export function isBrowserPanelBoundsHiddenKey(key: string): boolean {
 
 export function applyBrowserWebviewPresentation(
   stage: HTMLElement,
-  input: { floating: boolean; slotWidth: number; slotHeight: number },
+  input: {
+    floating: boolean;
+    slotWidth: number;
+    slotHeight: number;
+    borderRadius?: string;
+  },
 ): void {
-  // Scale a CSS stage around a frozen 1280×800 guest. Transforming the
-  // <webview> itself during drag/resize blacks the guest and can kill CDP.
+  // Keep the <webview> sized to its slot. Scaling the native guest with a CSS
+  // transform leaves an unclipped 1280×800 surface that ignores the card radius.
+  stage.style.position = "absolute";
+  stage.style.inset = "0";
+  stage.style.left = "";
+  stage.style.top = "";
+  stage.style.width = "100%";
+  stage.style.height = "100%";
+  stage.style.transform = "";
+  stage.style.transformOrigin = "";
+  stage.style.overflow = "hidden";
   if (!input.floating) {
-    stage.style.position = "absolute";
-    stage.style.inset = "0";
-    stage.style.left = "";
-    stage.style.top = "";
-    stage.style.width = "100%";
-    stage.style.height = "100%";
-    stage.style.transform = "";
-    stage.style.transformOrigin = "";
     stage.style.borderRadius = "";
     stage.style.clipPath = "";
-    stage.style.overflow = "hidden";
+    const webview = stage.firstElementChild;
+    if (webview && "style" in webview) {
+      const guest = webview as HTMLElement;
+      guest.style.borderRadius = "";
+      guest.style.clipPath = "";
+    }
     return;
   }
+  const borderRadius = input.borderRadius ?? "12px";
+  stage.style.borderRadius = borderRadius;
+  stage.style.clipPath = `inset(0 round ${borderRadius})`;
+  const webview = stage.firstElementChild;
+  if (webview && "style" in webview) {
+    const guest = webview as HTMLElement;
+    guest.style.borderRadius = borderRadius;
+    guest.style.overflow = "hidden";
+    guest.style.clipPath = `inset(0 round ${borderRadius})`;
+  }
+}
 
-  const layout = resolveFloatingBrowserGuestLayout({
-    width: input.slotWidth,
-    height: input.slotHeight,
-  });
-  stage.style.position = "absolute";
-  stage.style.inset = "";
-  stage.style.left = `${layout.x}px`;
-  stage.style.top = `${layout.y}px`;
-  stage.style.width = `${layout.width}px`;
-  stage.style.height = `${layout.height}px`;
-  stage.style.transform = layout.scale === 1 ? "" : `scale(${layout.scale})`;
-  stage.style.transformOrigin = "top left";
-  stage.style.borderRadius = "10px";
-  stage.style.clipPath = "inset(0 round 10px)";
-  stage.style.overflow = "hidden";
+export function applyBrowserWebviewPageZoom(
+  webview: HTMLElement | null | undefined,
+  pageZoomFactor: number,
+): void {
+  if (!webview) {
+    return;
+  }
+  const factor = normalizeBrowserPageZoomFactor(pageZoomFactor);
+  const guest = webview as HTMLElement & { setZoomFactor?: (value: number) => void };
+  try {
+    guest.setZoomFactor?.(factor);
+  } catch {
+    // The guest may not be attached yet; the next load or bounds sync retries.
+  }
 }

@@ -17,8 +17,12 @@ import {
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
+  applyBrowserWebviewPageZoom,
   applyBrowserWebviewPresentation,
+  applyFloatingBrowserChromeSlotStyle,
   isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRendererGuestSlotStyle,
+  shouldAssignBrowserWebviewSrc,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -314,6 +318,141 @@ describe("createBrowserPanelRendererHandoff", () => {
 
     await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
   });
+
+  it("rehomes a parked renderer guest instead of destroying it", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+      const guest = {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      };
+
+      handoff.parkGuest("thread-a", guest);
+      expect(handoff.takeParkedGuest("thread-a")).toBe(guest);
+      vi.runAllTimers();
+      expect(dispose).not.toHaveBeenCalled();
+      expect(handoff.takeParkedGuest("thread-a")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disposes a parked renderer guest when no successor claims it", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+      handoff.parkGuest("thread-a", {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      });
+      vi.advanceTimersByTime(1_000);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("browser renderer guest slot layout", () => {
+  it("does not assign src when the same guest is rebound to the same tab", () => {
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-a",
+        boundTabId: null,
+        guestTabId: "tab-a",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-b",
+        boundTabId: "tab-a",
+        guestTabId: "tab-a",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-a",
+        boundTabId: null,
+        guestTabId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("moves a guest slot by rectangle instead of changing its parent", () => {
+    expect(resolveBrowserRendererGuestSlotStyle(null)).toEqual({
+      left: "-10000px",
+      top: "0px",
+      width: "1280px",
+      height: "800px",
+      pointerEvents: "none",
+      borderRadius: "0px",
+      clipPath: "none",
+    });
+    expect(
+      resolveBrowserRendererGuestSlotStyle(
+        { left: 24, top: 48, width: 640, height: 400 },
+        { borderRadius: "12px" },
+      ),
+    ).toEqual({
+      left: "24px",
+      top: "48px",
+      width: "640px",
+      height: "400px",
+      pointerEvents: "auto",
+      borderRadius: "12px",
+      clipPath: "inset(0 round 12px)",
+    });
+  });
+});
+
+describe("floating browser chrome slot", () => {
+  it("pins the native chrome overlay to the card's top-right", () => {
+    const attributes: Record<string, string> = {};
+    const slot = {
+      style: {},
+      getAttribute(name: string) {
+        return attributes[name] ?? null;
+      },
+      setAttribute(name: string, value: string) {
+        attributes[name] = value;
+      },
+    } as HTMLElement;
+    applyFloatingBrowserChromeSlotStyle(slot, {
+      left: 100,
+      top: 200,
+      width: 320,
+      height: 200,
+    });
+    expect(slot.style.left).toBe("380px");
+    expect(slot.style.width).toBe("32px");
+    expect(slot.style.top).toBe("208px");
+    expect(slot.style.pointerEvents).toBe("auto");
+    applyFloatingBrowserChromeSlotStyle(
+      slot,
+      {
+        left: 100,
+        top: 200,
+        width: 320,
+        height: 200,
+      },
+      { expanded: true },
+    );
+    expect(slot.style.left).toBe("326px");
+    expect(slot.style.width).toBe("86px");
+    applyFloatingBrowserChromeSlotStyle(slot, null);
+    expect(slot.style.left).toBe("-10000px");
+    expect(slot.style.pointerEvents).toBe("none");
+  });
 });
 
 describe("shouldOccludeBrowserWebview", () => {
@@ -565,18 +704,36 @@ describe("resolveBrowserChromeStatus", () => {
 });
 
 describe("floating browser webview presentation", () => {
-  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
-    const stage = { style: {} } as HTMLElement;
+  it("fills the slot and clips to the card radius, then restores docked layout", () => {
+    const webview = { style: {} } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: true,
       slotWidth: 320,
       slotHeight: 220,
+      borderRadius: "12px",
     });
-    expect(stage.style.width).toBe("1280px");
-    expect(stage.style.height).toBe("800px");
-    expect(stage.style.transform).toBe("scale(0.25)");
-    expect(stage.style.top).toBe("10px");
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
+    expect(stage.style.borderRadius).toBe("12px");
+    expect(stage.style.clipPath).toBe("inset(0 round 12px)");
+    expect(webview.style.clipPath).toBe("inset(0 round 12px)");
+  });
 
+  it("applies miniature page zoom onto the renderer webview", () => {
+    const setZoomFactor = vi.fn();
+    applyBrowserWebviewPageZoom({ setZoomFactor } as HTMLElement, 0.25);
+    expect(setZoomFactor).toHaveBeenCalledWith(0.25);
+    applyBrowserWebviewPageZoom({ setZoomFactor } as HTMLElement, Number.NaN);
+    expect(setZoomFactor).toHaveBeenLastCalledWith(1);
+  });
+});
+
+describe("floating browser webview presentation restore", () => {
+  it("restores docked layout", () => {
+    const webview = { style: {} } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: false,
       slotWidth: 320,
@@ -584,7 +741,8 @@ describe("floating browser webview presentation", () => {
     });
     expect(stage.style.width).toBe("100%");
     expect(stage.style.height).toBe("100%");
-    expect(stage.style.transform).toBe("");
+    expect(stage.style.borderRadius).toBe("");
+    expect(stage.style.clipPath).toBe("");
   });
 });
 

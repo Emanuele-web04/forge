@@ -1,6 +1,6 @@
 import type { WebPreferences } from "electron";
 
-export function hardenBrowserAnnotationWebviewPreferences(input: {
+export function hardenIsolatedWebviewPreferences(input: {
   readonly partition: string;
   readonly expectedPartition: string;
   readonly preloadPath: string;
@@ -16,4 +16,13 @@ export function hardenBrowserAnnotationWebviewPreferences(input: {
   input.webPreferences.webSecurity = true;
   input.webPreferences.allowRunningInsecureContent = false;
   return true;
+}
+
+export function hardenBrowserAnnotationWebviewPreferences(input: {
+  readonly partition: string;
+  readonly expectedPartition: string;
+  readonly preloadPath: string;
+  readonly webPreferences: WebPreferences;
+}): boolean {
+  return hardenIsolatedWebviewPreferences(input);
 }

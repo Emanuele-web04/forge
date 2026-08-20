@@ -24,7 +24,17 @@ import {
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { cn } from "../../lib/utils";
+import { isElectron } from "../../env";
 import { IconButton } from "../ui/icon-button";
+import {
+  applyBrowserRendererGuestSlotStyle,
+  applyFloatingBrowserChromeSlotStyle,
+  ensureFloatingBrowserChromeWebview,
+  getBrowserRendererGuestSlot,
+  getFloatingBrowserChromeSlot,
+  nudgeFloatingBrowserChromeNativeView,
+  setFloatingBrowserChromeMenuOpen,
+} from "../BrowserPanel.logic";
 import {
   clampFloatingBrowserPanelRect,
   FLOATING_BROWSER_PANEL_DEFAULT_SIZE,
@@ -75,6 +85,61 @@ function hostSize(host: HTMLElement): FloatingBrowserPanelHostSize {
   };
 }
 
+function syncFloatingBrowserGuestSlot(threadId: ThreadId, panel: HTMLElement): void {
+  const slot = getBrowserRendererGuestSlot(threadId);
+  const rect = panel.getBoundingClientRect();
+  const styles = window.getComputedStyle(panel);
+  applyBrowserRendererGuestSlotStyle(
+    slot,
+    {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+    { borderRadius: styles.borderTopLeftRadius },
+  );
+  slot.style.border = styles.border;
+  slot.style.boxShadow = styles.boxShadow;
+  applyFloatingBrowserChromeSlotStyle(
+    getFloatingBrowserChromeSlot(threadId),
+    {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+  );
+}
+
+function setFloatingChromeExpanded(
+  threadId: ThreadId,
+  panel: HTMLElement | null,
+  expanded: boolean,
+): void {
+  const slot = getFloatingBrowserChromeSlot(threadId);
+  const webview = slot.querySelector("webview");
+  if (webview instanceof HTMLElement) {
+    setFloatingBrowserChromeMenuOpen(webview, expanded);
+  }
+  if (!panel) {
+    applyFloatingBrowserChromeSlotStyle(slot, null, { expanded });
+    return;
+  }
+  const rect = panel.getBoundingClientRect();
+  applyFloatingBrowserChromeSlotStyle(
+    slot,
+    {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+    { expanded },
+  );
+  nudgeFloatingBrowserChromeNativeView(slot);
+}
+
 export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -85,6 +150,9 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
   const panelRectRef = useRef<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [panelRect, setPanelRect] = useState<FloatingBrowserPanelRect>(DEFAULT_FLOATING_RECT);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const startDragFromClientRef = useRef<
+    (x: number, y: number, options: { reopenMenuOnRelease: boolean }) => void
+  >(() => {});
 
   const applyPanelRect = useCallback((next: FloatingBrowserPanelRect, host: HTMLElement) => {
     const clamped = clampFloatingBrowserPanelRect(next, hostSize(host));
@@ -95,9 +163,10 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       panel.style.top = `${clamped.top}px`;
       panel.style.width = `${clamped.width}px`;
       panel.style.height = `${clamped.height}px`;
+      syncFloatingBrowserGuestSlot(props.threadId, panel);
     }
     return clamped;
-  }, []);
+  }, [props.threadId]);
 
   const commitPanelRect = useCallback(
     (next: FloatingBrowserPanelRect, host: HTMLElement) => {
@@ -140,12 +209,22 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     return () => {
       activeInteractionCleanupRef.current?.();
       activeInteractionCleanupRef.current = null;
+      applyFloatingBrowserChromeSlotStyle(getFloatingBrowserChromeSlot(props.threadId), null);
     };
-  }, []);
+  }, [props.threadId]);
 
   useLayoutEffect(() => {
     requestBrowserPanelBoundsSync();
-  }, [panelRect]);
+    if (!isElectron) {
+      return;
+    }
+    const panel = panelRef.current;
+    if (!panel) {
+      return;
+    }
+    syncFloatingBrowserGuestSlot(props.threadId, panel);
+    nudgeFloatingBrowserChromeNativeView(getFloatingBrowserChromeSlot(props.threadId));
+  }, [panelRect, props.threadId]);
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const host = hostRef.current;
@@ -213,19 +292,20 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     activeInteractionCleanupRef.current = finish;
   };
 
-  const startHandleGesture = (event: ReactPointerEvent<HTMLElement>) => {
+  const startDragFromClient = (
+    startClientX: number,
+    startClientY: number,
+    options: { reopenMenuOnRelease: boolean },
+  ) => {
     const host = hostRef.current;
-    if (!host || event.button !== 0) return;
+    if (!host) return;
 
-    event.preventDefault();
-    event.stopPropagation();
     activeInteractionCleanupRef.current?.();
     didDragRef.current = false;
-    const reopenMenuOnRelease = !controlsOpen;
+    const reopenMenuOnRelease = options.reopenMenuOnRelease && !controlsOpen;
     setControlsOpen(false);
+    setFloatingChromeExpanded(props.threadId, panelRef.current, false);
 
-    const startClientX = event.clientX;
-    const startClientY = event.clientY;
     const startRect = panelRectRef.current;
     const resizeOverlay = createPanelResizeOverlay("grabbing");
     const previousBodyCursor = document.body.style.cursor;
@@ -250,6 +330,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       }
       if (openMenu && reopenMenuOnRelease) {
         setControlsOpen(true);
+        setFloatingChromeExpanded(props.threadId, panelRef.current, true);
       }
     };
     const finishWithRelease = () => finish(true);
@@ -277,12 +358,59 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     });
     activeInteractionCleanupRef.current = finishWithRelease;
   };
+  startDragFromClientRef.current = startDragFromClient;
+
+  const startHandleGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: true });
+  };
+
+  useLayoutEffect(() => {
+    if (!isElectron) {
+      return;
+    }
+    const slot = getFloatingBrowserChromeSlot(props.threadId);
+    const webview = ensureFloatingBrowserChromeWebview(slot);
+    const panel = panelRef.current;
+    if (panel) {
+      syncFloatingBrowserGuestSlot(props.threadId, panel);
+      nudgeFloatingBrowserChromeNativeView(slot);
+    }
+    const onIpcMessage = (event: Event) => {
+      const message = event as Event & { channel?: string; args?: unknown[] };
+      const channel = message.channel;
+      const payload = message.args?.[0];
+      if (channel === "drag") {
+        const point = payload as { x?: number; y?: number; button?: number } | undefined;
+        if (point?.button != null && point.button !== 0) return;
+        const rect = slot.getBoundingClientRect();
+        startDragFromClientRef.current(rect.left + (point?.x ?? 0), rect.top + (point?.y ?? 0), {
+          reopenMenuOnRelease: true,
+        });
+        return;
+      }
+      if (channel === "pop") {
+        setFloatingChromeExpanded(props.threadId, panelRef.current, false);
+        props.onPopToSidebar();
+        return;
+      }
+      if (channel === "close") {
+        props.onClose();
+      }
+    };
+    webview.addEventListener("ipc-message", onIpcMessage);
+    return () => {
+      webview.removeEventListener("ipc-message", onIpcMessage);
+    };
+  }, [props.onClose, props.onPopToSidebar, props.threadId]);
 
   return (
     <div
       ref={hostRef}
       data-floating-browser-host="true"
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 overflow-hidden"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 overflow-visible"
       style={{ top: `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` }}
     >
       <div
@@ -290,7 +418,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         data-floating-browser-panel="true"
         role="region"
         aria-label="Floating browser"
-        className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-xl border border-border bg-transparent text-foreground shadow-2xl ring-1 ring-black/10"
+        className="group/floating-browser pointer-events-none absolute flex flex-col overflow-visible rounded-xl border border-border bg-background text-foreground shadow-2xl ring-1 ring-black/10"
         style={{
           left: `${panelRect.left}px`,
           top: `${panelRect.top}px`,
@@ -301,22 +429,13 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         onPointerDown={startResize}
       >
         <div
-          data-floating-browser-content="true"
-          className="absolute inset-0 min-h-0 min-w-0 overflow-hidden rounded-[inherit]"
-        >
-          <Suspense fallback={<FloatingBrowserPanelFallback />}>
-            <LazyBrowserPanel
-              mode="floating"
-              threadId={props.threadId}
-              onClosePanel={props.onClose}
-            />
-          </Suspense>
-        </div>
-        <div
           data-floating-browser-controls="true"
-          className="pointer-events-none absolute right-2 top-2 z-[70]"
+          className={cn(
+            "pointer-events-auto absolute right-2 top-2 z-20",
+            isElectron && "hidden",
+          )}
         >
-          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border/80 bg-background/90 p-0.5 shadow-sm backdrop-blur-md">
+          <div className="flex items-center gap-0.5 rounded-full border border-border/80 bg-background/90 p-0.5 shadow-sm backdrop-blur-md">
             <IconButton
               type="button"
               variant="ghost"
@@ -336,7 +455,9 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
               className={disclosureWidthClassName(controlsOpen, "w-[50px]")}
               inert={!controlsOpen}
             >
-              <div className={cn(DISCLOSURE_INNER_CLASS, "flex w-[50px] items-center gap-0.5")}>
+              <div
+                className={cn(DISCLOSURE_INNER_CLASS, "flex w-[50px] items-center gap-0.5")}
+              >
                 <IconButton
                   type="button"
                   variant="ghost"
@@ -375,13 +496,25 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
             </div>
           </div>
         </div>
+        <div
+          data-floating-browser-content="true"
+          className="pointer-events-none absolute inset-0 min-h-0 min-w-0 overflow-hidden rounded-[inherit]"
+        >
+          <Suspense fallback={<FloatingBrowserPanelFallback />}>
+            <LazyBrowserPanel
+              mode="floating"
+              threadId={props.threadId}
+              onClosePanel={props.onClose}
+            />
+          </Suspense>
+        </div>
         {RESIZE_HANDLES.map(({ edge, className }) => (
           <div
             key={edge}
             aria-hidden="true"
             data-panel-resize-overlay="true"
             data-floating-resize-edge={edge}
-            className={cn("z-[60]", className)}
+            className={cn("pointer-events-auto z-10", className)}
           />
         ))}
       </div>

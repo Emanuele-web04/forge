@@ -9,7 +9,8 @@ import {
 } from "../../../desktop/src/browserManager";
 import { BrowserUsePipeServer } from "../../../desktop/src/browserUsePipeServer";
 import { BROWSER_IPC_CHANNELS } from "../../../desktop/src/ipcChannels";
-import { hardenBrowserAnnotationWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";
+import { hardenIsolatedWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";
+import { FLOATING_BROWSER_CHROME_PARTITION } from "@synara/shared/browserSession";
 import { createBrowserPanelHideScheduler } from "../../src/components/BrowserPanel.logic";
 
 const pipePath = process.env.SYNARA_BROWSER_HOST_PIPE_PATH;
@@ -115,9 +116,24 @@ app.whenReady().then(async () => {
   });
   browserManager.setWindow(mainWindow);
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const partition = params.partition;
+    if (partition === FLOATING_BROWSER_CHROME_PARTITION) {
+      if (
+        !hardenIsolatedWebviewPreferences({
+          partition,
+          expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
+          preloadPath: annotationPreloadPath,
+          webPreferences,
+        })
+      ) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (
-      !hardenBrowserAnnotationWebviewPreferences({
-        partition: params.partition,
+      partition === undefined ||
+      !hardenIsolatedWebviewPreferences({
+        partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationPreloadPath,
         webPreferences,
