@@ -10,7 +10,6 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -101,6 +100,10 @@ import {
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
+import {
+  selectFloatingBrowserRequested,
+  useFloatingBrowserRequestStore,
+} from "./floatingBrowserRequestStore";
 import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
 import {
   pullRequestDetailInputFromPane,
@@ -293,18 +296,19 @@ export function SingleChatSurface(props: {
   const [editorDiffOptionsControl, setEditorDiffOptionsControl] = useState<ReactNode | null>(null);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [searchPaletteMode, setSearchPaletteMode] = useState<WorkspaceSearchPaletteMode>("files");
-  const [floatingBrowserThreadId, setFloatingBrowserThreadId] = useState<ThreadId | null>(null);
+  const floatingBrowserRequested = useFloatingBrowserRequestStore(
+    useMemo(() => selectFloatingBrowserRequested(props.threadId), [props.threadId]),
+  );
+  const requestFloatingBrowser = useFloatingBrowserRequestStore((store) => store.request);
+  const dismissFloatingBrowserForThread = useFloatingBrowserRequestStore((store) => store.dismiss);
   const dismissFloatingBrowser = useCallback(() => {
-    setFloatingBrowserThreadId(null);
-  }, []);
-  useLayoutEffect(() => {
-    setFloatingBrowserThreadId(null);
-  }, [props.threadId]);
+    dismissFloatingBrowserForThread(props.threadId);
+  }, [dismissFloatingBrowserForThread, props.threadId]);
 
   const activePane = resolveActivePane(dockState);
   const floatingBrowserVisible = shouldRenderFloatingBrowserPanel({
     hostThreadId: props.threadId,
-    floatingThreadId: floatingBrowserThreadId,
+    floatingThreadId: floatingBrowserRequested ? props.threadId : null,
     dockBrowserVisible: dockState.open && activePane?.kind === "browser",
   });
   const {
@@ -334,21 +338,17 @@ export function SingleChatSurface(props: {
     toggleSingletonPane(props.threadId, { kind: "diff" });
   };
   const handleToggleBrowser = () => {
-    dismissFloatingBrowser();
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
   };
   const handleToggleDevice = () => {
-    dismissFloatingBrowser();
     requestImmediateDockHydration("device");
     toggleSingletonPane(props.threadId, { kind: "device" });
   };
   const handleToggleRightDock = () => {
-    dismissFloatingBrowser();
     setDockOpen(props.threadId, !dockState.open);
   };
   const handleOpenBrowserUrl = () => {
-    dismissFloatingBrowser();
     requestImmediateDockHydration("browser");
     openPane(props.threadId, { kind: "browser" });
   };
@@ -603,7 +603,6 @@ export function SingleChatSurface(props: {
     }
 
     if (panelPatch.panel === "browser") {
-      dismissFloatingBrowser();
       requestImmediateDockHydration("browser");
       openPane(props.threadId, { kind: "browser" });
     } else if (panelPatch.panel === "diff") {
@@ -633,7 +632,6 @@ export function SingleChatSurface(props: {
 
   useBrowserPanelDesktopBridge({
     onToggle: () => {
-      dismissFloatingBrowser();
       requestImmediateDockHydration("browser");
       toggleSingletonPane(props.threadId, { kind: "browser" });
     },
@@ -642,15 +640,8 @@ export function SingleChatSurface(props: {
         currentThreadId: props.threadId,
         requestedThreadId,
         requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
-        showFloatingBrowser: (threadId) => {
-          // An already-visible dock browser is the one live host for this thread.
-          // Otherwise the agent request stays local to the chat surface and never
-          // changes the user's persisted dock-open preference.
-          if (dockState.open && activePane?.kind === "browser") {
-            return;
-          }
-          setFloatingBrowserThreadId(threadId);
-        },
+        showFloatingBrowser: requestFloatingBrowser,
+        rememberFloatingBrowser: requestFloatingBrowser,
       });
     },
   });
@@ -813,9 +804,6 @@ export function SingleChatSurface(props: {
       : undefined;
 
   const handleAddDockPane = (kind: RightDockPaneKind) => {
-    if (kind === "browser") {
-      dismissFloatingBrowser();
-    }
     requestImmediateDockHydration(kind);
     if (kind === "sidechat") {
       // Sidechat spawns a thread; reuse the composer's /side flow (correct model
@@ -998,9 +986,6 @@ export function SingleChatSurface(props: {
   };
 
   const handleSelectDockPane = (paneId: string) => {
-    if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "browser") {
-      dismissFloatingBrowser();
-    }
     requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
     setActivePane(props.threadId, paneId);
   };
@@ -1200,9 +1185,6 @@ export function SingleChatSurface(props: {
           onClosePane={(paneId) => closePane(props.threadId, paneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => {
-            if (open) {
-              dismissFloatingBrowser();
-            }
             setDockOpen(props.threadId, open);
           }}
           onAddPane={handleAddDockPane}

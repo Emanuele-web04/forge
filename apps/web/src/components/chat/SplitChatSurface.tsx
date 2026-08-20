@@ -7,7 +7,6 @@ import {
   startTransition,
   Suspense,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +25,10 @@ import {
 } from "./ChatThreadSurfacePrimitives";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
+import {
+  selectFloatingBrowserRequested,
+  useFloatingBrowserRequestStore,
+} from "./floatingBrowserRequestStore";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
@@ -92,11 +95,6 @@ const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
 const SPLIT_RATIO_MIN = 0.25;
 const SPLIT_RATIO_MAX = 0.75;
-
-interface FloatingBrowserTarget {
-  paneId: PaneId;
-  threadId: ThreadId;
-}
 
 function clampSplitRatio(value: number): number {
   if (!Number.isFinite(value)) return 0.5;
@@ -623,15 +621,11 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
-  const [floatingBrowserTarget, setFloatingBrowserTarget] = useState<FloatingBrowserTarget | null>(
-    null,
+  const requestFloatingBrowser = useFloatingBrowserRequestStore((store) => store.request);
+  const dismissFloatingBrowserForThread = useFloatingBrowserRequestStore((store) => store.dismiss);
+  const floatingBrowserRequestedByThreadId = useFloatingBrowserRequestStore(
+    (store) => store.requestedByThreadId,
   );
-  const dismissFloatingBrowser = () => {
-    setFloatingBrowserTarget(null);
-  };
-  useLayoutEffect(() => {
-    setFloatingBrowserTarget(null);
-  }, [props.routeThreadId]);
   const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,
@@ -708,30 +702,10 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     setFocusedPane,
   ]);
 
-  useEffect(() => {
-    const floatingLeaf =
-      activeSplitView && floatingBrowserTarget
-        ? findLeafPaneById(activeSplitView.root, floatingBrowserTarget.paneId)
-        : null;
-    const floatingBrowserIsStillValid = Boolean(
-      activeSplitView &&
-      floatingLeaf &&
-      floatingLeaf.id === activeSplitView.focusedPaneId &&
-      floatingLeaf.threadId === floatingBrowserTarget?.threadId &&
-      floatingLeaf.panel.panel !== "browser",
-    );
-    if (floatingBrowserTarget !== null && !floatingBrowserIsStillValid) {
-      dismissFloatingBrowser();
-    }
-  }, [activeSplitView, floatingBrowserTarget]);
-
   const setPaneFocus = (paneId: PaneId) => {
     if (!activeSplitView) return;
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     const nextThreadId = leaf?.threadId ?? resolveSplitViewFocusedThreadId(activeSplitView);
-    if (floatingBrowserTarget !== null && floatingBrowserTarget.paneId !== paneId) {
-      dismissFloatingBrowser();
-    }
     setFocusedPane(activeSplitView.id, paneId);
     if (!nextThreadId || nextThreadId === props.routeThreadId) {
       return;
@@ -752,9 +726,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => {
     if (!activeSplitView) return;
-    if (patch.panel === "browser") {
-      dismissFloatingBrowser();
-    }
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     if (!leaf) return;
     const nextPanel = patch.panel ?? leaf.panel.panel;
@@ -788,11 +759,12 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
             requestedThreadId,
             showFloatingBrowser: (paneId) => {
               const leaf = findLeafPaneById(activeSplitView.root, paneId);
-              if (!leaf || leaf.threadId === null || leaf.panel.panel === "browser") {
+              if (!leaf?.threadId) {
                 return;
               }
-              setFloatingBrowserTarget({ paneId, threadId: leaf.threadId });
+              requestFloatingBrowser(leaf.threadId);
             },
+            rememberFloatingBrowser: requestFloatingBrowser,
           });
         }
       : null,
@@ -804,17 +776,15 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   // a single-surface tab and the composer screenshot both read.
   useDeviceEventBridge({ onOpenPaneRequested: null });
 
-  const closeFloatingBrowser = (paneId: PaneId) => {
-    if (floatingBrowserTarget?.paneId === paneId) {
-      dismissFloatingBrowser();
-    }
+  const closeFloatingBrowser = (threadId: ThreadId) => {
+    dismissFloatingBrowserForThread(threadId);
   };
 
   const popFloatingBrowser = (paneId: PaneId) => {
     if (!activeSplitView) return;
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     if (!leaf?.threadId) return;
-    dismissFloatingBrowser();
+    dismissFloatingBrowserForThread(leaf.threadId);
     updatePanePanelState(paneId, { panel: "browser" });
   };
 
@@ -996,9 +966,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const leaf = findLeafPaneById(activeSplitView.root, paneId);
     setFocusedPane(activeSplitView.id, paneId);
     if (leaf && leaf.threadId !== threadId) {
-      if (floatingBrowserTarget?.paneId === paneId) {
-        dismissFloatingBrowser();
-      }
       replacePaneThread(activeSplitView.id, paneId, threadId);
       setPanePanelState(activeSplitView.id, paneId, {
         diffTurnId: null,
@@ -1044,11 +1011,15 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         showFloatingBrowser={shouldRenderFloatingBrowserPanel({
           hostThreadId: leaf.threadId,
           floatingThreadId:
-            floatingBrowserTarget?.paneId === leaf.id ? floatingBrowserTarget.threadId : null,
+            floatingBrowserRequestedByThreadId[leaf.threadId ?? ""] === true
+              ? leaf.threadId
+              : null,
           dockBrowserVisible: leaf.panel.panel === "browser",
           isFocused,
         })}
-        onCloseFloatingBrowser={() => closeFloatingBrowser(leaf.id)}
+        onCloseFloatingBrowser={() => {
+          if (leaf.threadId) closeFloatingBrowser(leaf.threadId);
+        }}
         onPopFloatingBrowser={() => popFloatingBrowser(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
         onMaximize={maximizeFocusedPane}

@@ -7,15 +7,17 @@ interface SingleBrowserPanelOpenRequestInput {
   readonly currentThreadId: ThreadId;
   readonly requestedThreadId: ThreadId;
   readonly requestImmediateBrowserHydration: () => void;
+  readonly rememberFloatingBrowser: (threadId: ThreadId) => void;
   readonly showFloatingBrowser: (threadId: ThreadId) => void;
 }
 
 export function routeSingleBrowserPanelOpenRequest(
   input: SingleBrowserPanelOpenRequestInput,
 ): void {
+  // Remember even when another chat is focused. The native runtime stays on
+  // the requested thread; returning to that chat should restore the card.
+  input.rememberFloatingBrowser(input.requestedThreadId);
   if (input.requestedThreadId !== input.currentThreadId) {
-    // The native agent runtime stays alive without mounting this route. Never
-    // steal the user's current chat merely to make the browser executable.
     return;
   }
 
@@ -28,10 +30,12 @@ export function routeSingleBrowserPanelOpenRequest(
 interface SplitBrowserPanelOpenRequestInput {
   readonly splitView: SplitView;
   readonly requestedThreadId: ThreadId;
+  readonly rememberFloatingBrowser: (threadId: ThreadId) => void;
   readonly showFloatingBrowser: (paneId: PaneId) => void;
 }
 
 export function routeSplitBrowserPanelOpenRequest(input: SplitBrowserPanelOpenRequestInput): void {
+  input.rememberFloatingBrowser(input.requestedThreadId);
   const focusedPane = findLeafPaneById(input.splitView.root, input.splitView.focusedPaneId);
   if (!focusedPane || focusedPane.threadId !== input.requestedThreadId) {
     return;

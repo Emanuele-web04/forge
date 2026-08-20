@@ -86,6 +86,15 @@ describe("floating browser panel visibility", () => {
     );
     expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, isFocused: false })).toBe(false);
   });
+
+  it("restores the card once a matching dock browser is no longer visible", () => {
+    expect(
+      shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true }),
+    ).toBe(false);
+    expect(
+      shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: false }),
+    ).toBe(true);
+  });
 });
 
 describe("floating browser drag gesture", () => {

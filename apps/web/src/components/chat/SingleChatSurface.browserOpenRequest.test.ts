@@ -14,10 +14,15 @@ describe("routeSingleBrowserPanelOpenRequest", () => {
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: CURRENT_THREAD_ID,
       requestImmediateBrowserHydration: () => calls.push("hydrate"),
+      rememberFloatingBrowser: (threadId) => calls.push(`remember:${threadId}`),
       showFloatingBrowser: (threadId) => calls.push(`float:${threadId}`),
     });
 
-    expect(calls).toEqual(["hydrate", `float:${CURRENT_THREAD_ID}`]);
+    expect(calls).toEqual([
+      `remember:${CURRENT_THREAD_ID}`,
+      "hydrate",
+      `float:${CURRENT_THREAD_ID}`,
+    ]);
   });
 
   it("leaves the current chat untouched for a background thread request", () => {
@@ -27,9 +32,10 @@ describe("routeSingleBrowserPanelOpenRequest", () => {
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: REQUESTED_THREAD_ID,
       requestImmediateBrowserHydration: () => calls.push("hydrate"),
+      rememberFloatingBrowser: (threadId) => calls.push(`remember:${threadId}`),
       showFloatingBrowser: (threadId) => calls.push(`float:${threadId}`),
     });
 
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([`remember:${REQUESTED_THREAD_ID}`]);
   });
 });

@@ -305,6 +305,8 @@ export function shouldRenderFloatingBrowserPanel(input: {
   dockBrowserVisible: boolean;
   isFocused?: boolean;
 }): boolean {
+  // Hide while a docked live browser is on screen, but do not treat that as
+  // dismissing the request — collapsing the dock should restore the card.
   return (
     input.hostThreadId !== null &&
     input.hostThreadId === input.floatingThreadId &&
