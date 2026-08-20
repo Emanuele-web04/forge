@@ -31,6 +31,7 @@ import {
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { resumeQuitInterruptedChats } from "./orchestration/quitResume";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeReconciler";
@@ -224,6 +225,10 @@ export const createEffectServer = Effect.fn(function* (
     ),
   );
   yield* runtimeStartup.markCommandReady;
+  // Chats the user quit with "Resume chats automatically" get their continuation
+  // turn now that the orphaned turns above are settled. Forked so the (rare)
+  // dispatch work never delays readiness; a missing record costs one stat.
+  yield* resumeQuitInterruptedChats.pipe(Effect.forkIn(subscriptionsScope));
 
   yield* lifecycleEvents.publish({
     type: "welcome",

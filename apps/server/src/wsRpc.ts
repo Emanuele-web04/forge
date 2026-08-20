@@ -89,6 +89,7 @@ import {
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
@@ -928,6 +929,16 @@ const makeWsRpcHandlersLayer = () =>
               limit: input.limit ?? 50,
             }),
             "Failed to load provider delivery blockers",
+          ),
+        [ORCHESTRATION_WS_METHODS.prepareQuitResume]: (input) =>
+          rpcEffect(
+            prepareQuitResume({
+              request: input,
+              recordPath: config.quitResumeStatePath,
+              getReadModel: orchestrationEngine.getReadModel,
+              dispatch: dispatchOrchestrationCommand,
+            }),
+            "Failed to prepare chats for resume after quit",
           ),
         [ORCHESTRATION_WS_METHODS.reconcileProviderDelivery]: (input) =>
           rpcEffect(
