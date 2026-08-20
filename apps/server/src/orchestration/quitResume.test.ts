@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { Effect, FileSystem, Layer, Option } from "effect";
+import { ProjectId, ThreadId, TurnId, type OrchestrationCommand } from "@synara/contracts";
+import { Duration, Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../config";
@@ -10,6 +10,7 @@ import {
   clearQuitResumeRecord,
   persistQuitResumeRecord,
   planQuitResumeTurns,
+  prepareQuitResume,
   readQuitResumeRecord,
   type QuitResumeRecord,
   type QuitResumeThread,
@@ -36,6 +37,20 @@ const makeLatestTurn = (
   assistantMessageId: null,
 });
 
+const makeSession = (
+  id: string,
+  overrides: Partial<NonNullable<QuitResumeThread["session"]>> = {},
+): NonNullable<QuitResumeThread["session"]> => ({
+  threadId: threadId(id),
+  providerName: "codex",
+  runtimeMode: "full-access",
+  status: "running",
+  activeTurnId: turnId(`${id}-turn`),
+  lastError: null,
+  updatedAt: "2026-06-14T09:00:01.000Z",
+  ...overrides,
+});
+
 const makeThread = (id: string, overrides: Partial<QuitResumeThread> = {}): QuitResumeThread => ({
   id: threadId(id),
   projectId: PROJECT,
@@ -48,8 +63,16 @@ const makeThread = (id: string, overrides: Partial<QuitResumeThread> = {}): Quit
   ...overrides,
 });
 
+/** A thread whose latest turn is genuinely running right now. */
+const makeRunningThread = (id: string, overrides: Partial<QuitResumeThread> = {}) =>
+  makeThread(id, {
+    latestTurn: makeLatestTurn(`${id}-turn`, "running"),
+    session: makeSession(id),
+    ...overrides,
+  });
+
 const makeRecord = (
-  threads: ReadonlyArray<{ threadId: string; turnId: string | null }>,
+  threads: ReadonlyArray<{ threadId: string; turnId: string }>,
 ): QuitResumeRecord => ({
   version: 1,
   recordId: RECORD_ID,
@@ -57,23 +80,34 @@ const makeRecord = (
   continuationPrompt: PROMPT,
   threads: threads.map((entry) => ({
     threadId: threadId(entry.threadId),
-    turnId: entry.turnId === null ? null : turnId(entry.turnId),
+    turnId: turnId(entry.turnId),
   })),
 });
 
 const liveProjects = [{ id: PROJECT, deletedAt: null }];
 
 describe("buildQuitResumeRecord", () => {
-  it("snapshots known live threads with their latest turn, dropping unknown, deleted, and duplicate ids", () => {
+  it("snapshots only threads that are in flight right now, dropping unknown, deleted, idle, and duplicate ids", () => {
     const record = buildQuitResumeRecord({
       request: {
-        threadIds: [threadId("a"), threadId("b"), threadId("a"), threadId("gone"), threadId("c")],
+        threadIds: [
+          threadId("a"),
+          threadId("finished"),
+          threadId("a"),
+          threadId("gone"),
+          threadId("deleted"),
+          threadId("no-turn"),
+          threadId("b"),
+        ],
         continuationPrompt: PROMPT,
       },
       threads: [
-        makeThread("a"),
-        makeThread("b", { latestTurn: null }),
-        makeThread("c", { deletedAt: "2026-06-14T09:30:00.000Z" }),
+        makeRunningThread("a"),
+        // Finished while the dialog was open: nothing to resume.
+        makeThread("finished", { latestTurn: makeLatestTurn("finished-turn", "completed") }),
+        makeRunningThread("deleted", { deletedAt: "2026-06-14T09:30:00.000Z" }),
+        makeThread("no-turn", { latestTurn: null, session: makeSession("no-turn") }),
+        makeRunningThread("b"),
       ],
       recordId: RECORD_ID,
       now: RECORDED_AT,
@@ -86,14 +120,14 @@ describe("buildQuitResumeRecord", () => {
       continuationPrompt: PROMPT,
       threads: [
         { threadId: threadId("a"), turnId: turnId("a-turn") },
-        { threadId: threadId("b"), turnId: null },
+        { threadId: threadId("b"), turnId: turnId("b-turn") },
       ],
     });
   });
 });
 
 describe("buildQuitInterruptCommand", () => {
-  it("derives a deterministic command id and forwards the recorded turn id when present", () => {
+  it("derives a deterministic command id and targets the recorded turn", () => {
     expect(
       buildQuitInterruptCommand({
         threadId: threadId("a"),
@@ -108,14 +142,6 @@ describe("buildQuitInterruptCommand", () => {
       turnId: turnId("a-turn"),
       createdAt: RECORDED_AT,
     });
-    expect(
-      buildQuitInterruptCommand({
-        threadId: threadId("b"),
-        turnId: null,
-        recordId: RECORD_ID,
-        recordedAt: RECORDED_AT,
-      }),
-    ).not.toHaveProperty("turnId");
   });
 });
 
@@ -143,6 +169,8 @@ describe("planQuitResumeTurns", () => {
         dispatchMode: "queue",
         runtimeMode: "approval-required",
         interactionMode: "plan",
+        // Re-checked by the decider inside the serialized dispatch.
+        resumePrecondition: { expectedLatestTurnId: turnId("a-turn") },
         createdAt: NOW,
       },
     ]);
@@ -150,14 +178,37 @@ describe("planQuitResumeTurns", () => {
     expect(plan.commands[0]).not.toHaveProperty("modelSelection");
   });
 
-  it("skips threads that are missing, deleted, archived, project-less, turn-less, progressed, or in flight", () => {
+  it("resumes turns that ended as interrupted or error, not ones that completed on their own", () => {
+    const plan = planQuitResumeTurns({
+      record: makeRecord([
+        { threadId: "interrupted", turnId: "interrupted-turn" },
+        { threadId: "errored", turnId: "errored-turn" },
+        { threadId: "completed", turnId: "completed-turn" },
+      ]),
+      threads: [
+        makeThread("interrupted"),
+        makeThread("errored", { latestTurn: makeLatestTurn("errored-turn", "error") }),
+        makeThread("completed", { latestTurn: makeLatestTurn("completed-turn", "completed") }),
+      ],
+      projects: liveProjects,
+      now: NOW,
+    });
+
+    expect(plan.commands.map((command) => command.threadId)).toEqual([
+      threadId("interrupted"),
+      threadId("errored"),
+    ]);
+    expect(plan.skipped).toEqual([{ threadId: threadId("completed"), reason: "turn-completed" }]);
+  });
+
+  it("skips threads that are missing, deleted, archived, project-less, progressed, or in flight", () => {
     const plan = planQuitResumeTurns({
       record: makeRecord([
         { threadId: "missing", turnId: "missing-turn" },
         { threadId: "deleted", turnId: "deleted-turn" },
         { threadId: "archived", turnId: "archived-turn" },
         { threadId: "orphan", turnId: "orphan-turn" },
-        { threadId: "no-turn", turnId: null },
+        { threadId: "no-turn", turnId: "no-turn-turn" },
         { threadId: "progressed", turnId: "progressed-turn" },
         { threadId: "running", turnId: "running-turn" },
         { threadId: "ok", turnId: "ok-turn" },
@@ -168,7 +219,7 @@ describe("planQuitResumeTurns", () => {
         makeThread("orphan", { projectId: ProjectId.makeUnsafe("project-gone") }),
         makeThread("no-turn", { latestTurn: null }),
         makeThread("progressed", { latestTurn: makeLatestTurn("progressed-turn-2") }),
-        makeThread("running", { latestTurn: makeLatestTurn("running-turn", "running") }),
+        makeRunningThread("running"),
         makeThread("ok"),
       ],
       projects: [...liveProjects, { id: ProjectId.makeUnsafe("project-gone"), deletedAt: NOW }],
@@ -181,7 +232,7 @@ describe("planQuitResumeTurns", () => {
       { threadId: threadId("deleted"), reason: "thread-deleted" },
       { threadId: threadId("archived"), reason: "thread-archived" },
       { threadId: threadId("orphan"), reason: "project-missing" },
-      { threadId: threadId("no-turn"), reason: "no-turn" },
+      { threadId: threadId("no-turn"), reason: "turn-changed" },
       { threadId: threadId("progressed"), reason: "turn-changed" },
       { threadId: threadId("running"), reason: "turn-in-flight" },
     ]);
@@ -196,7 +247,7 @@ describe("quit resume record file", () => {
   const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
-  it("persists, reads, and clears the record; a missing or corrupt file reads as none", async () => {
+  it("persists, reads, and clears the record; missing reads as absent, corrupt as invalid", async () => {
     const record = makeRecord([{ threadId: "a", turnId: "a-turn" }]);
     const result = await run(
       Effect.gen(function* () {
@@ -212,14 +263,71 @@ describe("quit resume record file", () => {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(path, "{ not json");
         const corrupt = yield* readQuitResumeRecord(path);
+        yield* fs.writeFileString(path, "   \n");
+        const empty = yield* readQuitResumeRecord(path);
         yield* clearQuitResumeRecord(path);
-        return { missing, persisted, cleared, corrupt };
+        return { missing, persisted, cleared, corrupt, empty };
       }),
     );
 
-    expect(Option.isNone(result.missing)).toBe(true);
-    expect(Option.getOrNull(result.persisted)).toEqual(record);
-    expect(Option.isNone(result.cleared)).toBe(true);
-    expect(Option.isNone(result.corrupt)).toBe(true);
+    expect(result.missing).toEqual({ kind: "absent" });
+    expect(result.persisted).toEqual({ kind: "record", record });
+    expect(result.cleared).toEqual({ kind: "absent" });
+    expect(result.corrupt).toEqual({ kind: "invalid" });
+    expect(result.empty).toEqual({ kind: "invalid" });
+  });
+
+  it("prepareQuitResume records in-flight threads, interrupts them, and drops the record if the quit never happens", async () => {
+    const dispatched: OrchestrationCommand[] = [];
+    const result = await run(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig;
+        const path = config.quitResumeStatePath;
+        const prepared = yield* prepareQuitResume({
+          request: {
+            threadIds: [threadId("a"), threadId("finished")],
+            continuationPrompt: PROMPT,
+          },
+          recordPath: path,
+          getReadModel: () =>
+            Effect.succeed({
+              threads: [
+                makeRunningThread("a"),
+                makeThread("finished", {
+                  latestTurn: makeLatestTurn("finished-turn", "completed"),
+                }),
+              ],
+            }),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+            }),
+          abandonAfter: Duration.millis(50),
+        });
+        const persisted = yield* readQuitResumeRecord(path);
+        // Still alive well after the abandon delay → the quit was cancelled.
+        const abandoned = yield* Effect.sleep(Duration.millis(400)).pipe(
+          Effect.andThen(readQuitResumeRecord(path)),
+        );
+        return { prepared, persisted, abandoned };
+      }),
+    );
+
+    expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
+    expect(result.persisted.kind).toBe("record");
+    if (result.persisted.kind === "record") {
+      expect(result.persisted.record.threads).toEqual([
+        { threadId: threadId("a"), turnId: turnId("a-turn") },
+      ]);
+      expect(result.persisted.record.recordedAt).toBe(result.prepared.recordedAt);
+    }
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.turn.interrupt",
+        threadId: threadId("a"),
+        turnId: turnId("a-turn"),
+      }),
+    ]);
+    expect(result.abandoned).toEqual({ kind: "absent" });
   });
 });
