@@ -19,12 +19,12 @@
 <details>
   <summary><strong>Table of contents</strong></summary>
 
-| Workspace layer | Responsibility |
-| --- | --- |
-| **Project** | Repository context, settings, and related work. |
-| **Thread** | Task-specific conversation, state, files, and history. |
-| **Provider session** | The authenticated coding-agent runtime executing the task. |
-| **Workspace tools** | Changes, terminal, browser, files, editor, previews, and Git. |
+| Workspace layer      | Responsibility                                                |
+| -------------------- | ------------------------------------------------------------- |
+| **Project**          | Repository context, settings, and related work.               |
+| **Thread**           | Task-specific conversation, state, files, and history.        |
+| **Provider session** | The authenticated coding-agent runtime executing the task.    |
+| **Workspace tools**  | Changes, terminal, browser, files, editor, previews, and Git. |
 
 > [!NOTE]
 > Synara is early-stage software. APIs and interface details remain under active development.
@@ -44,13 +44,13 @@ Organize work around projects and threads. Projects define the workspace; thread
 
 The tools surrounding an agent session remain available from the same task surface, keeping execution and review connected.
 
-| Surface | Purpose |
-| --- | --- |
-| **Changes** | Inspect diffs, changed files, and review state. |
-| **Terminal** | Run commands in the project environment. |
-| **Browser** | Keep local previews and browser work next to the thread. |
-| **Files / Editor** | Browse, inspect, and edit project files in context. |
-| **Git** | Work with branches, commits, pushes, and pull requests. |
+| Surface            | Purpose                                                  |
+| ------------------ | -------------------------------------------------------- |
+| **Changes**        | Inspect diffs, changed files, and review state.          |
+| **Terminal**       | Run commands in the project environment.                 |
+| **Browser**        | Keep local previews and browser work next to the thread. |
+| **Files / Editor** | Browse, inspect, and edit project files in context.      |
+| **Git**            | Work with branches, commits, pushes, and pull requests.  |
 
 ### 3. Split views and previews
 
@@ -64,17 +64,17 @@ Keep an active conversation alongside the surface it is changing. Split views, b
 
 Synara connects to coding-agent runtimes that are installed and authenticated locally. The current development build includes the following integrations:
 
-| Runtime | Local integration |
-| --- | --- |
-| **Codex** | Codex CLI / app-server |
-| **Claude** | Claude Code |
-| **Cursor** | Cursor agent runtime |
-| **Antigravity** | Antigravity CLI |
-| **Grok** | Grok Build |
-| **Droid** | Factory Droid |
-| **Kilo** | Kilo Code or a configured Kilo server |
-| **OpenCode** | OpenCode and its configured model providers |
-| **Pi** | Pi and its configured model providers |
+| Runtime         | Local integration                           |
+| --------------- | ------------------------------------------- |
+| **Codex**       | Codex CLI / app-server                      |
+| **Claude**      | Claude Code                                 |
+| **Cursor**      | Cursor agent runtime                        |
+| **Antigravity** | Antigravity CLI                             |
+| **Grok**        | Grok Build                                  |
+| **Droid**       | Factory Droid                               |
+| **Kilo**        | Kilo Code or a configured Kilo server       |
+| **OpenCode**    | OpenCode and its configured model providers |
+| **Pi**          | Pi and its configured model providers       |
 
 ### 5. Isolated parallel work
 
@@ -101,13 +101,13 @@ Configure the shell to match the way you work with light and dark themes, typogr
 
 ### Additional capabilities
 
-| Workflow | Included surfaces |
-| --- | --- |
-| **Workspace** | Local projects, chats, history, and multiple provider runtimes. |
-| **Execution** | Terminals, browser previews, files, and editor. |
-| **Delivery** | Diffs, Git actions, managed worktrees, and pull requests. |
-| **Orchestration** | Provider handoffs, automations, and scoped external MCP. |
-| **Development** | Desktop shell plus focused server and web modes. |
+| Workflow          | Included surfaces                                               |
+| ----------------- | --------------------------------------------------------------- |
+| **Workspace**     | Local projects, chats, history, and multiple provider runtimes. |
+| **Execution**     | Terminals, browser previews, files, and editor.                 |
+| **Delivery**      | Diffs, Git actions, managed worktrees, and pull requests.       |
+| **Orchestration** | Provider handoffs, automations, and scoped external MCP.        |
+| **Development**   | Desktop shell plus focused server and web modes.                |
 
 ## Installation
 
