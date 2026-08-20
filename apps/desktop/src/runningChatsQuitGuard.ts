@@ -98,6 +98,7 @@ export function parseQuitConfirmationResponse(
 
 export interface RunningChatsQuitGuard {
   readonly hasAllowedQuit: () => boolean;
+  readonly cancelPending: () => void;
   readonly receiveResponse: (payload: unknown) => void;
   readonly askRenderer: (input: {
     readonly send: (request: DesktopQuitConfirmationRequest) => void;
@@ -168,6 +169,9 @@ export function makeRunningChatsQuitGuard(
 
   return {
     hasAllowedQuit: () => allowed,
+    cancelPending(): void {
+      finish(false);
+    },
     receiveResponse(payload: unknown): void {
       const response = parseQuitConfirmationResponse(payload);
       if (!response || pending == null || response.requestId !== pending.requestId) {

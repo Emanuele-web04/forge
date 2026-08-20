@@ -153,6 +153,25 @@ describe("running chats quit guard", () => {
     await expect(decision).resolves.toBe(false);
   });
 
+  it("cancels a pending decision when the renderer is replaced and can prompt again", async () => {
+    const requestIds = ["q1", "q2"];
+    const guard = makeRunningChatsQuitGuard(() => requestIds.shift() ?? "unexpected");
+    const first = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+
+    guard.cancelPending();
+
+    await expect(first).resolves.toBe(false);
+    const send = vi.fn();
+    const second = guard.askRenderer({ send, isRendererAvailable: () => true });
+    expect(send).toHaveBeenCalledWith({ requestId: "q2", presentation: "in-app" });
+    guard.receiveResponse({ requestId: "q2", phase: "decision", allow: true });
+    await expect(second).resolves.toBe(true);
+  });
+
   it("shows the native sheet after the renderer reports running chats", async () => {
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const presentNativeConfirmation = vi.fn(async () => false);

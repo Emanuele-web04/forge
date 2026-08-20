@@ -4603,6 +4603,7 @@ function createWindow(): BrowserWindow {
   }
 
   window.on("closed", () => {
+    runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -4628,6 +4629,7 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    runningChatsQuitGuard.cancelPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -4669,6 +4671,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   });
   window.webContents.on("responsive", () => {
     writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.webContents.on("did-start-loading", () => {
+    runningChatsQuitGuard.cancelPending();
   });
 
   window.on("closed", clearReloadTimer);
