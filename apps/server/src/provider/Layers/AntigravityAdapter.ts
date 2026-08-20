@@ -164,6 +164,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
+  stopAwaitingBackgroundTasks: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
 };
@@ -756,7 +757,7 @@ export function parseAntigravitySystemMessage(
   const exitCodeMatch = trimmed.match(/exited with code (\d+)/iu);
   const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1] ?? "0", 10) : undefined;
   const failureText = trimmed
-    .replace(/\b(?:0|no)\s+failed\b/giu, "")
+    .replace(/\b(?:0|no)(?:\s+[\p{L}\p{N}_-]+){0,3}\s+failed\b/giu, "")
     .replace(/\b(?:no|without)\s+errors?\b/giu, "");
   const isFailure =
     exitCode !== undefined ? exitCode !== 0 : /\bfailed\b|\berror\b/iu.test(failureText);
@@ -1134,9 +1135,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         candidateId,
         context.pendingBackgroundTasks.keys(),
       );
-      if (direct || !candidateId || context.pendingBackgroundTasks.size !== 1) return direct;
-      const only = context.pendingBackgroundTasks.values().next().value;
-      return only?.providerTaskId === undefined ? only?.taskId : undefined;
+      if (direct || !candidateId) return direct;
+      for (const task of context.pendingBackgroundTasks.values()) {
+        if (task.providerTaskId === undefined) return task.taskId;
+      }
+      return undefined;
     };
 
     const settleTrackedBackgroundTask = (
@@ -1198,6 +1201,26 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (completion) settleTrackedBackgroundTask(context, taskId, completion);
     };
 
+    const teardownStoppedTurnIfIdle = (context: AntigravitySessionContext): void => {
+      if (
+        !context.stopAwaitingBackgroundTasks ||
+        !context.activeProcess ||
+        context.turnTerminalEmitted ||
+        context.pendingBackgroundTasks.size > 0
+      ) {
+        return;
+      }
+      context.stopAwaitingBackgroundTasks = false;
+      const child = context.activeProcess;
+      void teardownProcessTree(child).catch(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Process may already be gone.
+        }
+      });
+    };
+
     /**
      * Emit a single terminal turn.completed for the active turn and mark the
      * session idle. Idempotent so process-close, interrupt, and stop-hook
@@ -1234,6 +1257,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }),
       });
       context.turnTerminalEmitted = true;
+      context.stopAwaitingBackgroundTasks = false;
       delete context.activeProcess;
       delete context.activeTurnId;
       const {
@@ -1837,29 +1861,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         // alive by design to wait for the background completion and stream the
         // follow-up response; killing it aborts the task and fails the turn
         // with "Error: timeout waiting for response" (#752).
-        if (eventName === "stop") {
-          // A background completion can be committed to the transcript before
-          // its final stop hook reaches this file. Drain it before deciding
-          // whether the print process is still waiting on live work.
-          await readTranscript(context);
-        }
-        if (
-          eventName === "stop" &&
-          context.activeProcess &&
-          !context.turnTerminalEmitted &&
-          context.pendingBackgroundTasks.size === 0
-        ) {
-          const child = context.activeProcess;
-          void teardownProcessTree(child).catch(() => {
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              // Process may already be gone.
-            }
-          });
-        }
+        if (eventName === "stop") context.stopAwaitingBackgroundTasks = true;
       }
       await readTranscript(context);
+      teardownStoppedTurnIfIdle(context);
     };
 
     const startSession: AntigravityAdapterShape["startSession"] = (input) =>
@@ -1942,6 +1947,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           sawAssistant: false,
           interrupted: false,
           stopped: false,
+          stopAwaitingBackgroundTasks: false,
           turnTerminalEmitted: false,
         };
         sessions.set(input.threadId, context);
@@ -2065,6 +2071,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.hookToolCallCounts.clear();
         context.sawAssistant = false;
         context.interrupted = false;
+        context.stopAwaitingBackgroundTasks = false;
         context.turnTerminalEmitted = false;
         context.turns.push({ id: turnId, items: [] });
         context.session = {

@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Effect, Fiber, Layer, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -1758,6 +1758,11 @@ describe("Antigravity background task helpers (#752)", () => {
         "<SYSTEM_MESSAGE> Task id 'task-clean' completed with 0 failed and no error",
       ),
     ).toMatchObject({ taskId: "task-clean", isFailure: false });
+    expect(
+      parseAntigravitySystemMessage(
+        "<SYSTEM_MESSAGE> Task id 'task-tests' completed with 0 tests failed",
+      ),
+    ).toMatchObject({ taskId: "task-tests", isFailure: false });
   });
 
   it("detects background task starts from run_command tool output", () => {
@@ -1899,11 +1904,30 @@ describe("Antigravity background task helpers (#752)", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
+          const firstTaskStarted = yield* Deferred.make<void>();
+          const secondTaskStarted = yield* Deferred.make<void>();
+          const firstTaskCompleted = yield* Deferred.make<void>();
+          const secondTaskCompleted = yield* Deferred.make<void>();
           const taskEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.tap((event) => {
+              if (event.type === "task.started" && event.payload.taskId === "task-1") {
+                return Deferred.succeed(firstTaskStarted, undefined);
+              }
+              if (event.type === "task.started" && event.payload.taskId === "task-2") {
+                return Deferred.succeed(secondTaskStarted, undefined);
+              }
+              if (event.type === "task.completed" && event.payload.taskId === "task-1") {
+                return Deferred.succeed(firstTaskCompleted, undefined);
+              }
+              if (event.type === "task.completed" && event.payload.taskId === "task-2") {
+                return Deferred.succeed(secondTaskCompleted, undefined);
+              }
+              return Effect.void;
+            }),
             Stream.filter(
               (event) => event.type === "task.started" || event.type === "task.completed",
             ),
-            Stream.take(2),
+            Stream.take(4),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -1926,31 +1950,56 @@ describe("Antigravity background task helpers (#752)", () => {
                   transcriptPath: transcriptFile,
                 })}`,
                 'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"npm test","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
-                'stop\t{"stepIdx":2}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run dev","WaitMsBeforeAsync":1000}},"toolOutput":"sent to the background"}',
+                'stop\t{"stepIdx":3}',
                 "",
               ].join("\n"),
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Effect.all([Deferred.await(firstTaskStarted), Deferred.await(secondTaskStarted)], {
+            discard: true,
+          }).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(0);
 
           yield* Effect.sync(() => {
             fsSync.appendFileSync(
               transcriptFile,
-              `${JSON.stringify({
-                step_index: 3,
-                type: "SYSTEM_MESSAGE",
-                content: "<SYSTEM_MESSAGE> Task id 'task-42' exited with code 0",
-              })}\n`,
+              [
+                JSON.stringify({
+                  step_index: 4,
+                  type: "SYSTEM_MESSAGE",
+                  content: "<SYSTEM_MESSAGE> Task id 'task-real-a' exited with code 0",
+                }),
+                JSON.stringify({
+                  step_index: 5,
+                  type: "SYSTEM_MESSAGE",
+                  content: "<SYSTEM_MESSAGE> Task id 'task-real-b' exited with code 0",
+                }),
+                "",
+              ].join("\n"),
             );
-            fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":4}\n');
+            fsSync.appendFileSync(eventFile!, 'stop\t{"stepIdx":6}\n');
           });
-          yield* Effect.sleep("150 millis");
+          yield* Effect.all(
+            [Deferred.await(firstTaskCompleted), Deferred.await(secondTaskCompleted)],
+            { discard: true },
+          ).pipe(Effect.timeout("2 seconds"));
 
           const taskEvents = Array.from(
             yield* Fiber.join(taskEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(taskEvents.map((event) => event.type)).toEqual(["task.started", "task.completed"]);
+          expect(taskEvents.map((event) => event.type)).toEqual([
+            "task.started",
+            "task.started",
+            "task.completed",
+            "task.completed",
+          ]);
+          expect(taskEvents.map((event) => event.payload.taskId)).toEqual([
+            "task-1",
+            "task-2",
+            "task-1",
+            "task-2",
+          ]);
           expect(teardownCalls).toBe(1);
 
           child?.emit("close", 0, null);
@@ -2005,7 +2054,39 @@ describe("Antigravity background task helpers (#752)", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
+          const firstTaskStarted = yield* Deferred.make<void>();
+          const conversationReady = yield* Deferred.make<void>();
+          const completionBuffered = yield* Deferred.make<void>();
+          const bufferedTaskCompleted = yield* Deferred.make<void>();
+          const secondTurnCompleted = yield* Deferred.make<void>();
+          const exitTaskStarted = yield* Deferred.make<void>();
           const taskEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.tap((event) =>
+              Effect.all(
+                [
+                  event.type === "task.started" && event.payload.taskId === "task-restart"
+                    ? Deferred.succeed(firstTaskStarted, undefined)
+                    : Effect.void,
+                  event.type === "thread.started" &&
+                  event.payload.providerThreadId === "conversation-background-restart"
+                    ? Deferred.succeed(conversationReady, undefined)
+                    : Effect.void,
+                  event.type === "item.completed" && event.payload.itemType === "assistant_message"
+                    ? Deferred.succeed(completionBuffered, undefined)
+                    : Effect.void,
+                  event.type === "task.completed" && event.payload.taskId === "task-1"
+                    ? Deferred.succeed(bufferedTaskCompleted, undefined)
+                    : Effect.void,
+                  event.type === "turn.completed"
+                    ? Deferred.succeed(secondTurnCompleted, undefined)
+                    : Effect.void,
+                  event.type === "task.started" && event.payload.taskId === "task-exit"
+                    ? Deferred.succeed(exitTaskStarted, undefined)
+                    : Effect.void,
+                ],
+                { discard: true },
+              ),
+            ),
             Stream.filter(
               (event) =>
                 event.type === "task.started" ||
@@ -2037,7 +2118,7 @@ describe("Antigravity background task helpers (#752)", () => {
               ].join("\n"),
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Deferred.await(firstTaskStarted).pipe(Effect.timeout("2 seconds"));
           yield* adapter.startSession(sessionInput);
 
           yield* adapter.sendTurn({ threadId, input: "run more tests", attachments: [] });
@@ -2050,18 +2131,26 @@ describe("Antigravity background task helpers (#752)", () => {
               })}\n`,
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Deferred.await(conversationReady).pipe(Effect.timeout("2 seconds"));
           yield* Effect.promise(() =>
             fs.appendFile(
               transcriptFile,
-              `${JSON.stringify({
-                step_index: 2,
-                type: "SYSTEM_MESSAGE",
-                content: "<SYSTEM_MESSAGE> Task id 'task-buffered' exited with code 0",
-              })}\n`,
+              [
+                JSON.stringify({
+                  step_index: 2,
+                  type: "SYSTEM_MESSAGE",
+                  content: "<SYSTEM_MESSAGE> Task id 'task-buffered' exited with code 0",
+                }),
+                JSON.stringify({
+                  step_index: 3,
+                  type: "PLANNER_RESPONSE",
+                  content: "buffer-ready",
+                }),
+                "",
+              ].join("\n"),
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Deferred.await(completionBuffered).pipe(Effect.timeout("2 seconds"));
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -2071,9 +2160,9 @@ describe("Antigravity background task helpers (#752)", () => {
               ].join("\n"),
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Deferred.await(bufferedTaskCompleted).pipe(Effect.timeout("2 seconds"));
           child?.emit("close", 0, null);
-          yield* Effect.sleep("50 millis");
+          yield* Deferred.await(secondTurnCompleted).pipe(Effect.timeout("2 seconds"));
 
           yield* adapter.sendTurn({ threadId, input: "run final tests", attachments: [] });
           yield* Effect.promise(() =>
@@ -2085,7 +2174,7 @@ describe("Antigravity background task helpers (#752)", () => {
               ].join("\n"),
             ),
           );
-          yield* Effect.sleep("150 millis");
+          yield* Deferred.await(exitTaskStarted).pipe(Effect.timeout("2 seconds"));
           child?.emit("close", 1, null);
 
           const taskEvents = Array.from(
