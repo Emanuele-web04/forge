@@ -493,11 +493,24 @@ const pairRequestEffect = Effect.gen(function* () {
   // on pairing navigations. Mirror the session token into sessionStorage so the
   // WebUI can authorize with Bearer when the cookie never sticks.
   const sessionTokenJson = JSON.stringify(result.sessionToken);
+  // Carry the session on `/?sb=` — Android Chrome through Tailscale often drops
+  // Set-Cookie and can fail sessionStorage writes on the /pair document, then
+  // auto-redirects to / unpaired. The query param is claimed into storage on /.
   return HttpServerResponse.text(
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Paired · Synara</title><script>
-try { sessionStorage.setItem("synara.sessionBearer", ${sessionTokenJson}); } catch (e) {}
-setTimeout(function () { location.replace("/"); }, 250);
-</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara… <a href="/" style="color:#d6ff55">Continue</a></p></main></body></html>`,
+(function () {
+  var token = ${sessionTokenJson};
+  try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
+  var next = "/?sb=" + encodeURIComponent(token);
+  setTimeout(function () { location.replace(next); }, 50);
+})();
+</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara… If this stalls, tap Continue.</p><p style="margin:28px 0 0"><a id="synara-continue" href="/" style="color:#10110f;background:#d6ff55;text-decoration:none;font:600 14px/1 DM Sans,sans-serif;padding:14px 18px;display:inline-block">Continue</a></p></main><script>
+(function () {
+  var token = ${sessionTokenJson};
+  var link = document.getElementById("synara-continue");
+  if (link) link.setAttribute("href", "/?sb=" + encodeURIComponent(token));
+})();
+</script></body></html>`,
     {
       status: 200,
       contentType: "text/html; charset=utf-8",
