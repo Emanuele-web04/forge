@@ -35,6 +35,27 @@ const toBootstrapCredentialError = (message: string, status: 401 | 500, cause?: 
     ...(cause === undefined ? {} : { cause }),
   });
 
+const OWNER_BOOTSTRAP_SUBJECT = "owner-bootstrap";
+
+const grantFromPairingRow = (row: {
+  readonly method: "desktop-bootstrap" | "one-time-token";
+  readonly role: "owner" | "client";
+  readonly subject: string;
+  readonly label: string | null;
+  readonly expiresAt: DateTime.Utc;
+}): BootstrapGrant => ({
+  method: row.method,
+  role: row.role,
+  subject: row.subject,
+  ...(row.label ? { label: row.label } : {}),
+  expiresAt: row.expiresAt,
+});
+
+const isReusableOwnerBootstrap = (row: {
+  readonly role: "owner" | "client";
+  readonly subject: string;
+}): boolean => row.role === "owner" && row.subject === OWNER_BOOTSTRAP_SUBJECT;
+
 const toPairingLink = (row: {
   readonly id: string;
   readonly credential: string;
@@ -166,21 +187,74 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
       },
     );
 
-  const consume: BootstrapCredentialServiceShape["consume"] = (credential) =>
+  const resolvePairingGrant = (
+    credential: string,
+    options: { readonly consumeOneTime: boolean },
+  ): Effect.Effect<BootstrapGrant, BootstrapCredentialError> =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
-      const seeded = yield* consumeSeededGrant(credential, now);
-      if (seeded === "expired") {
+
+      if (options.consumeOneTime) {
+        const seeded = yield* consumeSeededGrant(credential, now);
+        if (seeded === "expired") {
+          return yield* toBootstrapCredentialError("Bootstrap credential expired.", 401);
+        }
+        if (seeded) {
+          return {
+            method: seeded.method,
+            role: seeded.role,
+            subject: seeded.subject,
+            ...(seeded.label ? { label: seeded.label } : {}),
+            expiresAt: seeded.expiresAt,
+          } satisfies BootstrapGrant;
+        }
+      } else {
+        const seededMap = yield* Ref.get(seededGrantsRef);
+        const seeded = seededMap.get(credential);
+        if (seeded) {
+          if (DateTime.isGreaterThanOrEqualTo(now, seeded.expiresAt)) {
+            return yield* toBootstrapCredentialError("Bootstrap credential expired.", 401);
+          }
+          return {
+            method: seeded.method,
+            role: seeded.role,
+            subject: seeded.subject,
+            ...(seeded.label ? { label: seeded.label } : {}),
+            expiresAt: seeded.expiresAt,
+          } satisfies BootstrapGrant;
+        }
+      }
+
+      const matching = yield* pairingLinks.getByCredential({ credential });
+      if (Option.isNone(matching)) {
+        return yield* toBootstrapCredentialError("Unknown bootstrap credential.", 401);
+      }
+      const row = matching.value;
+      if (row.revokedAt !== null) {
+        return yield* toBootstrapCredentialError(
+          "Bootstrap credential is no longer available.",
+          401,
+        );
+      }
+      if (DateTime.isGreaterThanOrEqualTo(now, row.expiresAt)) {
         return yield* toBootstrapCredentialError("Bootstrap credential expired.", 401);
       }
-      if (seeded) {
-        return {
-          method: seeded.method,
-          role: seeded.role,
-          subject: seeded.subject,
-          ...(seeded.label ? { label: seeded.label } : {}),
-          expiresAt: seeded.expiresAt,
-        } satisfies BootstrapGrant;
+
+      // Owner startup links are reusable for 24h so link previews / first opens
+      // cannot burn the only chance to pair a phone.
+      if (isReusableOwnerBootstrap(row)) {
+        return grantFromPairingRow(row);
+      }
+
+      if (row.consumedAt !== null) {
+        return yield* toBootstrapCredentialError(
+          "Bootstrap credential is no longer available.",
+          401,
+        );
+      }
+
+      if (!options.consumeOneTime) {
+        return grantFromPairingRow(row);
       }
 
       const consumed = yield* pairingLinks.consumeAvailable({
@@ -191,27 +265,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
 
       if (Option.isSome(consumed)) {
         yield* emitRemoved(consumed.value.id);
-        return {
-          method: consumed.value.method,
-          role: consumed.value.role,
-          subject: consumed.value.subject,
-          ...(consumed.value.label ? { label: consumed.value.label } : {}),
-          expiresAt: consumed.value.expiresAt,
-        } satisfies BootstrapGrant;
-      }
-
-      const matching = yield* pairingLinks.getByCredential({ credential });
-      if (Option.isNone(matching)) {
-        return yield* toBootstrapCredentialError("Unknown bootstrap credential.", 401);
-      }
-      if (matching.value.revokedAt !== null || matching.value.consumedAt !== null) {
-        return yield* toBootstrapCredentialError(
-          "Bootstrap credential is no longer available.",
-          401,
-        );
-      }
-      if (DateTime.isGreaterThanOrEqualTo(now, matching.value.expiresAt)) {
-        return yield* toBootstrapCredentialError("Bootstrap credential expired.", 401);
+        return grantFromPairingRow(consumed.value);
       }
 
       return yield* toBootstrapCredentialError("Bootstrap credential is no longer available.", 401);
@@ -219,9 +273,15 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
       Effect.mapError((cause) =>
         cause instanceof BootstrapCredentialError
           ? cause
-          : toBootstrapCredentialError("Failed to consume bootstrap credential.", 500, cause),
+          : toBootstrapCredentialError("Failed to validate bootstrap credential.", 500, cause),
       ),
     );
+
+  const peek: BootstrapCredentialServiceShape["peek"] = (credential) =>
+    resolvePairingGrant(credential, { consumeOneTime: false });
+
+  const consume: BootstrapCredentialServiceShape["consume"] = (credential) =>
+    resolvePairingGrant(credential, { consumeOneTime: true });
 
   return {
     issueOneTimeToken,
@@ -230,6 +290,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
       return Stream.fromPubSub(changesPubSub);
     },
     revoke,
+    peek,
     consume,
   } satisfies BootstrapCredentialServiceShape;
 });

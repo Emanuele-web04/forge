@@ -446,7 +446,6 @@ const pairRequestEffect = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const config = yield* ServerConfig;
   const serverAuth = yield* ServerAuth;
-  const sessions = yield* SessionCredentialService;
   const url = HttpServerRequest.toURL(request);
   if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
@@ -483,53 +482,55 @@ const pairRequestEffect = Effect.gen(function* () {
     });
   }
 
-  const result = yield* serverAuth.exchangeBootstrapCredential(credential, {
-    ...deriveAuthClientMetadata({
-      headers: request.headers,
-      remoteAddress: request.remoteAddress ?? null,
-    }),
-  });
-  // 200 + HTML (not 302): Android Chrome through Tailscale often drops Set-Cookie
-  // on pairing navigations. Mirror the session token into sessionStorage so the
-  // WebUI can authorize with Bearer when the cookie never sticks.
-  const sessionTokenJson = JSON.stringify(result.sessionToken);
-  // Carry the session on `/?sb=` — Android Chrome through Tailscale often drops
-  // Set-Cookie and can fail sessionStorage writes on the /pair document, then
-  // auto-redirects to / unpaired. The query param is claimed into storage on /.
+  // Peek only — never consume on GET. Link previews and the first navigation
+  // used to burn one-time owner links before the phone could finish pairing.
+  yield* serverAuth.peekBootstrapCredential(credential);
+  const credentialJson = JSON.stringify(credential);
   return HttpServerResponse.text(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Paired · Synara</title><script>
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pair · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">Pair this browser with Synara.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Tap the button below on the phone you want to keep signed in. Do not open this link in a preview or in-app browser.</p><p style="margin:28px 0 0"><button id="synara-pair" type="button" style="color:#10110f;background:#d6ff55;border:0;font:600 14px/1 DM Sans,sans-serif;padding:14px 18px;cursor:pointer">Pair this browser</button></p><p id="synara-pair-status" style="margin:18px 0 0;color:#b8bbb2;font-size:14px;line-height:1.5;min-height:1.5em"></p></main><script>
 (function () {
-  var token = ${sessionTokenJson};
-  try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
-  var next = "/?sb=" + encodeURIComponent(token);
-  setTimeout(function () { location.replace(next); }, 50);
-})();
-</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara… If this stalls, tap Continue.</p><p style="margin:28px 0 0"><a id="synara-continue" href="/" style="color:#10110f;background:#d6ff55;text-decoration:none;font:600 14px/1 DM Sans,sans-serif;padding:14px 18px;display:inline-block">Continue</a></p></main><script>
-(function () {
-  var token = ${sessionTokenJson};
-  var link = document.getElementById("synara-continue");
-  if (link) link.setAttribute("href", "/?sb=" + encodeURIComponent(token));
+  var credential = ${credentialJson};
+  var button = document.getElementById("synara-pair");
+  var status = document.getElementById("synara-pair-status");
+  if (!button) return;
+  button.addEventListener("click", function () {
+    button.disabled = true;
+    status.textContent = "Pairing…";
+    fetch("/api/auth/bootstrap/bearer", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: credential })
+    }).then(function (response) {
+      return response.json().then(function (payload) {
+        return { ok: response.ok, payload: payload };
+      });
+    }).then(function (result) {
+      if (!result.ok || !result.payload || typeof result.payload.sessionToken !== "string") {
+        throw new Error((result.payload && result.payload.error) || "Pairing failed.");
+      }
+      var token = result.payload.sessionToken;
+      try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
+      status.textContent = "Paired. Opening Synara…";
+      location.replace("/?sb=" + encodeURIComponent(token));
+    }).catch(function (error) {
+      button.disabled = false;
+      status.textContent = error && error.message ? error.message : "Pairing failed. Try again.";
+    });
+  });
 })();
 </script></body></html>`,
     {
       status: 200,
       contentType: "text/html; charset=utf-8",
-      headers: {
-        "Set-Cookie": encodeCookie({
-          name: sessions.cookieName,
-          value: result.sessionToken,
-          expiresAt: result.response.expiresAt,
-          secure: config.publicUrl !== undefined,
-        }),
-        "Cache-Control": "no-store",
-      },
+      headers: { "Cache-Control": "no-store" },
     },
   );
 }).pipe(
   Effect.catchTag("AuthError", (error) =>
     Effect.succeed(
       HttpServerResponse.text(
-        `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pairing failed · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing interrupted</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This pairing link could not be used.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">${error.message} Ask the Synara server for a fresh pairing link and open the full URL in Chrome (Brave shields can block the session cookie).</p></main></body></html>`,
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pairing failed · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing interrupted</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This pairing link could not be used.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">${error.message} Restart Synara on the PC for a fresh pairing link, then paste the full URL into Chrome.</p></main></body></html>`,
         { status: error.status ?? 401, contentType: "text/html; charset=utf-8" },
       ),
     ),

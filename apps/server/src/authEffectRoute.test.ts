@@ -73,6 +73,7 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         expiresAt,
         sessionToken: "bearer-token",
       }),
+    peekBootstrapCredential: () => Effect.succeed({ role: "owner" as const, subject: "owner-bootstrap" }),
     issuePairingCredential: () =>
       mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),
@@ -204,13 +205,11 @@ describe("authEffectRouteLayer", () => {
           redirect: "manual",
         });
         expect(response.status).toBe(200);
-        expect(response.headers.get("set-cookie")).toContain("synara_session=");
+        expect(response.headers.get("set-cookie")).toBeNull();
         const body = await response.text();
-        expect(body).toContain("This browser is paired.");
-        expect(body).toContain("synara.sessionBearer");
-        expect(body).toContain("cookie-token");
-        expect(body).toContain("?sb=");
-        expect(sideEffects.count).toBe(1);
+        expect(body).toContain("Pair this browser");
+        expect(body).toContain("PAIRINGTOKEN");
+        expect(sideEffects.count).toBe(0);
       },
       pairEffectRouteLayer,
     );
@@ -231,9 +230,9 @@ describe("authEffectRouteLayer", () => {
           redirect: "manual",
         });
         expect(response.status).toBe(200);
-        expect(response.headers.get("set-cookie")).toContain("synara_session=");
-        expect(await response.text()).toContain("This browser is paired.");
-        expect(sideEffects.count).toBe(1);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        expect(await response.text()).toContain("Pair this browser");
+        expect(sideEffects.count).toBe(0);
       },
       pairEffectRouteLayer,
     );

@@ -58,6 +58,14 @@ export interface ServerAuthShape {
     credential: string,
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
+  /** Validates a pairing credential without consuming one-time links. */
+  readonly peekBootstrapCredential: (credential: string) => Effect.Effect<
+    {
+      readonly role: "owner" | "client";
+      readonly subject: string;
+    },
+    AuthError
+  >;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;

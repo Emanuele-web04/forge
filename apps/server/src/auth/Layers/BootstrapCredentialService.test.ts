@@ -97,4 +97,22 @@ describe("BootstrapCredentialServiceLive", () => {
       expect(remainingMs).toBeLessThanOrEqual(Duration.toMillis(Duration.hours(24)));
     }).pipe(Effect.provide(testLayer), Effect.runPromise);
   });
+
+  it("lets owner startup pairing links be reused after a first consume", async () => {
+    await Effect.gen(function* () {
+      const service = yield* BootstrapCredentialService;
+      const issued = yield* service.issueOneTimeToken({
+        role: "owner",
+        subject: "owner-bootstrap",
+        ttl: OWNER_STARTUP_PAIRING_TTL,
+      });
+
+      yield* service.consume(issued.credential);
+      const again = yield* service.consume(issued.credential);
+      expect(again.role).toBe("owner");
+      expect(again.subject).toBe("owner-bootstrap");
+      const peeked = yield* service.peek(issued.credential);
+      expect(peeked.subject).toBe("owner-bootstrap");
+    }).pipe(Effect.provide(testLayer), Effect.runPromise);
+  });
 });

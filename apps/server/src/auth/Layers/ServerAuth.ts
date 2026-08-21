@@ -141,6 +141,15 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const peekBootstrapCredential: ServerAuthShape["peekBootstrapCredential"] = (credential) =>
+    bootstrapCredentials.peek(credential).pipe(
+      Effect.mapError(toBootstrapExchangeAuthError),
+      Effect.map((grant) => ({
+        role: grant.role,
+        subject: grant.subject,
+      })),
+    );
+
   const exchangeBootstrapCredential: ServerAuthShape["exchangeBootstrapCredential"] = (
     credential,
     requestMetadata,
@@ -408,6 +417,7 @@ export const makeServerAuth = Effect.gen(function* () {
   return {
     getDescriptor: () => Effect.succeed(descriptor),
     getSessionState,
+    peekBootstrapCredential,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
     issuePairingCredential,

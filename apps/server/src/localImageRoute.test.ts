@@ -100,6 +100,8 @@ function makeFakeServerAuth(): ServerAuthShape {
         expiresAt,
         sessionToken: "bearer-session-token",
       }),
+    peekBootstrapCredential: () =>
+      Effect.succeed({ role: "owner" as const, subject: "owner-bootstrap" }),
     issuePairingCredential: () =>
       Effect.succeed({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),

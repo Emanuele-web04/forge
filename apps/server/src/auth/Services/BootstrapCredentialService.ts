@@ -48,6 +48,8 @@ export interface BootstrapCredentialServiceShape {
   >;
   readonly streamChanges: Stream.Stream<BootstrapCredentialChange>;
   readonly revoke: (id: string) => Effect.Effect<boolean, BootstrapCredentialError>;
+  /** Validates a credential without consuming it. */
+  readonly peek: (credential: string) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
   readonly consume: (credential: string) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
 }
 
