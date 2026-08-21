@@ -133,7 +133,11 @@ import {
   isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
-import { useThreadPullRequests, type ThreadPullRequest } from "../hooks/useThreadPullRequests";
+import {
+  resolveThreadPullRequestFallback,
+  useThreadPullRequests,
+  type ThreadPullRequest,
+} from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -321,6 +325,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
+  resolveThreadStatusPillForPullRequest,
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
@@ -1712,15 +1717,21 @@ export default function Sidebar() {
     });
   }, []);
   const resolveThreadStatusForSidebar = useCallback(
-    (thread: SidebarThreadSummary) =>
-      resolveThreadStatusPill({
+    (thread: SidebarThreadSummary) => {
+      const effectivePullRequest = resolveThreadPullRequestFallback({
+        branch: thread.branch,
+        lastKnownPr: thread.lastKnownPr ?? null,
+      });
+      return resolveThreadStatusPillForPullRequest({
         thread: {
           ...thread,
           dismissedStatusKey: dismissedThreadStatusKeyByThreadId[thread.id],
         },
+        effectivePullRequest,
         hasPendingApprovals: thread.hasPendingApprovals,
         hasPendingUserInput: thread.hasPendingUserInput,
-      }),
+      });
+    },
     [dismissedThreadStatusKeyByThreadId],
   );
 
@@ -4093,6 +4104,24 @@ export default function Sidebar() {
     threads: visibleSidebarThreads,
     projectCwdById,
   });
+  const resolveVisibleThreadStatusForSidebar = useCallback(
+    (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPillForPullRequest({
+        thread: {
+          ...thread,
+          dismissedStatusKey: dismissedThreadStatusKeyByThreadId[thread.id],
+        },
+        effectivePullRequest: prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : resolveThreadPullRequestFallback({
+              branch: thread.branch,
+              lastKnownPr: thread.lastKnownPr ?? null,
+            }),
+        hasPendingApprovals: thread.hasPendingApprovals,
+        hasPendingUserInput: thread.hasPendingUserInput,
+      }),
+    [dismissedThreadStatusKeyByThreadId, prByThreadId],
+  );
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
@@ -4314,7 +4343,7 @@ export default function Sidebar() {
       project: hoverProject,
     });
     const hoverStatus = resolveThreadStatusTrailingIndicator({
-      status: resolveThreadStatusForSidebar(thread),
+      status: resolveVisibleThreadStatusForSidebar(thread),
       isActive,
     });
     return (
@@ -4386,7 +4415,7 @@ export default function Sidebar() {
         Boolean(thread.handoff?.sourceProvider),
       threadAutomations: automationsByThreadId.get(thread.id),
     });
-    const threadStatus = resolveThreadStatusForSidebar(thread);
+    const threadStatus = resolveVisibleThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
     const leadingPrStatus =
@@ -4533,7 +4562,7 @@ export default function Sidebar() {
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
-    const threadStatus = resolveThreadStatusForSidebar(thread);
+    const threadStatus = resolveVisibleThreadStatusForSidebar(thread);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
     const terminalStatus = terminalStatusFromThreadState({
       runningTerminalIds: threadTerminalState.runningTerminalIds,
@@ -5967,7 +5996,7 @@ export default function Sidebar() {
                     pinnedThreadIdSet={pinnedThreadIdSet}
                     settledOverrideByThreadId={settledOverrideByThreadId}
                     threadsHydrated={threadsHydrated}
-                    resolveThreadStatus={resolveThreadStatusForSidebar}
+                    resolveThreadStatus={resolveVisibleThreadStatusForSidebar}
                     onOpenThread={openActivityThread}
                     onSetThreadSettled={setThreadSettledWithToast}
                     onToggleThreadPinned={toggleThreadPinned}

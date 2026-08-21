@@ -45,7 +45,9 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
+  resolveThreadPullRequestForStatus,
   resolveThreadStatusPill,
+  resolveThreadStatusPillForPullRequest,
   resolveThreadStatusTrailingIndicator,
   isUrgentThreadStatusPill,
   type ThreadStatusPill,
@@ -1107,6 +1109,8 @@ describe("isUrgentThreadStatusPill", () => {
     expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Failed"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Ready for Review"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
   });
 });
@@ -1158,6 +1162,131 @@ describe("resolveThreadStatusPill", () => {
       orchestrationStatus: "running" as const,
     },
   };
+
+  it("shows failures before other states", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: { ...baseThread.session, status: "error" },
+        },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).toMatchObject({ label: "Failed", pulse: false, dismissible: false });
+  });
+
+  it("shows review-ready only for completed non-draft open PR work", () => {
+    const completedWithOpenPr = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestTurn: makeLatestTurn(),
+      lastKnownPr: {
+        number: 42,
+        title: "Review this",
+        url: "https://github.com/acme/synara/pull/42",
+        baseBranch: "main",
+        headBranch: "feature/review",
+        state: "open" as const,
+        isDraft: false,
+      },
+      session: {
+        ...baseThread.session,
+        status: "ready" as const,
+        orchestrationStatus: "ready" as const,
+      },
+    };
+    expect(
+      resolveThreadStatusPill({
+        thread: completedWithOpenPr,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).toMatchObject({ label: "Ready for Review", pulse: false, dismissible: false });
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...completedWithOpenPr,
+          lastKnownPr: { ...completedWithOpenPr.lastKnownPr, isDraft: true },
+        },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).not.toMatchObject({ label: "Ready for Review" });
+  });
+
+  it("keeps unknown draft provenance when the live PR matches a legacy snapshot", () => {
+    const persisted = {
+      number: 42,
+      title: "Legacy snapshot",
+      url: "https://github.com/acme/synara/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/review",
+      state: "open" as const,
+      isDraft: undefined,
+    };
+    const live = { ...persisted, isDraft: false, title: "Live PR" };
+    expect(resolveThreadPullRequestForStatus({ lastKnownPr: persisted }, live)).toEqual({
+      ...live,
+      isDraft: undefined,
+    });
+    expect(
+      resolveThreadStatusPillForPullRequest({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          lastKnownPr: persisted,
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+        effectivePullRequest: live,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).not.toMatchObject({ label: "Ready for Review" });
+  });
+
+  it("uses a distinct live PR even when persisted metadata is stale", () => {
+    const persisted = {
+      number: 42,
+      title: "Stale persisted PR",
+      url: "https://github.com/acme/synara/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/old",
+      state: "open" as const,
+      isDraft: false,
+    };
+    const live = {
+      ...persisted,
+      number: 43,
+      title: "Live resolved PR",
+      url: "https://github.com/acme/synara/pull/43",
+      headBranch: "feature/review",
+    };
+    expect(resolveThreadPullRequestForStatus({ lastKnownPr: persisted }, live)).toEqual(live);
+    expect(
+      resolveThreadStatusPillForPullRequest({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          lastKnownPr: persisted,
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+        effectivePullRequest: null,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).not.toMatchObject({ label: "Ready for Review" });
+  });
 
   it("shows pending approval before all other statuses", () => {
     expect(

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -129,6 +129,106 @@ describe("SidebarActivityView", () => {
 
     await page.viewport(1_280, 800);
     await vi.waitFor(() => expect(getComputedStyle(mobileHeader!).display).toBe("none"));
+    await mounted.unmount();
+  });
+
+  it("shows failed and review-ready attention pills in priority order", async () => {
+    const failed = makeThread(10, {
+      latestTurn: {
+        ...makeThread(10).latestTurn!,
+        state: "error",
+      },
+    });
+    const reviewReady = makeThread(11, {
+      lastKnownPr: {
+        number: 42,
+        title: "Review Activity attention",
+        url: "https://github.com/acme/synara/pull/42",
+        baseBranch: "main",
+        headBranch: "feature/activity-attention",
+        state: "open",
+        isDraft: false,
+      },
+    });
+    const mounted = await render(
+      renderActivity({
+        threads: [reviewReady, failed],
+        resolveThreadStatus: (thread) =>
+          resolveThreadStatusPill({
+            thread,
+            hasPendingApprovals: thread.hasPendingApprovals,
+            hasPendingUserInput: thread.hasPendingUserInput,
+          }),
+      }),
+    );
+
+    await expect.element(page.getByText("Failed", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Ready for Review", { exact: true })).toBeVisible();
+    expect(document.querySelector('[role="img"][aria-label="Failed"]')).toBeNull();
+    expect(document.querySelector('[role="img"][aria-label="Ready for Review"]')).toBeNull();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-testid^='activity-thread-']"));
+    expect(rows.map((row) => row.dataset.testid)).toEqual([
+      `activity-thread-${failed.id}`,
+      `activity-thread-${reviewReady.id}`,
+    ]);
+    await mounted.unmount();
+  });
+
+  it("uses the effective PR for both review status and the displayed badge", async () => {
+    const persistedPr = {
+      number: 42,
+      title: "Stale persisted PR",
+      url: "https://github.com/acme/synara/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/old",
+      state: "open" as const,
+      isDraft: false,
+    };
+    const stale = makeThread(12, { lastKnownPr: persistedPr });
+    const resolveStatus = (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: thread.hasPendingApprovals,
+        hasPendingUserInput: thread.hasPendingUserInput,
+      });
+    const mounted = await render(
+      renderActivity({
+        threads: [stale],
+        prByThreadId: new Map([[stale.id, null]]),
+        resolveThreadStatus: resolveStatus,
+      }),
+    );
+
+    expect(document.body.textContent).not.toContain("Ready for Review");
+    expect(document.querySelector('[title^="#42 "]')).toBeNull();
+
+    const live = makeThread(13, { lastKnownPr: null });
+    const livePr = { ...persistedPr, number: 43, title: "Live resolved PR" };
+    await mounted.rerender(
+      renderActivity({
+        threads: [live],
+        prByThreadId: new Map([[live.id, livePr]]),
+        resolveThreadStatus: resolveStatus,
+      }),
+    );
+
+    await expect.element(page.getByText("Ready for Review", { exact: true })).toBeVisible();
+    expect(document.querySelector('[title="#43 PR open: Live resolved PR"]')).not.toBeNull();
+
+    const legacy = makeThread(14, {
+      lastKnownPr: { ...persistedPr, number: 44, isDraft: undefined },
+    });
+    await mounted.rerender(
+      renderActivity({
+        threads: [legacy],
+        prByThreadId: new Map([
+          [legacy.id, { ...persistedPr, number: 44, isDraft: false }],
+        ]),
+        resolveThreadStatus: resolveStatus,
+      }),
+    );
+    expect(document.body.textContent).not.toContain("Ready for Review");
+    expect(document.querySelector('[title="#44 PR open: Stale persisted PR"]')).not.toBeNull();
     await mounted.unmount();
   });
 

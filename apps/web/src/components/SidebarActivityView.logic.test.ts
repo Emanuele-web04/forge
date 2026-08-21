@@ -14,6 +14,7 @@ import {
   formatActivityRowTime,
   groupActivityThreadsByProject,
   hasUnreadActivity,
+  isActivityAttentionSignalAcknowledged,
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
@@ -45,7 +46,9 @@ function makeThread(input: {
   session?: ThreadSession | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
+  hasActionableProposedPlan?: boolean;
   hasLiveTailWork?: boolean;
+  lastKnownPr?: SidebarThreadSummary["lastKnownPr"];
   archivedAt?: string | null;
   settledAt?: string | null;
   parentThreadId?: string | null;
@@ -72,8 +75,9 @@ function makeThread(input: {
     latestUserMessageAt: null,
     hasPendingApprovals: input.hasPendingApprovals ?? false,
     hasPendingUserInput: input.hasPendingUserInput ?? false,
-    hasActionableProposedPlan: false,
+    hasActionableProposedPlan: input.hasActionableProposedPlan ?? false,
     hasLiveTailWork: input.hasLiveTailWork ?? false,
+    lastKnownPr: input.lastKnownPr ?? null,
   } satisfies SidebarThreadSummary;
 }
 
@@ -112,6 +116,63 @@ describe("isActivityThread", () => {
 });
 
 describe("resolveActivityStatusGroup", () => {
+  it("puts failures first and only treats completed non-draft PR work as review-ready", () => {
+    const failedTurn = {
+      ...completedTurn("2026-08-01T09:30:00.000Z"),
+      state: "error" as const,
+    };
+    const openPr = {
+      number: 42,
+      title: "Ship Activity attention",
+      url: "https://github.com/acme/synara/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/activity-attention",
+      state: "open" as const,
+      isDraft: false,
+    };
+
+    expect(resolveActivityStatusGroup(makeThread({ id: "failed", latestTurn: failedTurn }))).toBe(
+      "failed",
+    );
+    expect(
+      resolveActivityStatusGroup(
+        makeThread({
+          id: "review-ready",
+          latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+          lastKnownPr: openPr,
+        }),
+      ),
+    ).toBe("reviewReady");
+    expect(
+      resolveActivityStatusGroup(
+        makeThread({
+          id: "draft",
+          latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+          lastKnownPr: { ...openPr, isDraft: true },
+        }),
+      ),
+    ).not.toBe("reviewReady");
+    expect(
+      resolveActivityStatusGroup(
+        makeThread({
+          id: "legacy-unknown-draft-state",
+          latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+          lastKnownPr: { ...openPr, isDraft: undefined },
+        }),
+      ),
+    ).not.toBe("reviewReady");
+    expect(
+      resolveActivityStatusGroup(
+        makeThread({
+          id: "still-running",
+          latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+          lastKnownPr: openPr,
+          hasLiveTailWork: true,
+        }),
+      ),
+    ).not.toBe("reviewReady");
+  });
+
   it("puts answerable pending approvals in attention", () => {
     const thread = makeThread({
       id: "a",
@@ -158,7 +219,7 @@ describe("resolveActivityStatusGroup", () => {
 });
 
 describe("buildActivityViewModel", () => {
-  it("orders active threads attention → unseen → running → seen, newest first per group", () => {
+  it("orders active threads failed → attention → review-ready → unseen → running → seen", () => {
     const createdAt = "2026-08-01T04:00:00.000Z";
     const seenOld = makeThread({
       id: "seen-old",
@@ -191,14 +252,38 @@ describe("buildActivityViewModel", () => {
       session: makeSession("running"),
       latestTurn: completedTurn("2026-08-01T04:30:00.000Z"),
     });
+    const reviewReady = makeThread({
+      id: "review-ready",
+      createdAt,
+      latestTurn: completedTurn("2026-08-01T04:15:00.000Z"),
+      lastKnownPr: {
+        number: 42,
+        title: "Review this",
+        url: "https://github.com/acme/synara/pull/42",
+        baseBranch: "main",
+        headBranch: "feature/review",
+        state: "open",
+        isDraft: false,
+      },
+    });
+    const failed = makeThread({
+      id: "failed",
+      createdAt,
+      latestTurn: {
+        ...completedTurn("2026-08-01T04:00:00.000Z"),
+        state: "error",
+      },
+    });
 
     const model = buildActivityViewModel({
-      threads: [seenOld, seenNew, running, unseen, attention],
+      threads: [seenOld, seenNew, running, unseen, attention, reviewReady, failed],
       pinnedThreadIdSet: new Set(),
     });
 
     expect(model.active.map((thread) => thread.id)).toEqual([
+      "failed",
       "attention",
+      "review-ready",
       "unseen",
       "running",
       "seen-new",
@@ -370,6 +455,112 @@ describe("buildActivityViewModel", () => {
 
     expect(model.active.map((thread) => thread.id)).toEqual(["attention", "unseen", "running"]);
     expect(model.settled.map((thread) => thread.id)).toEqual(["reviewed"]);
+  });
+
+  it("keeps acknowledged failures and reviews settled until a newer signal arrives", () => {
+    const openPr = {
+      number: 42,
+      title: "Review this",
+      url: "https://github.com/acme/synara/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/review",
+      state: "open" as const,
+      isDraft: false,
+    };
+    const failedAt = (id: string, completedAt: string, settledAt: string) =>
+      makeThread({
+        id,
+        settledAt,
+        latestTurn: { ...completedTurn(completedAt), state: "error" },
+      });
+    const reviewAt = (id: string, completedAt: string, settledAt: string) =>
+      makeThread({
+        id,
+        settledAt,
+        latestTurn: completedTurn(completedAt),
+        lastKnownPr: openPr,
+      });
+    const acknowledgedFailure = failedAt(
+      "ack-failure",
+      "2026-08-01T09:00:00.000Z",
+      "2026-08-01T09:05:00.000Z",
+    );
+    const newerFailure = failedAt(
+      "new-failure",
+      "2026-08-01T09:10:00.000Z",
+      "2026-08-01T09:05:00.000Z",
+    );
+    const acknowledgedReview = reviewAt(
+      "ack-review",
+      "2026-08-01T09:00:00.000Z",
+      "2026-08-01T09:05:00.000Z",
+    );
+    const newerReview = reviewAt(
+      "new-review",
+      "2026-08-01T09:10:00.000Z",
+      "2026-08-01T09:05:00.000Z",
+    );
+
+    expect(isActivityAttentionSignalAcknowledged(acknowledgedFailure)).toBe(true);
+    expect(isActivityAttentionSignalAcknowledged(newerFailure)).toBe(false);
+    expect(isActivityAttentionSignalAcknowledged(acknowledgedReview)).toBe(true);
+    expect(isActivityAttentionSignalAcknowledged(newerReview)).toBe(false);
+
+    const model = buildActivityViewModel({
+      threads: [acknowledgedFailure, newerFailure, acknowledgedReview, newerReview],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(model.active.map((thread) => thread.id)).toEqual(["new-failure", "new-review"]);
+    expect(model.settled.map((thread) => thread.id)).toEqual(["ack-failure", "ack-review"]);
+
+    const sessionFailure = (id: string, errorAt: string, settledAt: string) =>
+      makeThread({
+        id,
+        settledAt,
+        latestTurn: completedTurn("2026-08-01T08:00:00.000Z"),
+        session: {
+          ...makeSession("error"),
+          updatedAt: errorAt,
+        },
+      });
+    expect(
+      isActivityAttentionSignalAcknowledged(
+        sessionFailure(
+          "ack-session-error",
+          "2026-08-01T09:00:00.000Z",
+          "2026-08-01T09:05:00.000Z",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isActivityAttentionSignalAcknowledged(
+        sessionFailure(
+          "new-session-error",
+          "2026-08-01T09:10:00.000Z",
+          "2026-08-01T09:05:00.000Z",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("treats an optimistic Done action as immediate acknowledgement", () => {
+    const failed = makeThread({
+      id: "optimistically-acknowledged",
+      latestTurn: {
+        ...completedTurn("2026-08-01T09:10:00.000Z"),
+        state: "error",
+      },
+    });
+    const overrides = new Map([[failed.id, true]]);
+
+    expect(isActivityAttentionSignalAcknowledged(failed, overrides)).toBe(true);
+    const model = buildActivityViewModel({
+      threads: [failed],
+      pinnedThreadIdSet: new Set(),
+      settledOverrideByThreadId: overrides,
+    });
+    expect(model.active).toEqual([]);
+    expect(model.settled.map((thread) => thread.id)).toEqual([failed.id]);
   });
 });
 

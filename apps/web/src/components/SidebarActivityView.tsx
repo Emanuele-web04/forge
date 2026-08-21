@@ -46,6 +46,7 @@ import {
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
+  resolveThreadPullRequestForStatus,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -55,6 +56,7 @@ import {
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
+  isActivityAttentionSignalAcknowledged,
   isThreadSettledForActivity,
   resolveActivityScope,
   splitActivityThreadsByDateBucket,
@@ -76,6 +78,7 @@ import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { ThreadStatusPillChip } from "./ThreadStatusPillChip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import {
@@ -145,10 +148,13 @@ function ActivityThreadRow({
     threadId: thread.id,
   });
   const actionToneClassName = "text-muted-foreground/42";
-  // One trailing slot, top-right, shared by every status: the accent dot for an
-  // unread completion and the running spinner (or state dot) for everything
-  // else — same rule and same glyphs the classic thread/project rows use.
-  const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
+  const attentionStatus =
+    status?.label === "Failed" || status?.label === "Ready for Review" ? status : null;
+  // Labeled attention chips own both the visual and accessible status. Rendering
+  // the compact trailing dot as well would announce the same state twice.
+  const trailingStatus = attentionStatus
+    ? null
+    : resolveThreadStatusTrailingIndicator({ status, isActive });
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
   // they also fire over the trailing status and hover-action cluster, which are
   // absolutely positioned siblings of the button.
@@ -214,6 +220,9 @@ function ActivityThreadRow({
             <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
+            {attentionStatus ? (
+              <ThreadStatusPillChip pill={attentionStatus} className="shrink-0" />
+            ) : null}
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
               {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
               {branch ? (
@@ -580,11 +589,39 @@ export function SidebarActivityView({
     () => new Map(),
   );
 
+  const effectivePrByThreadId = useMemo(() => {
+    const effective = new Map<ThreadId, OrchestrationThreadPullRequest | null>();
+    for (const thread of threads) {
+      effective.set(
+        thread.id,
+        prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : resolveThreadPullRequestFallback({
+              branch: thread.branch,
+              lastKnownPr: thread.lastKnownPr ?? null,
+            }),
+      );
+    }
+    return effective;
+  }, [prByThreadId, threads]);
+  const activityThreads = useMemo(
+    () =>
+      threads.map((thread) => {
+        const statusPr = resolveThreadPullRequestForStatus(
+          thread,
+          effectivePrByThreadId.get(thread.id) ?? null,
+        );
+        return statusPr === (thread.lastKnownPr ?? null)
+          ? thread
+          : { ...thread, lastKnownPr: statusPr };
+      }),
+    [effectivePrByThreadId, threads],
+  );
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
   // Scope options and the unread sweep intentionally ignore the active scope:
   // the menu must keep offering every project, and "Mark all as read" means all.
-  const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
-  const unreadThreads = collectUnreadActivityThreads(threads);
+  const scopeOptions = collectActivityScopeOptions(activityThreads, isRealProject);
+  const unreadThreads = collectUnreadActivityThreads(activityThreads);
 
   const { scope: activeScope, projectFilterIds } = resolveActivityScope(
     scopeSelection,
@@ -595,7 +632,7 @@ export function SidebarActivityView({
   }, [activeScope, scopeSelection]);
 
   const model = buildActivityViewModel({
-    threads,
+    threads: activityThreads,
     pinnedThreadIdSet,
     settledOverrideByThreadId,
     projectFilterIds,
@@ -701,19 +738,12 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={
-        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
-        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
-        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
-        // catches up) get the same resolution without live status instead.
-        prByThreadId.has(thread.id)
-          ? (prByThreadId.get(thread.id) ?? null)
-          : resolveThreadPullRequestFallback({
-              branch: thread.branch,
-              lastKnownPr: thread.lastKnownPr ?? null,
-            })
+      pr={effectivePrByThreadId.get(thread.id) ?? null}
+      status={
+        isActivityAttentionSignalAcknowledged(thread, settledOverrideByThreadId)
+          ? null
+          : resolveThreadStatus(thread)
       }
-      status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);

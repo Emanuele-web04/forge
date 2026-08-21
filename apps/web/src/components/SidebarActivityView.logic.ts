@@ -9,21 +9,34 @@ import type { TimestampFormat } from "../appSettings";
 import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../session-logic";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
+import {
+  hasFailedThread,
+  hasUnseenCompletion,
+  isThreadActivelyWorking,
+  isThreadReadyForReview,
+} from "./Sidebar.logic";
 
 /**
- * Task-feed ordering, top to bottom: threads that need the user (approvals,
- * input, ready plans), finished work not yet seen, live work, then everything
- * already reviewed. Settled threads leave these groups entirely and sink to
- * the dimmed Settled section.
+ * Task-feed ordering, top to bottom: failed work, threads that need the user
+ * (approvals, input, ready plans), review-ready PRs, unseen completions, live
+ * work, then everything already reviewed. Settled threads leave these groups
+ * entirely and sink to the dimmed Settled section.
  */
-export type ActivityStatusGroup = "attention" | "unseenCompleted" | "running" | "seen";
+export type ActivityStatusGroup =
+  | "failed"
+  | "attention"
+  | "reviewReady"
+  | "unseenCompleted"
+  | "running"
+  | "seen";
 
 const ACTIVITY_GROUP_ORDER: Record<ActivityStatusGroup, number> = {
-  attention: 0,
-  unseenCompleted: 1,
-  running: 2,
-  seen: 3,
+  failed: 0,
+  attention: 1,
+  reviewReady: 2,
+  unseenCompleted: 3,
+  running: 4,
+  seen: 5,
 };
 
 export function isThreadRunningForActivity(
@@ -59,8 +72,14 @@ function requiresActivityAttention(thread: ActivityAttentionInput): boolean {
 }
 
 export function resolveActivityStatusGroup(thread: SidebarThreadSummary): ActivityStatusGroup {
+  if (hasFailedThread(thread)) {
+    return "failed";
+  }
   if (requiresActivityAttention(thread)) {
     return "attention";
+  }
+  if (isThreadReadyForReview(thread)) {
+    return "reviewReady";
   }
   if (isThreadRunningForActivity(thread)) {
     return "running";
@@ -93,6 +112,42 @@ function parseTimestampMs(value: string | null | undefined): number {
   if (!value) return 0;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/** Timestamp of the failed/review-ready signal that `Done` acknowledges. */
+export function resolveActivityAttentionSignalMs(
+  thread: SidebarThreadSummary,
+  statusGroup: ActivityStatusGroup = resolveActivityStatusGroup(thread),
+): number {
+  if (statusGroup === "failed") {
+    return Math.max(
+      thread.latestTurn?.state === "error"
+        ? Math.max(
+            parseTimestampMs(thread.latestTurn.completedAt),
+            parseTimestampMs(thread.latestTurn.startedAt),
+            parseTimestampMs(thread.latestTurn.requestedAt),
+          )
+        : 0,
+      thread.session?.status === "error" ? parseTimestampMs(thread.session.updatedAt) : 0,
+    );
+  }
+  if (statusGroup === "reviewReady") {
+    return parseTimestampMs(thread.latestTurn?.completedAt);
+  }
+  return 0;
+}
+
+export function isActivityAttentionSignalAcknowledged(
+  thread: SidebarThreadSummary,
+  settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>,
+): boolean {
+  const settledOverride = settledOverrideByThreadId?.get(thread.id);
+  if (settledOverride === false) return false;
+  if (settledOverride === true) return true;
+  const settledMs = parseTimestampMs(thread.settledAt);
+  if (settledMs === 0) return false;
+  const signalMs = resolveActivityAttentionSignalMs(thread);
+  return signalMs > 0 && signalMs <= settledMs;
 }
 
 /**
@@ -155,8 +210,10 @@ export interface ActivityViewModel {
  * pinned by recency, active by status group then recency, settled by when they
  * were settled. Pinned threads live exclusively in the Pinned section, while a
  * settled non-pinned thread is promoted back to active whenever it starts working,
- * needs attention, or has an unseen completion. An optional project filter narrows
- * every section without changing the ordering rules.
+ * needs attention, or has an unseen completion. Failed and review-ready signals
+ * remain settled after Done until their signal timestamp becomes newer than
+ * `settledAt`. An optional project filter narrows every section without changing
+ * the ordering rules.
  */
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
@@ -178,9 +235,13 @@ export function buildActivityViewModel(input: {
       continue;
     }
     const statusGroup = resolveActivityStatusGroup(thread);
+    const acknowledgedAttention = isActivityAttentionSignalAcknowledged(
+      thread,
+      input.settledOverrideByThreadId,
+    );
     if (
       isThreadSettledForActivity(thread, input.settledOverrideByThreadId) &&
-      statusGroup === "seen"
+      (statusGroup === "seen" || acknowledgedAttention)
     ) {
       settled.push(thread);
     } else {
@@ -418,7 +479,7 @@ export function resolveActivityDayStartMs(nowMs: number): number {
 /**
  * Keeps actionable or live work ahead of the user's already-reviewed working
  * set. `active` is already status-sorted, so both returned arrays preserve the
- * intended attention → unseen completion → running → seen ordering.
+ * intended failed → attention → review-ready → unseen → running → seen ordering.
  */
 export function splitPriorityActivityThreads(active: readonly SidebarThreadSummary[]): {
   priority: SidebarThreadSummary[];

@@ -5,6 +5,7 @@
 import {
   MAX_PINNED_PROJECTS,
   type KeybindingCommand,
+  type OrchestrationThreadPullRequest,
   type ProjectId,
   type PullRequestReviewRequestCountResult,
   type ThreadId,
@@ -338,6 +339,8 @@ export interface ThreadStatusPill {
   label:
     | "Working"
     | "Connecting"
+    | "Failed"
+    | "Ready for Review"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
@@ -389,8 +392,10 @@ export function resolveThreadStatusTrailingIndicator(input: {
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 5,
-  "Awaiting Input": 4,
+  Failed: 7,
+  "Pending Approval": 6,
+  "Awaiting Input": 5,
+  "Ready for Review": 4,
   Working: 3,
   Connecting: 3,
   "Plan Ready": 2,
@@ -399,7 +404,12 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   Thread,
-  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session" | "updatedAt"
+  | "interactionMode"
+  | "lastKnownPr"
+  | "latestTurn"
+  | "lastVisitedAt"
+  | "session"
+  | "updatedAt"
 > & {
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
@@ -603,6 +613,82 @@ export function isThreadActivelyWorking(thread: {
   );
 }
 
+export function hasFailedThread(
+  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+): boolean {
+  return thread.latestTurn?.state === "error" || thread.session?.status === "error";
+}
+
+/**
+ * An open PR is review-ready only after a provider turn completed and GitHub
+ * explicitly says it is not a draft. Legacy PR snapshots without `isDraft`
+ * remain unlabeled rather than guessing that in-progress work is ready.
+ */
+export function isThreadReadyForReview(
+  thread: Pick<
+    SidebarThreadSummary,
+    | "hasActionableProposedPlan"
+    | "hasLiveTailWork"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "lastKnownPr"
+    | "latestTurn"
+    | "session"
+  >,
+): boolean {
+  return (
+    thread.lastKnownPr?.state === "open" &&
+    thread.lastKnownPr.isDraft === false &&
+    thread.latestTurn?.state === "completed" &&
+    thread.latestTurn.completedAt !== null &&
+    thread.session?.status !== "error" &&
+    thread.session?.status !== "running" &&
+    thread.session?.status !== "connecting" &&
+    !thread.hasLiveTailWork &&
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput &&
+    !thread.hasActionableProposedPlan
+  );
+}
+
+/**
+ * Keeps PR identity/state from the effective branch-aware resolver while
+ * preserving unknown draft provenance from legacy persisted snapshots.
+ */
+export function resolveThreadPullRequestForStatus(
+  thread: Pick<SidebarThreadSummary, "lastKnownPr">,
+  effectivePullRequest: OrchestrationThreadPullRequest | null,
+): OrchestrationThreadPullRequest | null {
+  if (
+    effectivePullRequest &&
+    thread.lastKnownPr?.isDraft === undefined &&
+    effectivePullRequest.number === thread.lastKnownPr?.number &&
+    effectivePullRequest.url === thread.lastKnownPr.url
+  ) {
+    return { ...effectivePullRequest, isDraft: undefined };
+  }
+  return effectivePullRequest;
+}
+
+export function resolveThreadStatusPillForPullRequest(input: {
+  thread: ThreadStatusInput;
+  effectivePullRequest: OrchestrationThreadPullRequest | null;
+  hasPendingApprovals: boolean;
+  hasPendingUserInput: boolean;
+}): ThreadStatusPill | null {
+  return resolveThreadStatusPill({
+    thread: {
+      ...input.thread,
+      lastKnownPr: resolveThreadPullRequestForStatus(
+        input.thread,
+        input.effectivePullRequest,
+      ),
+    },
+    hasPendingApprovals: input.hasPendingApprovals,
+    hasPendingUserInput: input.hasPendingUserInput,
+  });
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
   hasPendingApprovals: boolean;
@@ -615,6 +701,16 @@ export function resolveThreadStatusPill(input: {
   const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
   const hasPendingApprovals = input.hasPendingApprovals && canAnswerPendingRequests;
   const hasPendingUserInput = input.hasPendingUserInput && canAnswerPendingRequests;
+
+  if (hasFailedThread(thread)) {
+    return {
+      label: "Failed",
+      colorClass: "text-red-600 dark:text-red-300/90",
+      dotClass: "bg-red-500 dark:bg-red-300/90",
+      pulse: false,
+      dismissible: false,
+    };
+  }
 
   if (hasPendingApprovals) {
     const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
@@ -687,6 +783,22 @@ export function resolveThreadStatusPill(input: {
       pulse: false,
       dismissible: true,
       dismissalKey,
+    };
+  }
+
+  if (
+    isThreadReadyForReview({
+      ...thread,
+      hasPendingApprovals: input.hasPendingApprovals,
+      hasPendingUserInput: input.hasPendingUserInput,
+    })
+  ) {
+    return {
+      label: "Ready for Review",
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      dotClass: "bg-teal-500 dark:bg-teal-300/90",
+      pulse: false,
+      dismissible: false,
     };
   }
 

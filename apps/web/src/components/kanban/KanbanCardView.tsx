@@ -12,7 +12,7 @@ import {
   type ThreadPullRequest,
 } from "~/hooks/useThreadPullRequests";
 import { PrStateChip } from "../pullRequest/PrStateChip";
-import { resolveThreadStatusPill } from "../Sidebar.logic";
+import { resolveThreadStatusPillForPullRequest } from "../Sidebar.logic";
 import { ThreadStatusPillChip } from "../ThreadStatusPillChip";
 import { ProviderIcon } from "../ProviderIcon";
 import {
@@ -75,10 +75,11 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
 // (Pending Approval, Awaiting Input, Plan Ready) still surface as pills.
 const REDUNDANT_COLUMN_PILL_LABELS = new Set(["Working", "Connecting", "Completed"]);
 
-function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
+function KanbanCardStatusPill({ card, pr }: { card: KanbanCard; pr: ThreadPullRequest }) {
   const pill = card.thread
-    ? resolveThreadStatusPill({
+    ? resolveThreadStatusPillForPullRequest({
         thread: card.thread,
+        effectivePullRequest: pr,
         hasPendingApprovals: card.thread.hasPendingApprovals,
         hasPendingUserInput: card.thread.hasPendingUserInput,
       })
@@ -211,7 +212,7 @@ function KanbanCardViewComponent({
             </>
           ) : (
             <>
-              <KanbanCardStatusPill card={card} />
+              <KanbanCardStatusPill card={card} pr={pr} />
               {activeWorkElapsed ? (
                 <span className="shrink-0 text-[11px] text-muted-foreground/70">
                   Worked for {activeWorkElapsed}
