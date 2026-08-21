@@ -1103,6 +1103,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (process.platform === "win32") {
+    // node-pty's winpty gyp invokes a sibling batch file by bare name. A
+    // hardened user environment can disable cmd.exe's current-directory
+    // lookup; remove that flag only for the isolated native build subtree.
+    for (const key of Object.keys(buildEnv)) {
+      if (key.toLowerCase() === "nodefaultcurrentdirectoryinexepath") {
+        delete buildEnv[key];
+      }
+    }
     const python = resolvePythonForNodeGyp();
     if (python) {
       buildEnv.PYTHON = python;
