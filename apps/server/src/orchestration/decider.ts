@@ -34,7 +34,7 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
-import { hasNativeHandoffMessages } from "./handoff.ts";
+import { buildHandoffDurableStateUpdate, hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
   findSpaceById,
@@ -1072,6 +1072,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: null,
+          lastKnownPr: sourceThread.lastKnownPr,
           handoff: {
             sourceThreadId: command.sourceThreadId,
             sourceProvider: sourceThread.modelSelection.provider,
@@ -1082,6 +1083,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+
+      const durableStateUpdate = buildHandoffDurableStateUpdate({
+        sourceThread,
+        importedMessages: command.importedMessages,
+      });
+      const durableStateEvent: Omit<OrchestrationEvent, "sequence"> | null = durableStateUpdate
+        ? {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.meta-updated",
+            payload: {
+              threadId: command.threadId,
+              ...durableStateUpdate,
+              updatedAt: command.createdAt,
+            },
+          }
+        : null;
 
       // Imported messages keep their source-thread timestamps so the transcript still
       // reads chronologically. They are not activity in this thread: the retention
@@ -1111,7 +1133,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         }));
 
-      return [createdEvent, ...importedMessageEvents];
+      return [
+        createdEvent,
+        ...importedMessageEvents,
+        ...(durableStateEvent ? [durableStateEvent] : []),
+      ];
     }
 
     case "thread.fork.create": {

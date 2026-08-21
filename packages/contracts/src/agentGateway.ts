@@ -7,8 +7,19 @@
  */
 import { Schema } from "effect";
 
-import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
-import { ModelSelection, ProviderKind } from "./orchestration";
+import { CheckpointRef, IsoDateTime, MessageId, ProjectId, ThreadId, TurnId } from "./baseSchemas";
+import {
+  ModelSelection,
+  OrchestrationCheckpointStatus,
+  OrchestrationMessageRole,
+  OrchestrationThreadPullRequest,
+  PinnedMessageLabel,
+  ProviderKind,
+  ThreadCreationSource,
+  ThreadGoal,
+  ThreadHandoff,
+  ThreadNotes,
+} from "./orchestration";
 import { ProviderModelDescriptor } from "./providerDiscovery";
 import { ServerProviderAuthStatus } from "./server";
 
@@ -44,6 +55,65 @@ export const SynaraGatewayErrorResult = Schema.Struct({
 });
 export type SynaraGatewayErrorResult = typeof SynaraGatewayErrorResult.Type;
 
+export const SynaraGatewayPinnedMessageSummary = Schema.Struct({
+  messageId: MessageId,
+  label: Schema.NullOr(PinnedMessageLabel),
+  done: Schema.Boolean,
+  pinnedAt: IsoDateTime,
+  message: Schema.NullOr(
+    Schema.Struct({
+      index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      role: OrchestrationMessageRole,
+      text: Schema.String,
+      truncated: Schema.Boolean,
+    }),
+  ),
+});
+export type SynaraGatewayPinnedMessageSummary = typeof SynaraGatewayPinnedMessageSummary.Type;
+
+export const SynaraGatewayCheckpointSummary = Schema.Struct({
+  count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  latest: Schema.NullOr(
+    Schema.Struct({
+      turnId: TurnId,
+      checkpointTurnCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      checkpointRef: CheckpointRef,
+      status: OrchestrationCheckpointStatus,
+      completedAt: IsoDateTime,
+      fileCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      files: Schema.Array(Schema.String),
+      filesTruncated: Schema.Boolean,
+    }),
+  ),
+});
+export type SynaraGatewayCheckpointSummary = typeof SynaraGatewayCheckpointSummary.Type;
+
+export const SynaraGatewayThreadLineage = Schema.Struct({
+  parentThreadId: Schema.NullOr(ThreadId),
+  sourceThreadId: Schema.NullOr(ThreadId),
+  sourceTurnId: Schema.NullOr(TurnId),
+  creationSource: Schema.NullOr(ThreadCreationSource),
+  gatewayOperationId: Schema.NullOr(Schema.String),
+  gatewayOperationIndex: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  handoff: Schema.NullOr(ThreadHandoff),
+});
+export type SynaraGatewayThreadLineage = typeof SynaraGatewayThreadLineage.Type;
+
+/** Compact, provider-independent state that survives provider session replacement. */
+export const SynaraDurableTaskState = Schema.Struct({
+  goal: Schema.NullOr(ThreadGoal),
+  goalStartedAt: Schema.NullOr(IsoDateTime),
+  goalPausedAt: Schema.NullOr(IsoDateTime),
+  notes: Schema.NullOr(ThreadNotes),
+  notesTruncated: Schema.Boolean,
+  pins: Schema.Array(SynaraGatewayPinnedMessageSummary),
+  settledAt: Schema.NullOr(IsoDateTime),
+  lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
+  lineage: SynaraGatewayThreadLineage,
+  checkpoints: SynaraGatewayCheckpointSummary,
+});
+export type SynaraDurableTaskState = typeof SynaraDurableTaskState.Type;
+
 export const SynaraContextResult = Schema.Struct({
   harness: Schema.Struct({
     name: Schema.Literal("Synara"),
@@ -55,10 +125,12 @@ export const SynaraContextResult = Schema.Struct({
     provider: ProviderKind,
     projectId: ProjectId,
   }),
+  taskState: SynaraDurableTaskState,
   capabilities: Schema.Struct({
     threadRead: Schema.Boolean,
     threadCreate: Schema.Boolean,
     threadWait: Schema.Boolean,
+    diagnostics: Schema.Boolean,
     automations: Schema.Boolean,
   }),
 });

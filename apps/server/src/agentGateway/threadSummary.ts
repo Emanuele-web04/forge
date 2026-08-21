@@ -13,6 +13,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
 } from "@synara/contracts";
+import { summarizeDurableTaskState } from "../orchestration/durableTaskState.ts";
 
 export type AgentThreadStatus =
   | "working"
@@ -198,6 +199,7 @@ export interface AgentThreadDetail {
   readonly projectId: string;
   readonly title: string;
   readonly goal: string | null;
+  readonly taskState: ReturnType<typeof summarizeDurableTaskState>;
   readonly provider: string;
   readonly model: string;
   readonly status: AgentThreadStatus;
@@ -235,6 +237,7 @@ export function summarizeThreadDetail(input: {
     projectId: thread.projectId,
     title: thread.title,
     goal: thread.goal?.trim() || null,
+    taskState: summarizeDurableTaskState(thread),
     provider: thread.modelSelection.provider,
     model: thread.modelSelection.model,
     status: deriveAgentThreadStatus(thread),

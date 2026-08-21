@@ -6,7 +6,10 @@
 import { MessageId, type OrchestrationMessage } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildPriorTranscriptBootstrapText } from "./handoff.ts";
+import {
+  buildHandoffDurableStateUpdate,
+  buildPriorTranscriptBootstrapText,
+} from "./handoff.ts";
 
 const message = (
   index: number,
@@ -31,6 +34,16 @@ const thread = (messages: ReadonlyArray<OrchestrationMessage>) => ({
 });
 
 describe("buildPriorTranscriptBootstrapText", () => {
+  it("injects durable notes when a restarted provider has no prior transcript", () => {
+    const text = buildPriorTranscriptBootstrapText(
+      { ...thread([]), notes: "Resume from the verified service install." },
+      undefined,
+    );
+
+    expect(text).toContain("Durable Synara task state follows");
+    expect(text).toContain("Resume from the verified service install.");
+  });
+
   it("keeps every message with a plain summary header when under budget", () => {
     const messages = Array.from({ length: 10 }, (_, index) =>
       message(index, index % 2 === 0 ? "user" : "assistant", `marker-${index} short message`),
@@ -134,5 +147,43 @@ describe("buildPriorTranscriptBootstrapText", () => {
     expect(text).toMatch(/\(\d{3,} older messages omitted to fit the context budget\):/);
     expect(text).toContain("NEWEST-START");
     expect(text).toContain("NEWEST-END-UNIQUE-MARKER");
+  });
+});
+
+describe("buildHandoffDurableStateUpdate", () => {
+  it("copies task metadata and remaps pins to imported message ids", () => {
+    const sourceMessage = message(1, "assistant", "Keep this decision");
+    const update = buildHandoffDurableStateUpdate({
+      sourceThread: {
+        messages: [sourceMessage],
+        notes: "Use the existing backend.",
+        goal: "Finish Android access",
+        goalStartedAt: "2026-07-08T01:00:00.000Z",
+        pinnedMessages: [
+          {
+            messageId: sourceMessage.id,
+            label: "Decision",
+            done: false,
+            pinnedAt: "2026-07-08T01:05:00.000Z",
+          },
+        ],
+      },
+      importedMessages: [
+        {
+          messageId: MessageId.makeUnsafe("imported-message-1"),
+          role: sourceMessage.role as "assistant",
+          text: sourceMessage.text,
+          createdAt: sourceMessage.createdAt,
+          updatedAt: sourceMessage.updatedAt,
+        },
+      ],
+    });
+
+    expect(update).toMatchObject({
+      notes: "Use the existing backend.",
+      goal: "Finish Android access",
+      goalStartedAt: "2026-07-08T01:00:00.000Z",
+      pinnedMessages: [{ messageId: "imported-message-1", label: "Decision" }],
+    });
   });
 });

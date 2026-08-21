@@ -6,6 +6,7 @@ import {
   SynaraCreateThreadsInput,
   SynaraCreateThreadsResult,
   SynaraGatewayErrorResult,
+  SynaraContextResult,
   SynaraWaitForThreadsInput,
   SynaraWaitForThreadsResult,
 } from "./agentGateway";
@@ -79,6 +80,44 @@ describe("agent gateway contracts", () => {
   });
 
   it("decodes typed capability, creation, wait, and error results", () => {
+    assert.doesNotThrow(() =>
+      Schema.decodeUnknownSync(SynaraContextResult)({
+        harness: { name: "Synara", policyVersion: "1" },
+        caller: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          provider: "codex",
+          projectId: "project-1",
+        },
+        taskState: {
+          goal: "Ship the feature",
+          goalStartedAt: null,
+          goalPausedAt: null,
+          notes: "Verified current state",
+          notesTruncated: false,
+          pins: [],
+          settledAt: null,
+          lastKnownPr: null,
+          lineage: {
+            parentThreadId: null,
+            sourceThreadId: null,
+            sourceTurnId: null,
+            creationSource: null,
+            gatewayOperationId: null,
+            gatewayOperationIndex: null,
+            handoff: null,
+          },
+          checkpoints: { count: 0, latest: null },
+        },
+        capabilities: {
+          threadRead: true,
+          threadCreate: true,
+          threadWait: true,
+          diagnostics: true,
+          automations: true,
+        },
+      }),
+    );
     assert.doesNotThrow(() =>
       Schema.decodeUnknownSync(SynaraCapabilitiesResult)({
         targetConstruction: {

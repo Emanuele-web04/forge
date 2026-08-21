@@ -1557,6 +1557,33 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("returns the caller's durable task state from synara_context", () => {
+    const parent = makeThreadShell("thread-parent", { goal: "Finish the durable task" });
+    const parentDetail = {
+      ...makeThreadDetail(parent),
+      notes: "Current state: verification remains.",
+    };
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [parent, ...baseThreads.filter((thread) => thread.id !== parent.id)],
+      [],
+      { threadDetails: new Map([[parent.id, parentDetail]]) },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepInclude(toolResultJson(response.result).taskState as Record<string, unknown>, {
+        goal: "Finish the durable task",
+        notes: "Current state: verification remains.",
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("lists only ordinary projects, excluding system-managed containers", () => {
     // ServerConfig.layerTest canonicalizes the home dir via realpath, so the legacy
     // Home row must use the same canonical form for the workspace-root match to hold.
@@ -4906,12 +4933,42 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("includes the persistent goal in synara_read_thread", () => {
+  it.effect("includes durable task state in synara_read_thread", () => {
     const goal = "Keep working until every gateway check passes";
-    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+    const child = makeThreadShell("thread-child", { goal });
+    const pinnedMessageId = MessageId.makeUnsafe("message-pinned-decision");
+    const detail: OrchestrationThread = {
+      ...makeThreadDetail(child),
+      notes: "Decision: keep the Gateway as the coordination boundary.",
+      pinnedMessages: [
+        {
+          messageId: pinnedMessageId,
+          label: "Architecture decision",
+          done: false,
+          pinnedAt: NOW,
+        },
+      ],
+      messages: [
+        {
+          id: pinnedMessageId,
+          role: "assistant",
+          text: "Keep provider sessions replaceable.",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    };
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [
       ...baseThreads.filter((thread) => thread.id !== "thread-child"),
-      makeThreadShell("thread-child", { goal }),
-    ]);
+        child,
+      ],
+      [],
+      { threadDetails: new Map([[child.id, detail]]) },
+    );
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
@@ -4921,7 +4978,22 @@ describe("AgentGateway", () => {
       });
 
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-      assert.equal(toolResultJson(response.result).goal, goal);
+      const result = toolResultJson(response.result);
+      assert.equal(result.goal, goal);
+      const taskState = result.taskState as {
+        goal: string;
+        notes: string;
+        pins: Array<{ label: string | null; message: { role: string; text: string } | null }>;
+      };
+      assert.deepInclude(taskState, {
+        goal,
+        notes: "Decision: keep the Gateway as the coordination boundary.",
+      });
+      assert.equal(taskState.pins[0]?.label, "Architecture decision");
+      assert.deepInclude(taskState.pins[0]?.message ?? {}, {
+        role: "assistant",
+        text: "Keep provider sessions replaceable.",
+      });
     }).pipe(Effect.provide(gatewayLayer));
   });
 

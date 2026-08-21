@@ -1,4 +1,15 @@
-import type { OrchestrationMessage, OrchestrationThread } from "@synara/contracts";
+import type {
+  OrchestrationMessage,
+  OrchestrationThread,
+  ThreadGoalAchievements,
+  ThreadHandoffImportedMessage,
+  ThreadPinnedMessages,
+} from "@synara/contracts";
+
+import {
+  buildDurableTaskStateBootstrapText,
+  type DurableTaskStateSource,
+} from "./durableTaskState.ts";
 
 const RECENT_MESSAGE_COUNT = 6;
 const EARLIER_MESSAGE_CHAR_LIMIT = 320;
@@ -104,15 +115,12 @@ export function listPriorTranscriptMessages(
 }
 
 function buildImportedMessagesBootstrapText(input: {
-  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
+  thread: DurableTaskStateSource &
+    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
   importedMessages: ReadonlyArray<OrchestrationMessage>;
   intro: string;
   maxChars: number;
 }): string | null {
-  if (input.importedMessages.length === 0) {
-    return null;
-  }
-
   const maxChars = Math.min(Math.max(0, input.maxChars), BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET);
   const earlierMessages = input.importedMessages.slice(0, -RECENT_MESSAGE_COUNT);
   const recentMessages = input.importedMessages.slice(-RECENT_MESSAGE_COUNT);
@@ -126,18 +134,33 @@ function buildImportedMessagesBootstrapText(input: {
   }
 
   const recentSection =
-    "Most recent imported messages:\n" +
-    recentMessages
-      .map((message) => {
-        const normalized = truncateText(
-          normalizeMessageText(message.text),
-          RECENT_MESSAGE_CHAR_LIMIT,
-        );
-        return `${roleLabel(message)}:\n${normalized}`;
-      })
-      .join("\n\n");
+    recentMessages.length > 0
+      ? "Most recent imported messages:\n" +
+        recentMessages
+          .map((message) => {
+            const normalized = truncateText(
+              normalizeMessageText(message.text),
+              RECENT_MESSAGE_CHAR_LIMIT,
+            );
+            return `${roleLabel(message)}:\n${normalized}`;
+          })
+          .join("\n\n")
+      : null;
+  const fixedChars =
+    sections.reduce((total, section) => total + section.length + 2, 0) +
+    (recentSection?.length ?? 0) +
+    (recentSection ? 2 : 0);
+  const earlierHeaderReserve =
+    earlierMessages.length > 0 ? earlierSummaryHeader(earlierMessages.length).length + 2 : 0;
+  const taskStateText = buildDurableTaskStateBootstrapText(
+    input.thread,
+    Math.max(0, maxChars - fixedChars - earlierHeaderReserve),
+  );
+  if (taskStateText) sections.push(taskStateText);
 
-  if (earlierMessages.length > 0) {
+  if (input.importedMessages.length === 0 && taskStateText === null) return null;
+
+  if (earlierMessages.length > 0 && recentSection) {
     // Keep the newest earlier-message summaries that fit the remaining budget;
     // older ones are dropped so long threads cannot inflate the bootstrap.
     let remaining =
@@ -173,14 +196,15 @@ function buildImportedMessagesBootstrapText(input: {
     sections.push(summaryLines.length > 0 ? `${header}\n${summaryLines.join("\n")}` : header);
   }
 
-  sections.push(recentSection);
+  if (recentSection) sections.push(recentSection);
 
   const joined = sections.join("\n\n").trim();
   return truncateText(joined, maxChars);
 }
 
 export function buildHandoffBootstrapText(
-  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "handoff" | "messages">,
+  thread: DurableTaskStateSource &
+    Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "handoff">,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const importedMessages = listImportedHandoffMessages(thread);
@@ -197,14 +221,12 @@ export function buildHandoffBootstrapText(
 }
 
 export function buildPriorTranscriptBootstrapText(
-  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
+  thread: DurableTaskStateSource &
+    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
   currentMessageId: string | undefined,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const priorMessages = listPriorTranscriptMessages(thread, currentMessageId);
-  if (priorMessages.length === 0) {
-    return null;
-  }
 
   return buildImportedMessagesBootstrapText({
     thread,
@@ -216,7 +238,8 @@ export function buildPriorTranscriptBootstrapText(
 }
 
 export function buildForkBootstrapText(
-  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
+  thread: DurableTaskStateSource &
+    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const importedMessages = listImportedForkMessages(thread);
@@ -230,4 +253,59 @@ export function buildForkBootstrapText(
     intro: "This sidechat was cloned from an earlier conversation.",
     maxChars,
   });
+}
+
+export interface HandoffDurableStateUpdate {
+  readonly pinnedMessages?: ThreadPinnedMessages;
+  readonly notes?: string;
+  readonly goal?: string;
+  readonly goalStartedAt?: string | null;
+  readonly goalPausedAt?: string | null;
+  readonly goalAchievements?: ThreadGoalAchievements;
+}
+
+/** Copy task-owned metadata while remapping pins to the imported transcript ids. */
+export function buildHandoffDurableStateUpdate(input: {
+  readonly sourceThread: Pick<
+    OrchestrationThread,
+    | "messages"
+    | "pinnedMessages"
+    | "notes"
+    | "goal"
+    | "goalStartedAt"
+    | "goalPausedAt"
+    | "goalAchievements"
+  >;
+  readonly importedMessages: ReadonlyArray<ThreadHandoffImportedMessage>;
+}): HandoffDurableStateUpdate | null {
+  const sourceMessages = input.sourceThread.messages.filter(
+    (message) =>
+      (message.role === "user" || message.role === "assistant") && message.streaming === false,
+  );
+  const importedIdBySourceId = new Map<string, ThreadHandoffImportedMessage["messageId"]>();
+  input.importedMessages.forEach((imported, index) => {
+    const source = sourceMessages[index];
+    if (source && source.role === imported.role && source.createdAt === imported.createdAt) {
+      importedIdBySourceId.set(source.id, imported.messageId);
+    }
+  });
+  const pinnedMessages = (input.sourceThread.pinnedMessages ?? []).flatMap((pin) => {
+    const importedMessageId = importedIdBySourceId.get(pin.messageId);
+    return importedMessageId ? [{ ...pin, messageId: importedMessageId }] : [];
+  });
+  const update: HandoffDurableStateUpdate = {
+    ...(pinnedMessages.length > 0 ? { pinnedMessages } : {}),
+    ...(input.sourceThread.notes !== undefined ? { notes: input.sourceThread.notes } : {}),
+    ...(input.sourceThread.goal !== undefined ? { goal: input.sourceThread.goal } : {}),
+    ...(input.sourceThread.goalStartedAt !== undefined
+      ? { goalStartedAt: input.sourceThread.goalStartedAt }
+      : {}),
+    ...(input.sourceThread.goalPausedAt !== undefined
+      ? { goalPausedAt: input.sourceThread.goalPausedAt }
+      : {}),
+    ...(input.sourceThread.goalAchievements !== undefined
+      ? { goalAchievements: input.sourceThread.goalAchievements }
+      : {}),
+  };
+  return Object.keys(update).length > 0 ? update : null;
 }

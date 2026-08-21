@@ -45,6 +45,7 @@ import {
   READ_ONLY_TOOL_ANNOTATIONS,
   type ToolEntry,
 } from "./toolRuntime.ts";
+import { summarizeDurableTaskState } from "../orchestration/durableTaskState.ts";
 
 const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
@@ -79,7 +80,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_context",
       description:
-        "Inspect the current Synara harness identity, caller thread/turn, and authorized coordination capabilities.",
+        "Inspect the current Synara harness identity, caller thread/turn, durable task state, and authorized coordination capabilities.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: {
         title: "Synara context",
@@ -92,6 +93,16 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     handler: (_args, context) =>
       Effect.gen(function* () {
         const caller = yield* requireThreadShell(context.callerThreadId);
+        const callerDetail = yield* snapshotQuery.getThreadDetailById(caller.id).pipe(
+          Effect.mapError((error) => new ToolInputError(errorText(error))),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(new ToolInputError(`Thread "${caller.id}" was not found.`)),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
         const turnId = caller.latestTurn?.state === "running" ? caller.latestTurn.turnId : null;
         return mcpToolResultJson({
           harness: { name: "Synara", policyVersion: SYNARA_HARNESS_POLICY_VERSION },
@@ -101,6 +112,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             provider: context.callerProvider,
             projectId: caller.projectId,
           },
+          taskState: summarizeDurableTaskState(callerDetail),
           capabilities: {
             threadRead: context.callerCapabilities.has("thread:read"),
             threadCreate: turnId !== null && context.callerCapabilities.has("thread:write"),
@@ -287,7 +299,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_read_thread",
       description:
-        "Read one Synara thread's status and recent messages (newest last, truncated). Pass the returned nextCursor as cursor to page older messages.",
+        "Read one Synara thread's durable task state, lineage, latest checkpoint summary, status, and recent messages (newest last, truncated). Pass the returned nextCursor as cursor to page older messages.",
       inputSchema: {
         type: "object",
         properties: {
