@@ -396,10 +396,10 @@ export const makeServerAuth = Effect.gen(function* () {
     issuePairingCredential({ role: "owner", ttl: OWNER_STARTUP_PAIRING_TTL }).pipe(
       Effect.map((issued) => {
         const url = new URL(baseUrl);
-        url.pathname = "/pair";
-        // Prefer the query string: GET /pair?token= exchanges on the server and
-        // survives browsers that drop URL fragments before JavaScript runs.
-        url.searchParams.set("token", issued.credential);
+        // Path form survives chat/link previews that strip `?token=`; query still
+        // works as a fallback for older bookmarks.
+        url.pathname = `/pair/${encodeURIComponent(issued.credential)}`;
+        url.search = "";
         url.hash = "";
         return url.toString();
       }),

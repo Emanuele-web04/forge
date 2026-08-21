@@ -26,6 +26,31 @@ interface PairingBootstrapDependencies {
 
 export type PairingBootstrapResult = "not-pairing" | "redirecting" | "failed";
 
+export function isPairingPath(pathname: string): boolean {
+  return pathname === PAIRING_PATH || pathname.startsWith(`${PAIRING_PATH}/`);
+}
+
+export function pairingCredentialFromLocation(input: {
+  readonly pathname: string;
+  readonly search: string;
+  readonly hash: string;
+}): string | null {
+  const hashParams = new URLSearchParams(input.hash.slice(1));
+  const searchParams = new URLSearchParams(input.search);
+  const fromHashOrQuery = hashParams.get("token") ?? searchParams.get("token");
+  if (fromHashOrQuery && fromHashOrQuery.trim().length > 0) {
+    return fromHashOrQuery.trim();
+  }
+  const match = /^\/pair\/([^/]+)\/?$/.exec(input.pathname);
+  if (!match?.[1]) return null;
+  try {
+    const decoded = decodeURIComponent(match[1]).trim();
+    return decoded.length > 0 ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 function renderPairingFailure(): void {
   const root = document.getElementById("root");
   if (!root) return;
@@ -51,19 +76,18 @@ export async function bootstrapPairingSession(
     storeBearer: writeSessionBearer,
   },
 ): Promise<PairingBootstrapResult> {
-  if (dependencies.location.pathname !== PAIRING_PATH) {
+  if (!isPairingPath(dependencies.location.pathname)) {
     return "not-pairing";
   }
 
-  const hashParams = new URLSearchParams(dependencies.location.hash.slice(1));
+  const credential = pairingCredentialFromLocation(dependencies.location);
   const searchParams = new URLSearchParams(dependencies.location.search);
-  const credential = hashParams.get("token") ?? searchParams.get("token");
   searchParams.delete("token");
   const remainingSearch = searchParams.toString();
   dependencies.history.replaceState(
     null,
     "",
-    `${dependencies.location.pathname}${remainingSearch ? `?${remainingSearch}` : ""}`,
+    `${PAIRING_PATH}${remainingSearch ? `?${remainingSearch}` : ""}`,
   );
 
   if (!credential) {

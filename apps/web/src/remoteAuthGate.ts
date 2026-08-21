@@ -2,6 +2,7 @@
 // Purpose: Stops the remote WebUI from hanging unsigned-in on "Loading activity...".
 
 import { isElectron } from "./env";
+import { isPairingPath } from "./pairingBootstrap";
 import { authorizationHeaderFromSessionBearer } from "./sessionBearer";
 
 export const REMOTE_PAIRING_REQUIRED_PATH = "/pair";
@@ -44,7 +45,7 @@ export function shouldRequireRemotePairing(input: {
   readonly policy: string | undefined;
 }): boolean {
   if (input.isElectron) return false;
-  if (input.pathname === REMOTE_PAIRING_REQUIRED_PATH) return false;
+  if (isPairingPath(input.pathname)) return false;
   if (input.authenticated) return false;
   return input.policy === "remote-reachable";
 }
@@ -58,7 +59,7 @@ export async function bootstrapRemoteAuthGate(
     authorizationHeaders: authorizationHeaderFromSessionBearer(),
   },
 ): Promise<"ok" | "blocked"> {
-  if (dependencies.isElectron || dependencies.pathname === REMOTE_PAIRING_REQUIRED_PATH) {
+  if (dependencies.isElectron || isPairingPath(dependencies.pathname)) {
     return "ok";
   }
 

@@ -111,4 +111,21 @@ describe("bootstrapPairingSession", () => {
       }),
     );
   });
+
+  it("accepts a path token when the fragment and query are missing", async () => {
+    const test = makeDependencies({
+      pathname: "/pair/PATH-SECRET",
+      hash: "",
+      search: "",
+    });
+
+    await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
+    expect(test.events).toEqual(["scrub:/pair", "fetch", "navigate:/"]);
+    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap/bearer", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: "PATH-SECRET" }),
+    });
+  });
 });

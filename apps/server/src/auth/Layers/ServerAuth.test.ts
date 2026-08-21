@@ -109,10 +109,11 @@ describe("ServerAuthLive", () => {
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
         const parsed = new URL(pairingUrl);
-        const token = parsed.searchParams.get("token");
+        const token = parsed.pathname.match(/^\/pair\/([^/]+)\/?$/)?.[1] ?? null;
         expect(token).toBeTruthy();
         expect(parsed.hash).toBe("");
-        expect(parsed.pathname).toBe("/pair");
+        expect(parsed.search).toBe("");
+        expect(parsed.pathname.startsWith("/pair/")).toBe(true);
         const listedPairingLinks = yield* serverAuth.listPairingLinks();
 
         expect(token).toBeTruthy();

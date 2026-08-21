@@ -215,6 +215,29 @@ describe("authEffectRouteLayer", () => {
     );
   });
 
+  it("exchanges owner pairing tokens on GET /pair/:credential", async () => {
+    const sideEffects = { count: 0 };
+    const config = {
+      host: "127.0.0.1",
+      publicUrl: new URL("https://synara.example.test/"),
+      staticDir: undefined,
+    } as ServerConfigShape;
+    await withAuthEffectServer(
+      config,
+      makeServerAuth(sideEffects),
+      async (serverOrigin) => {
+        const response = await fetch(`${serverOrigin}/pair/PAIRINGTOKEN`, {
+          redirect: "manual",
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("set-cookie")).toContain("synara_session=");
+        expect(await response.text()).toContain("This browser is paired.");
+        expect(sideEffects.count).toBe(1);
+      },
+      pairEffectRouteLayer,
+    );
+  });
+
   it("rejects declared and chunked oversized bootstrap JSON before auth exchange", async () => {
     const sideEffects = { count: 0 };
     const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
