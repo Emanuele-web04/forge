@@ -45,6 +45,11 @@ export interface ProviderModelCatalog {
   selectedProviderModelsLoading: boolean;
   /** Whether the selected provider requires and is still waiting on runtime models. */
   selectedProviderRuntimeModelDiscoveryPending: boolean;
+  /**
+   * Discovery failure detail per provider (268 passthrough). Devin's static
+   * fallback is deliberately omitted: it is a resolved catalog, not an error.
+   */
+  discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
 }
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
@@ -270,7 +275,11 @@ export function useProviderModelCatalog(input: {
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
   const hasResolvedDevinModelDiscovery =
-    devinDynamicModelsQuery.data?.source === "devin-cli" &&
+    (devinDynamicModelsQuery.data?.source === "devin-cli" ||
+      // Static fallback descriptors are a valid resolved catalog: the adapter
+      // serves its built-in matrix when CLI discovery is unavailable, so the
+      // picker must render them instead of spinning (or banner-ing) forever.
+      devinDynamicModelsQuery.data?.source === "devin.static") &&
     (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
   const devinModelDiscoveryPending =
     devinModelDiscoveryEnabled &&
@@ -448,6 +457,41 @@ export function useProviderModelCatalog(input: {
     [selectedDynamicAgents],
   );
 
+  // Discovery failures per provider, surfaced as a subtle inline note by the
+  // model pickers. Devin's static fallback is a resolved catalog, not a
+  // failure: the adapter already substituted its built-in matrix, so its
+  // discovery detail is suppressed here and never rendered as an error.
+  const discoveryErrorsByProvider = useMemo<Partial<Record<ProviderKind, string | undefined>>>(
+    () => ({
+      claudeAgent: claudeDynamicModelsQuery.data?.error,
+      codex: codexDynamicModelsQuery.data?.error,
+      cursor: cursorDynamicModelsQuery.data?.error,
+      devin:
+        devinDynamicModelsQuery.data?.source === "devin.static"
+          ? undefined
+          : devinDynamicModelsQuery.data?.error,
+      antigravity: antigravityModelsQuery.data?.error,
+      grok: grokDynamicModelsQuery.data?.error,
+      droid: droidDynamicModelsQuery.data?.error,
+      kilo: kiloDynamicModelsQuery.data?.error,
+      opencode: openCodeDynamicModelsQuery.data?.error,
+      pi: piDynamicModelsQuery.data?.error,
+    }),
+    [
+      antigravityModelsQuery.data?.error,
+      claudeDynamicModelsQuery.data?.error,
+      codexDynamicModelsQuery.data?.error,
+      cursorDynamicModelsQuery.data?.error,
+      devinDynamicModelsQuery.data?.error,
+      devinDynamicModelsQuery.data?.source,
+      droidDynamicModelsQuery.data?.error,
+      grokDynamicModelsQuery.data?.error,
+      kiloDynamicModelsQuery.data?.error,
+      openCodeDynamicModelsQuery.data?.error,
+      piDynamicModelsQuery.data?.error,
+    ],
+  );
+
   const selectedProviderRuntimeModelDiscoveryPending =
     loadingModelProviders[selectedProvider] ?? false;
   const selectedProviderModelsQuery =
@@ -487,9 +531,11 @@ export function useProviderModelCatalog(input: {
       selectedRuntimeAgents,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,
+      discoveryErrorsByProvider,
     }),
     [
       customModelsByProvider,
+      discoveryErrorsByProvider,
       loadingModelProviders,
       modelOptionsByProvider,
       runtimeModelsByProvider,

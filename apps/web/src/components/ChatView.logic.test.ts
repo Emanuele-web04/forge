@@ -2963,6 +2963,6 @@ describe("resolveDraftFallbackModelSelection", () => {
         projectDefault: undefined,
         settingsDefaultProvider: "grok",
       }),
-    ).toEqual({ provider: "grok", model: "grok-build" });
+    ).toEqual({ provider: "grok", model: "grok-4.6" });
   });
 });

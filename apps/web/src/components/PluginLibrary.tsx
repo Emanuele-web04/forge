@@ -387,7 +387,6 @@ export function PluginLibrary() {
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
-  const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const antigravityCapabilitiesQuery = useQuery(
     providerComposerCapabilitiesQueryOptions("antigravity"),
   );
@@ -438,10 +437,6 @@ export function PluginLibrary() {
     pi: {
       plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
-    },
-    devin: {
-      plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
-      skills: supportsSkillDiscovery(devinCapabilitiesQuery.data),
     },
   };
 

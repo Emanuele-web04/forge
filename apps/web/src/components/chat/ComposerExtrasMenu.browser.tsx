@@ -16,7 +16,6 @@ async function mountMenu(props?: {
   fastModeEnabled?: boolean;
   interactionMode?: ProviderInteractionMode;
   supportsFastMode?: boolean;
-  supportsFileAttachments?: boolean;
 }) {
   const onAddAttachments = vi.fn();
   const onToggleFastMode = vi.fn();
@@ -27,7 +26,6 @@ async function mountMenu(props?: {
     <ComposerExtrasMenu
       interactionMode={props?.interactionMode ?? "default"}
       supportsFastMode={props?.supportsFastMode ?? true}
-      supportsFileAttachments={props?.supportsFileAttachments ?? false}
       fastModeEnabled={props?.fastModeEnabled ?? false}
       onAddAttachments={onAddAttachments}
       onToggleFastMode={onToggleFastMode}

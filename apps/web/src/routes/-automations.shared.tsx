@@ -898,6 +898,7 @@ export function AutomationModelPicker({
   const {
     modelOptionsByProvider,
     loadingModelProviders,
+    discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeModel,
   } = useProviderModelCatalog({
@@ -933,6 +934,7 @@ export function AutomationModelPicker({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={loadingModelProviders}
+      discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
       disabled={disabled ?? false}

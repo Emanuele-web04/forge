@@ -327,7 +327,6 @@ describe("wsNativeApi", () => {
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
-          devin: { enabled: true, binaryPath: "devin", customModels: [] },
         },
         skills: { disabled: [] },
       },

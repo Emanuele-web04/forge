@@ -237,12 +237,8 @@ const PROVIDER_TARGET_OPTION_RULES = {
     },
   }),
   devin: defineProviderOptionConfig<"devin">({
-    primaryOptionKey: "variant",
+    primaryOptionKey: "modelVariant",
     options: {
-      variant: providerOptionRule("string", [], "model-discovery", {
-        validation: { kind: "non-empty-string" },
-        allowsCustomValue: true,
-      }),
       fastMode: providerOptionRule("boolean", [], "model-discovery", {
         advertised: false,
         validation: { kind: "boolean-capability", capability: "supportsFastMode" },

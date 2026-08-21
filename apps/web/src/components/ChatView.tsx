@@ -152,7 +152,6 @@ import {
 } from "../lib/devicePromptContext";
 import {
   buildComposerFileAttachmentsFromFiles,
-  providerSupportsGenericFileAttachments,
   stageUploadComposerAttachments,
   cloneComposerImageAttachment,
   effectiveComposerAttachmentCount,
@@ -952,8 +951,6 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
-    case "devin":
-      return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
   }
 }
 
@@ -2442,7 +2439,8 @@ export default function ChatView({
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
-    selectedProvider === "pi";
+    selectedProvider === "pi" ||
+    selectedProvider === "devin";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -6725,8 +6723,6 @@ export default function ChatView({
     },
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
   );
-
-  const composerAcceptsGenericFiles = providerSupportsGenericFileAttachments(selectedProvider);
 
   const addComposerAttachments = useCallback(
     (files: readonly File[]) => {
@@ -11100,7 +11096,6 @@ export default function ChatView({
       <ComposerExtrasMenu
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-        supportsFileAttachments={composerAcceptsGenericFiles}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}

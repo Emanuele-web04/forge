@@ -518,13 +518,5 @@ export function buildModelSelection(
             options: options as PiModelOptions,
           }
         : { provider, model };
-    case "devin":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DevinModelOptions,
-          }
-        : { provider, model };
   }
 }

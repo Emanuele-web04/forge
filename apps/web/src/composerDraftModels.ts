@@ -10,7 +10,6 @@ import {
   type CursorModelOptions,
   type DevinModelOptions,
   type DroidReasoningEffort,
-  type DevinModelOptions,
   type GrokReasoningEffort,
   type ModelSelection,
   type ModelSlug,
@@ -221,14 +220,6 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
-    case "devin":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
-          : {}),
-      };
   }
 }
 
@@ -277,10 +268,6 @@ export function normalizeProviderModelOptions(
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
-      : null;
-  const devinCandidate =
-    candidate?.devin && typeof candidate.devin === "object"
-      ? (candidate.devin as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -372,36 +359,6 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
 
-  const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
-  const devinFastMode =
-    devinCandidate?.fastMode === true
-      ? true
-      : devinCandidate?.fastMode === false
-        ? false
-        : undefined;
-  const devinThinking =
-    devinCandidate?.thinking === true
-      ? true
-      : devinCandidate?.thinking === false
-        ? false
-        : undefined;
-  const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
-  const devinVariant = trimStringOrUndefined(devinCandidate?.variant);
-  const devin: DevinModelOptions | undefined =
-    devinReasoningEffort !== undefined ||
-    devinFastMode !== undefined ||
-    devinThinking !== undefined ||
-    devinContextWindow !== undefined ||
-    devinVariant !== undefined
-      ? {
-          ...(devinReasoningEffort !== undefined ? { reasoningEffort: devinReasoningEffort } : {}),
-          ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
-          ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
-          ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),
-          ...(devinVariant !== undefined ? { variant: devinVariant } : {}),
-        }
-      : undefined;
-
   const antigravityReasoningEffort = trimStringOrUndefined(antigravityCandidate?.reasoningEffort);
   const antigravity =
     antigravityReasoningEffort !== undefined
@@ -487,8 +444,7 @@ export function normalizeProviderModelOptions(
     !droid &&
     !kilo &&
     !opencode &&
-    !pi &&
-    !devin
+    !pi
   ) {
     return null;
   }
@@ -503,7 +459,6 @@ export function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
-    ...(devin ? { devin } : {}),
   };
 }
 

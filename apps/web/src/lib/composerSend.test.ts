@@ -16,7 +16,6 @@ import {
   effectiveComposerAttachmentCount,
   findPendingBlobComposerAttachments,
   hydratePendingBlobComposerAttachments,
-  providerSupportsGenericFileAttachments,
   readFileAsDataUrl,
   prepareComposerImageAttachmentsFromFiles,
 } from "./composerSend";
@@ -72,27 +71,6 @@ describe("composerSend attachment builders", () => {
         mimeType: "application/octet-stream",
         sizeBytes: unknownFile.size,
         file: unknownFile,
-      }),
-    ]);
-  });
-
-  it("stages non-image files for providers with generic file support", () => {
-    expect(providerSupportsGenericFileAttachments("devin")).toBe(true);
-    expect(providerSupportsGenericFileAttachments("codex")).toBe(false);
-
-    const textFile = new File(["hello"], "notes.txt", { type: "text/plain" });
-    const result = buildComposerFileAttachmentsFromFiles({
-      files: [textFile],
-      existingAttachmentCount: 0,
-    });
-
-    expect(result.error).toBeNull();
-    expect(result.files).toEqual([
-      expect.objectContaining({
-        type: "file",
-        name: "notes.txt",
-        mimeType: "text/plain",
-        file: textFile,
       }),
     ]);
   });

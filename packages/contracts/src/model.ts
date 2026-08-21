@@ -140,11 +140,6 @@ export const CursorModelOptions = Schema.Struct({
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
 
-/**
- * Devin model options — variant selections resolved to full slugs by the adapter.
- * The adapter calls ACP session/set_model and session/set_config_option live, so
- * these are best-effort hints rather than a frozen model matrix.
- */
 export const GrokModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(Schema.Literals(GROK_REASONING_EFFORT_OPTIONS)),
 });
@@ -160,7 +155,6 @@ export const DevinModelOptions = Schema.Struct({
   fastMode: Schema.optional(Schema.Boolean),
   thinking: Schema.optional(Schema.Boolean),
   contextWindow: Schema.optional(TrimmedNonEmptyString),
-  variant: Schema.optional(TrimmedNonEmptyString),
   // Devin's ACP command accepts a concrete model UID at process start. This
   // is populated from runtime discovery when an abstract effort/context
   // selection needs to resolve to a specific variant.
@@ -1286,7 +1280,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "swe-1-7": "swe-1-7",
     opus: "claude-opus-4-8",
     sonnet: "claude-sonnet-5",
-    fable: "claude-5-fable",
+    fable: "claude-fable-5",
   },
 };
 
