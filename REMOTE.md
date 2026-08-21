@@ -114,7 +114,7 @@ Get-NetTCPConnection -State Listen -LocalPort 3773
 tailscale serve status
 
 # Local backend health.
-Invoke-RestMethod http://127.0.0.1:3773/api/health
+Invoke-RestMethod http://127.0.0.1:3773/health
 ```
 
 Expected results:
@@ -122,4 +122,4 @@ Expected results:
 - The Synara listener uses `127.0.0.1`, not `0.0.0.0` or a LAN/Tailnet address.
 - `tailscale serve status` shows the tailnet HTTPS URL proxying to
   `http://127.0.0.1:3773`.
-- `/api/health` reports the local backend as ready.
+- `/health` reports the local backend as ready.
