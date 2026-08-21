@@ -67,8 +67,10 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     projectId === null
       ? null
       : (board.projects.find((candidate) => candidate.projectId === projectId) ?? null);
-  const hasActiveCardWork = board.projects.some((project) =>
-    project.inProgress.some((card) => card.activeWorkStartedAt !== null),
+  const hasActiveCardWork = board.projects.some(
+    (project) =>
+      project.inProgress.some((card) => card.activeWorkStartedAt !== null) ||
+      project.awaitingYou.some((card) => card.activeWorkStartedAt !== null),
   );
   const nowMs = useNowMs(hasActiveCardWork);
 

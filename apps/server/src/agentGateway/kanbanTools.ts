@@ -11,15 +11,15 @@ import {
   type KanbanColumnV2Key,
   type KanbanThreadDerivationInput,
 } from "@synara/shared/kanban";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 
 import {
   isOrdinaryProjectRow,
+  threadHasActiveTurn,
   type SpaceAssignmentWorkspacePaths,
 } from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { GatewayCreationContext } from "./creationCoordinator.ts";
-import { gatewayIsoNow as isoNow } from "./creationUtils.ts";
 import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
 import {
   buildModelSelection,
@@ -269,7 +269,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         const at = now();
         let emittedCardCount = 0;
         let truncated = false;
-        const projects = snapshot.projects
+        const visibleProjects = snapshot.projects
           .filter((project) => (projectId ? project.id === projectId : true))
           .filter((project) =>
             isOrdinaryProjectRow({
@@ -278,41 +278,54 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               projectWorkspaceRoot: project.workspaceRoot,
               workspacePaths,
             }),
-          )
-          .map((project) => {
-            const columnBuckets: Record<KanbanColumnV2Key, ReadKanbanCard[]> = {
-              draft: [],
-              inProgress: [],
-              awaitingYou: [],
-              done: [],
-            };
-            for (const thread of snapshot.threads) {
-              if (thread.projectId !== project.id) continue;
-              if ((thread.archivedAt ?? null) !== null) continue;
-              // Stop materializing once the board-wide cap is reached: the
-              // response stays bounded and the `truncated` flag tells the
-              // caller the board is incomplete (scoped reads are the fallback).
-              if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
-                truncated = true;
-                break;
-              }
-              const card = deriveCard(thread, at);
-              columnBuckets[card.column].push(card);
-              emittedCardCount += 1;
+          );
+        const projects: Array<{
+          projectId: string;
+          name: string;
+          columns: Array<{ key: KanbanColumnV2Key; label: string; cards: ReadKanbanCard[] }>;
+        }> = [];
+        for (const project of visibleProjects) {
+          const cardsBeforeProject = emittedCardCount;
+          // Past the board-wide cap, stop emitting project rows entirely: an
+          // empty-column project would read as "no cards" — a lie the
+          // `truncated` flag exists to prevent.
+          if (truncated) break;
+          const columnBuckets: Record<KanbanColumnV2Key, ReadKanbanCard[]> = {
+            draft: [],
+            inProgress: [],
+            awaitingYou: [],
+            done: [],
+          };
+          for (const thread of snapshot.threads) {
+            if (thread.projectId !== project.id) continue;
+            if ((thread.archivedAt ?? null) !== null) continue;
+            // Stop materializing once the board-wide cap is reached: the
+            // response stays bounded and the `truncated` flag tells the
+            // caller the board is incomplete (scoped reads are the fallback).
+            if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
+              truncated = true;
+              break;
             }
-            for (const bucket of Object.values(columnBuckets)) {
-              bucket.sort((a, b) => (a.summary.updatedAt < b.summary.updatedAt ? 1 : -1));
-            }
-            return {
-              projectId: project.id,
-              name: project.title,
-              columns: (["draft", "inProgress", "awaitingYou", "done"] as const).map((key) => ({
-                key,
-                label: KANBAN_COLUMN_V2_LABELS[key],
-                cards: columnBuckets[key],
-              })),
-            };
+            const card = deriveCard(thread, at);
+            columnBuckets[card.column].push(card);
+            emittedCardCount += 1;
+          }
+          // Truncation landed inside this project before it emitted anything:
+          // drop the would-be empty row instead of reporting ghost columns.
+          if (truncated && emittedCardCount === cardsBeforeProject) break;
+          for (const bucket of Object.values(columnBuckets)) {
+            bucket.sort((a, b) => (a.summary.updatedAt < b.summary.updatedAt ? 1 : -1));
+          }
+          projects.push({
+            projectId: project.id,
+            name: project.title,
+            columns: (["draft", "inProgress", "awaitingYou", "done"] as const).map((key) => ({
+              key,
+              label: KANBAN_COLUMN_V2_LABELS[key],
+              cards: columnBuckets[key],
+            })),
           });
+        }
         return mcpToolResultJson({
           projects,
           asOf: new Date(at).toISOString(),
@@ -371,7 +384,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     definition: {
       name: "synara_create_kanban_task",
       description:
-        "Create a Kanban task from a title and optional description/prompt: starts a new Synara thread and immediately starts a turn, so the card renders In Progress while the turn is live. Reuse the returned threadId with synara_read_thread or synara_move_kanban_card. Retries of the same requestId replay exactly-once, so keep requestId stable across retries.",
+        "Create a Kanban task from a title and optional description/prompt: starts a new Synara thread and immediately starts a turn, so the card renders In Progress while the turn is live. Reuse the returned threadId with synara_read_thread or synara_move_kanban_card. requestId is required and retries with the same requestId replay exactly-once.",
       inputSchema: {
         type: "object",
         properties: {
@@ -384,7 +397,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           model: { type: "string", description: "Model slug override (defaults to caller)." },
           requestId: { type: "string", maxLength: 256, description: "Idempotency key." },
         },
-        required: ["title"],
+        required: ["title", "requestId"],
         additionalProperties: false,
       },
       annotations: {
@@ -395,8 +408,9 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: true,
       },
     },
-    handler: withKanbanWriteConcurrencyGuard(
-      withKanbanToolAudit("synara_create_kanban_task", (args, context) =>
+    handler: withKanbanToolAudit(
+      "synara_create_kanban_task",
+      withKanbanWriteConcurrencyGuard((args, context) =>
         Effect.suspend(() =>
           Effect.gen(function* () {
             const caller = context.callerThreadId;
@@ -404,8 +418,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             const description = readStringArg(args, "description");
             const projectId = readStringArg(args, "projectId");
             const model = readStringArg(args, "model");
-            const requestId =
-              readStringArg(args, "requestId") ?? `kanban-task:${caller}:${isoNow()}`;
+            const requestId = readStringArg(args, "requestId", { required: true })!;
             // Default the provider/model to the caller's own so an agent never
             // spawns a task on a provider it cannot reason about.
             const spec: Record<string, unknown> = {
@@ -432,23 +445,34 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             };
             // The creation saga returns `threadIds` / per-thread `threads`, never a
             // top-level `threadId`; read the first created thread so the create →
-            // read → move loop works against the real contract shape.
+            // read → move loop works against the real contract shape. The card
+            // view is decoration: a projection that has not caught up yet must not
+            // turn an already-successful creation into a tool error.
             const createdThreadId = batch.threads?.[0]?.threadId ?? batch.threadIds?.[0];
             if (!createdThreadId) return result;
-            const thread = yield* requireThreadShell(createdThreadId).pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-            );
-            const cardView = deriveCard(thread, now());
+            const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
+            const createdCard = Option.isSome(threadShell)
+              ? (() => {
+                  const thread = threadShell.value;
+                  const cardView = deriveCard(thread, now());
+                  return {
+                    threadId: thread.id,
+                    title: thread.title,
+                    column: cardView.column,
+                    attention: cardView.attention,
+                  };
+                })()
+              : { threadId: createdThreadId, title, column: "inProgress" as const, attention: [] };
             return mcpToolResultJson({
               operationId: batch.operationId,
-              threadId: thread.id,
-              title: thread.title,
+              threadId: createdThreadId,
+              title: createdCard.title,
               status: "task_dispatched",
               card: {
-                threadId: thread.id,
-                title: thread.title,
-                column: cardView.column,
-                attention: cardView.attention,
+                threadId: createdCard.threadId,
+                title: createdCard.title,
+                column: createdCard.column,
+                attention: createdCard.attention,
               },
             });
           }),
@@ -474,7 +498,6 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             description:
               "Prompt/message for the started turn. Required when restarting a settled thread (a card outside In Progress with a completed turn).",
           },
-          requestId: { type: "string", maxLength: 256, description: "Idempotency key." },
         },
         required: ["threadId", "target"],
         additionalProperties: false,
@@ -487,8 +510,9 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: false,
       },
     },
-    handler: withKanbanWriteConcurrencyGuard(
-      withKanbanToolAudit("synara_move_kanban_card", (args, context) =>
+    handler: withKanbanToolAudit(
+      "synara_move_kanban_card",
+      withKanbanWriteConcurrencyGuard((args, context) =>
         Effect.suspend(() =>
           Effect.gen(function* () {
             const threadId = readStringArg(args, "threadId", { required: true })!;
@@ -566,8 +590,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 card: { threadId, column: currentColumn, attention: cardView.attention },
               });
             }
-            const hadLiveTurn =
-              card.session?.activeTurnId !== null || card.latestTurn?.state === "running";
+            const hadLiveTurn = threadHasActiveTurn(card);
             if (!hadLiveTurn) {
               return mcpToolResultJson({
                 threadId,

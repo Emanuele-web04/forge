@@ -164,15 +164,14 @@ describe("deriveSynaraMcpToolTitle", () => {
         status: "cancelled",
       }),
     ).toBe("Synara stopped creating a thread");
-    expect(
-      deriveSynaraMcpToolTitle({ toolName: "synara_read_kanban_board", status: "failed" }),
-    ).toBe("Synara couldn't read the board");
-    expect(
-      deriveSynaraMcpToolTitle({ toolName: "synara_create_kanban_task", status: "failed" }),
-    ).toBe("Synara couldn't create a board task");
-    expect(
-      deriveSynaraMcpToolTitle({ toolName: "synara_move_kanban_card", status: "failed" }),
-    ).toBe("Synara couldn't move a board card");
+
+    for (const [toolName, failed] of [
+      ["synara_read_kanban_board", "Synara couldn't read the board"],
+      ["synara_create_kanban_task", "Synara couldn't create a board task"],
+      ["synara_move_kanban_card", "Synara couldn't move a board card"],
+    ] as const) {
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "failed" })).toBe(failed);
+    }
     expect(
       deriveSynaraMcpToolTitle({ toolName: "synara_move_kanban_card", status: "cancelled" }),
     ).toBe("Synara stopped moving a board card");

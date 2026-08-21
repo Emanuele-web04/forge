@@ -59,7 +59,7 @@ describe("Synara harness policy", () => {
     assert.isNull(takeSynaraHarnessPolicyForSession(state, { gatewayControlAvailable: true }));
   });
 
-  it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
+  it("delivers exactly once per fresh session for every scoped MCP provider", () => {
     for (const provider of [
       "antigravity",
       "cursor",
@@ -69,23 +69,21 @@ describe("Synara harness policy", () => {
       "kilo",
       "pi",
     ] as const) {
-      for (const lifecycle of ["fresh", "load", "fork"] as const) {
-        const state: { harnessPolicyDelivered?: boolean } = {};
-        const first =
-          takeSynaraHarnessPolicyTextPartForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          })?.text ?? "";
-        assert.include(first, SYNARA_HARNESS_POLICY_MARKER, `${provider}/${lifecycle}`);
-        assert.include(first, "Use the synara_* tools", `${provider}/${lifecycle}`);
-        assert.isNull(
-          takeSynaraHarnessPolicyForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          }),
-          `${provider}/${lifecycle}`,
-        );
-      }
+      const state: { harnessPolicyDelivered?: boolean } = {};
+      const first =
+        takeSynaraHarnessPolicyTextPartForProviderSession(state, {
+          provider,
+          scopedGatewayConnectionAvailable: true,
+        })?.text ?? "";
+      assert.include(first, SYNARA_HARNESS_POLICY_MARKER, provider);
+      assert.include(first, "Use the synara_* tools", provider);
+      assert.isNull(
+        takeSynaraHarnessPolicyForProviderSession(state, {
+          provider,
+          scopedGatewayConnectionAvailable: true,
+        }),
+        provider,
+      );
     }
   });
 

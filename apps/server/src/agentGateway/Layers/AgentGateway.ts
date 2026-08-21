@@ -77,7 +77,6 @@ import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/Browse
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
-import { threadHasActiveTurn } from "../../orchestration/commandInvariants.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -726,18 +725,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
     helpers: {
-      // Move-card must base its "already done" fast-path on a *fresh* snapshot
-      // (never the read tool's possibly-stale one), so the target shell is
-      // re-read and live-checked at dispatch time. This prevents falsely
-      // reporting an unobserved running turn as done.
-      requireThreadShell: (threadId) =>
-        requireThreadShell(threadId).pipe(
-          Effect.flatMap((shell) =>
-            threadHasActiveTurn(shell)
-              ? Effect.succeed(shell)
-              : Effect.fail(new ToolInputError(`Thread "${threadId}" is not in progress.`)),
-          ),
-        ),
+      // Move-card bases its "already done" fast-path on a fresh snapshot by
+      // re-reading and live-checking the target shell at dispatch time, so the
+      // plain shell loader is correct here for every column.
+      requireThreadShell,
       assertCallerMayDriveThread,
       runCreateThreads,
       startTurn: ({ threadId, message, dispatchMode, runtimeMode, interactionMode }) => {
@@ -771,12 +762,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             createdAt: isoNow(),
           })
           .pipe(
-            Effect.map((eventSequence) => {
-              if (typeof eventSequence === "number") {
-                return { sequence: eventSequence };
-              }
-              return eventSequence;
-            }),
+            Effect.map((eventSequence) => ({ sequence: eventSequence.sequence })),
             Effect.mapError((error) => new ToolInputError(errorText(error))),
           );
       },

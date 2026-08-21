@@ -43,9 +43,16 @@ const OPTIMISTIC_DISPATCH_EXPIRY_CHECK_MS = 5_000;
 
 export function useKanbanBoard(): KanbanBoard {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
-    hideAutomationRunThreads: !settings.showAutomationRunThreads,
-  });
+  // Stable across renders: a fresh selector closure per render would hand the
+  // store a new filter function each time and re-derive `threads` (and thus the
+  // whole board) on every unrelated store write.
+  const selectDisplayThreads = useMemo(
+    () =>
+      createSidebarDisplayThreadsSelector({
+        hideAutomationRunThreads: !settings.showAutomationRunThreads,
+      }),
+    [settings.showAutomationRunThreads],
+  );
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
@@ -234,9 +241,9 @@ export function useKanbanBoard(): KanbanBoard {
   // ("at least one card has an open PR") and the per-thread flag consult the same
   // live resolved PR rows the card chips render — a merged PR drops the "Needs
   // review" flag even though `lastKnownPr` still says open (H2). Polling is
-  // bounded: only threads whose persisted seed says open (the filter candidates)
-  // run live lookups, and only while the filter can actually change cards. When
-  // the filter is off, the map stays at `lastKnownPr` seeds so nothing churns.
+  // bounded: only threads whose persisted seed says open (pill and filter
+  // candidates) run live lookups, in v2 mode only — the pills need the live
+  // state even when the filter itself is off. When v2 is off, nothing polls.
   const projectCwdById = useMemo(
     () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
     [allProjects],
@@ -270,8 +277,32 @@ export function useKanbanBoard(): KanbanBoard {
     return map;
   }, [needsReviewPrLookup, threads]);
 
-  const board = buildKanbanBoard(
-    {
+  const board = useMemo(
+    () =>
+      buildKanbanBoard(
+        {
+          projects,
+          threads,
+          draftThreads,
+          composerDraftByThreadId,
+          draftOrderByProjectId,
+          projectIdAliases,
+          terminalEntryThreadIds,
+          optimisticDispatchByThreadId,
+        },
+        kanbanViewMode === "v2"
+          ? {
+              now: nowMs,
+              needsReviewByThreadId,
+              isNeedsReviewActive: kanbanNeedsReviewFilter,
+              // The board-level "Show more" affordance drops the per-column review
+              // cap so the folded tail renders (H1).
+              uncapped: hasRevealedReviewFold,
+              lastActivityTimestampMsByThreadId,
+            }
+          : undefined,
+      ),
+    [
       projects,
       threads,
       draftThreads,
@@ -280,18 +311,13 @@ export function useKanbanBoard(): KanbanBoard {
       projectIdAliases,
       terminalEntryThreadIds,
       optimisticDispatchByThreadId,
-    },
-    kanbanViewMode === "v2"
-      ? {
-          now: nowMs,
-          needsReviewByThreadId,
-          isNeedsReviewActive: kanbanNeedsReviewFilter,
-          // The board-level "Show more" affordance drops the per-column review
-          // cap so the folded tail renders (H1).
-          uncapped: hasRevealedReviewFold,
-          lastActivityTimestampMsByThreadId,
-        }
-      : undefined,
+      kanbanViewMode,
+      nowMs,
+      needsReviewByThreadId,
+      kanbanNeedsReviewFilter,
+      hasRevealedReviewFold,
+      lastActivityTimestampMsByThreadId,
+    ],
   );
   return board;
 }
