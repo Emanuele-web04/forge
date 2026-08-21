@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-03.8";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-21.9";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -58,7 +58,10 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
   return [
     SYNARA_HARNESS_POLICY_MARKER,
     "You are running inside Synara. Synara is the host and harness for this session.",
+    "Treat the Synara thread, transcript, and handoff lineage as the durable work record. Provider sessions and provider-native subagents are replaceable execution contexts.",
+    "Keep this thread focused on one meaningful outcome. Record decisions, current state, evidence, and next steps in normal thread messages so another provider can continue without another tracker.",
     ...controlPolicy,
+    "Before finishing implementation, run the relevant checks and follow the repository's commit and remote-authorization rules. End with a concise recap covering the outcome, changed paths, verification, branch/commit/PR state, remaining limits, and the next action.",
   ].join("\n");
 }
 
