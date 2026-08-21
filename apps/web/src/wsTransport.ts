@@ -65,6 +65,10 @@ import * as Socket from "effect/unstable/socket/Socket";
 import { APP_VERSION } from "./branding";
 import { useDeviceStateStore } from "./deviceStateStore";
 import {
+  authorizationHeaderFromSessionBearer,
+  readSessionBearer,
+} from "./sessionBearer";
+import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
   resetThreadDetailResumeCursors,
@@ -274,6 +278,32 @@ export function makeNegotiateHttpUrl(explicitUrl: string | null): string {
     url.searchParams.append(WS_NEGOTIATE_QUERY.requiredCapability, capability);
   }
   return url.toString();
+}
+
+/** When cookies failed to stick, pair pages store a bearer and WS upgrades need wsToken. */
+export async function attachWebSocketAuthToken(
+  url: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!readSessionBearer()) return url;
+  const response = await fetch("/api/auth/ws-token", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      ...authorizationHeaderFromSessionBearer(),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to issue WebSocket auth token (${response.status}).`);
+  }
+  const payload = (await response.json().catch(() => null)) as { readonly token?: unknown } | null;
+  if (!payload || typeof payload.token !== "string" || payload.token.trim().length === 0) {
+    throw new Error("WebSocket auth token response was empty.");
+  }
+  const withToken = new URL(url);
+  withToken.searchParams.set("wsToken", payload.token);
+  return withToken.toString();
 }
 
 /** Bounded so a stalled negotiate falls back to bootstrap instead of hanging. */
@@ -992,7 +1022,12 @@ export class WsTransport {
       throw new Error("WebSocket transport was disposed during negotiation.");
     }
     const runtime = ManagedRuntime.make(
-      makeProtocolLayer(makeSocketUrl(this.explicitUrl, WS_BOOTSTRAP_PATH)),
+      makeProtocolLayer(
+        await attachWebSocketAuthToken(
+          makeSocketUrl(this.explicitUrl, WS_BOOTSTRAP_PATH),
+          this.lifetime.signal,
+        ),
+      ),
     );
     const clientScope = runtime.runSync(Scope.make());
     // Track the bootstrap runtime so dispose() during negotiation aborts it.
@@ -1082,7 +1117,12 @@ export class WsTransport {
       }
 
       const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility)),
+        makeProtocolLayer(
+          await attachWebSocketAuthToken(
+            makeFeatureSocketUrl(this.explicitUrl, compatibility),
+            this.lifetime.signal,
+          ),
+        ),
       );
       const featureScope = featureRuntime.runSync(Scope.make());
       this.runtime = featureRuntime;

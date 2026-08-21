@@ -426,7 +426,8 @@ const readEffectBinary = (
  * Brave and some Android in-app browsers drop URL fragments before JS runs, and
  * can fail the SPA POST bootstrap. Exchanging `?token=` on the navigation itself
  * sets the owner cookie before the app shell loads. Success is a 200 HTML page
- * (not a 302) so mobile Chromium stores Set-Cookie before navigating to `/`.
+ * that also writes `synara.sessionBearer` into sessionStorage so Android Chrome
+ * can authorize when Set-Cookie never sticks through Tailscale.
  */
 export const pairEffectRouteLayer = HttpRouter.add(
   "GET",
@@ -465,10 +466,15 @@ export const pairEffectRouteLayer = HttpRouter.add(
         remoteAddress: request.remoteAddress ?? null,
       }),
     });
-    // 200 + HTML refresh (not 302): Android Chrome and Brave often drop Set-Cookie on
-    // redirect responses, which burns the one-time token and leaves / unpaired.
+    // 200 + HTML (not 302): Android Chrome through Tailscale often drops Set-Cookie
+    // on pairing navigations. Mirror the session token into sessionStorage so the
+    // WebUI can authorize with Bearer when the cookie never sticks.
+    const sessionTokenJson = JSON.stringify(result.sessionToken);
     return HttpServerResponse.text(
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><meta http-equiv="refresh" content="0;url=/"/><title>Paired · Synara</title><script>location.replace("/");</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara… <a href="/" style="color:#d6ff55">Continue</a></p></main></body></html>`,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Paired · Synara</title><script>
+try { sessionStorage.setItem("synara.sessionBearer", ${sessionTokenJson}); } catch (e) {}
+setTimeout(function () { location.replace("/"); }, 250);
+</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara… <a href="/" style="color:#d6ff55">Continue</a></p></main></body></html>`,
       {
         status: 200,
         contentType: "text/html; charset=utf-8",

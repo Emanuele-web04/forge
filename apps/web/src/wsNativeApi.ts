@@ -54,9 +54,13 @@ import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTran
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
+import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import {
+  authorizationHeaderFromSessionBearer,
+  clearSessionBearer,
+} from "./sessionBearer";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
-import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
@@ -217,12 +221,11 @@ async function requestAuthJson<T>(
   const response = await fetch(path, {
     method: options.method ?? "GET",
     credentials: "same-origin",
-    ...(hasBody
-      ? {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(options.body),
-        }
-      : {}),
+    headers: {
+      ...authorizationHeaderFromSessionBearer(),
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
   });
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {
@@ -256,7 +259,14 @@ async function requestVoiceTranscriptionUpload(
   }
   const response = await fetch(
     resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
-    { method: "POST", credentials: "include", body: bytes },
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        ...authorizationHeaderFromSessionBearer(),
+      },
+      body: bytes,
+    },
   );
   const payload = (await response.json().catch(() => null)) as
     | ServerVoiceTranscriptionResult
@@ -680,6 +690,7 @@ export function createWsNativeApi(): NativeApi {
         const result = await requestAuthJson<AuthLogoutResult>("/api/auth/logout", {
           method: "POST",
         });
+        clearSessionBearer();
         await transport.dispose();
         return result;
       },

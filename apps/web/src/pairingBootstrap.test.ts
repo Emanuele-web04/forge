@@ -15,7 +15,10 @@ function makeDependencies(input: {
   );
   const fetch = vi.fn(async () => {
     events.push("fetch");
-    return { ok: input.responseOk ?? true } as Response;
+    return {
+      ok: input.responseOk ?? true,
+      json: async () => ({ sessionToken: "bearer-from-pair" }),
+    } as Response;
   });
   const renderFailure = vi.fn(() => events.push("failure"));
 
@@ -54,7 +57,7 @@ describe("bootstrapPairingSession", () => {
     await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
 
     expect(test.events).toEqual(["scrub:/pair", "fetch", "navigate:/"]);
-    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap", {
+    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap/bearer", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -85,7 +88,7 @@ describe("bootstrapPairingSession", () => {
 
     await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
     expect(test.events).toEqual(["scrub:/pair", "fetch", "navigate:/"]);
-    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap", {
+    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap/bearer", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -102,7 +105,7 @@ describe("bootstrapPairingSession", () => {
     await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
     expect(test.events).toEqual(["scrub:/pair?next=%2Factivity", "fetch", "navigate:/"]);
     expect(test.fetch).toHaveBeenCalledWith(
-      "/api/auth/bootstrap",
+      "/api/auth/bootstrap/bearer",
       expect.objectContaining({
         body: JSON.stringify({ credential: "HASH-SECRET" }),
       }),

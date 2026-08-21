@@ -2,6 +2,7 @@
 // Purpose: Stops the remote WebUI from hanging unsigned-in on "Loading activity...".
 
 import { isElectron } from "./env";
+import { authorizationHeaderFromSessionBearer } from "./sessionBearer";
 
 export const REMOTE_PAIRING_REQUIRED_PATH = "/pair";
 
@@ -17,6 +18,7 @@ interface RemoteAuthGateDependencies {
   readonly pathname: string;
   readonly fetch: typeof globalThis.fetch;
   readonly render: () => void;
+  readonly authorizationHeaders?: Record<string, string>;
 }
 
 function renderRemotePairingRequired(): void {
@@ -53,6 +55,7 @@ export async function bootstrapRemoteAuthGate(
     pathname: window.location.pathname,
     fetch: globalThis.fetch,
     render: renderRemotePairingRequired,
+    authorizationHeaders: authorizationHeaderFromSessionBearer(),
   },
 ): Promise<"ok" | "blocked"> {
   if (dependencies.isElectron || dependencies.pathname === REMOTE_PAIRING_REQUIRED_PATH) {
@@ -62,6 +65,9 @@ export async function bootstrapRemoteAuthGate(
   try {
     const response = await dependencies.fetch("/api/auth/session", {
       credentials: "same-origin",
+      headers: {
+        ...(dependencies.authorizationHeaders ?? authorizationHeaderFromSessionBearer()),
+      },
     });
     if (!response.ok) {
       dependencies.render();

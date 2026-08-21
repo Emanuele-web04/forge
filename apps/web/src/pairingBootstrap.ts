@@ -1,6 +1,8 @@
 // FILE: pairingBootstrap.ts
 // Purpose: Exchanges one-time remote pairing links before the application opens a WebSocket.
 
+import { writeSessionBearer } from "./sessionBearer";
+
 const PAIRING_PATH = "/pair";
 
 interface PairingLocation {
@@ -19,6 +21,7 @@ interface PairingBootstrapDependencies {
   readonly history: PairingHistory;
   readonly fetch: typeof globalThis.fetch;
   readonly renderFailure: () => void;
+  readonly storeBearer?: (token: string) => void;
 }
 
 export type PairingBootstrapResult = "not-pairing" | "redirecting" | "failed";
@@ -45,6 +48,7 @@ export async function bootstrapPairingSession(
     history: window.history,
     fetch: globalThis.fetch,
     renderFailure: renderPairingFailure,
+    storeBearer: writeSessionBearer,
   },
 ): Promise<PairingBootstrapResult> {
   if (dependencies.location.pathname !== PAIRING_PATH) {
@@ -68,7 +72,9 @@ export async function bootstrapPairingSession(
   }
 
   try {
-    const response = await dependencies.fetch("/api/auth/bootstrap", {
+    // Prefer bearer bootstrap: Android Chrome through Tailscale often drops the
+    // HttpOnly cookie, and the SPA path still needs a durable credential.
+    const response = await dependencies.fetch("/api/auth/bootstrap/bearer", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -77,6 +83,10 @@ export async function bootstrapPairingSession(
     if (!response.ok) {
       dependencies.renderFailure();
       return "failed";
+    }
+    const payload = (await response.json()) as { readonly sessionToken?: unknown };
+    if (typeof payload.sessionToken === "string" && payload.sessionToken.length > 0) {
+      (dependencies.storeBearer ?? writeSessionBearer)(payload.sessionToken);
     }
   } catch {
     dependencies.renderFailure();

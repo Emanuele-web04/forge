@@ -205,7 +205,10 @@ describe("authEffectRouteLayer", () => {
         });
         expect(response.status).toBe(200);
         expect(response.headers.get("set-cookie")).toContain("synara_session=");
-        expect(await response.text()).toContain("This browser is paired.");
+        const body = await response.text();
+        expect(body).toContain("This browser is paired.");
+        expect(body).toContain("synara.sessionBearer");
+        expect(body).toContain("cookie-token");
         expect(sideEffects.count).toBe(1);
       },
       pairEffectRouteLayer,
