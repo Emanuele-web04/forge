@@ -69,12 +69,14 @@ function makeSession(
 }
 
 describe("kanban v2 vocabulary", () => {
-  it("labels every v2 column key and nothing else", () => {
+  it("labels every v2 column key and nothing else, with awaiting-you distinct", () => {
     expect(Object.keys(KANBAN_COLUMN_V2_LABELS).toSorted()).toEqual([...COLUMN_V2_KEYS].toSorted());
     for (const key of COLUMN_V2_KEYS) {
       expect(KANBAN_COLUMN_V2_LABELS[key]).toBeTypeOf("string");
       expect(KANBAN_COLUMN_V2_LABELS[key].length).toBeGreaterThan(0);
     }
+    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).toBe("Awaiting you");
+    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).not.toBe(KANBAN_COLUMN_V2_LABELS.inProgress);
   });
 
   it("labels every attention flag and nothing else", () => {
@@ -85,11 +87,6 @@ describe("kanban v2 vocabulary", () => {
       expect(KANBAN_ATTENTION_LABELS[flag]).toBeTypeOf("string");
       expect(KANBAN_ATTENTION_LABELS[flag].length).toBeGreaterThan(0);
     }
-  });
-
-  it("keeps the awaiting-you column label distinct from the other columns", () => {
-    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).toBe("Awaiting you");
-    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).not.toBe(KANBAN_COLUMN_V2_LABELS.inProgress);
   });
 });
 

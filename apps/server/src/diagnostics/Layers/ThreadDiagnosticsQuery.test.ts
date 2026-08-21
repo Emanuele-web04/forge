@@ -47,6 +47,9 @@ layer("ThreadDiagnosticsQuery", (it) => {
   it.effect("stores bounded structured incidents and reads only the requested thread", () =>
     Effect.gen(function* () {
       const diagnostics = yield* ThreadDiagnosticsQuery;
+      // Relative stamps: retention purges rows older than 30 days, so absolute
+      // fixture dates silently vanish once real time moves past them.
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-1",
         source: "server",
@@ -54,7 +57,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         severity: "warning",
         code: "THREAD_STREAM_CAPACITY_EXCEEDED",
         detail: { reason: "thread-capacity", activeThreads: 16 },
-        occurredAt: "2026-07-20T10:00:00.000Z",
+        occurredAt: dayAgoIso,
       });
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-2",
@@ -62,7 +65,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         kind: "ws.stream-admission-rejected",
         severity: "warning",
         detail: { reason: "duplicate" },
-        occurredAt: "2026-07-20T10:00:01.000Z",
+        occurredAt: dayAgoIso,
       });
 
       const incidents = yield* diagnostics.listOperationalDiagnostics({

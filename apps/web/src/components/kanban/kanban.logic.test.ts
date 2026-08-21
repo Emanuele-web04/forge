@@ -1050,13 +1050,25 @@ describe("deriveKanbanColumnV2 (web adapter)", () => {
     expect(deriveKanbanColumnV2(thread, FROZEN_NOW_MS)).toBe("awaitingYou");
   });
 
-  it("falls back to the shared function without `now` for non-staleness cases", () => {
+  it("derives draft/done/inProgress from runtime state with the clock injected", () => {
     const settled = makeSidebarThreadSummary({ latestTurn: makeLatestTurn() });
-    expect(deriveKanbanColumnV2(settled)).toBe("done");
-    expect(deriveKanbanColumnV2(makeSidebarThreadSummary())).toBe("draft");
-    expect(deriveKanbanColumnV2(makeSidebarThreadSummary({ hasLiveTailWork: true }))).toBe(
-      "inProgress",
-    );
+    expect(deriveKanbanColumnV2(settled, FROZEN_NOW_MS)).toBe("done");
+    expect(deriveKanbanColumnV2(makeSidebarThreadSummary(), FROZEN_NOW_MS)).toBe("draft");
+    // A fresh heartbeat keeps live-tail work In Progress; a stale one would age
+    // into stuck/awaitingYou instead.
+    expect(
+      deriveKanbanColumnV2(
+        makeSidebarThreadSummary({
+          hasLiveTailWork: true,
+          session: makeSession({
+            status: "running",
+            orchestrationStatus: "running",
+            updatedAt: FROZEN_NOW_ISO,
+          }),
+        }),
+        FROZEN_NOW_MS,
+      ),
+    ).toBe("inProgress");
   });
 
   it("uses orchestrationStatus as the session status label", () => {
@@ -1084,7 +1096,7 @@ describe("deriveKanbanColumnV2 (web adapter)", () => {
 
 describe("deriveKanbanCardAttention", () => {
   it("produces no attention on a plain settled card", () => {
-    const { attention, attentionLabels } = deriveKanbanCardAttention(
+    const attention = deriveKanbanCardAttention(
       makeSidebarThreadSummary({
         latestTurn: makeLatestTurn(),
         session: makeSession({ orchestrationStatus: "ready", updatedAt: FROZEN_NOW_ISO }),
@@ -1092,11 +1104,10 @@ describe("deriveKanbanCardAttention", () => {
       { now: FROZEN_NOW_MS },
     );
     expect(attention).toEqual([]);
-    expect(attentionLabels).toEqual([]);
   });
 
   it("surfaces the failed pill when the session errored", () => {
-    const { attention, attentionLabels } = deriveKanbanCardAttention(
+    const attention = deriveKanbanCardAttention(
       makeSidebarThreadSummary({
         latestTurn: makeLatestTurn({ state: "error" }),
         session: makeSession({
@@ -1109,11 +1120,10 @@ describe("deriveKanbanCardAttention", () => {
       { now: FROZEN_NOW_MS },
     );
     expect(attention).toContain("failed");
-    expect(attentionLabels).toContain("Failed");
   });
 
   it("adds needs-review when the caller passes an open PR", () => {
-    const { attention } = deriveKanbanCardAttention(
+    const attention = deriveKanbanCardAttention(
       makeSidebarThreadSummary({
         latestTurn: makeLatestTurn(),
         session: makeSession({ orchestrationStatus: "ready", updatedAt: FROZEN_NOW_ISO }),
@@ -1157,7 +1167,7 @@ describe("buildKanbanBoard v2 mode", () => {
     expect(project.awaitingYou.map((card) => card.threadId)).toEqual(["thread-awaited"]);
   });
 
-  it("fills attention and attentionLabel on thread cards in v2 mode", () => {
+  it("fills attention on thread cards in v2 mode", () => {
     const failed = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-failed"),
       latestTurn: makeLatestTurn({ state: "error" }),
@@ -1171,7 +1181,6 @@ describe("buildKanbanBoard v2 mode", () => {
     const board = buildKanbanBoard(makeBoardInput({ threads: [failed] }), v2Options());
     const card = board.projects[0]!.awaitingYou[0]!;
     expect(card.attention).toContain("failed");
-    expect(card.attentionLabels).toContain("Failed");
   });
 
   it("leaves classic cards with no attention fields", () => {
@@ -1183,7 +1192,6 @@ describe("buildKanbanBoard v2 mode", () => {
     const board = buildKanbanBoard(makeBoardInput({ threads: [failed] }));
     const doneCard = board.projects[0]!.done[0]!;
     expect(doneCard.attention).toBeUndefined();
-    expect(doneCard.attentionLabels).toBeUndefined();
   });
 
   it("applies the needs-review filter in v2 mode", () => {
@@ -1305,19 +1313,13 @@ describe("refineAttentionFlagsForLivePr", () => {
     ]);
   });
 
-  it("drops needs-review once the live row settles merged", () => {
+  it("drops needs-review once the live row settles merged, closed, or empty (C3/M3)", () => {
     expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], "merged")).toEqual([
       failedFlag,
     ]);
-  });
-
-  it("drops needs-review when live resolution settled empty (null, C3/M3)", () => {
     expect(refineAttentionFlagsForLivePr([failedFlag, needsReviewFlag], null)).toEqual([
       failedFlag,
     ]);
-  });
-
-  it("drops needs-review once the live row settles closed", () => {
     expect(refineAttentionFlagsForLivePr([needsReviewFlag], "closed")).toEqual([]);
   });
 
@@ -1328,11 +1330,8 @@ describe("refineAttentionFlagsForLivePr", () => {
 });
 
 describe("shouldToastForExpiredDispatch (H5)", () => {
-  it("stays silent when the thread left the display set", () => {
+  it("stays silent when the thread left the display set or still derives In Progress", () => {
     expect(shouldToastForExpiredDispatch(undefined)).toBe(false);
-  });
-
-  it("stays silent while the thread still derives In Progress (slow provider)", () => {
     expect(shouldToastForExpiredDispatch(makeSidebarThreadSummary({ hasLiveTailWork: true }))).toBe(
       false,
     );
@@ -1356,19 +1355,13 @@ describe("shouldToastForExpiredDispatch (H5)", () => {
 });
 
 describe("needs-review reveal affordance (H1)", () => {
-  it("renders when there is a fold but the tail is not revealed", () => {
+  it("renders when there is a fold, stays reachable once revealed, hides when idle", () => {
     expect(shouldShowReviewFoldToggle(false, 3)).toBe(true);
     expect(resolveReviewFoldToggleLabel(false, 3)).toBe("Show 3 more");
-  });
-
-  it("keeps the toggle reachable once revealed even with zero hidden cards", () => {
     expect(shouldShowReviewFoldToggle(true, 0)).toBe(true);
     expect(resolveReviewFoldToggleLabel(true, 0)).toBe("Show fewer");
     expect(shouldShowReviewFoldToggle(true, 5)).toBe(true);
     expect(resolveReviewFoldToggleLabel(true, 5)).toBe("Show fewer");
-  });
-
-  it("hides the toggle when there is no fold and nothing is revealed", () => {
     expect(shouldShowReviewFoldToggle(false, 0)).toBe(false);
   });
 });

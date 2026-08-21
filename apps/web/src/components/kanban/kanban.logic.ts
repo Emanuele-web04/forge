@@ -7,7 +7,6 @@
 import type { ProjectId, ProviderKind, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import {
-  KANBAN_ATTENTION_LABELS,
   KANBAN_COLUMN_V2_LABELS,
   deriveKanbanAttention as deriveKanbanAttentionShared,
   deriveKanbanColumnV2 as deriveKanbanColumnV2Shared,
@@ -187,15 +186,10 @@ export interface KanbanCard {
   isOptimisticDispatch: boolean;
   /**
    * v2-path attention flags (failed / stuck / awaiting-approval / awaiting-input /
-   * needs-review). Present only for v2 boards; classic cards never set it.
+   * needs-review). Present only for v2 boards; classic cards never set it. Display
+   * copy maps through `KANBAN_ATTENTION_LABELS` at render time.
    */
   attention?: KanbanAttentionFlag[] | undefined;
-  /**
-   * v2-path red-pill copy for every `attention` flag (the renderer shows up to
-   * two). Present only for v2 boards; undefined for classic so the classic pill
-   * renderer is untouched.
-   */
-  attentionLabels?: string[] | undefined;
   /** needs-review (open PR per the live PR view) — set on v2-path thread cards. */
   needsReview?: boolean | undefined;
 }
@@ -411,25 +405,25 @@ export function refineAttentionFlagsForLivePr(
 /**
  * v2-path column adapter. The web ↔ shared mapping lives only here: it projects
  * the web thread summary into the shared structural input and delegates to
- * `@synara/shared/kanban`. `now` is the injected ticking clock from the board
- * hook (S1-P5); without it the derivation never consults staleness. Typed as the
- * shared `KanbanColumnV2Key` so `awaitingYou` cannot leak into the classic path.
+ * `@synara/shared/kanban` with the injected board clock (`now`) that drives the
+ * stuck-staleness rules. Typed as the shared `KanbanColumnV2Key` so `awaitingYou`
+ * cannot leak into the classic path.
  */
 export function deriveKanbanColumnV2(
   thread: SidebarThreadSummary,
-  now?: number,
+  now: number,
   lastActivityTimestampMs?: number | null,
 ): KanbanColumnV2Key {
-  const input = toKanbanThreadDerivationInput(thread, lastActivityTimestampMs);
-  return now !== undefined
-    ? deriveKanbanColumnV2Shared(input, { now })
-    : deriveKanbanColumnV2Shared(input);
+  return deriveKanbanColumnV2Shared(
+    toKanbanThreadDerivationInput(thread, lastActivityTimestampMs),
+    { now },
+  );
 }
 
 /**
- * v2-path attention projection for a thread card: the shared flag set plus the
- * display label map. `now` feeds the stuck staleness check. `needsReview` is the
- * per-thread open-PR view (S1-P8) that the shared module also turns into a pill.
+ * v2-path attention projection for a thread card. `now` feeds the stuck staleness
+ * check. `needsReview` is the per-thread open-PR view (S1-P8) that the shared
+ * module also turns into a pill.
  */
 export function deriveKanbanCardAttention(
   thread: SidebarThreadSummary,
@@ -438,16 +432,12 @@ export function deriveKanbanCardAttention(
     needsReview?: boolean;
     lastActivityTimestampMs?: number | null;
   },
-): { attention: KanbanAttentionFlag[]; attentionLabels: string[] } {
+): KanbanAttentionFlag[] {
   const input = toKanbanThreadDerivationInput(thread, opts.lastActivityTimestampMs);
-  const attention = deriveKanbanAttentionShared(input, {
+  return deriveKanbanAttentionShared(input, {
     now: opts.now,
     needsReview: opts.needsReview ?? false,
   });
-  return {
-    attention,
-    attentionLabels: attention.map((flag) => KANBAN_ATTENTION_LABELS[flag]),
-  };
 }
 
 function resolveThreadCardTimestamp(
@@ -493,7 +483,7 @@ function buildThreadCard(
   const threadProvider = isTerminal
     ? null
     : (thread.session?.provider ?? thread.modelSelection.provider);
-  const attentionFields = v2
+  const attention = v2
     ? deriveKanbanCardAttention(thread, {
         now: v2.now,
         needsReview: v2.needsReviewByThreadId?.[thread.id] ?? false,
@@ -503,8 +493,7 @@ function buildThreadCard(
   // In Progress cards and Awaiting-you cards whose reason is staleness (stuck)
   // are both live work: the elapsed label tracks their active stretch. Other
   // Awaiting-you reasons (pending/failed) center on the human, not the work.
-  const isAwaitingStuck =
-    column === "awaitingYou" && attentionFields?.attention.includes("stuck") === true;
+  const isAwaitingStuck = column === "awaitingYou" && attention?.includes("stuck") === true;
   const activeWorkStartedAt =
     column === "inProgress" || isAwaitingStuck
       ? deriveActiveWorkStartedAt(thread.latestTurn, thread.session, timestamp)
@@ -530,8 +519,7 @@ function buildThreadCard(
     isOptimisticDispatch: false,
     ...(v2
       ? {
-          attention: attentionFields?.attention ?? [],
-          attentionLabels: attentionFields?.attentionLabels ?? [],
+          attention: attention ?? [],
           needsReview: v2.needsReviewByThreadId?.[thread.id] ?? false,
         }
       : {}),
@@ -844,7 +832,7 @@ export function buildKanbanBoard(
       continue;
     }
     bucket[card.column].push(card);
-    if (card.column === "done") {
+    if (card.column === "done" || card.column === "awaitingYou") {
       const unsentPromptCard = buildUnsentPromptCard(
         thread,
         input.composerDraftByThreadId,
