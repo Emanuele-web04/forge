@@ -377,9 +377,39 @@ function normalizeAutomationKey(value: string): string {
   return value.length === 1 ? value.toLocaleLowerCase("en-US") : value;
 }
 
+const AUTOMATION_MOUSE_CSS_TOLERANCE_PX = 1.5;
+const AUTOMATION_MOUSE_DIP_TOLERANCE_PX = 2;
+
+function mouseCoordinatesMatch(
+  expectedX: number,
+  expectedY: number,
+  actualX: number,
+  actualY: number,
+  pageZoomFactor: number,
+): boolean {
+  if (
+    Math.abs(expectedX - actualX) <= AUTOMATION_MOUSE_CSS_TOLERANCE_PX &&
+    Math.abs(expectedY - actualY) <= AUTOMATION_MOUSE_CSS_TOLERANCE_PX
+  ) {
+    return true;
+  }
+  const zoom =
+    Number.isFinite(pageZoomFactor) && pageZoomFactor > 0 ? pageZoomFactor : 1;
+  if (Math.abs(zoom - 1) < 0.001) {
+    return false;
+  }
+  // CDP/actionability points are CSS layout pixels. Electron's before-mouse-event
+  // reports widget DIPs, which shrink with page zoom on the floating card.
+  return (
+    Math.abs(expectedX * zoom - actualX) <= AUTOMATION_MOUSE_DIP_TOLERANCE_PX &&
+    Math.abs(expectedY * zoom - actualY) <= AUTOMATION_MOUSE_DIP_TOLERANCE_PX
+  );
+}
+
 function browserAutomationInputMatches(
   expected: BrowserAutomationExpectedInput,
   actual: BrowserAutomationExpectedInput,
+  pageZoomFactor = 1,
 ): boolean {
   if (expected.kind !== actual.kind) return false;
   if (expected.kind === "key" && actual.kind === "key") {
@@ -395,8 +425,7 @@ function browserAutomationInputMatches(
   return (
     expected.type === actual.type &&
     (expected.button === undefined || expected.button === actual.button) &&
-    Math.abs(expected.x - actual.x) <= 1.5 &&
-    Math.abs(expected.y - actual.y) <= 1.5
+    mouseCoordinatesMatch(expected.x, expected.y, actual.x, actual.y, pageZoomFactor)
   );
 }
 
@@ -3253,6 +3282,26 @@ export class DesktopBrowserManager {
     }
   }
 
+  private resolveAutomationPageZoomFactor(threadId: ThreadId, tabId: string): number {
+    const key = buildRuntimeKey(threadId, tabId);
+    const runtime = this.runtimes.get(key);
+    if (runtime && !runtime.webContents.isDestroyed()) {
+      try {
+        const live = runtime.webContents.getZoomFactor();
+        if (typeof live === "number" && Number.isFinite(live) && live > 0) {
+          return live;
+        }
+      } catch {
+        // The guest may be mid-teardown while a late native event is delivered.
+      }
+    }
+    const stored = this.runtimePageZoomFactors.get(key);
+    if (typeof stored === "number" && stored > 0) {
+      return stored;
+    }
+    return this.getVisiblePageZoomFactor(threadId);
+  }
+
   private consumeExpectedAutomationInput(
     threadId: ThreadId,
     tabId: string,
@@ -3264,7 +3313,11 @@ export class DesktopBrowserManager {
       (entry) => entry.expiresAt > now,
     );
     const matchedIndex = pending.findIndex((entry) =>
-      browserAutomationInputMatches(entry.signal, signal),
+      browserAutomationInputMatches(
+        entry.signal,
+        signal,
+        this.resolveAutomationPageZoomFactor(threadId, tabId),
+      ),
     );
     if (matchedIndex < 0) {
       if (pending.length === 0) this.expectedAutomationInputsByRuntimeKey.delete(key);
