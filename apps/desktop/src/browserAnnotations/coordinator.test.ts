@@ -564,7 +564,12 @@ describe("BrowserAnnotationCoordinator", () => {
   it("asks the guest to announce after a same-guest runtime replace", () => {
     const harness = createHarness();
     harness.ready("document-a");
-    harness.coordinator.handleRuntimeDetached(THREAD_ID, TAB_ID, harness.webContents.id, "replaced");
+    harness.coordinator.handleRuntimeDetached(
+      THREAD_ID,
+      TAB_ID,
+      harness.webContents.id,
+      "replaced",
+    );
     expect(() =>
       harness.coordinator.start({
         threadId: THREAD_ID,
@@ -576,6 +581,26 @@ describe("BrowserAnnotationCoordinator", () => {
     harness.coordinator.requestDocumentReady(THREAD_ID, TAB_ID, harness.webContents.id);
     expect(harness.sent.at(-1)?.payload).toMatchObject({ kind: "announce-ready" });
     harness.ready("document-a");
+    expect(() =>
+      harness.coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).not.toThrow();
+  });
+
+  it("refreshes an already-ready overlay when the same guest rebinds", () => {
+    const harness = createHarness();
+    harness.ready("document-a");
+    harness.sent.length = 0;
+
+    harness.coordinator.requestDocumentReady(THREAD_ID, TAB_ID, harness.webContents.id);
+
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "refresh-document",
+      documentToken: "document-a",
+    });
     expect(() =>
       harness.coordinator.start({
         threadId: THREAD_ID,

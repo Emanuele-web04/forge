@@ -177,6 +177,21 @@ export function clampFloatingBrowserPanelRect(
   };
 }
 
+export function restoreFloatingBrowserPanelRect(
+  host: FloatingBrowserPanelHostSize,
+  saved: FloatingBrowserPanelRect | null | undefined,
+  options: {
+    defaultSize?: FloatingBrowserPanelSize;
+    minSize?: FloatingBrowserPanelSize;
+    maxSize?: FloatingBrowserPanelSize;
+  } = {},
+): FloatingBrowserPanelRect {
+  if (!saved) {
+    return initialFloatingBrowserPanelRect(host, options);
+  }
+  return clampFloatingBrowserPanelRect(saved, host, options);
+}
+
 export function initialFloatingBrowserPanelRect(
   host: FloatingBrowserPanelHostSize,
   options: {

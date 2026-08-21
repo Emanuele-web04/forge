@@ -183,7 +183,7 @@ function SelectPopup({
           alignItemWithTrigger={alignItemWithTrigger}
           alignOffset={alignOffset}
           anchor={anchor}
-          className="z-50 select-none"
+          className="z-50 select-none [-webkit-app-region:no-drag]"
           data-slot="select-positioner"
           side={side}
           sideOffset={sideOffset}

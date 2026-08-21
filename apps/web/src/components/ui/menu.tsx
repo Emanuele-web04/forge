@@ -94,7 +94,13 @@ function MenuPopupBase({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
+        className={cn(
+          // Portals overlay drag-region chrome (browser tab strip, dock headers).
+          // Electron hit-tests app-region in DOM order, not paint order, so without
+          // no-drag the OS swallows the overlapping rows as a window drag.
+          "z-50 min-w-32 [-webkit-app-region:no-drag]",
+          isComposerSurface ? undefined : className,
+        )}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}

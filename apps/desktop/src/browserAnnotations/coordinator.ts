@@ -407,13 +407,6 @@ export class BrowserAnnotationCoordinator {
     }
     const key = runtimeKey(threadId, tabId);
     const documentState = this.documentsByRuntimeKey.get(key);
-    if (
-      documentState &&
-      documentState.webContentsId === webContentsId &&
-      !this.invalidatedDocumentRuntimeKeys.has(key)
-    ) {
-      return;
-    }
     if (documentState && documentState.webContentsId === webContentsId) {
       this.sendGuestCommand(runtime, {
         version: BROWSER_ANNOTATION_PROTOCOL_VERSION,

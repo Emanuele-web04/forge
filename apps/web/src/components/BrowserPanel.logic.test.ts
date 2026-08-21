@@ -10,6 +10,7 @@ import {
   createBrowserPanelHideScheduler,
   createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
+  createFloatingBrowserChromePark,
   formatBrowserAnnotationActionError,
   hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
@@ -361,6 +362,143 @@ describe("createBrowserPanelRendererHandoff", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("flushes a parked renderer guest immediately on close", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+      handoff.parkGuest("thread-a", {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      });
+      handoff.flushParkedGuest("thread-a");
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(handoff.takeParkedGuest("thread-a")).toBeNull();
+      vi.runAllTimers();
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushing without a parked guest is a no-op", () => {
+    const dispose = vi.fn();
+    const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+    expect(() => handoff.flushParkedGuest("thread-a")).not.toThrow();
+    expect(dispose).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFloatingBrowserChromePark", () => {
+  type FakeChromeSlot = HTMLElement & { removed: boolean };
+
+  function fakeChromeSlot(): FakeChromeSlot {
+    const slot: {
+      removed: boolean;
+      style: CSSStyleDeclaration;
+      getAttribute: (name: string) => string | null;
+      setAttribute: (name: string, value: string) => void;
+      querySelectorAll: (selector: string) => NodeListOf<Element>;
+      remove: () => void;
+    } = {
+      removed: false,
+      style: {} as CSSStyleDeclaration,
+      getAttribute: () => null,
+      setAttribute: () => {},
+      querySelectorAll: () => [] as unknown as NodeListOf<Element>,
+      remove: () => {
+        slot.removed = true;
+      },
+    };
+    return slot as unknown as FakeChromeSlot;
+  }
+
+  it("parks the chrome slot hidden and disposes it after the park window", () => {
+    vi.useFakeTimers();
+    try {
+      const slots = new Map<string, FakeChromeSlot>([["thread-a", fakeChromeSlot()]]);
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 1_000,
+        findSlot: (threadId) => slots.get(threadId) ?? null,
+        ensureSlot: (threadId) => {
+          let slot = slots.get(threadId);
+          if (!slot) {
+            slot = fakeChromeSlot();
+            slots.set(threadId, slot);
+          }
+          return slot;
+        },
+      });
+
+      park.park("thread-a");
+      expect(slots.get("thread-a")?.style.pointerEvents).toBe("none");
+      vi.advanceTimersByTime(1_000);
+      expect(slots.get("thread-a")?.removed).toBe(true);
+
+      park.park("missing-thread");
+      vi.runAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("take cancels a pending chrome disposal and reuses the same slot", () => {
+    vi.useFakeTimers();
+    try {
+      const slot = fakeChromeSlot();
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 1_000,
+        findSlot: () => slot,
+        ensureSlot: () => slot,
+      });
+
+      park.park("thread-a");
+      expect(park.take("thread-a")).toBe(slot);
+      vi.advanceTimersByTime(5_000);
+      expect(slot.removed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flush destroys the parked chrome webview immediately", () => {
+    vi.useFakeTimers();
+    try {
+      const slot = fakeChromeSlot();
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 60_000,
+        findSlot: () => slot,
+        ensureSlot: () => slot,
+      });
+
+      park.park("thread-a");
+      park.flush("thread-a");
+      expect(slot.removed).toBe(true);
+      vi.runAllTimers();
+      expect(slot.removed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flush destroys a live chrome slot that was never parked", () => {
+    const slot = fakeChromeSlot();
+    const park = createFloatingBrowserChromePark({
+      parkUntilMs: 60_000,
+      findSlot: () => (slot.removed ? null : slot),
+      ensureSlot: () => slot,
+    });
+
+    expect(park.take("thread-a")).toBe(slot);
+    park.flush("thread-a");
+    expect(slot.removed).toBe(true);
   });
 });
 
@@ -726,7 +864,7 @@ describe("resolveBrowserChromeStatus", () => {
 describe("floating browser webview presentation", () => {
   it("fills the slot and clips to the card radius, then restores docked layout", () => {
     const webview = { style: {} } as HTMLElement;
-    const stage = { style: {}, firstElementChild: webview } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as unknown as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: true,
       slotWidth: 320,
@@ -752,7 +890,11 @@ describe("floating browser webview presentation", () => {
       },
       setZoomFactor: vi.fn(),
     } as HTMLElement & { setZoomFactor: ReturnType<typeof vi.fn> };
-    const stage = { style: {}, firstElementChild: webview, querySelector: () => webview } as unknown as HTMLElement;
+    const stage = {
+      style: {},
+      firstElementChild: webview,
+      querySelector: () => webview,
+    } as unknown as HTMLElement;
     const slot = {
       style: {},
       querySelector(selector: string) {
@@ -782,8 +924,10 @@ describe("floating browser webview presentation", () => {
 
 describe("floating browser webview presentation restore", () => {
   it("restores docked layout", () => {
-    const webview = { style: { overflow: "hidden", clipPath: "inset(0 round 12px)" } } as HTMLElement;
-    const stage = { style: {}, firstElementChild: webview } as HTMLElement;
+    const webview = {
+      style: { overflow: "hidden", clipPath: "inset(0 round 12px)" },
+    } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as unknown as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: false,
       slotWidth: 320,

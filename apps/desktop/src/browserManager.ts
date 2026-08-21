@@ -1599,11 +1599,7 @@ export class DesktopBrowserManager {
       // WebContents until attachWebview adopts the guest. Destroying here drops
       // CDP and makes every in-flight agent tool miss the host.
       this.promoteTabToRendererSurface(input.threadId, activeTabId);
-      this.activateThreadForPendingRenderer(
-        input.threadId,
-        nextBounds,
-        nextPageZoomFactor,
-      );
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       this.attachRuntime(activeRuntime, nextBounds, nextPageZoomFactor);
       return;
     }

@@ -88,6 +88,7 @@ export interface BrowserPanelRendererHandoff {
   readonly waitForDetach: (threadId: string) => Promise<void>;
   readonly parkGuest: (threadId: string, guest: ParkedBrowserRendererGuest) => void;
   readonly takeParkedGuest: (threadId: string) => ParkedBrowserRendererGuest | null;
+  readonly flushParkedGuest: (threadId: string) => void;
 }
 
 interface BrowserPanelRendererHandoffOptions {
@@ -106,7 +107,10 @@ export const FLOATING_BROWSER_CHROME_WIDTH_PX = FLOATING_BROWSER_CHROME_EXPANDED
 export const FLOATING_BROWSER_CHROME_HEIGHT_PX = 32;
 export const FLOATING_BROWSER_CHROME_INSET_PX = 8;
 
-export function isBrowserRendererGuestHitTarget(element: { tagName?: string; closest?: (selector: string) => Element | null }): boolean {
+export function isBrowserRendererGuestHitTarget(element: {
+  tagName?: string;
+  closest?: (selector: string) => Element | null;
+}): boolean {
   const tagName = element.tagName?.toLowerCase();
   if (tagName === "webview") {
     return true;
@@ -273,8 +277,14 @@ export function createBrowserPanelRendererHandoff(
     return clearParked(threadId);
   }
 
-  return { trackDetach, waitForDetach, parkGuest, takeParkedGuest };
+  function flushParkedGuest(threadId: string): void {
+    clearParked(threadId)?.dispose();
+  }
+
+  return { trackDetach, waitForDetach, parkGuest, takeParkedGuest, flushParkedGuest };
 }
+
+export const browserPanelRendererHandoff = createBrowserPanelRendererHandoff();
 
 export function getBrowserRendererParkingContainer(): HTMLElement {
   const existing = document.getElementById(BROWSER_RENDERER_PARKING_CONTAINER_ID);
@@ -317,7 +327,10 @@ export function applyFloatingBrowserChromeSlotStyle(
   options: { expanded?: boolean } = {},
 ): void {
   if (options.expanded != null) {
-    slot.setAttribute(FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE, options.expanded ? "true" : "false");
+    slot.setAttribute(
+      FLOATING_BROWSER_CHROME_EXPANDED_ATTRIBUTE,
+      options.expanded ? "true" : "false",
+    );
   }
   const width = floatingBrowserChromeSlotWidth(slot);
   slot.style.position = "fixed";
@@ -353,6 +366,125 @@ export function getFloatingBrowserChromeSlot(threadId: string): HTMLElement {
   container.append(slot);
   return slot;
 }
+
+export function findFloatingBrowserChromeSlot(threadId: string): HTMLElement | null {
+  const container = document.getElementById(BROWSER_RENDERER_PARKING_CONTAINER_ID);
+  if (!container) {
+    return null;
+  }
+  for (const child of container.children) {
+    if (
+      child instanceof HTMLElement &&
+      child.getAttribute(FLOATING_BROWSER_CHROME_THREAD_ATTRIBUTE) === threadId
+    ) {
+      return child;
+    }
+  }
+  return null;
+}
+
+export interface FloatingBrowserGuestSlotFrame {
+  readonly rect: BrowserRendererGuestSlotBox;
+  readonly borderRadius: string;
+  readonly border: string;
+  readonly boxShadow: string;
+}
+
+export function applyFloatingBrowserGuestSlotFrame(
+  threadId: string,
+  frame: FloatingBrowserGuestSlotFrame,
+): void {
+  const slot = getBrowserRendererGuestSlot(threadId);
+  applyBrowserRendererGuestSlotStyle(slot, frame.rect, { borderRadius: frame.borderRadius });
+  slot.style.border = frame.border;
+  slot.style.boxShadow = frame.boxShadow;
+  applyFloatingBrowserChromeSlotStyle(getFloatingBrowserChromeSlot(threadId), frame.rect);
+}
+
+export const FLOATING_BROWSER_CHROME_PARK_MS = 8_000;
+
+export interface FloatingBrowserChromePark {
+  readonly take: (threadId: string) => HTMLElement;
+  readonly park: (threadId: string) => void;
+  readonly flush: (threadId: string) => void;
+}
+
+interface FloatingBrowserChromeParkOptions {
+  readonly parkUntilMs?: number;
+  readonly setTimer?: (callback: () => void, delayMs: number) => BrowserPanelHideTimer;
+  readonly clearTimer?: (timer: BrowserPanelHideTimer) => void;
+  readonly ensureSlot?: (threadId: string) => HTMLElement;
+  readonly findSlot?: (threadId: string) => HTMLElement | null;
+}
+
+export function createFloatingBrowserChromePark(
+  options: FloatingBrowserChromeParkOptions = {},
+): FloatingBrowserChromePark {
+  const parkUntilMs = options.parkUntilMs ?? FLOATING_BROWSER_CHROME_PARK_MS;
+  const setTimer =
+    options.setTimer ??
+    ((callback, delayMs) => globalThis.setTimeout(callback, delayMs) as BrowserPanelHideTimer);
+  const clearTimer =
+    options.clearTimer ??
+    ((timer) => globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>));
+  const ensureSlot = options.ensureSlot ?? getFloatingBrowserChromeSlot;
+  const findSlot = options.findSlot ?? findFloatingBrowserChromeSlot;
+  const parkedByThreadId = new Map<string, { slot: HTMLElement; timer: BrowserPanelHideTimer }>();
+
+  function disposeChromeSlot(slot: HTMLElement): void {
+    for (const webview of Array.from(slot.querySelectorAll("webview"))) {
+      webview.remove();
+    }
+    slot.remove();
+  }
+
+  function clearParked(threadId: string): HTMLElement | null {
+    const parked = parkedByThreadId.get(threadId);
+    if (!parked) {
+      return null;
+    }
+    parkedByThreadId.delete(threadId);
+    clearTimer(parked.timer);
+    return parked.slot;
+  }
+
+  function take(threadId: string): HTMLElement {
+    clearParked(threadId);
+    return ensureSlot(threadId);
+  }
+
+  function park(threadId: string): void {
+    const slot = findSlot(threadId);
+    if (!slot) {
+      return;
+    }
+    applyFloatingBrowserChromeSlotStyle(slot, null);
+    const replaced = clearParked(threadId);
+    if (replaced && replaced !== slot) {
+      disposeChromeSlot(replaced);
+    }
+    const timer = setTimer(() => {
+      parkedByThreadId.delete(threadId);
+      disposeChromeSlot(slot);
+    }, parkUntilMs);
+    parkedByThreadId.set(threadId, { slot, timer });
+  }
+
+  function flush(threadId: string): void {
+    const parked = clearParked(threadId);
+    const live = findSlot(threadId);
+    if (parked && parked !== live) {
+      disposeChromeSlot(parked);
+    }
+    if (live) {
+      disposeChromeSlot(live);
+    }
+  }
+
+  return { take, park, flush };
+}
+
+export const floatingBrowserChromePark = createFloatingBrowserChromePark();
 
 export const FLOATING_BROWSER_CHROME_SRCDOC = `<!doctype html>
 <html>
@@ -462,9 +594,7 @@ export const FLOATING_BROWSER_CHROME_SRCDOC = `<!doctype html>
   </body>
 </html>`;
 
-function floatingBrowserChromeGuest(
-  webview: HTMLElement,
-): HTMLElement & {
+function floatingBrowserChromeGuest(webview: HTMLElement): HTMLElement & {
   executeJavaScript?: (code: string) => Promise<unknown>;
   send?: (channel: string, ...args: unknown[]) => void;
 } {
@@ -506,8 +636,7 @@ export function handoffBrowserGuestToDockedSurface(input: {
   input.slot.style.border = "";
   input.slot.style.boxShadow = "";
   const stage =
-    input.stage ??
-    input.slot.querySelector<HTMLElement>("[data-floating-browser-stage='true']");
+    input.stage ?? input.slot.querySelector<HTMLElement>("[data-floating-browser-stage='true']");
   if (stage) {
     applyBrowserWebviewPresentation(stage, {
       floating: false,
@@ -529,15 +658,18 @@ export function handoffBrowserGuestToDockedSurface(input: {
 }
 
 export function ensureFloatingBrowserChromeWebview(slot: HTMLElement): HTMLElement {
-  let webview = slot.querySelector("webview");
-  if (webview instanceof HTMLElement) {
-    return webview;
+  const existing = slot.querySelector<HTMLElement>("webview");
+  if (existing) {
+    return existing;
   }
-  webview = document.createElement("webview");
+  const webview = document.createElement("webview");
   webview.setAttribute("partition", FLOATING_BROWSER_CHROME_PARTITION);
   webview.setAttribute("allowtransparency", "on");
   webview.style.cssText = "display:flex;width:100%;height:100%;background:transparent;";
-  webview.setAttribute("src", `data:text/html;charset=utf-8,${encodeURIComponent(FLOATING_BROWSER_CHROME_SRCDOC)}`);
+  webview.setAttribute(
+    "src",
+    `data:text/html;charset=utf-8,${encodeURIComponent(FLOATING_BROWSER_CHROME_SRCDOC)}`,
+  );
   slot.append(webview);
   return webview;
 }

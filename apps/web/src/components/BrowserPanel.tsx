@@ -65,8 +65,8 @@ import {
   browserAddressDisplayValue,
   browserWebviewInitialUrl,
   buildBrowserAddressSuggestions,
+  browserPanelRendererHandoff,
   createBrowserPanelHideScheduler,
-  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
   applyBrowserRendererGuestSlotStyle,
   applyBrowserWebviewPageZoom,
@@ -115,7 +115,6 @@ const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
 const browserPanelHideScheduler = createBrowserPanelHideScheduler();
-const browserPanelRendererHandoff = createBrowserPanelRendererHandoff();
 // The address field and tab pills share one chrome-control surface so the whole row reads
 // as a single cohesive control: matching height, radius, border width, and type scale.
 const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
@@ -276,8 +275,7 @@ function layoutBrowserRendererGuestSlot(
   host: HTMLElement | null,
   floating: boolean,
 ): void {
-  const borderRadius =
-    floating && host ? readFloatingBrowserPanelBorderRadius(host) : "0px";
+  const borderRadius = floating && host ? readFloatingBrowserPanelBorderRadius(host) : "0px";
   if (!host) {
     applyBrowserRendererGuestSlotStyle(slot, null, { borderRadius });
     slot.style.border = "";
@@ -858,10 +856,9 @@ export function BrowserPanel({
           stage: parkStage,
           webview,
           dispose: () => {
+            // takeParkedGuest is the claim path. dispose means this park lease
+            // expired or was flushed — always tear the guest down.
             const liveSlot = getBrowserRendererGuestSlot(threadId);
-            if (webview.isConnected && liveSlot.contains(webview) && liveSlot.style.pointerEvents === "auto") {
-              return;
-            }
             destroyRendererBrowserWebview(webview, tabId, webContentsId);
             if (parkStage.childElementCount === 0) {
               parkStage.remove();
@@ -885,7 +882,7 @@ export function BrowserPanel({
       }
       releaseRefs();
     },
-    [destroyRendererBrowserWebview, isFloatingMode, threadId],
+    [destroyRendererBrowserWebview, threadId],
   );
 
   useEffect(() => {
@@ -982,7 +979,9 @@ export function BrowserPanel({
 
     const slot = getBrowserRendererGuestSlot(threadId);
     browserPanelRendererHandoff.takeParkedGuest(threadId);
-    const existingStage = slot.querySelector<HTMLDivElement>("[data-floating-browser-stage='true']");
+    const existingStage = slot.querySelector<HTMLDivElement>(
+      "[data-floating-browser-stage='true']",
+    );
     const existingWebview = (existingStage?.querySelector("webview") ??
       slot.querySelector("webview")) as BrowserWebviewElement | null;
 
@@ -1002,7 +1001,7 @@ export function BrowserPanel({
       try {
         browserWebviewWebContentsIdRef.current = existingWebview.getWebContentsId?.() ?? null;
       } catch {
-        browserWebviewWebContentsIdRef.current = browserWebviewWebContentsIdRef.current;
+        // A not-yet-ready guest cannot answer; attachment below re-captures the id.
       }
       browserWebviewAttachKeyRef.current = null;
       browserWebviewAttachInFlightKeyRef.current = null;
@@ -1046,9 +1045,7 @@ export function BrowserPanel({
       floating: isFloatingMode,
       slotWidth: host.clientWidth,
       slotHeight: host.clientHeight,
-      ...(isFloatingMode
-        ? { borderRadius: readFloatingBrowserPanelBorderRadius(host) }
-        : {}),
+      ...(isFloatingMode ? { borderRadius: readFloatingBrowserPanelBorderRadius(host) } : {}),
     });
     if (!isFloatingMode) {
       const rect = host.getBoundingClientRect();
@@ -1363,9 +1360,7 @@ export function BrowserPanel({
       const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
       // Fit the 1280px desktop page into the floating card without reflowing it
       // as a tiny mobile viewport (which looks zoomed in).
-      const pageZoomFactor = isFloatingMode
-        ? resolveBrowserFloatingZoomFactor(rect.width)
-        : 1;
+      const pageZoomFactor = isFloatingMode ? resolveBrowserFloatingZoomFactor(rect.width) : 1;
       applyBrowserWebviewPageZoom(webview, pageZoomFactor);
       const nextKey = bounds
         ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}`
