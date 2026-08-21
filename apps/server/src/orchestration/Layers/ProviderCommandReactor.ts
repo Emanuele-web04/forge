@@ -1186,7 +1186,17 @@ const make = Effect.gen(function* () {
       providerService
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
-    const activeSession = yield* resolveActiveSession(threadId);
+    // The runtime-session lookup costs a provider round-trip. It can only change
+    // the binding decision when a session row exists but no turn has run yet
+    // (an optimistic placeholder) AND the turn contests the row's provider.
+    // Every other case resolves identically without it, so skip the lookup.
+    const activeSession =
+      currentProvider !== undefined &&
+      thread.latestTurn === null &&
+      requestedModelSelection !== undefined &&
+      requestedModelSelection.provider !== currentProvider
+        ? yield* resolveActiveSession(threadId)
+        : undefined;
     // A session row alone can be an optimistic placeholder written before the
     // first turn; only treat the provider as an immutable binding when a real
     // runtime session exists or the thread has actually run a turn.
