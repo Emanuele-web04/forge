@@ -59,9 +59,12 @@ function makeLayer(input: {
 }
 
 describe("ProviderSessionReaperLive", () => {
-  it("stops stale sessions without active turns", async () => {
+  it("stops stale runtimes without deleting their resume state", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-stale");
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
+    const stopRuntimeSession = vi.fn<
+      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
+    >(() => Effect.void);
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),
@@ -90,6 +93,7 @@ describe("ProviderSessionReaperLive", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
+      stopRuntimeSession,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
@@ -113,18 +117,22 @@ describe("ProviderSessionReaperLive", () => {
         ),
         Effect.runPromise,
       );
-      await waitFor(() => stopSession.mock.calls.length === 1);
+      await waitFor(() => stopRuntimeSession.mock.calls.length === 1);
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void));
     }
 
-    expect(stopSession).toHaveBeenCalledWith({ threadId });
+    expect(stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+    expect(stopSession).not.toHaveBeenCalled();
   });
 
   it("skips stale sessions with active turns", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-active");
     const turnId = TurnId.makeUnsafe("turn-reaper-active");
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
+    const stopRuntimeSession = vi.fn<
+      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
+    >(() => Effect.void);
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),
@@ -153,6 +161,7 @@ describe("ProviderSessionReaperLive", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
+      stopRuntimeSession,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
@@ -182,5 +191,6 @@ describe("ProviderSessionReaperLive", () => {
     }
 
     expect(stopSession).not.toHaveBeenCalled();
+    expect(stopRuntimeSession).not.toHaveBeenCalled();
   });
 });

@@ -3666,7 +3666,9 @@ const make = Effect.gen(function* () {
       const stopped = yield* runBoundedProviderCall({
         label: "The provider session stop",
         timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
-        call: providerService.stopSession({ threadId: providerThread.id }),
+        call: providerService.stopRuntimeSession
+          ? providerService.stopRuntimeSession({ threadId: providerThread.id })
+          : providerService.stopSession({ threadId: providerThread.id }),
       });
       if (stopped._tag !== "ok") {
         yield* appendProviderFailureActivity({

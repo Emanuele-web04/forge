@@ -3268,7 +3268,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("stops the live runtime while preserving resume cursor and provider options", () =>
+  it.effect("resumes Codex with its original cursor after a runtime stop and restart", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "synara-provider-service-stop-runtime-"),
@@ -3279,19 +3279,19 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(persistenceLayer),
       );
       const providerOptions = {
-        claudeAgent: {
-          binaryPath: "/usr/local/bin/claude",
-          permissionMode: "acceptEdits",
+        codex: {
+          homePath: "/tmp/custom-codex-home",
+          binaryPath: "/usr/local/bin/codex",
         },
       };
 
-      const firstClaude = makeFakeCodexAdapter("claudeAgent");
+      const firstCodex = makeFakeCodexAdapter("codex");
       const firstRegistry: typeof ProviderAdapterRegistry.Service = {
         getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(firstClaude.adapter)
+          provider === "codex"
+            ? Effect.succeed(firstCodex.adapter)
             : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
+        listProviders: () => Effect.succeed(["codex"]),
       };
       const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
@@ -3304,7 +3304,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
         const session = yield* provider.startSession(asThreadId("thread-stop-runtime"), {
-          provider: "claudeAgent",
+          provider: "codex",
           threadId: asThreadId("thread-stop-runtime"),
           cwd: "/tmp/project-stop-runtime",
           providerOptions,
@@ -3317,15 +3317,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
         return session;
       }).pipe(Effect.provide(firstProviderLayer));
 
-      assert.equal(firstClaude.stopSession.mock.calls.length, 1);
+      assert.equal(firstCodex.stopSession.mock.calls.length, 1);
 
-      const secondClaude = makeFakeCodexAdapter("claudeAgent");
+      const secondCodex = makeFakeCodexAdapter("codex");
       const secondRegistry: typeof ProviderAdapterRegistry.Service = {
         getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(secondClaude.adapter)
+          provider === "codex"
+            ? Effect.succeed(secondCodex.adapter)
             : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
+        listProviders: () => Effect.succeed(["codex"]),
       };
       const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
@@ -3338,15 +3338,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
         yield* provider.startSession(initial.threadId, {
-          provider: "claudeAgent",
+          provider: "codex",
           threadId: initial.threadId,
           cwd: "/tmp/project-stop-runtime",
           runtimeMode: "full-access",
         });
       }).pipe(Effect.provide(secondProviderLayer));
 
-      assert.equal(secondClaude.startSession.mock.calls.length, 1);
-      const restartedInput = secondClaude.startSession.mock.calls[0]?.[0];
+      assert.equal(secondCodex.startSession.mock.calls.length, 1);
+      const restartedInput = secondCodex.startSession.mock.calls[0]?.[0];
       assert.equal(typeof restartedInput === "object" && restartedInput !== null, true);
       if (restartedInput && typeof restartedInput === "object") {
         const startPayload = restartedInput as {
