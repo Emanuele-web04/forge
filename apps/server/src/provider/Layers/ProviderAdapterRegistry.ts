@@ -47,7 +47,6 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* KiloAdapter,
             yield* OpenCodeAdapter,
             yield* PiAdapter,
-            yield* DevinAdapter,
           ];
 
     for (const adapter of adapters) {

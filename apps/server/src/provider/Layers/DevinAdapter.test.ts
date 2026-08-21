@@ -3,58 +3,31 @@
 // model discovery, and plan-mode fail-closed behavior.
 // Layer: Provider adapter tests
 
-import { Effect, type Stream } from "effect";
+import { Effect } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
-import type * as AcpErrors from "../acp/AcpErrors.ts";
 import { describe, expect, it } from "vitest";
 
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   applyDevinSessionConfiguration,
-  buildDevinProviderModelDescriptors,
+  buildDevinPromptMeta,
+  buildDevinStaticModelDescriptors,
+  mergeDevinModelDescriptors,
+  parseDevinCliModelList,
   resolveRequestedModeId,
 } from "./DevinAdapter.ts";
 
-type MutableConfigOptions = Array<Acp.SessionConfigOption>;
-
-function makeFakeAcpRuntime(
-  initialConfigOptions: MutableConfigOptions,
-  initialModeState?: { currentModeId: string; availableModes: Array<{ id: string; name: string }> },
-): {
-  readonly runtime: AcpSessionRuntimeShape;
+function makeFakeAcpRuntime(initialModeState?: {
+  currentModeId: string;
+  availableModes: Array<{ id: string; name: string }>;
+}): {
+  readonly runtime: Pick<AcpSessionRuntimeShape, "getModeState" | "setMode">;
   readonly calls: Array<{ method: string; args: ReadonlyArray<unknown> }>;
-  readonly configOptions: MutableConfigOptions;
 } {
   const calls: Array<{ method: string; args: ReadonlyArray<unknown> }> = [];
-  const configOptions = initialConfigOptions;
   let modeState = initialModeState;
 
-  const record = (method: string, args: ReadonlyArray<unknown>) => {
-    calls.push({ method, args });
-  };
-
-  const setOptionCurrentValue = (id: string, value: string | boolean) => {
-    const idx = configOptions.findIndex((o) => o.id.toLowerCase() === id.toLowerCase());
-    if (idx === -1) return;
-    const existing = configOptions[idx]!;
-    configOptions[idx] = {
-      ...existing,
-      currentValue: value,
-    } as Acp.SessionConfigOption;
-  };
-
   const runtime = {
-    start: () => Effect.succeed({ sessionId: "fake-session", resumedExistingSession: false }),
-    awaitExit: Effect.void,
-    getEvents: () =>
-      ({
-        // Empty stream placeholder; never consumed in these tests.
-        [Symbol.asyncIterator]: () => ({
-          next: async () => ({ done: true as const, value: undefined }),
-        }),
-      }) as unknown as Stream.Stream<never, never>,
-    sessionUpdatesEnqueuedCount: Effect.succeed(0),
-    supportsSessionFork: Effect.succeed(false),
     getModeState: Effect.sync(() =>
       modeState
         ? {
@@ -63,184 +36,60 @@ function makeFakeAcpRuntime(
           }
         : undefined,
     ),
-    getConfigOptions: Effect.sync(() => configOptions),
-    getAvailableCommands: Effect.succeed([]),
-    prompt: () => Effect.fail(null as unknown as AcpErrors.AcpError),
-    cancel: Effect.void,
     setMode: (modeId: string) =>
       Effect.sync(() => {
-        record("setMode", [modeId]);
+        calls.push({ method: "setMode", args: [modeId] });
         if (modeState) {
           modeState = { ...modeState, currentModeId: modeId };
         }
         return {} as Acp.SetSessionModeResponse;
       }),
-    setConfigOption: (id: string, value: string | boolean) =>
-      Effect.sync(() => {
-        record("setConfigOption", [id, value]);
-        setOptionCurrentValue(id, value);
-        return { configOptions } as Acp.SetSessionConfigOptionResponse;
-      }),
-    setModel: (model: string) =>
-      Effect.sync(() => {
-        record("setModel", [model]);
-        const modelOption = configOptions.find(
-          (o) => o.category === "model" || o.id.toLowerCase() === "model",
-        );
-        if (modelOption) {
-          setOptionCurrentValue(modelOption.id, model);
-        }
-      }),
-    forkSession: () => Effect.fail(null as unknown as AcpErrors.AcpError),
-    request: () => Effect.fail(null as unknown as AcpErrors.AcpError),
-    notify: () => Effect.void,
-    exitCode: Effect.succeed(null),
-  } as unknown as AcpSessionRuntimeShape;
-
-  return { runtime, calls, configOptions };
-}
-
-function modelOption(
-  currentValue: string,
-  values: ReadonlyArray<{ value: string; name: string }>,
-): Acp.SessionConfigOption {
-  return {
-    id: "model",
-    name: "Model",
-    category: "model",
-    type: "select",
-    currentValue,
-    options: values as never,
   };
-}
-
-function selectOption(
-  id: string,
-  name: string,
-  currentValue: string,
-  values: ReadonlyArray<{ value: string; name: string }>,
-): Acp.SessionConfigOption {
-  return {
-    id,
-    name,
-    category: "model_config",
-    type: "select",
-    currentValue,
-    options: values as never,
-  };
+  return { runtime, calls };
 }
 
 describe("applyDevinSessionConfiguration", () => {
-  it("applies model and traits transactionally", async () => {
-    const { runtime, calls, configOptions } = makeFakeAcpRuntime([
-      modelOption("default", [
-        { value: "default", name: "Auto" },
-        { value: "composer-2", name: "Composer 2" },
-        { value: "gpt-5.4", name: "GPT-5.4" },
-      ]),
-      selectOption("fast", "Fast", "false", [
-        { value: "false", name: "Off" },
-        { value: "true", name: "Fast" },
-      ]),
-      selectOption("reasoning", "Reasoning", "medium", [
-        { value: "low", name: "Low" },
-        { value: "medium", name: "Medium" },
-        { value: "high", name: "High" },
-      ]),
-    ]);
-
-    const result = await Effect.runPromise(
-      applyDevinSessionConfiguration({
-        runtime,
-        runtimeMode: "full-access",
-        interactionMode: undefined,
-        modelSelection: {
-          model: "composer-2",
-          options: { fastMode: true, reasoningEffort: "high" },
-        },
-      }),
-    );
-
-    expect(result.model).toBe("composer-2");
-    expect(calls).toEqual([
-      { method: "setModel", args: ["composer-2"] },
-      { method: "setConfigOption", args: ["fast", "true"] },
-      { method: "setConfigOption", args: ["reasoning", "high"] },
-    ]);
-    expect(configOptions.find((o) => o.id === "fast")?.currentValue).toBe("true");
-    expect(configOptions.find((o) => o.id === "reasoning")?.currentValue).toBe("high");
-  });
-
-  it("fails when the requested model is not allowed", async () => {
-    const { runtime } = makeFakeAcpRuntime([
-      modelOption("default", [{ value: "default", name: "Auto" }]),
-    ]);
-
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "full-access",
-          interactionMode: undefined,
-          modelSelection: { model: "unknown-model" },
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
-  it("fails when a trait value is not available", async () => {
-    const { runtime } = makeFakeAcpRuntime([
-      modelOption("default", [{ value: "default", name: "Auto" }]),
-      selectOption("fast", "Fast", "false", [
-        { value: "false", name: "Off" },
-        { value: "true", name: "Fast" },
-      ]),
-    ]);
-
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "full-access",
-          interactionMode: undefined,
-          modelSelection: { model: "default", options: { reasoningEffort: "high" } },
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
   it("sets plan mode when requested", async () => {
-    const { runtime, calls } = makeFakeAcpRuntime(
-      [modelOption("default", [{ value: "default", name: "Auto" }])],
-      {
-        currentModeId: "default",
-        availableModes: [
-          { id: "default", name: "Default" },
-          { id: "plan", name: "Plan" },
-        ],
-      },
-    );
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "default",
+      availableModes: [
+        { id: "default", name: "Default" },
+        { id: "plan", name: "Plan" },
+      ],
+    });
 
     await Effect.runPromise(
       applyDevinSessionConfiguration({
         runtime,
         runtimeMode: "full-access",
         interactionMode: "plan",
-        modelSelection: { model: "default" },
       }),
     );
 
-    expect(calls.some((call) => call.method === "setMode" && call.args[0] === "plan")).toBe(true);
+    expect(calls).toEqual([{ method: "setMode", args: ["plan"] }]);
+  });
+
+  it("does not touch config options for the model selection", async () => {
+    // Devin models are process-start `--model` flags; the per-turn
+    // set_config_option path must stay gone.
+    const { runtime, calls } = makeFakeAcpRuntime();
+
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime,
+        runtimeMode: "full-access",
+        interactionMode: undefined,
+      }),
+    );
+
+    expect(calls).toEqual([]);
   });
 
   it("fails closed when plan mode is not available", async () => {
-    const { runtime } = makeFakeAcpRuntime(
-      [modelOption("default", [{ value: "default", name: "Auto" }])],
-      {
-        currentModeId: "default",
-        availableModes: [{ id: "default", name: "Default" }],
-      },
-    );
+    const { runtime } = makeFakeAcpRuntime({
+      currentModeId: "default",
+      availableModes: [{ id: "default", name: "Default" }],
+    });
 
     await expect(
       Effect.runPromise(
@@ -248,7 +97,6 @@ describe("applyDevinSessionConfiguration", () => {
           runtime,
           runtimeMode: "full-access",
           interactionMode: "plan",
-          modelSelection: { model: "default" },
         }),
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
@@ -303,44 +151,138 @@ describe("resolveRequestedModeId", () => {
   });
 });
 
-describe("buildDevinProviderModelDescriptors", () => {
-  it("does not attach a cross-product of options to every model", () => {
-    const descriptors = buildDevinProviderModelDescriptors([
-      modelOption("default", [
-        { value: "swe-1-7", name: "SWE 1.7" },
-        { value: "adaptive", name: "Adaptive" },
-      ]),
-      selectOption("context", "Context", "128k", [
-        { value: "128k", name: "128K" },
-        { value: "256k", name: "256K" },
-      ]),
-    ]);
-
-    const swe17 = descriptors.find((d) => d.slug === "swe-1-7");
-    const adaptive = descriptors.find((d) => d.slug === "adaptive");
-
-    expect(swe17).toBeDefined();
-    expect(adaptive).toBeDefined();
-    // SWE 1.7 supports fast mode; Adaptive does not.
-    expect(swe17?.supportsFastMode).toBe(true);
-    expect(adaptive?.supportsFastMode).toBe(false);
-    // Both should have per-model static descriptors, not a shared runtime option list.
-    expect((swe17?.optionDescriptors ?? []).some((d) => d.id === "context")).toBe(false);
+describe("buildDevinPromptMeta", () => {
+  it("advertises plan mode through prompt metadata", () => {
+    expect(buildDevinPromptMeta("plan")).toEqual({ mode: "plan" });
   });
 
-  it("uses runtime names for unknown models and falls back to the slug", () => {
-    const descriptors = buildDevinProviderModelDescriptors([
-      modelOption("default", [{ value: "future-model", name: "Future Model" }]),
-    ]);
-
-    expect(descriptors).toEqual([
-      expect.objectContaining({ slug: "future-model", name: "Future Model" }),
-    ]);
+  it("maps omitted and default modes to agent", () => {
+    expect(buildDevinPromptMeta("default")).toEqual({ mode: "agent" });
   });
+});
 
-  it("falls back to the static model list when no model option is present", () => {
-    const descriptors = buildDevinProviderModelDescriptors(undefined);
+describe("buildDevinStaticModelDescriptors", () => {
+  it("falls back to the static contract catalog", () => {
+    const descriptors = buildDevinStaticModelDescriptors();
     expect(descriptors.some((d) => d.slug === "swe-1-7")).toBe(true);
     expect(descriptors.some((d) => d.slug === "adaptive")).toBe(true);
+  });
+});
+
+describe("Devin CLI model discovery", () => {
+  it("publishes reasoning, fast, context, and concrete variant metadata", () => {
+    const models = parseDevinCliModelList(
+      JSON.stringify({
+        families: [
+          {
+            family_uid: "gpt-5.6-sol",
+            family_label: "GPT-5.6 Sol",
+            slug: "gpt-5.6-sol",
+            variants: [
+              {
+                model_uid: "gpt-5-6-sol-medium",
+                label: "GPT-5.6 Sol Medium",
+                max_context_tokens: 200_000,
+              },
+              {
+                model_uid: "gpt-5-6-sol-low",
+                label: "GPT-5.6 Sol Low",
+                max_context_tokens: 200_000,
+              },
+              {
+                model_uid: "gpt-5-6-sol-high",
+                label: "GPT-5.6 Sol High",
+                max_context_tokens: 200_000,
+              },
+              {
+                model_uid: "gpt-5-6-sol-medium-priority",
+                label: "GPT-5.6 Sol Medium Priority",
+                max_context_tokens: 1_000_000,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const [model] = mergeDevinModelDescriptors([models]);
+    if (!model) throw new Error("Expected GPT-5.6 Sol to be discovered");
+    expect(model).toMatchObject({
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      defaultReasoningEffort: "medium",
+      supportsFastMode: true,
+      defaultContextWindow: "200k",
+    });
+    expect(model.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(model.contextWindowOptions?.map((option) => option.value)).toEqual(["200k", "1m"]);
+    expect(model.modelVariants).toContainEqual({
+      model: "gpt-5-6-sol-medium-priority",
+      reasoningEffort: "medium",
+      contextWindow: "1m",
+      fastMode: true,
+    });
+  });
+
+  it("exposes thinking and long-context toggles for Claude-style variants", () => {
+    const models = parseDevinCliModelList(
+      JSON.stringify({
+        families: [
+          {
+            family_uid: "claude-opus-4.6",
+            family_label: "Claude Opus 4.6",
+            slug: "claude-opus-4.6",
+            variants: [
+              {
+                model_uid: "claude-opus-4-6",
+                label: "Claude Opus 4.6",
+                max_context_tokens: 200_000,
+              },
+              {
+                model_uid: "claude-opus-4-6-thinking",
+                label: "Claude Opus 4.6 Thinking",
+                max_context_tokens: 200_000,
+              },
+              {
+                model_uid: "claude-opus-4-6-1m",
+                label: "Claude Opus 4.6 1M",
+                max_context_tokens: 1_000_000,
+              },
+              {
+                model_uid: "claude-opus-4-6-thinking-1m",
+                label: "Claude Opus 4.6 Thinking 1M",
+                max_context_tokens: 1_000_000,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const [model] = mergeDevinModelDescriptors([models]);
+    if (!model) throw new Error("Expected Claude Opus 4.6 to be discovered");
+    expect(model).toMatchObject({
+      supportsThinkingToggle: true,
+      defaultContextWindow: "200k",
+    });
+    expect(model.contextWindowOptions?.map((option) => option.value)).toEqual(["200k", "1m"]);
+    expect(model.modelVariants).toContainEqual({
+      model: "claude-opus-4-6-thinking-1m",
+      contextWindow: "1m",
+      thinking: true,
+    });
+    expect(model.modelVariants).toContainEqual({
+      model: "claude-opus-4-6",
+      contextWindow: "200k",
+      thinking: false,
+    });
+  });
+
+  it("returns no descriptors for non-JSON CLI output", () => {
+    expect(parseDevinCliModelList("devin: not logged in")).toEqual([]);
   });
 });
