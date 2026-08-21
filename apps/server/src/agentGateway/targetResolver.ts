@@ -256,6 +256,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
         validation: { kind: "context-window" },
       }),
       reasoningEffort: providerOptionRule("string", [], "model-discovery"),
+      modelVariant: providerOptionRule("string", [], "model-discovery", {
+        validation: { kind: "non-empty-string" },
+        allowsCustomValue: true,
+      }),
     },
   }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;

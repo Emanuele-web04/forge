@@ -62,15 +62,6 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     },
   },
   {
-    kind: "devin",
-    displayName: PROVIDER_DISPLAY_NAMES.devin,
-    available: true,
-    usage: {
-      signInCommand: "devin login",
-      learnMoreHref: "https://app.devin.ai/usage",
-    },
-  },
-  {
     kind: "antigravity",
     displayName: PROVIDER_DISPLAY_NAMES.antigravity,
     available: true,

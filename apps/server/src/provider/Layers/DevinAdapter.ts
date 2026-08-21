@@ -337,6 +337,7 @@ const DEVIN_OPTION_ALIASES: Record<keyof DevinModelOptions, ReadonlyArray<string
   thinking: ["thinking"],
   contextWindow: ["context_window", "context"],
   variant: ["variant"],
+  modelVariant: ["model_variant", "modelvariant"],
 };
 
 function optionIdOrCategoryMatchesAny(

@@ -55,12 +55,6 @@ export const CursorServerProviderSettings = Schema.Struct({
 });
 export type CursorServerProviderSettings = typeof CursorServerProviderSettings.Type;
 
-export const DevinServerProviderSettings = Schema.Struct({
-  ...ProviderSettingsBase,
-  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "devin")),
-});
-export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
-
 export const OpenCodeServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "opencode")),
@@ -124,7 +118,6 @@ export const ServerSettings = Schema.Struct({
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
-    devin: DevinServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
@@ -179,7 +172,6 @@ export const ServerSettingsPatch = Schema.Struct({
           apiEndpoint: Schema.optionalKey(StringSetting),
         }),
       ),
-      devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),

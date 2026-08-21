@@ -4,7 +4,7 @@
 // Exports: AcpSessionRuntime and its typed runtime factory contracts.
 
 import { randomUUID } from "node:crypto";
-import * as Acp from "@agentclientprotocol/sdk";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { parseWindowsWslUncPath, prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
@@ -22,6 +22,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as AcpErrors from "./AcpErrors.ts";
+import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -394,8 +395,8 @@ export const teardownAcpChildProcess = (
     }).pipe(Effect.orDie);
   });
 
-function officialSdkError(error: unknown): AcpErrors.AcpError {
-  return error instanceof Acp.RequestError
+function officialSdkError(acpSdk: AcpSdkModule, error: unknown): AcpErrors.AcpError {
+  return error instanceof acpSdk.RequestError
     ? new AcpErrors.AcpRequestError({
         code: error.code,
         errorMessage: error.message,
@@ -412,6 +413,9 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   runtimeScope: Scope.Scope,
   protocolLogging?: AcpSessionRuntimeOptions["protocolLogging"],
 ) {
+  // The ACP SDK is only needed once a provider process is actually spawned, so
+  // it is imported here instead of at module scope (see AcpSdk.ts).
+  const acpSdk = yield* Effect.promise(() => loadAcpSdk());
   type RequestPermissionHandler = Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
   type ElicitationHandler = Parameters<AcpSessionRuntimeShape["handleElicitation"]>[0];
   type ReadTextFileHandler = Parameters<AcpSessionRuntimeShape["handleReadTextFile"]>[0];
@@ -475,7 +479,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   const runHandler = <A>(effect: Effect.Effect<A, AcpErrors.AcpError>): Promise<A> =>
     Effect.runPromise(effect).catch((error) => {
       if (error instanceof AcpErrors.AcpRequestError) {
-        throw new Acp.RequestError(error.code, error.errorMessage, error.data);
+        throw new acpSdk.RequestError(error.code, error.errorMessage, error.data);
       }
       throw error;
     });
@@ -486,7 +490,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   ) =>
     handler
       ? runHandler(handler(payload as never))
-      : Promise.reject(Acp.RequestError.methodNotFound(method));
+      : Promise.reject(acpSdk.RequestError.methodNotFound(method));
 
   const outgoing = yield* Queue.bounded<Uint8Array>(256);
   yield* Stream.fromQueue(outgoing).pipe(Stream.run(child.stdin), Effect.forkIn(runtimeScope));
@@ -542,48 +546,48 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     },
   });
 
-  const clientApp = Acp.client({ name: "synara" })
-    .onRequest(Acp.methods.client.session.requestPermission, ({ params }) =>
+  const clientApp = acpSdk.client({ name: "synara" })
+    .onRequest(acpSdk.methods.client.session.requestPermission, ({ params }) =>
       requireHandler("session/request_permission", requestPermission, params),
     )
-    .onRequest(Acp.methods.client.fs.readTextFile, ({ params }) =>
+    .onRequest(acpSdk.methods.client.fs.readTextFile, ({ params }) =>
       requireHandler("fs/read_text_file", readTextFile, params),
     )
-    .onRequest(Acp.methods.client.fs.writeTextFile, ({ params }) =>
+    .onRequest(acpSdk.methods.client.fs.writeTextFile, ({ params }) =>
       requireHandler("fs/write_text_file", writeTextFile, params),
     )
-    .onRequest(Acp.methods.client.terminal.create, ({ params }) =>
+    .onRequest(acpSdk.methods.client.terminal.create, ({ params }) =>
       requireHandler("terminal/create", createTerminal, params),
     )
-    .onRequest(Acp.methods.client.terminal.output, ({ params }) =>
+    .onRequest(acpSdk.methods.client.terminal.output, ({ params }) =>
       requireHandler("terminal/output", terminalOutput, params),
     )
-    .onRequest(Acp.methods.client.terminal.waitForExit, ({ params }) =>
+    .onRequest(acpSdk.methods.client.terminal.waitForExit, ({ params }) =>
       requireHandler("terminal/wait_for_exit", terminalWait, params),
     )
-    .onRequest(Acp.methods.client.terminal.kill, ({ params }) =>
+    .onRequest(acpSdk.methods.client.terminal.kill, ({ params }) =>
       requireHandler("terminal/kill", terminalKill, params),
     )
-    .onRequest(Acp.methods.client.terminal.release, ({ params }) =>
+    .onRequest(acpSdk.methods.client.terminal.release, ({ params }) =>
       requireHandler("terminal/release", terminalRelease, params),
     )
-    .onRequest(Acp.methods.client.elicitation.create, async ({ params }) => {
+    .onRequest(acpSdk.methods.client.elicitation.create, async ({ params }) => {
       return requireHandler("elicitation/create", elicitation, params);
     })
-    .onNotification(Acp.methods.client.session.update, ({ params }) =>
+    .onNotification(acpSdk.methods.client.session.update, ({ params }) =>
       dispatchSessionUpdate(params),
     )
-    .onNotification(Acp.methods.client.elicitation.complete, ({ params }) =>
+    .onNotification(acpSdk.methods.client.elicitation.complete, ({ params }) =>
       Promise.all(elicitationCompleteHandlers.map((handler) => runHandler(handler(params)))).then(
         () => undefined,
       ),
     );
   let connection: Acp.ClientConnection | undefined;
-  const getConnection = () => (connection ??= clientApp.connect(Acp.ndJsonStream(output, input)));
+  const getConnection = () => (connection ??= clientApp.connect(acpSdk.ndJsonStream(output, input)));
   const fromPromise = <A>(
     thunk: (signal: AbortSignal) => Promise<A>,
   ): Effect.Effect<A, AcpErrors.AcpError> =>
-    Effect.tryPromise({ try: thunk, catch: officialSdkError });
+    Effect.tryPromise({ try: thunk, catch: (error) => officialSdkError(acpSdk, error) });
   const request = <Method extends Acp.AgentRequestMethod>(
     method: Method,
     payload: Acp.AgentRequestParamsByMethod[Method],
@@ -627,39 +631,39 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     },
     agent: {
       initialize: (payload: Acp.InitializeRequest) =>
-        request(Acp.methods.agent.initialize, payload),
+        request(acpSdk.methods.agent.initialize, payload),
       authenticate: (payload: Acp.AuthenticateRequest) =>
-        request(Acp.methods.agent.authenticate, payload),
-      logout: (payload: Acp.LogoutRequest) => request(Acp.methods.agent.logout, payload),
+        request(acpSdk.methods.agent.authenticate, payload),
+      logout: (payload: Acp.LogoutRequest) => request(acpSdk.methods.agent.logout, payload),
       createSession: (payload: Acp.NewSessionRequest) =>
-        request(Acp.methods.agent.session.new, payload).pipe(
+        request(acpSdk.methods.agent.session.new, payload).pipe(
           Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
         ),
       loadSession: (payload: Acp.LoadSessionRequest) =>
-        request(Acp.methods.agent.session.load, payload).pipe(
+        request(acpSdk.methods.agent.session.load, payload).pipe(
           Effect.map((response) => response ?? {}),
           Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
         ),
       listSessions: (payload: Acp.ListSessionsRequest) =>
-        request(Acp.methods.agent.session.list, payload),
+        request(acpSdk.methods.agent.session.list, payload),
       forkSession: (payload: Acp.ForkSessionRequest) =>
-        request(Acp.methods.agent.session.fork, payload),
+        request(acpSdk.methods.agent.session.fork, payload),
       resumeSession: (payload: Acp.ResumeSessionRequest) =>
-        request(Acp.methods.agent.session.resume, payload).pipe(
+        request(acpSdk.methods.agent.session.resume, payload).pipe(
           Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
         ),
       closeSession: (payload: Acp.CloseSessionRequest) =>
-        request(Acp.methods.agent.session.close, payload).pipe(
+        request(acpSdk.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
         ),
       setSessionConfigOption: (payload: Acp.SetSessionConfigOptionRequest) =>
-        request(Acp.methods.agent.session.setConfigOption, payload),
+        request(acpSdk.methods.agent.session.setConfigOption, payload),
       prompt: (payload: Acp.PromptRequest) =>
-        request(Acp.methods.agent.session.prompt, payload).pipe(
+        request(acpSdk.methods.agent.session.prompt, payload).pipe(
           Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
         ),
       cancel: (payload: Acp.CancelNotification) =>
-        notifyStandard(Acp.methods.agent.session.cancel, payload),
+        notifyStandard(acpSdk.methods.agent.session.cancel, payload),
     },
     handleRequestPermission: (handler: RequestPermissionHandler) =>
       register(() => void (requestPermission = handler)),
