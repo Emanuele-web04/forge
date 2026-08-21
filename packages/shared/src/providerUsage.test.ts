@@ -34,6 +34,7 @@ describe("provider usage metadata", () => {
       "kilo",
       "opencode",
       "pi",
+      "devin",
     ]);
   });
 
