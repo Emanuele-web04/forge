@@ -203,9 +203,9 @@ describe("authEffectRouteLayer", () => {
         const response = await fetch(`${serverOrigin}/pair?token=PAIRINGTOKEN`, {
           redirect: "manual",
         });
-        expect(response.status).toBe(302);
-        expect(response.headers.get("location")).toBe("/");
+        expect(response.status).toBe(200);
         expect(response.headers.get("set-cookie")).toContain("synara_session=");
+        expect(await response.text()).toContain("This browser is paired.");
         expect(sideEffects.count).toBe(1);
       },
       pairEffectRouteLayer,
