@@ -63,6 +63,7 @@ import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
+import { resolveDesktopBackendPort } from "./desktopBackendEndpoint";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import {
   retainLiveBackendAfterShutdownFailure,
@@ -80,6 +81,7 @@ import {
   type BundleSignature,
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
+import { shouldKeepDesktopRunningAfterWindowClose } from "./desktopWindowClosePolicy";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
@@ -623,11 +625,20 @@ function cancelBackendReadinessWait(): void {
 }
 
 async function reserveBackendEndpoint(reason: string): Promise<void> {
-  backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
-    Effect.provide(NetService.layer),
-    Effect.runPromise,
-  );
+  backendPort = await resolveDesktopBackendPort(process.env.SYNARA_PORT, {
+    reserveLoopbackPort: () =>
+      Effect.service(NetService).pipe(
+        Effect.flatMap((net) => net.reserveLoopbackPort()),
+        Effect.provide(NetService.layer),
+        Effect.runPromise,
+      ),
+    isPortAvailableOnLoopback: (port) =>
+      Effect.service(NetService).pipe(
+        Effect.flatMap((net) => net.isPortAvailableOnLoopback(port)),
+        Effect.provide(NetService.layer),
+        Effect.runPromise,
+      ),
+  });
   backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
@@ -4567,6 +4578,22 @@ function createWindow(): BrowserWindow {
       });
     } catch (error) {
       console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+
+    if (
+      shouldKeepDesktopRunningAfterWindowClose({
+        configuredValue: process.env.SYNARA_KEEP_RUNNING_AFTER_CLOSE,
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        shutdownComplete: desktopShutdownComplete,
+        appQuitRequested: isQuitting,
+        updaterHandoffActive: isUpdaterQuitAndInstallInFlight,
+      })
+    ) {
+      event.preventDefault();
+      window.hide();
+      writeDesktopLogHeader("window hidden; desktop backend remains running");
+      return;
     }
 
     if (

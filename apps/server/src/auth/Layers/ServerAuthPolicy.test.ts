@@ -55,6 +55,23 @@ describe("ServerAuthPolicyLive", () => {
     expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap", "one-time-token"]);
   });
 
+  it("uses remote-reachable policy for a loopback desktop behind a public URL", async () => {
+    const descriptor = await getDescriptor.pipe(
+      Effect.provide(
+        makeLayer({
+          mode: "desktop",
+          host: "127.0.0.1",
+          publicUrl: new URL("https://synara.example.ts.net"),
+        }),
+      ),
+      Effect.scoped,
+      Effect.runPromise,
+    );
+
+    expect(descriptor.policy).toBe("remote-reachable");
+    expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap", "one-time-token"]);
+  });
+
   it("uses loopback-browser policy for loopback web mode", async () => {
     const descriptor = await getDescriptor.pipe(
       Effect.provide(makeLayer({ mode: "web", host: "localhost" })),

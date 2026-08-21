@@ -8,7 +8,8 @@ import { resolveSessionCookieName } from "../utils";
 
 export const makeServerAuthPolicy = Effect.gen(function* () {
   const config = yield* ServerConfig;
-  const remoteReachable = isWildcardHost(config.host) || !isLoopbackHost(config.host);
+  const remoteReachable =
+    config.publicUrl !== undefined || isWildcardHost(config.host) || !isLoopbackHost(config.host);
 
   const policy: ServerAuthDescriptor["policy"] =
     config.mode === "desktop"
