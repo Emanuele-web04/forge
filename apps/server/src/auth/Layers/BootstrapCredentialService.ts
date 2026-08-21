@@ -18,6 +18,8 @@ interface StoredBootstrapGrant extends BootstrapGrant {
 }
 
 const DEFAULT_ONE_TIME_TOKEN_TTL = Duration.minutes(5);
+/** Owner startup links have to survive opening the URL on another device. */
+export const OWNER_STARTUP_PAIRING_TTL = Duration.hours(24);
 const PAIRING_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const PAIRING_TOKEN_LENGTH = 12;
 

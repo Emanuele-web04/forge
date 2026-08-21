@@ -51,11 +51,15 @@ export async function bootstrapPairingSession(
     return "not-pairing";
   }
 
-  const credential = new URLSearchParams(dependencies.location.hash.slice(1)).get("token");
+  const hashParams = new URLSearchParams(dependencies.location.hash.slice(1));
+  const searchParams = new URLSearchParams(dependencies.location.search);
+  const credential = hashParams.get("token") ?? searchParams.get("token");
+  searchParams.delete("token");
+  const remainingSearch = searchParams.toString();
   dependencies.history.replaceState(
     null,
     "",
-    `${dependencies.location.pathname}${dependencies.location.search}`,
+    `${dependencies.location.pathname}${remainingSearch ? `?${remainingSearch}` : ""}`,
   );
 
   if (!credential) {

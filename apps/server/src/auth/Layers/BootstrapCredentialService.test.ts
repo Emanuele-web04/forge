@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite";
 import { AuthPairingLinkRepository } from "../../persistence/Services/AuthPairingLinks";
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService";
-import { BootstrapCredentialServiceLive } from "./BootstrapCredentialService";
+import {
+  BootstrapCredentialServiceLive,
+  OWNER_STARTUP_PAIRING_TTL,
+} from "./BootstrapCredentialService";
 
 const testLayer = BootstrapCredentialServiceLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
@@ -75,6 +78,23 @@ describe("BootstrapCredentialServiceLive", () => {
       expect(yield* repository.getByCredential({ credential: "EXPIREDTOKEN" })).toSatisfy(
         Option.isSome,
       );
+    }).pipe(Effect.provide(testLayer), Effect.runPromise);
+  });
+
+  it("keeps owner startup pairing links valid for a day", async () => {
+    await Effect.gen(function* () {
+      const service = yield* BootstrapCredentialService;
+      const issued = yield* service.issueOneTimeToken({
+        role: "owner",
+        subject: "owner-bootstrap",
+        ttl: OWNER_STARTUP_PAIRING_TTL,
+      });
+      const now = yield* DateTime.now;
+      const remainingMs =
+        DateTime.toEpochMillis(issued.expiresAt) - DateTime.toEpochMillis(now);
+
+      expect(remainingMs).toBeGreaterThan(Duration.toMillis(Duration.hours(23)));
+      expect(remainingMs).toBeLessThanOrEqual(Duration.toMillis(Duration.hours(24)));
     }).pipe(Effect.provide(testLayer), Effect.runPromise);
   });
 });

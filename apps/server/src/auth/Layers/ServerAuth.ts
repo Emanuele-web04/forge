@@ -13,6 +13,7 @@ import {
   BootstrapCredentialError,
   BootstrapCredentialService,
 } from "../Services/BootstrapCredentialService";
+import { OWNER_STARTUP_PAIRING_TTL } from "./BootstrapCredentialService";
 import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
 import {
   AuthError,
@@ -226,6 +227,7 @@ export const makeServerAuth = Effect.gen(function* () {
         role: input?.role ?? "client",
         subject: input?.role === "owner" ? "owner-bootstrap" : "one-time-token",
         ...(input?.label ? { label: input.label } : {}),
+        ...(input?.ttl ? { ttl: input.ttl } : {}),
       })
       .pipe(
         Effect.mapError(
@@ -391,11 +393,14 @@ export const makeServerAuth = Effect.gen(function* () {
   };
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
-    issuePairingCredential({ role: "owner" }).pipe(
+    issuePairingCredential({ role: "owner", ttl: OWNER_STARTUP_PAIRING_TTL }).pipe(
       Effect.map((issued) => {
         const url = new URL(baseUrl);
         url.pathname = "/pair";
-        url.searchParams.delete("token");
+        // Chat clients and some in-app browsers drop URL fragments. Keep the
+        // one-time token in the query string as well; /pair still scrubs it
+        // before the app shell loads.
+        url.searchParams.set("token", issued.credential);
         url.hash = new URLSearchParams([["token", issued.credential]]).toString();
         return url.toString();
       }),

@@ -108,7 +108,9 @@ describe("ServerAuthLive", () => {
         const serverAuth = yield* ServerAuth;
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
-        const token = new URLSearchParams(new URL(pairingUrl).hash.slice(1)).get("token");
+        const parsed = new URL(pairingUrl);
+        const token = new URLSearchParams(parsed.hash.slice(1)).get("token");
+        expect(parsed.searchParams.get("token")).toBe(token);
         const listedPairingLinks = yield* serverAuth.listPairingLinks();
 
         expect(token).toBeTruthy();

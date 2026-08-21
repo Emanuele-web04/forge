@@ -695,7 +695,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(openBrowser.mock.calls.length, 1);
       assert.match(
         openBrowser.mock.calls[0]?.[0] ?? "",
-        /^https:\/\/synara\.example\.test\/pair#token=/,
+        /^https:\/\/synara\.example\.test\/pair\?token=[^#]+#token=/,
       );
     }),
   );
@@ -731,7 +731,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(openBrowser.mock.calls.length, 1);
       assert.match(
         openBrowser.mock.calls[0]?.[0] ?? "",
-        /^https:\/\/proxy\.example\.test\/pair#token=/,
+        /^https:\/\/proxy\.example\.test\/pair\?token=[^#]+#token=/,
       );
     }),
   );

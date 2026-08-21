@@ -12,7 +12,7 @@ import type {
   ServerAuthDescriptor,
   ServerAuthSessionMethod,
 } from "@synara/contracts";
-import { Data, DateTime, ServiceMap } from "effect";
+import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { SessionRole } from "./SessionCredentialService";
@@ -61,6 +61,7 @@ export interface ServerAuthShape {
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;
+      readonly ttl?: Duration.Duration;
     },
   ) => Effect.Effect<AuthPairingCredentialResult, AuthError>;
   readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthError>;

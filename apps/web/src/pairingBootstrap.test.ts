@@ -4,6 +4,7 @@ import { bootstrapPairingSession } from "./pairingBootstrap";
 
 function makeDependencies(input: {
   readonly pathname?: string;
+  readonly search?: string;
   readonly hash?: string;
   readonly responseOk?: boolean;
 }) {
@@ -22,7 +23,7 @@ function makeDependencies(input: {
     dependencies: {
       location: {
         pathname: input.pathname ?? "/pair",
-        search: "",
+        search: input.search ?? "",
         hash: input.hash ?? "#token=PAIRING-SECRET",
         replace,
       },
@@ -77,5 +78,34 @@ describe("bootstrapPairingSession", () => {
     await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("failed");
     expect(test.events).toEqual(["scrub:/pair", "failure"]);
     expect(test.fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts a query token when the fragment is missing", async () => {
+    const test = makeDependencies({ hash: "", search: "?token=QUERY-SECRET" });
+
+    await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
+    expect(test.events).toEqual(["scrub:/pair", "fetch", "navigate:/"]);
+    expect(test.fetch).toHaveBeenCalledWith("/api/auth/bootstrap", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: "QUERY-SECRET" }),
+    });
+  });
+
+  it("prefers the fragment token over a query token and scrubs both", async () => {
+    const test = makeDependencies({
+      hash: "#token=HASH-SECRET",
+      search: "?token=QUERY-SECRET&next=/activity",
+    });
+
+    await expect(bootstrapPairingSession(test.dependencies)).resolves.toBe("redirecting");
+    expect(test.events).toEqual(["scrub:/pair?next=%2Factivity", "fetch", "navigate:/"]);
+    expect(test.fetch).toHaveBeenCalledWith(
+      "/api/auth/bootstrap",
+      expect.objectContaining({
+        body: JSON.stringify({ credential: "HASH-SECRET" }),
+      }),
+    );
   });
 });
