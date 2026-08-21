@@ -2378,8 +2378,7 @@ const make = Effect.gen(function* () {
       // stale provider; only defer to it for a real established binding, and
       // otherwise honor the turn's explicit requested selection.
       const sessionProviderEstablished =
-        thread.session != null &&
-        (thread.session.status === "ready" || thread.latestTurn !== null);
+        thread.session != null && (thread.session.status === "ready" || thread.latestTurn !== null);
       const turnStartSession = deriveTurnStartSession({
         threadId: event.payload.threadId,
         currentSession: thread.session,
