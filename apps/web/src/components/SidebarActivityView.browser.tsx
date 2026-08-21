@@ -116,6 +116,22 @@ describe("SidebarActivityView", () => {
     document.body.innerHTML = "";
   });
 
+  it("presents Activity as the mobile home without adding desktop chrome", async () => {
+    await page.viewport(430, 932);
+    const mounted = await render(renderActivity({ threads: [makeThread(0)] }));
+
+    await expect.element(page.getByRole("heading", { name: "Activity" })).toBeVisible();
+    expect(document.querySelector('[data-slot="activity-home"]')).not.toBeNull();
+    const mobileHeader = document.querySelector<HTMLElement>(
+      '[data-slot="activity-home"] > div:first-child',
+    );
+    expect(mobileHeader).not.toBeNull();
+
+    await page.viewport(1_280, 800);
+    await vi.waitFor(() => expect(getComputedStyle(mobileHeader!).display).toBe("none"));
+    await mounted.unmount();
+  });
+
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
     const threads = Array.from({ length: 45 }, (_, index) => makeThread(index));
     threads[44] = makeThread(44, {

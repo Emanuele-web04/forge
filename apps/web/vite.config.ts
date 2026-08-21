@@ -5,6 +5,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,6 +14,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import { createPwaServiceWorkerSource, PWA_SHELL_URL } from "./src/pwaServiceWorkerSource";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -110,6 +112,66 @@ const PRECOMPRESS_EXTENSIONS = new Set([".js", ".mjs", ".css", ".html", ".svg", 
 // the sidecar file overhead.
 const PRECOMPRESS_MIN_BYTES = 1024;
 
+function pwaServiceWorkerPlugin(): Plugin {
+  return {
+    name: "synara-pwa-service-worker",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const startupFiles = new Set<string>();
+      const visitedChunks = new Set<string>();
+      const visitChunk = (fileName: string, includeDirectDynamicImports: boolean): void => {
+        if (visitedChunks.has(fileName)) return;
+        const output = bundle[fileName];
+        if (!output || output.type !== "chunk") return;
+        visitedChunks.add(fileName);
+        startupFiles.add(output.fileName);
+
+        const metadata = (
+          output as typeof output & {
+            readonly viteMetadata?: {
+              readonly importedAssets?: ReadonlySet<string>;
+              readonly importedCss?: ReadonlySet<string>;
+            };
+          }
+        ).viteMetadata;
+        for (const asset of metadata?.importedAssets ?? []) startupFiles.add(asset);
+        for (const stylesheet of metadata?.importedCss ?? []) startupFiles.add(stylesheet);
+        for (const importedChunk of output.imports) visitChunk(importedChunk, false);
+        if (includeDirectDynamicImports) {
+          for (const importedChunk of output.dynamicImports) visitChunk(importedChunk, false);
+        }
+      };
+      for (const output of Object.values(bundle)) {
+        if (output.type === "chunk" && output.isEntry) visitChunk(output.fileName, true);
+      }
+      const startupAssetUrls = [...startupFiles]
+        .filter((fileName) => !fileName.endsWith(".map"))
+        .map((fileName) => `/${fileName}`);
+      const precacheUrls = [
+        PWA_SHELL_URL,
+        "/manifest.webmanifest",
+        "/pwa-icon-192.png",
+        "/pwa-icon-512.png",
+        ...startupAssetUrls,
+      ];
+      const cacheFingerprint = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(precacheUrls))
+        .digest("hex")
+        .slice(0, 12);
+
+      this.emitFile({
+        type: "asset",
+        fileName: "service-worker.js",
+        source: createPwaServiceWorkerSource({
+          cacheVersion: `${pkg.version}-${cacheFingerprint}`,
+          precacheUrls,
+        }),
+      });
+    },
+  };
+}
+
 // Emits .gz and .br sidecars next to compressible build outputs so the server
 // can serve precompressed bytes by Accept-Encoding instead of compressing on
 // the request path (apps/server/src/http.ts static route).
@@ -198,6 +260,7 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
     tailwindcss(),
+    pwaServiceWorkerPlugin(),
     centralIconPrunePlugin(),
     precompressPlugin(),
   ],

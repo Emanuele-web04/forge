@@ -5,6 +5,9 @@ import "./storageOriginMigration";
 
 import { bootstrapSignedOutScreen } from "./authSignedOut";
 import { bootstrapPairingSession } from "./pairingBootstrap";
+import { registerPwaServiceWorker } from "./pwaRegistration";
+
+registerPwaServiceWorker();
 
 if (!bootstrapSignedOutScreen()) {
   void bootstrapPairingSession().then((result) => {

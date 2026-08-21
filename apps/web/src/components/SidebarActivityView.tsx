@@ -743,7 +743,13 @@ export function SidebarActivityView({
         : "No activity for this project";
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-w-0 flex-col gap-3" data-slot="activity-home">
+      <div className="px-2 pt-1 md:hidden">
+        <h1 className="font-display text-xl leading-none text-foreground">Activity</h1>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Running work, results, and anything that needs you.
+        </p>
+      </div>
       {scopedPinnedThreads.length > 0 ? (
         <ActivityCollapsibleSection
           label="Pinned"

@@ -603,6 +603,7 @@ function ChatRouteLayout() {
   return (
     <SidebarProvider
       defaultOpen
+      defaultOpenMobile
       open={resolvedSidebarOpen}
       onOpenChange={setSidebarOpen}
       className="bg-[var(--app-shell-background)]"
