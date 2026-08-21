@@ -486,14 +486,17 @@ const pairRequestEffect = Effect.gen(function* () {
   // used to burn one-time owner links before the phone could finish pairing.
   yield* serverAuth.peekBootstrapCredential(credential);
   const credentialJson = JSON.stringify(credential);
+  const pairAction = `/pair/${encodeURIComponent(credential)}`;
   return HttpServerResponse.text(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pair · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">Pair this browser with Synara.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Tap the button below on the phone you want to keep signed in. Do not open this link in a preview or in-app browser.</p><p style="margin:28px 0 0"><button id="synara-pair" type="button" style="color:#10110f;background:#d6ff55;border:0;font:600 14px/1 DM Sans,sans-serif;padding:14px 18px;cursor:pointer">Pair this browser</button></p><p id="synara-pair-status" style="margin:18px 0 0;color:#b8bbb2;font-size:14px;line-height:1.5;min-height:1.5em"></p></main><script>
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pair · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">Pair this browser with Synara.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Tap the button below on the phone you want to keep signed in. Do not open this link in a preview or in-app browser.</p><form id="synara-pair-form" method="POST" action="${pairAction}" style="margin:28px 0 0"><button id="synara-pair" type="submit" style="color:#10110f;background:#d6ff55;border:0;font:600 14px/1 DM Sans,sans-serif;padding:14px 18px;cursor:pointer">Pair this browser</button></form><p id="synara-pair-status" style="margin:18px 0 0;color:#b8bbb2;font-size:14px;line-height:1.5;min-height:1.5em"></p></main><script>
 (function () {
   var credential = ${credentialJson};
+  var form = document.getElementById("synara-pair-form");
   var button = document.getElementById("synara-pair");
   var status = document.getElementById("synara-pair-status");
-  if (!button) return;
-  button.addEventListener("click", function () {
+  if (!form || !button) return;
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
     button.disabled = true;
     status.textContent = "Pairing…";
     fetch("/api/auth/bootstrap/bearer", {
@@ -511,11 +514,23 @@ const pairRequestEffect = Effect.gen(function* () {
       }
       var token = result.payload.sessionToken;
       try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
-      status.textContent = "Paired. Opening Synara…";
-      location.replace("/?sb=" + encodeURIComponent(token));
+      return fetch("/api/auth/session", {
+        credentials: "same-origin",
+        headers: { Authorization: "Bearer " + token }
+      }).then(function (sessionResponse) {
+        return sessionResponse.json().then(function (sessionPayload) {
+          if (!sessionResponse.ok || !sessionPayload || sessionPayload.authenticated !== true) {
+            throw new Error("Paired, but this browser still looks signed out. Try the button again.");
+          }
+          status.textContent = "Paired. Opening Synara…";
+          location.replace("/?sb=" + encodeURIComponent(token));
+        });
+      });
     }).catch(function (error) {
       button.disabled = false;
       status.textContent = error && error.message ? error.message : "Pairing failed. Try again.";
+      // Fall back to a classic form POST so the server can Set-Cookie on navigation.
+      form.submit();
     });
   });
 })();
@@ -537,9 +552,69 @@ const pairRequestEffect = Effect.gen(function* () {
   ),
 );
 
+const pairSubmitEffect = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const config = yield* ServerConfig;
+  const serverAuth = yield* ServerAuth;
+  const sessions = yield* SessionCredentialService;
+  const url = HttpServerRequest.toURL(request);
+  if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+  const routeParams = yield* HttpRouter.params;
+  const credential = resolvePairingCredential({
+    pathname: url.pathname,
+    searchParams: url.searchParams,
+    pathCredential: routeParams.credential,
+  });
+  if (credential.length === 0) {
+    return HttpServerResponse.text("Missing pairing credential.", { status: 400 });
+  }
+
+  const result = yield* serverAuth.exchangeBootstrapCredential(credential, {
+    ...deriveAuthClientMetadata({
+      headers: request.headers,
+      remoteAddress: request.remoteAddress ?? null,
+    }),
+  });
+  const sessionTokenJson = JSON.stringify(result.sessionToken);
+  return HttpServerResponse.text(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Paired · Synara</title><script>
+(function () {
+  var token = ${sessionTokenJson};
+  try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
+  location.replace("/?sb=" + encodeURIComponent(token));
+})();
+</script></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This browser is paired.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">Opening Synara…</p></main></body></html>`,
+    {
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      headers: {
+        "Set-Cookie": encodeCookie({
+          name: sessions.cookieName,
+          value: result.sessionToken,
+          expiresAt: result.response.expiresAt,
+          secure: config.publicUrl !== undefined,
+        }),
+        "Cache-Control": "no-store",
+      },
+    },
+  );
+}).pipe(
+  Effect.catchTag("AuthError", (error) =>
+    Effect.succeed(
+      HttpServerResponse.text(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Pairing failed · Synara</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#10110f;color:#f3f0e8;font-family:DM Sans,sans-serif"><main style="width:min(100%,520px);margin:32px;border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907"><p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing interrupted</p><h1 style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This pairing link could not be used.</h1><p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">${error.message}</p></main></body></html>`,
+        { status: error.status ?? 401, contentType: "text/html; charset=utf-8" },
+      ),
+    ),
+  ),
+);
+
 export const pairEffectRouteLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/pair", pairRequestEffect),
   HttpRouter.add("GET", "/pair/:credential", pairRequestEffect),
+  HttpRouter.add("POST", "/pair", pairSubmitEffect),
+  HttpRouter.add("POST", "/pair/:credential", pairSubmitEffect),
 );
 
 export const authEffectRouteLayer = HttpRouter.add(
@@ -586,14 +661,27 @@ export const authEffectRouteLayer = HttpRouter.add(
         Effect.flatMap(decodeBootstrapInput),
         Effect.mapError((cause) => mapPayloadError("Invalid bootstrap payload.", cause)),
       );
-      return HttpServerResponse.jsonUnsafe(
-        yield* serverAuth.exchangeBootstrapCredentialForBearerSession(payload.credential, {
+      const result = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+        payload.credential,
+        {
           ...deriveAuthClientMetadata({
             headers: request.headers,
             remoteAddress: request.remoteAddress ?? null,
           }),
-        }),
+        },
       );
+      // Also set the session cookie: Android Chrome kept losing the bearer handoff
+      // after pairing, while Set-Cookie on this same-origin fetch is reliable.
+      return HttpServerResponse.jsonUnsafe(result, {
+        headers: {
+          "Set-Cookie": encodeCookie({
+            name: sessions.cookieName,
+            value: result.sessionToken,
+            expiresAt: result.expiresAt,
+            secure: config.publicUrl !== undefined,
+          }),
+        },
+      });
     }
 
     const authenticatedMutationSession = requireAuthenticatedMutationRequest;
