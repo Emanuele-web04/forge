@@ -1426,9 +1426,9 @@ describe("AgentGateway", () => {
       });
       assert.isFalse(isToolError(boardResponse.result), toolErrorText(boardResponse.result));
       const board = toolResultJson(boardResponse.result) as {
+        truncated?: boolean;
         projects: Array<{
           columns: Array<{ key: string; cards: Array<{ threadId: string; attention: string[] }> }>;
-          truncated?: boolean;
         }>;
       };
       assert.isFalse(board.truncated ?? false);
