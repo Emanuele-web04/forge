@@ -3795,6 +3795,7 @@ const make = Effect.gen(function* () {
             threadId: event.payload.threadId,
             updatedAt: event.payload.deletedAt,
           });
+          yield* providerService.stopSession({ threadId: event.payload.threadId });
           yield* clearThreadRuntimeCaches(event.payload.threadId);
           return;
         case "thread.archived":

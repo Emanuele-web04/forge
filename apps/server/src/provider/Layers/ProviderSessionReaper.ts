@@ -54,9 +54,9 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           .pipe(Effect.map(Option.getOrUndefined));
         if (thread?.session?.activeTurnId != null) continue;
 
-        if (!providerService.stopRuntimeSession) {
+        if (!providerService.stopRuntimeSession || !providerService.hasLiveRuntimeTasks) {
           yield* Effect.logWarning(
-            "provider session reaper cannot stop stale runtime without preserving resume state",
+            "provider session reaper cannot safely stop stale runtime",
             {
               threadId: binding.threadId,
               provider: binding.provider,
@@ -64,6 +64,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           );
           continue;
         }
+
+        if (yield* providerService.hasLiveRuntimeTasks({ threadId: binding.threadId })) continue;
 
         yield* providerService.stopRuntimeSession({ threadId: binding.threadId }).pipe(
           Effect.catchCause((cause) =>

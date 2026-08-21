@@ -65,6 +65,9 @@ describe("ProviderSessionReaperLive", () => {
     const stopRuntimeSession = vi.fn<
       NonNullable<ProviderServiceShape["stopRuntimeSession"]>
     >(() => Effect.void);
+    const hasLiveRuntimeTasks = vi.fn<
+      NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>
+    >(() => Effect.succeed(false));
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),
@@ -94,6 +97,7 @@ describe("ProviderSessionReaperLive", () => {
       respondToUserInput: () => unsupported(),
       stopSession,
       stopRuntimeSession,
+      hasLiveRuntimeTasks,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
@@ -124,6 +128,78 @@ describe("ProviderSessionReaperLive", () => {
 
     expect(stopRuntimeSession).toHaveBeenCalledWith({ threadId });
     expect(stopSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps stale runtimes alive while provider-native tasks are running", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-reaper-background-task");
+    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
+    const stopRuntimeSession = vi.fn<
+      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
+    >(() => Effect.void);
+    const hasLiveRuntimeTasks = vi.fn<
+      NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>
+    >(() => Effect.succeed(true));
+    const directory: ProviderSessionDirectoryShape = {
+      upsert: () => Effect.void,
+      getProvider: () => unsupported(),
+      getBinding: () => unsupported(),
+      remove: () => Effect.void,
+      listThreadIds: () => Effect.succeed([]),
+      listBindings: () =>
+        Effect.succeed([
+          {
+            threadId,
+            provider: "codex",
+            status: "running",
+            lastSeenAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]),
+    };
+    const providerService: ProviderServiceShape = {
+      startSession: () => unsupported(),
+      sendTurn: () => unsupported(),
+      steerTurn: () => unsupported(),
+      startReview: () => unsupported(),
+      interruptTurn: () => unsupported(),
+      stopTask: () => unsupported(),
+      backgroundTask: () => unsupported(),
+      steerSubagent: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession,
+      stopRuntimeSession,
+      hasLiveRuntimeTasks,
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => unsupported(),
+      rollbackConversation: () => unsupported(),
+      compactThread: () => unsupported(),
+      closeRuntimeEvents: Effect.void,
+      streamEvents: Stream.empty,
+    };
+
+    const scope = await Effect.runPromise(Scope.make());
+    try {
+      await Effect.gen(function* () {
+        const reaper = yield* ProviderSessionReaper;
+        yield* Scope.provide(reaper.start(), scope);
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            threadShell: makeThreadShell({ threadId, activeTurnId: null }),
+            directory,
+            providerService,
+          }),
+        ),
+        Effect.runPromise,
+      );
+      await waitFor(() => hasLiveRuntimeTasks.mock.calls.length === 1);
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
+
+    expect(hasLiveRuntimeTasks).toHaveBeenCalledWith({ threadId });
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(stopRuntimeSession).not.toHaveBeenCalled();
   });
 
   it("skips stale sessions with active turns", async () => {

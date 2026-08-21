@@ -116,6 +116,32 @@ it.effect("preserves the legacy query token for loopback desktop sessions", () =
   }),
 );
 
+it.effect("preserves the direct desktop token behind an HTTPS public origin", () =>
+  Effect.gen(function* () {
+    const authenticateWebSocketUpgrade = vi.fn(() =>
+      Effect.fail(new AuthError({ message: "Unexpected authentication call.", status: 500 })),
+    );
+
+    const session = yield* authenticateRpcWebSocketUpgrade({
+      config: {
+        host: "127.0.0.1",
+        authToken: "desktop-secret",
+        publicUrl: new URL("https://synara.example.test/"),
+      },
+      legacyToken: "desktop-secret",
+      request: {
+        headers: { origin: "synara://app" },
+        cookies: {},
+        url: new URL("http://127.0.0.1:3773/ws?token=desktop-secret"),
+      },
+      serverAuth: { authenticateWebSocketUpgrade },
+    });
+
+    assert.equal(session, null);
+    assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 0);
+  }),
+);
+
 it.effect("preserves the legacy loopback token on the device frame socket", () =>
   Effect.gen(function* () {
     const authenticateWebSocketUpgrade = vi.fn(() =>

@@ -304,7 +304,13 @@ export function buildHandoffDurableStateUpdate(input: {
       ? { goalPausedAt: input.sourceThread.goalPausedAt }
       : {}),
     ...(input.sourceThread.goalAchievements !== undefined
-      ? { goalAchievements: input.sourceThread.goalAchievements }
+      ? {
+          goalAchievements: input.sourceThread.goalAchievements.map((achievement) => ({
+            ...achievement,
+            // Imported handoff messages intentionally have no source turn ids.
+            turnId: null,
+          })),
+        }
       : {}),
   };
   return Object.keys(update).length > 0 ? update : null;

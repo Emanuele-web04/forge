@@ -8,6 +8,7 @@ import {
   goForwardInAppHistory,
   resolveAppNavigationState,
 } from "../appNavigation";
+import { shouldDefaultOpenMobileActivity } from "../chatMobileActivity";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
@@ -563,6 +564,9 @@ function ChatRouteLayout() {
   const isEditorView = useLocation({
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });
+  const defaultOpenMobileActivity = useLocation({
+    select: (location) => shouldDefaultOpenMobileActivity(location.pathname),
+  });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const resolvedSidebarOpen = isEditorView ? false : sidebarOpen;
 
@@ -603,7 +607,7 @@ function ChatRouteLayout() {
   return (
     <SidebarProvider
       defaultOpen
-      defaultOpenMobile
+      defaultOpenMobile={defaultOpenMobileActivity}
       open={resolvedSidebarOpen}
       onOpenChange={setSidebarOpen}
       className="bg-[var(--app-shell-background)]"

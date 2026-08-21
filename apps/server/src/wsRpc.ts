@@ -143,6 +143,7 @@ import {
   validateWsFeatureCompatibility,
 } from "./wsCompatibility";
 import {
+  DESKTOP_APP_CORS_ORIGINS,
   isTrustedAppOrigin,
   normalizeCorsOrigin,
   requiresWebSocketAuthentication,
@@ -2095,10 +2096,16 @@ export function authenticateRpcWebSocketUpgrade(input: {
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
+  const normalizedOrigin = normalizeCorsOrigin(input.request.headers.origin);
+  const isDirectDesktopRequest =
+    input.request.url != null &&
+    isLoopbackHost(input.request.url.hostname) &&
+    normalizedOrigin !== null &&
+    DESKTOP_APP_CORS_ORIGINS.has(normalizedOrigin);
   if (
     !requiresWebSocketAuthentication(input.config) ||
     (isLoopbackHost(input.config.host) &&
-      !input.config.publicUrl &&
+      (!input.config.publicUrl || isDirectDesktopRequest) &&
       input.legacyToken === input.config.authToken)
   ) {
     return Effect.succeed(null);

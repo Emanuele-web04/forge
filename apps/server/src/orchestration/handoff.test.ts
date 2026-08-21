@@ -159,6 +159,14 @@ describe("buildHandoffDurableStateUpdate", () => {
         notes: "Use the existing backend.",
         goal: "Finish Android access",
         goalStartedAt: "2026-07-08T01:00:00.000Z",
+        goalAchievements: [
+          {
+            goal: "Choose the remote architecture",
+            achievedAt: "2026-07-08T00:55:00.000Z",
+            elapsedMs: 1_000,
+            turnId: "source-turn-1" as never,
+          },
+        ],
         pinnedMessages: [
           {
             messageId: sourceMessage.id,
@@ -183,6 +191,7 @@ describe("buildHandoffDurableStateUpdate", () => {
       notes: "Use the existing backend.",
       goal: "Finish Android access",
       goalStartedAt: "2026-07-08T01:00:00.000Z",
+      goalAchievements: [{ goal: "Choose the remote architecture", turnId: null }],
       pinnedMessages: [{ messageId: "imported-message-1", label: "Decision" }],
     });
   });
