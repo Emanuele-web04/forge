@@ -33,7 +33,7 @@ function renderPairingFailure(): void {
       <section style="width:min(100%,520px);border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907">
         <p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 'Geist Mono',monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing interrupted</p>
         <h1 tabindex="-1" style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This pairing link could not be used.</h1>
-        <p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">The link may be incomplete, expired, or already used. Generate a new pairing link from the Synara server and try again.</p>
+        <p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">The link may be incomplete, expired, already used, or blocked by the browser. Prefer Chrome over Brave, paste the full URL, and turn shields off for this site if needed.</p>
       </section>
     </main>`;
   root.querySelector<HTMLElement>("h1")?.focus();

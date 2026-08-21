@@ -61,11 +61,12 @@ Select-String `
 
 If `SYNARA_HOME` points elsewhere, use its `userdata\logs\server-child.log`.
 Open the complete pairing URL on Android while signed in to the same
-tailnet. Copy the whole URL, including `?token=` and `#token=`; some chat
-apps and in-app browsers drop the fragment. Owner startup links expire after
-24 hours. The URL establishes a persistent owner session; later visits can
-use the plain HTTPS URL reported by `tailscale serve status`. Treat the
-complete pairing URL like a password until it has been consumed.
+tailnet. Prefer Chrome; Brave shields can block the session cookie. Copy the
+whole URL including `?token=`. Owner startup links expire after 24 hours and
+are exchanged by the server on navigation, which sets a persistent owner
+session cookie. Later visits can use the plain HTTPS URL reported by
+`tailscale serve status`. Treat the complete pairing URL like a password
+until it has been consumed.
 
 The packaged desktop behavior is intentional:
 

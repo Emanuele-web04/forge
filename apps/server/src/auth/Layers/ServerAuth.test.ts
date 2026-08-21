@@ -109,8 +109,10 @@ describe("ServerAuthLive", () => {
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
         const parsed = new URL(pairingUrl);
-        const token = new URLSearchParams(parsed.hash.slice(1)).get("token");
-        expect(parsed.searchParams.get("token")).toBe(token);
+        const token = parsed.searchParams.get("token");
+        expect(token).toBeTruthy();
+        expect(parsed.hash).toBe("");
+        expect(parsed.pathname).toBe("/pair");
         const listedPairingLinks = yield* serverAuth.listPairingLinks();
 
         expect(token).toBeTruthy();
@@ -139,7 +141,7 @@ describe("ServerAuthLive", () => {
 
         const ownerPairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
         const ownerToken =
-          new URLSearchParams(new URL(ownerPairingUrl).hash.slice(1)).get("token") ?? "";
+          new URL(ownerPairingUrl).searchParams.get("token") ?? "";
         const ownerExchange = yield* serverAuth.exchangeBootstrapCredential(
           ownerToken,
           requestMetadata,
@@ -183,8 +185,7 @@ describe("ServerAuthLive", () => {
         const serverAuth = yield* ServerAuth;
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
-        const bootstrapToken =
-          new URLSearchParams(new URL(pairingUrl).hash.slice(1)).get("token") ?? "";
+        const bootstrapToken = new URL(pairingUrl).searchParams.get("token") ?? "";
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(
           bootstrapToken,
           requestMetadata,
@@ -300,8 +301,7 @@ describe("ServerAuthLive", () => {
         expect(legacyError.status).toBe(401);
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://192.168.1.50:3773");
-        const bootstrapToken =
-          new URLSearchParams(new URL(pairingUrl).hash.slice(1)).get("token") ?? "";
+        const bootstrapToken = new URL(pairingUrl).searchParams.get("token") ?? "";
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(
           bootstrapToken,
           requestMetadata,

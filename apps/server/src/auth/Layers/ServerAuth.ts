@@ -397,11 +397,10 @@ export const makeServerAuth = Effect.gen(function* () {
       Effect.map((issued) => {
         const url = new URL(baseUrl);
         url.pathname = "/pair";
-        // Chat clients and some in-app browsers drop URL fragments. Keep the
-        // one-time token in the query string as well; /pair still scrubs it
-        // before the app shell loads.
+        // Prefer the query string: GET /pair?token= exchanges on the server and
+        // survives browsers that drop URL fragments before JavaScript runs.
         url.searchParams.set("token", issued.credential);
-        url.hash = new URLSearchParams([["token", issued.credential]]).toString();
+        url.hash = "";
         return url.toString();
       }),
     );
