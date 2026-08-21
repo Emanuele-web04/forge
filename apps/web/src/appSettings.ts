@@ -176,7 +176,6 @@ const PersistedProviderKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
-  "devin",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,

@@ -210,26 +210,6 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     ],
   },
   {
-    provider: "devin",
-    docs: [
-      { label: "Install", href: "https://docs.devin.ai" },
-      { label: "Config", href: "https://docs.devin.ai" },
-    ],
-    fields: [
-      {
-        kind: "text",
-        settingsKey: "devinBinaryPath",
-        label: "Devin binary path",
-        placeholder: "devin",
-        description: (
-          <>
-            Leave blank to use <code>devin</code> from your PATH.
-          </>
-        ),
-      },
-    ],
-  },
-  {
     provider: "antigravity",
     docs: [
       { label: "Install", href: "https://antigravity.google/docs/cli-using" },

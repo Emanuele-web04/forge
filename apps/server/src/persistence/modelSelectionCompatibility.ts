@@ -76,13 +76,16 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
-  if (lowerLabel.includes("devin") || lowerLabel.includes("windsurf")) {
+  // Windsurf shares Devin credentials, so its labels attribute to the Devin provider.
+  if (lowerLabel.includes("windsurf")) {
     return "devin";
   }
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
   }
-  if (lowerLabel.includes("devin") || lowerLabel.includes("cognition")) {
+  // Word-boundary match only: a bare substring would also catch unrelated
+  // labels like "speech recognition".
+  if (/(^|[^a-z0-9])cognition([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "devin";
   }
   if (lowerLabel.includes("codex")) {

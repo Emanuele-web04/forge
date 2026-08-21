@@ -138,7 +138,6 @@ const PROVIDERS = [
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
-  DEVIN_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -1984,15 +1983,21 @@ export const makeCheckDevinProviderStatus = (
     const parsedVersion = parseGenericCliVersion(
       `${versionResult.stdout}\n${versionResult.stderr}`,
     );
-    const authStatus: ServerProviderAuthStatus = hasDevinApiKeyEnv() ? "authenticated" : "unknown";
+    const hasApiKey = hasDevinApiKeyEnv();
 
     return {
       provider: DEVIN_PROVIDER,
       status: "ready" as const,
       available: true,
-      authStatus,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
       version: parsedVersion,
       checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
+        : {
+            message:
+              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
+          }),
     } satisfies ServerProviderStatus;
   });
 
@@ -2501,11 +2506,6 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                     settings.providers.pi.agentDir,
                     settings.providers.pi.binaryPath,
                   ),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  DEVIN_PROVIDER,
-                  makeCheckDevinProviderStatus(settings.providers.devin.binaryPath),
                 ),
               ],
               {

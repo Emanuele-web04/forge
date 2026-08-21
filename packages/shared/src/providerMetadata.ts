@@ -128,7 +128,7 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     supportsNativeTurnSteering: false,
     usage: {
       signInCommand: "devin auth login",
-      learnMoreHref: "https://app.devin.ai",
+      learnMoreHref: "https://app.devin.ai/usage",
     },
   },
 ] as const satisfies readonly ProviderDescriptor[]);

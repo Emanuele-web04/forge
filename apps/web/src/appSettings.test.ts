@@ -598,7 +598,6 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
-        devinBinaryPath: "devin",
       }),
     ).toBeUndefined();
   });

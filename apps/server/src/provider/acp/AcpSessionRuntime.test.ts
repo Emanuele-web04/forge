@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
-import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   assistantItemId,

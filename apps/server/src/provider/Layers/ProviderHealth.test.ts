@@ -157,7 +157,6 @@ const allProvidersDisabledSettings = {
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
-    devin: { enabled: false },
   },
 } as const;
 
@@ -174,7 +173,6 @@ const allProvidersDisabledServerSettings = {
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
-    devin: { ...DEFAULT_SERVER_SETTINGS.providers.devin, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 

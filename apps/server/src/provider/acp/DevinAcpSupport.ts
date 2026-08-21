@@ -57,7 +57,9 @@ const DEVIN_INTERACTIVE_AUTH_METHOD_IDS = new Set([
   "devin.com",
   "oauth",
 ]);
-const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY", "DEVIN_API_KEY"] as const;
+// Accept the canonical uppercase keys plus the lowercase `windsurf_api_key`
+// that some secret/credential injectors provide.
+const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY", "DEVIN_API_KEY", "windsurf_api_key"] as const;
 const DEVIN_API_SERVER_URL_ENV_KEYS = ["WINDSURF_API_SERVER_URL", "DEVIN_API_SERVER_URL"] as const;
 const DEVIN_COMPACT_COMMAND_NAME = "compact";
 const DEVIN_COMPACT_PROMPT = "/compact";
@@ -235,11 +237,16 @@ export function buildDevinAcpSpawnInput(
     args.push("--model", model);
   }
 
+  // The Devin ACP server expects `WINDSURF_API_KEY`. If only the lowercase
+  // variant is present, normalize it to the canonical key for the child.
+  const apiKey = getDevinApiKeyEnv();
+  const overrides: NodeJS.ProcessEnv = apiKey ? { WINDSURF_API_KEY: apiKey } : {};
+
   return {
     command: devinSettings?.binaryPath || "devin",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "devin" }),
+    env: buildProviderChildEnvironment({ provider: "devin", overrides }),
   };
 }
 
