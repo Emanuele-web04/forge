@@ -85,6 +85,33 @@ function isolateMalformedModelDescriptors(input: {
   );
 }
 
+export const PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
+
+export function withProviderModelDiscoveryDeadline<ErrorType, Requirements>(input: {
+  readonly effect: Effect.Effect<ProviderListModelsResult, ErrorType, Requirements>;
+  readonly provider: ProviderListModelsInput["provider"];
+  readonly timeoutMs?: number;
+}): Effect.Effect<ProviderListModelsResult, ErrorType, Requirements> {
+  const timeoutMs = input.timeoutMs ?? PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS;
+  return input.effect.pipe(
+    Effect.timeoutOption(timeoutMs),
+    Effect.flatMap((result) =>
+      Option.isSome(result)
+        ? Effect.succeed(result.value)
+        : Effect.logWarning("provider model discovery timed out; serving static model fallback", {
+            provider: input.provider,
+            timeoutMs,
+          }).pipe(
+            Effect.as({
+              models: [],
+              source: "timeout",
+              cached: false,
+            } satisfies ProviderListModelsResult),
+          ),
+    ),
+  );
+}
+
 const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
@@ -247,7 +274,10 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      const result = yield* adapter.listModels(parsed);
+      const result = yield* withProviderModelDiscoveryDeadline({
+        effect: adapter.listModels(parsed),
+        provider: parsed.provider,
+      });
       return yield* isolateMalformedModelDescriptors({
         provider: parsed.provider,
         result,

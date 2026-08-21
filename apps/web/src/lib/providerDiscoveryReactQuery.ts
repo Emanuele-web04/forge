@@ -29,6 +29,12 @@ const EMPTY_MODELS_RESULT: ProviderListModelsResult = {
   cached: false,
 };
 
+const MODEL_DISCOVERY_TIMEOUT_RESULT: ProviderListModelsResult = {
+  models: [],
+  source: "timeout",
+  cached: false,
+};
+
 const EMPTY_AGENTS_RESULT: ProviderListAgentsResult = {
   agents: [],
   source: "empty",
@@ -43,6 +49,31 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   source: "empty",
   cached: false,
 };
+
+export const PROVIDER_MODEL_DISCOVERY_CLIENT_TIMEOUT_MS = 35_000;
+
+/**
+ * Final client-side fence for provider discovery. The server applies its own
+ * shorter deadline, but Electron/network bridge failures must not be able to
+ * leave the composer model and reasoning controls skeletonized forever.
+ */
+export async function withProviderModelDiscoveryClientDeadline(
+  discovery: Promise<ProviderListModelsResult>,
+  timeoutMs = PROVIDER_MODEL_DISCOVERY_CLIENT_TIMEOUT_MS,
+): Promise<ProviderListModelsResult> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ProviderListModelsResult>((resolve) => {
+    timeoutId = setTimeout(() => resolve(MODEL_DISCOVERY_TIMEOUT_RESULT), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([discovery, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
@@ -215,13 +246,15 @@ export function providerModelsQueryOptions(input: {
     ),
     queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
-      return api.provider.listModels({
-        provider: input.provider,
-        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-        ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
-        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      });
+      return withProviderModelDiscoveryClientDeadline(
+        api.provider.listModels({
+          provider: input.provider,
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+          ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+        }),
+      );
     },
     enabled: input.enabled ?? true,
     // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
