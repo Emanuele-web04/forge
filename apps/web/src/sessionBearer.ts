@@ -8,7 +8,7 @@ export const SESSION_BEARER_QUERY_PARAM = "sb";
 let memorySessionBearer: string | null = null;
 
 export function readSessionBearer(
-  storage: Pick<Storage, "getItem"> | null = defaultSessionStorage(),
+  storage: Pick<Storage, "getItem"> | null = defaultStorage(),
 ): string | null {
   if (memorySessionBearer) return memorySessionBearer;
   if (!storage) return null;
@@ -22,7 +22,7 @@ export function readSessionBearer(
 
 export function writeSessionBearer(
   token: string,
-  storage: Pick<Storage, "setItem"> | null = defaultSessionStorage(),
+  storage: Pick<Storage, "setItem"> | null = defaultStorage(),
 ): void {
   const trimmed = token.trim();
   if (trimmed.length === 0) return;
@@ -36,7 +36,7 @@ export function writeSessionBearer(
 }
 
 export function clearSessionBearer(
-  storage: Pick<Storage, "removeItem"> | null = defaultSessionStorage(),
+  storage: Pick<Storage, "removeItem"> | null = defaultStorage(),
 ): void {
   memorySessionBearer = null;
   if (!storage) return;
@@ -48,7 +48,7 @@ export function clearSessionBearer(
 }
 
 export function authorizationHeaderFromSessionBearer(
-  storage: Pick<Storage, "getItem"> | null = defaultSessionStorage(),
+  storage: Pick<Storage, "getItem"> | null = defaultStorage(),
 ): Record<string, string> {
   const token = readSessionBearer(storage);
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -67,7 +67,7 @@ export function claimSessionBearerFromLocation(
   history: {
     replaceState(data: unknown, unused: string, url?: string | URL | null): void;
   },
-  storage: Pick<Storage, "getItem" | "setItem"> | null = defaultSessionStorage(),
+  storage: Pick<Storage, "getItem" | "setItem"> | null = defaultStorage(),
 ): string | null {
   const searchParams = new URLSearchParams(location.search);
   const hashParams = new URLSearchParams(
@@ -93,11 +93,39 @@ export function claimSessionBearerFromLocation(
   return token;
 }
 
-function defaultSessionStorage(): Storage | null {
+function defaultStorage(): {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+} | null {
   if (typeof window === "undefined") return null;
-  try {
-    return window.sessionStorage;
-  } catch {
-    return null;
-  }
+  return {
+    getItem(key: string) {
+      try {
+        const fromLocal = window.localStorage?.getItem(key)?.trim();
+        if (fromLocal) return fromLocal;
+      } catch {}
+      try {
+        const fromSession = window.sessionStorage?.getItem(key)?.trim();
+        if (fromSession) return fromSession;
+      } catch {}
+      return null;
+    },
+    setItem(key: string, value: string) {
+      try {
+        window.localStorage?.setItem(key, value);
+      } catch {}
+      try {
+        window.sessionStorage?.setItem(key, value);
+      } catch {}
+    },
+    removeItem(key: string) {
+      try {
+        window.localStorage?.removeItem(key);
+      } catch {}
+      try {
+        window.sessionStorage?.removeItem(key);
+      } catch {}
+    },
+  };
 }

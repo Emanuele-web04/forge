@@ -51,43 +51,45 @@ export function shouldRequireRemotePairing(input: {
 }
 
 export async function bootstrapRemoteAuthGate(
-  dependencies: RemoteAuthGateDependencies = {
-    isElectron,
-    pathname: window.location.pathname,
-    fetch: globalThis.fetch,
-    render: renderRemotePairingRequired,
-    authorizationHeaders: authorizationHeaderFromSessionBearer(),
-  },
+  dependencies?: Partial<RemoteAuthGateDependencies>,
 ): Promise<"ok" | "blocked"> {
-  if (dependencies.isElectron || isPairingPath(dependencies.pathname)) {
+  const isDesktop = dependencies?.isElectron ?? isElectron;
+  const currentPathname =
+    dependencies?.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "/");
+  const fetchFn = dependencies?.fetch ?? globalThis.fetch;
+  const renderFn = dependencies?.render ?? renderRemotePairingRequired;
+  const authHeaders =
+    dependencies?.authorizationHeaders ?? authorizationHeaderFromSessionBearer();
+
+  if (isDesktop || isPairingPath(currentPathname)) {
     return "ok";
   }
 
   try {
-    const response = await dependencies.fetch("/api/auth/session", {
+    const response = await fetchFn("/api/auth/session", {
       credentials: "same-origin",
       headers: {
-        ...(dependencies.authorizationHeaders ?? authorizationHeaderFromSessionBearer()),
+        ...authHeaders,
       },
     });
     if (!response.ok) {
-      dependencies.render();
+      renderFn();
       return "blocked";
     }
     const session = (await response.json()) as AuthSessionResponse;
     if (
       shouldRequireRemotePairing({
-        isElectron: dependencies.isElectron,
-        pathname: dependencies.pathname,
+        isElectron: isDesktop,
+        pathname: currentPathname,
         authenticated: session.authenticated,
         policy: session.auth?.policy,
       })
     ) {
-      dependencies.render();
+      renderFn();
       return "blocked";
     }
   } catch {
-    dependencies.render();
+    renderFn();
     return "blocked";
   }
 

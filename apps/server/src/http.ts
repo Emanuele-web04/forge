@@ -349,6 +349,39 @@ function encodeExpiredCookie(input: { readonly name: string; readonly secure: bo
   return `${encodeURIComponent(input.name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
 }
 
+function isRequestSecure(
+  request: HttpServerRequest.HttpServerRequest,
+  config?: { readonly publicUrl?: URL | undefined },
+): boolean {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  if (typeof forwardedProto === "string" && forwardedProto.toLowerCase().includes("https")) {
+    return true;
+  }
+  const forwardedSsl = request.headers["x-forwarded-ssl"];
+  if (typeof forwardedSsl === "string" && forwardedSsl.toLowerCase() === "on") {
+    return true;
+  }
+  const url = HttpServerRequest.toURL(request);
+  if (url?.protocol === "https:") {
+    return true;
+  }
+  if (config?.publicUrl && config.publicUrl.protocol === "https:") {
+    const host = request.headers["host"];
+    if (host && host.toLowerCase() === config.publicUrl.host.toLowerCase()) {
+      return true;
+    }
+    const origin = request.headers["origin"];
+    if (origin && origin.toLowerCase() === config.publicUrl.origin.toLowerCase()) {
+      return true;
+    }
+    const referer = request.headers["referer"];
+    if (referer && referer.toLowerCase().startsWith(config.publicUrl.origin.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isBodyCapacityError(cause: unknown): boolean {
   if (Cause.isExceededCapacityError(cause)) return true;
   if (cause instanceof Error && cause.message === "maxBytes exceeded") return true;
@@ -513,6 +546,7 @@ const pairRequestEffect = Effect.gen(function* () {
         throw new Error((result.payload && result.payload.error) || "Pairing failed.");
       }
       var token = result.payload.sessionToken;
+      try { localStorage.setItem("synara.sessionBearer", token); } catch (e) {}
       try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
       return fetch("/api/auth/session", {
         credentials: "same-origin",
@@ -581,6 +615,7 @@ const pairSubmitEffect = Effect.gen(function* () {
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Paired · Synara</title><script>
 (function () {
   var token = ${sessionTokenJson};
+  try { localStorage.setItem("synara.sessionBearer", token); } catch (e) {}
   try { sessionStorage.setItem("synara.sessionBearer", token); } catch (e) {}
   location.replace("/?sb=" + encodeURIComponent(token));
 })();
@@ -593,7 +628,7 @@ const pairSubmitEffect = Effect.gen(function* () {
           name: sessions.cookieName,
           value: result.sessionToken,
           expiresAt: result.response.expiresAt,
-          secure: config.publicUrl !== undefined,
+          secure: isRequestSecure(request, config),
         }),
         "Cache-Control": "no-store",
       },
@@ -650,7 +685,7 @@ export const authEffectRouteLayer = HttpRouter.add(
             name: sessions.cookieName,
             value: result.sessionToken,
             expiresAt: result.response.expiresAt,
-            secure: config.publicUrl !== undefined,
+            secure: isRequestSecure(request, config),
           }),
         },
       });
@@ -678,7 +713,7 @@ export const authEffectRouteLayer = HttpRouter.add(
             name: sessions.cookieName,
             value: result.sessionToken,
             expiresAt: result.expiresAt,
-            secure: config.publicUrl !== undefined,
+            secure: isRequestSecure(request, config),
           }),
         },
       });
@@ -718,7 +753,7 @@ export const authEffectRouteLayer = HttpRouter.add(
           headers: {
             "Set-Cookie": encodeExpiredCookie({
               name: sessions.cookieName,
-              secure: config.publicUrl !== undefined,
+              secure: isRequestSecure(request, config),
             }),
           },
         },

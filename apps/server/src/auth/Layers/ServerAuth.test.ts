@@ -142,7 +142,8 @@ describe("ServerAuthLive", () => {
 
         const ownerPairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
         const ownerToken =
-          new URL(ownerPairingUrl).searchParams.get("token") ?? "";
+          new URL(ownerPairingUrl).pathname.replace(/^\/pair\/?/, "") ||
+          (new URL(ownerPairingUrl).searchParams.get("token") ?? "");
         const ownerExchange = yield* serverAuth.exchangeBootstrapCredential(
           ownerToken,
           requestMetadata,
@@ -186,7 +187,9 @@ describe("ServerAuthLive", () => {
         const serverAuth = yield* ServerAuth;
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
-        const bootstrapToken = new URL(pairingUrl).searchParams.get("token") ?? "";
+        const bootstrapToken =
+          new URL(pairingUrl).pathname.replace(/^\/pair\/?/, "") ||
+          (new URL(pairingUrl).searchParams.get("token") ?? "");
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(
           bootstrapToken,
           requestMetadata,
@@ -302,7 +305,9 @@ describe("ServerAuthLive", () => {
         expect(legacyError.status).toBe(401);
 
         const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://192.168.1.50:3773");
-        const bootstrapToken = new URL(pairingUrl).searchParams.get("token") ?? "";
+        const bootstrapToken =
+          new URL(pairingUrl).pathname.replace(/^\/pair\/?/, "") ||
+          (new URL(pairingUrl).searchParams.get("token") ?? "");
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(
           bootstrapToken,
           requestMetadata,
