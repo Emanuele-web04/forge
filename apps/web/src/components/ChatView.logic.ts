@@ -1457,6 +1457,41 @@ export function resolveQueuedSteerGateTransition(input: {
   };
 }
 
+/**
+ * Guards the queued-composer auto-dispatch effect. After sending
+ * `queuedTurns[0]`, the thread can look idle: the user-message echo and
+ * `thread.turn-start-requested` are not live-turn takeover, so
+ * `hasQueueableLiveTurn` is still false. Holding through
+ * `isAwaitingTurnStart` (`localDispatch` set, takeover not observed)
+ * stops the rest of the queue from flushing in that gap. Same failure
+ * mode the steer gate already covers for interrupt→re-dispatch.
+ */
+export function shouldHoldQueuedComposerAutoDispatch(input: {
+  hasQueueableLiveTurn: boolean;
+  phase: SessionPhase;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isAwaitingTurnStart: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+}): boolean {
+  return (
+    input.hasQueueableLiveTurn ||
+    input.phase === "disconnected" ||
+    input.isSendBusy ||
+    input.isConnecting ||
+    input.isAwaitingTurnStart ||
+    input.queuedSteerGate !== null ||
+    input.hasPendingApproval ||
+    input.hasPendingProgress ||
+    input.hasPendingUserInput ||
+    input.queuedTurnCount === 0
+  );
+}
+
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
 
 export function shouldStartActiveTurnLayoutGrace(options: {

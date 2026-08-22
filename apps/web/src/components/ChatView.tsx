@@ -593,6 +593,7 @@ import {
   PullRequestDialogState,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
+  shouldHoldQueuedComposerAutoDispatch,
   shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
@@ -9363,16 +9364,23 @@ export default function ChatView({
   }, [activeTurnIdForSteerGate, phase, queuedSteerGate, sessionErroredForSteerGate]);
 
   useEffect(() => {
+    // After dispatching queuedTurns[0], the thread can look idle until the
+    // provider session reports running + activeTurnId. Message echo and
+    // turn-start-requested are not takeover, so isAwaitingTurnStart holds
+    // the rest of the queue through that gap (#774).
     if (
-      hasQueueableLiveTurn ||
-      phase === "disconnected" ||
-      isSendBusy ||
-      isConnecting ||
-      queuedSteerGate !== null ||
-      activePendingApproval !== null ||
-      activePendingProgress !== null ||
-      pendingUserInputs.length > 0 ||
-      queuedComposerTurns.length === 0
+      shouldHoldQueuedComposerAutoDispatch({
+        hasQueueableLiveTurn,
+        phase,
+        isSendBusy,
+        isConnecting,
+        isAwaitingTurnStart,
+        queuedSteerGate,
+        hasPendingApproval: activePendingApproval !== null,
+        hasPendingProgress: activePendingProgress !== null,
+        hasPendingUserInput: pendingUserInputs.length > 0,
+        queuedTurnCount: queuedComposerTurns.length,
+      })
     ) {
       return;
     }
@@ -9404,6 +9412,7 @@ export default function ChatView({
     activePendingProgress,
     dispatchQueuedComposerTurn,
     phase,
+    isAwaitingTurnStart,
     isConnecting,
     isSendBusy,
     pendingUserInputs.length,
