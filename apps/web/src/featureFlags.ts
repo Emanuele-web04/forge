@@ -102,10 +102,15 @@ function readFeatureFlagState(): FeatureFlagState {
       return cachedFeatureFlagState;
     }
 
+    const nextState = normalizeFeatureFlagState(raw ? JSON.parse(raw) : null);
     cachedRawFeatureFlagState = raw;
-    cachedFeatureFlagState = normalizeFeatureFlagState(raw ? JSON.parse(raw) : null);
-    return cachedFeatureFlagState;
+    cachedFeatureFlagState = nextState;
+    return nextState;
   } catch {
+    // Do not cache a raw value whose parse/read failed. Otherwise a later read of
+    // that same value would match the cache key and resurrect the previous state.
+    cachedRawFeatureFlagState = undefined;
+    cachedFeatureFlagState = DEFAULT_FEATURE_FLAG_STATE;
     return DEFAULT_FEATURE_FLAG_STATE;
   }
 }

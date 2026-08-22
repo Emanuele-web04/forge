@@ -35,6 +35,7 @@ import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
 import type { ProviderServiceError } from "../Errors.ts";
+import type { PersistedProviderRuntimeEvent } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 
 export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
@@ -218,6 +219,15 @@ export interface ProviderServiceShape {
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Canonical runtime events paired with their already-durable journal sequence.
+   *
+   * Durable production services expose this stream so the ingestion worker can
+   * drain through the accepted row without appending the same event again.
+   * Lightweight/test services may omit it and retain the append-on-ingest path.
+   */
+  readonly streamPersistedEvents?: Stream.Stream<PersistedProviderRuntimeEvent>;
 }
 
 /**

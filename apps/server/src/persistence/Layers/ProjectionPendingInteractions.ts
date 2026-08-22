@@ -1,3 +1,4 @@
+import { respondingInteractionReclaimCutoff } from "@synara/shared/pendingInteractions";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer } from "effect";
@@ -136,7 +137,16 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
       WHERE thread_id = ${input.threadId}
         AND interaction_kind = ${input.interactionKind}
         AND request_id = ${input.requestId}
-        AND status IN ('pending', 'retryable')
+        AND (
+          status IN ('pending', 'retryable', 'uncertain')
+          OR (
+            status = 'responding'
+            AND (
+              response_requested_at IS NULL
+              OR response_requested_at <= ${respondingInteractionReclaimCutoff(input.requestedAt)}
+            )
+          )
+        )
         AND (
           (${input.lifecycleGeneration} IS NULL AND lifecycle_generation IS NULL)
           OR lifecycle_generation = ${input.lifecycleGeneration}

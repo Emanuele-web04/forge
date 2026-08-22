@@ -15,6 +15,7 @@ import {
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
   GitPullRequestSnapshotResult,
+  GitResolvedPullRequest,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
   GitWorkingTreeDiffStatsResult,
@@ -49,6 +50,17 @@ export interface GitManagerShape {
   readonly status: (
     input: GitStatusInput,
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
+
+  /**
+   * Resolve the most relevant pull request for an already-captured branch.
+   * Unlike status(), lookup failures remain typed failures so callers can distinguish
+   * “no PR exists” from “GitHub is temporarily unavailable”.
+   */
+  readonly pullRequestForBranch: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly upstreamRef: string | null;
+  }) => Effect.Effect<GitResolvedPullRequest | null, GitManagerServiceError>;
 
   /**
    * Read a unified patch for the current repository working tree.

@@ -6,13 +6,19 @@ import {
   browserAnnotationTheme,
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
+  browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
   formatBrowserAnnotationActionError,
+  hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -251,6 +257,135 @@ describe("createBrowserPanelHideScheduler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the surface visible when a new live host mounts before the old host cleans up", () => {
+    vi.useFakeTimers();
+    try {
+      const hide = vi.fn();
+      const scheduler = createBrowserPanelHideScheduler();
+      const releaseDockHost = scheduler.acquire("thread-a");
+      const releaseFloatingHost = scheduler.acquire("thread-a");
+
+      releaseDockHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).not.toHaveBeenCalled();
+
+      releaseFloatingHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("createBrowserPanelRendererHandoff", () => {
+  it("waits for the previous renderer guest to detach before attaching its replacement", async () => {
+    let resolveDetach!: () => void;
+    const detach = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", detach);
+    const replacementReady = handoff.waitForDetach("thread-a");
+    let didAttach = false;
+    void replacementReady.then(() => {
+      didAttach = true;
+    });
+
+    await Promise.resolve();
+    expect(didAttach).toBe(false);
+
+    resolveDetach();
+    await replacementReady;
+
+    expect(didAttach).toBe(true);
+  });
+
+  it("does not block a replacement when detach IPC rejects", async () => {
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", Promise.reject(new Error("stale guest")));
+
+    await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
+  });
+});
+
+describe("shouldOccludeBrowserWebview", () => {
+  it("occludes the Electron guest while the browser actions menu is open", () => {
+    expect(
+      shouldOccludeBrowserWebview({
+        showLocalServersHome: false,
+        browserActionsMenuOpen: true,
+        hasObscuringOverlay: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the guest visible when no DOM surface covers it", () => {
+    expect(
+      shouldOccludeBrowserWebview({
+        showLocalServersHome: false,
+        browserActionsMenuOpen: false,
+        hasObscuringOverlay: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasObscuringHitStackElementAboveSurface", () => {
+  const surface = { id: "viewport" };
+  const overlay = { id: "dialog" };
+  const underlyingChat = { id: "chat" };
+  const isVisible = (element: { id: string }) => element.id !== "hidden";
+  const isNonObscuring = (element: { id: string }) => element.id === "toast-portal";
+  const isSurfaceBoundary = (element: { id: string }) =>
+    element.id === surface.id || element.id === "viewport-child";
+
+  it("detects a visible overlay above the viewport and ignores content behind it", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([overlay, surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat underlying chat siblings as an overlay", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("stops at a descendant of the viewport as well", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([{ id: "viewport-child" }, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores an incomplete stack that never reaches the viewport", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("browserAddressDisplayValue", () => {
@@ -323,6 +458,21 @@ describe("normalizeBrowserAddressInput", () => {
     expect(normalizeBrowserAddressInput("how to bake bread")).toContain(
       "https://www.google.com/search?q=how%20to%20bake%20bread",
     );
+  });
+
+  it("preserves local file URLs", () => {
+    expect(normalizeBrowserAddressInput("file:///Users/example/project/index.html")).toBe(
+      "file:///Users/example/project/index.html",
+    );
+  });
+});
+
+describe("browserWebviewInitialUrl", () => {
+  it("defers local files to the desktop preview protocol", () => {
+    expect(browserWebviewInitialUrl("file:///Users/example/project/index.html")).toBe(
+      "about:blank",
+    );
+    expect(browserWebviewInitialUrl("https://example.test/")).toBe("https://example.test/");
   });
 });
 
@@ -411,5 +561,37 @@ describe("resolveBrowserChromeStatus", () => {
       tone: "default",
       label: "Starting browser...",
     });
+  });
+});
+
+describe("floating browser webview presentation", () => {
+  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
+    const stage = { style: {} } as HTMLElement;
+    applyBrowserWebviewPresentation(stage, {
+      floating: true,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(stage.style.width).toBe("1280px");
+    expect(stage.style.height).toBe("800px");
+    expect(stage.style.transform).toBe("scale(0.25)");
+    expect(stage.style.top).toBe("10px");
+
+    applyBrowserWebviewPresentation(stage, {
+      floating: false,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
+  });
+});
+
+describe("isBrowserPanelBoundsHiddenKey", () => {
+  it("detects hidden keys after the zoom suffix was added", () => {
+    expect(isBrowserPanelBoundsHiddenKey("renderer:hidden:zoom-1")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("native:hidden")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("renderer:12:40:800:600:zoom-1")).toBe(false);
   });
 });

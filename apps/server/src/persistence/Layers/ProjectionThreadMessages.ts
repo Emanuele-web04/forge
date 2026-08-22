@@ -2,10 +2,15 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema } from "effect";
 
-import { toPersistenceSqlError } from "../Errors.ts";
+import {
+  toPersistenceSqlError,
+  toPersistenceSqlOrDecodeError,
+  type ProjectionRepositoryError,
+} from "../Errors.ts";
 import {
   ProjectionThreadMessageDbRowSchema,
   projectionThreadMessageFromRow,
+  type ProjectionThreadMessageDbRow,
 } from "../projectionThreadMessageRow.ts";
 import {
   GetProjectionThreadMessageInput,
@@ -14,6 +19,8 @@ import {
   DeleteProjectionThreadMessagesInput,
   ListProjectionThreadMessagesInput,
   ProjectionThreadMessage,
+  ProjectionThreadMessageSegmentDbRow,
+  type ProjectionThreadMessageTextSegment,
 } from "../Services/ProjectionThreadMessages.ts";
 
 const LatestUserMessageAtRowSchema = Schema.Struct({
@@ -186,6 +193,97 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const deleteMessageTextSegmentRows = SqlSchema.void({
+    Request: DeleteProjectionThreadMessagesInput,
+    execute: ({ threadId }) =>
+      sql`
+        DELETE FROM message_text_segments
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
+  const listMessageTextSegmentRowsQuery = SqlSchema.findAll({
+    Request: ListProjectionThreadMessagesInput,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          sequence,
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id = ${threadId}
+        ORDER BY sequence ASC, message_id ASC
+      `,
+  });
+
+  const getMessageTextSegmentRowsQuery = SqlSchema.findAll({
+    Request: GetProjectionThreadMessageInput,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          sequence,
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id = ${threadId}
+          AND message_id = ${messageId}
+        ORDER BY sequence ASC
+      `,
+  });
+
+  const listMessageTextSegmentRows = (
+    input: ListProjectionThreadMessagesInput,
+  ): Effect.Effect<
+    ReadonlyArray<ProjectionThreadMessageSegmentDbRow>,
+    ProjectionRepositoryError,
+    never
+  > =>
+    listMessageTextSegmentRowsQuery(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadMessageRepository.listMessageTextSegments:query",
+          "ProjectionThreadMessageRepository.listMessageTextSegments:decodeRows",
+        ),
+      ),
+    );
+
+  const attachTextSegmentsToRows = (
+    rows: ReadonlyArray<ProjectionThreadMessageDbRow>,
+    segments: ReadonlyArray<ProjectionThreadMessageSegmentDbRow>,
+  ): ReadonlyArray<ProjectionThreadMessageDbRow> => {
+    if (segments.length === 0) {
+      return rows;
+    }
+    const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
+    for (const segment of segments) {
+      const key = JSON.stringify([segment.threadId, segment.messageId]);
+      const existing = segmentsByMessage.get(key);
+      const entry = {
+        sequence: segment.sequence,
+        startedAt: segment.startedAt,
+        endedAt: segment.endedAt,
+        text: segment.text,
+      };
+      if (existing) {
+        existing.push(entry);
+      } else {
+        segmentsByMessage.set(key, [entry]);
+      }
+    }
+    return rows.map((row) => {
+      const rowSegments = segmentsByMessage.get(JSON.stringify([row.threadId, row.messageId]));
+      return rowSegments ? { ...row, textSegments: rowSegments } : row;
+    });
+  };
+
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadMessageRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
@@ -197,7 +295,23 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         Effect.mapError(
           toPersistenceSqlError("ProjectionThreadMessageRepository.getByThreadAndMessageId:query"),
         ),
-        Effect.map(Option.map(projectionThreadMessageFromRow)),
+        Effect.flatMap((row) =>
+          getMessageTextSegmentRowsQuery(input).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionThreadMessageRepository.getMessageTextSegments:query",
+                "ProjectionThreadMessageRepository.getMessageTextSegments:decodeRows",
+              ),
+            ),
+            Effect.map((segments) =>
+              Option.map(row, (messageRow) =>
+                projectionThreadMessageFromRow(
+                  attachTextSegmentsToRows([messageRow], segments)[0]!,
+                ),
+              ),
+            ),
+          ),
+        ),
       );
 
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
@@ -205,7 +319,13 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadMessageRepository.listByThreadId:query"),
       ),
-      Effect.map((rows) => rows.map(projectionThreadMessageFromRow)),
+      Effect.flatMap((rows) =>
+        listMessageTextSegmentRows(input).pipe(
+          Effect.map((segments) =>
+            attachTextSegmentsToRows(rows, segments).map(projectionThreadMessageFromRow),
+          ),
+        ),
+      ),
     );
 
   const getLatestUserMessageAt: ProjectionThreadMessageRepositoryShape["getLatestUserMessageAt"] = (
@@ -220,6 +340,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
 
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
+      Effect.flatMap(() => deleteMessageTextSegmentRows(input)),
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadMessageRepository.deleteByThreadId:query"),
       ),

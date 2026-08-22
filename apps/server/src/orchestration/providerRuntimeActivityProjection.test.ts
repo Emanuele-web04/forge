@@ -47,8 +47,8 @@ function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unk
   });
 }
 
-function expectSchemaValidActivities(event: ProviderRuntimeEvent): void {
-  const activities = projectProviderRuntimeActivities(event);
+function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequence?: number): void {
+  const activities = projectProviderRuntimeActivities(event, sessionSequence);
   expect(activities.length).toBeGreaterThan(0);
   for (const activity of activities) {
     expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
@@ -154,9 +154,9 @@ describe("projected activities satisfy the orchestration command schema", () => 
         type: "turn.steered",
         eventId: "turn-steered-fractional-sequence",
         turnId: TURN_ID,
-        sessionSequence: 12.5,
         payload: { message: "keep going" },
       }),
+      12.5,
     );
   });
 
@@ -353,6 +353,105 @@ describe("provider runtime activity projection", () => {
     );
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
   });
+
+  it("keeps the fast JSON fingerprint byte-identical to the legacy JSON-like serializer", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "tool.progress",
+        eventId: "tool-progress-fingerprint",
+        turnId: TURN_ID,
+        payload: {
+          toolUseId: "tool-fingerprint",
+          toolName: "mcp__github__fetch_pr",
+          summary: "Fetching PR",
+          elapsedSeconds: 2.4,
+        },
+      }),
+    );
+    const legacyFingerprint = JSON.stringify(
+      {
+        kind: activity!.kind,
+        summary: activity!.summary,
+        payload: activity!.payload,
+        turnId: activity!.turnId,
+      },
+      (() => {
+        const seen = new WeakSet<object>();
+        return (_key: string, entry: unknown) => {
+          if (typeof entry === "bigint") return entry.toString();
+          if (typeof entry === "function" || typeof entry === "symbol") return undefined;
+          if (entry && typeof entry === "object") {
+            if (seen.has(entry)) return "[Circular]";
+            seen.add(entry);
+          }
+          return entry;
+        };
+      })(),
+    );
+
+    expect(providerActivityUpdateFingerprint(activity!)).toBe(legacyFingerprint);
+  });
+
+  it.each(["antigravity", "codex"] as const)(
+    "projects %s tool lifecycle events through the same canonical activities",
+    (provider) => {
+      const itemId = RuntimeItemId.makeUnsafe(`${provider}-tool-1`);
+      const data = { toolCallId: itemId, toolName: "run_command" };
+      const [started] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          provider,
+          type: "item.started",
+          eventId: `${provider}-tool-started`,
+          turnId: TURN_ID,
+          itemId,
+          payload: {
+            itemType: "command_execution",
+            status: "inProgress",
+            title: "run_command",
+            data,
+          },
+        }),
+      );
+      const [completed] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          provider,
+          type: "item.completed",
+          eventId: `${provider}-tool-completed`,
+          turnId: TURN_ID,
+          itemId,
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            title: "run_command",
+            data,
+          },
+        }),
+      );
+
+      expect(started).toMatchObject({
+        kind: "tool.started",
+        summary: "run_command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "run_command",
+          data,
+        },
+      });
+      expect(completed).toMatchObject({
+        kind: "tool.completed",
+        summary: "run_command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "run_command",
+          data,
+        },
+      });
+      expect(() => decodeActivityAppendCommand(started!)).not.toThrow();
+      expect(() => decodeActivityAppendCommand(completed!)).not.toThrow();
+    },
+  );
 
   it("maps canonical approvals and structured user input", () => {
     const approval = projectProviderRuntimeActivities(
@@ -577,5 +676,54 @@ describe("provider runtime activity projection", () => {
     expect(
       Object.keys((turn?.payload as { modelUsage?: Record<string, unknown> }).modelUsage ?? {}),
     ).toEqual(["claude-fable-5"]);
+  });
+
+  it("projects unmapped passthrough events instead of dropping them", () => {
+    const oversizedDiagnostic = "x".repeat(64_000);
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "event.unmapped",
+        eventId: "unmapped-native-event",
+        turnId: TURN_ID,
+        payload: {
+          nativeType: "item/agentMessage/completed",
+          detail: "Finished the refactor",
+          data: {
+            secretKey: "must-not-reach-the-activity-snapshot",
+            note: "api_key=another-secret",
+            output: oversizedDiagnostic,
+          },
+        },
+      }),
+    );
+    expect(activity).toMatchObject({
+      tone: "info",
+      kind: "provider.event.unmapped",
+      // Raw native type/label is the row title.
+      summary: "item/agentMessage/completed",
+      turnId: TURN_ID,
+      payload: {
+        nativeEventType: "item/agentMessage/completed",
+        detail: "Finished the refactor",
+        data: expect.objectContaining({ __synaraTruncated: true }),
+      },
+    });
+    const serializedPayload = JSON.stringify(activity?.payload);
+    expect(serializedPayload.length).toBeLessThan(17_000);
+    expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
+    expect(serializedPayload).not.toContain("another-secret");
+    // The activity must survive the schema of the command that carries it.
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+    // A passthrough event without a native type is the one case still dropped.
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "event.unmapped",
+          eventId: "unmapped-without-type",
+          payload: { detail: "no type" },
+        }),
+      ),
+    ).toEqual([]);
   });
 });

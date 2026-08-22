@@ -4,10 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanupSucceededUnlessInterrupted,
+  detachThreadDevice,
   isThreadCurrentlyArchived,
   isThreadLifecycleCleanupEvent,
   logCleanupCauseUnlessInterrupted,
 } from "./ThreadDeletionReactor";
+import { DeviceService } from "../../device/Services/DeviceService";
+import { DeviceManager } from "../../device/DeviceManager";
+import { FakeDeviceBackend } from "../../device/FakeDeviceBackend";
 
 function lifecycleEvent(type: "thread.archived" | "thread.deleted"): OrchestrationEvent {
   const threadId = ThreadId.makeUnsafe(`thread-${type}`);
@@ -112,5 +116,24 @@ describe("cleanupSucceededUnlessInterrupted", () => {
     if (Exit.isFailure(exit)) {
       expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     }
+  });
+});
+
+describe("detachThreadDevice", () => {
+  it("releases the device attachment when an active thread is deleted", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-delete-device");
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend });
+    await backend.boot("FAKE-0001");
+    await manager.attach(threadId, "FAKE-0001");
+
+    await Effect.runPromise(
+      detachThreadDevice(threadId).pipe(
+        Effect.provideService(DeviceService, { supported: true, manager }),
+      ),
+    );
+
+    expect((await manager.getThreadState(threadId)).attachedDeviceUdid).toBeNull();
+    expect(backend.hasStream("FAKE-0001")).toBe(false);
   });
 });

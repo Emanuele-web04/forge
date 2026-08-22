@@ -38,8 +38,11 @@ import type {
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 import {
   BROWSER_BLANK_URL as ABOUT_BLANK_URL,
+  BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
+  BROWSER_AUTOMATION_VIEWPORT_WIDTH,
   classifyBrowserWindowOpen,
   isBlankBrowserTabUrl,
+  normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput as normalizeUrlInput,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
@@ -52,11 +55,20 @@ import {
   BrowserAnnotationCoordinator,
   type BrowserAnnotationRuntime,
 } from "./browserAnnotations/coordinator";
+import {
+  isLocalFileUrl,
+  isLocalHtmlPreviewUrl,
+  isSameLocalHtmlPreviewGrant,
+} from "./localHtmlPreviewProtocol";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
+const BROWSER_MAX_BACKGROUND_AUTOMATION_RUNTIMES = 4;
+// Browser tools have a published maximum 30 second deadline. Keep a newly
+// acquired runtime out of the eviction pool until that action has drained.
+const BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS = 31_000;
 const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
 const BROWSER_AUTOMATION_WINDOW_OPEN_FALLBACK_MS = 2_000;
 const BROWSER_DEFERRED_PUBLICATION_DELAY_MS = 16;
@@ -153,6 +165,12 @@ interface PendingStatePublication {
 
 const LIVE_TAB_STATUS: BrowserTabState["status"] = "live";
 const SUSPENDED_TAB_STATUS: BrowserTabState["status"] = "suspended";
+const BACKGROUND_AUTOMATION_BOUNDS: BrowserPanelBounds = {
+  x: -10_000,
+  y: 0,
+  width: BROWSER_AUTOMATION_VIEWPORT_WIDTH,
+  height: BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
+};
 
 interface BrowserPerformanceSnapshot {
   counters: {
@@ -208,6 +226,7 @@ export interface BrowserAutomationDownloadEvent {
 
 export interface DesktopBrowserManagerOptions {
   beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+  annotationPreloadPath?: string;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -215,6 +234,7 @@ function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
     id: Crypto.randomUUID(),
     url,
     title: defaultTitleForUrl(url),
+    runtimeSurface: "renderer",
     status: SUSPENDED_TAB_STATUS,
     isLoading: false,
     canGoBack: false,
@@ -330,11 +350,21 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
 }
 
-function isAllowedBrowserRuntimeNavigation(url: string): boolean {
+function browserPresentationSignature(
+  bounds: BrowserPanelBounds | null,
+  pageZoomFactor: number,
+): string {
+  return `${browserBoundsSignature(bounds)}:zoom-${pageZoomFactor}`;
+}
+
+function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return true;
+    }
+    return isLocalHtmlPreviewUrl(url) && isSameLocalHtmlPreviewGrant(currentUrl, url);
   } catch {
     return false;
   }
@@ -375,6 +405,8 @@ export class DesktopBrowserManager {
   private activeThreadId: ThreadId | null = null;
   private activeBounds: BrowserPanelBounds | null = null;
   private activeBoundsThreadId: ThreadId | null = null;
+  private activePageZoomFactor = 1;
+  private activePageZoomThreadId: ThreadId | null = null;
   private attachedRuntimeKey: string | null = null;
   private attachedBoundsSignature: string | null = null;
   private readonly states = new Map<ThreadId, ThreadBrowserState>();
@@ -413,7 +445,10 @@ export class DesktopBrowserManager {
   >();
   private readonly pendingStatePublicationsByKey = new Map<string, PendingStatePublication>();
   private readonly runtimes = new Map<string, LiveTabRuntime>();
+  private readonly runtimePageZoomFactors = new Map<string, number>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
+  private readonly automationRuntimeKeys = new Set<string>();
+  private readonly automationRuntimeProtectedUntilByKey = new Map<string, number>();
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
@@ -425,6 +460,7 @@ export class DesktopBrowserManager {
   private readonly sessionPolicy: BrowserSessionPolicy;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
+  private backgroundAutomationEvictionTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeSyncFlushScheduled = false;
   private disposed = false;
   private readonly perfCounters = {
@@ -456,7 +492,7 @@ export class DesktopBrowserManager {
         };
       },
       resolveRuntimeByWebContentsId: (webContentsId) =>
-        this.toAnnotationRuntime(this.findRendererRuntimeByWebContentsId(webContentsId)),
+        this.toAnnotationRuntime(this.findRuntimeByWebContentsId(webContentsId)),
       markHumanControl: (threadId) => this.markHumanControl(threadId),
     });
   }
@@ -650,7 +686,7 @@ export class DesktopBrowserManager {
         typeof details.isMainFrame === "boolean"
           ? details.isMainFrame
           : legacyIsMainFrame !== false;
-      if (isMainFrame && !isAllowedBrowserRuntimeNavigation(url)) {
+      if (isMainFrame && !isAllowedBrowserRuntimeNavigation(url, webContents.getURL())) {
         details.preventDefault();
       }
     };
@@ -886,7 +922,8 @@ export class DesktopBrowserManager {
 
     state.tabs = [...state.tabs, pending.tab];
     state.activeTabId = pending.tab.id;
-    this.rendererOnlyRuntimeKeys.add(buildRuntimeKey(pending.threadId, pending.tab.id));
+    pending.tab.runtimeSurface = "native";
+    this.automationRuntimeKeys.add(buildRuntimeKey(pending.threadId, pending.tab.id));
     syncThreadLastError(state);
     this.markThreadStateChanged(pending.threadId);
     // The host can now reconcile openedTabId from canonical state, but the
@@ -1113,12 +1150,18 @@ export class DesktopBrowserManager {
       clearTimeout(timer);
     }
     this.tabSuspendTimers.clear();
+    if (this.backgroundAutomationEvictionTimer !== null) {
+      clearTimeout(this.backgroundAutomationEvictionTimer);
+      this.backgroundAutomationEvictionTimer = null;
+    }
     this.detachAttachedRuntime();
     this.destroyAllRuntimes();
     this.closeAllPopupWindows();
     this.pendingRuntimeSyncs.clear();
     this.runtimeLastActiveAtByKey.clear();
     this.rendererOnlyRuntimeKeys.clear();
+    this.automationRuntimeKeys.clear();
+    this.automationRuntimeProtectedUntilByKey.clear();
     this.listeners.clear();
     this.copyLinkListeners.clear();
     this.states.clear();
@@ -1132,10 +1175,13 @@ export class DesktopBrowserManager {
     this.automationWindowOpenListenersByRuntimeKey.clear();
     this.automationDownloadListenersByRuntimeKey.clear();
     this.automationSideEffectProvenanceByRuntimeKey.clear();
+    this.runtimePageZoomFactors.clear();
     this.window = null;
     this.activeThreadId = null;
     this.activeBounds = null;
     this.activeBoundsThreadId = null;
+    this.activePageZoomFactor = 1;
+    this.activePageZoomThreadId = null;
     this.attachedBoundsSignature = null;
     this.runtimeSyncFlushScheduled = false;
   }
@@ -1168,11 +1214,7 @@ export class DesktopBrowserManager {
     };
   }
 
-  /**
-   * Prepares browser state for the renderer-owned browser surface without ever
-   * creating or waking a native WebContentsView. The renderer observes the
-   * emitted state, mounts its visible <webview>, then calls attachWebview.
-   */
+  /** Prepares an agent-owned tab whose native runtime can outlive the chat route. */
   prepareAutomationTab(input: BrowserAutomationPrepareTabInput): ThreadBrowserState {
     const hadExistingTab = (this.states.get(input.threadId)?.tabs.length ?? 0) > 0;
     const state = this.ensureWorkspace(input.threadId, input.url);
@@ -1182,16 +1224,7 @@ export class DesktopBrowserManager {
       state.tabs = [...state.tabs, tab];
     }
 
-    const key = buildRuntimeKey(input.threadId, tab.id);
-    this.rendererOnlyRuntimeKeys.add(key);
-    const existing = this.runtimes.get(key);
-    if (existing?.ownsWebContents) {
-      // A native fallback can never be an automation target. Drop it so the
-      // renderer can adopt the canonical visible guest for this tab.
-      this.destroyRuntime(input.threadId, tab.id, {
-        preserveAutomationDownloadTracking: true,
-      });
-    }
+    this.claimAutomationTab(input.threadId, tab);
 
     if (input.url !== undefined) {
       const nextUrl = normalizeUrlInput(input.url);
@@ -1208,7 +1241,7 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  /** Selects a scoped tab for automation without resuming a native fallback. */
+  /** Selects a scoped tab and keeps it available to background automation. */
   selectAutomationTab(input: BrowserTabInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1216,16 +1249,8 @@ export class DesktopBrowserManager {
       throw new Error("The requested browser tab is not available in this thread.");
     }
 
-    const key = buildRuntimeKey(input.threadId, tab.id);
-    const runtime = this.runtimes.get(key);
-    this.rendererOnlyRuntimeKeys.add(key);
     let didChange = false;
-    if (runtime?.ownsWebContents) {
-      this.destroyRuntime(input.threadId, tab.id, {
-        preserveAutomationDownloadTracking: true,
-      });
-      didChange = suspendTabState(tab) || didChange;
-    }
+    didChange = this.claimAutomationTab(input.threadId, tab) || didChange;
     if (state.activeTabId !== tab.id) {
       state.activeTabId = tab.id;
       didChange = true;
@@ -1238,21 +1263,14 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  /** Projects a navigation into renderer state before waiting for its guest. */
+  /** Projects a navigation into the persistent agent-owned runtime state. */
   prepareAutomationNavigation(input: BrowserAutomationPrepareNavigationInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
     if (!state?.open || !tab) {
       throw new Error("The requested browser tab is not available in this thread.");
     }
-    const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
-    this.rendererOnlyRuntimeKeys.add(buildRuntimeKey(input.threadId, tab.id));
-    if (runtime?.ownsWebContents) {
-      this.destroyRuntime(input.threadId, tab.id, {
-        preserveAutomationDownloadTracking: true,
-      });
-      suspendTabState(tab);
-    }
+    this.claimAutomationTab(input.threadId, tab);
     const nextUrl = normalizeUrlInput(input.url);
     tab.url = nextUrl;
     tab.title = defaultTitleForUrl(nextUrl);
@@ -1266,9 +1284,9 @@ export class DesktopBrowserManager {
   }
 
   /**
-   * Returns only the renderer-owned guest that is currently selected in the
-   * requested thread. Callers must treat failure as host-unavailable; this API
-   * intentionally never calls ensureLiveRuntime().
+   * Returns the existing page currently displayed by the requested thread,
+   * whether it is a native agent view or a legacy renderer guest. Annotation
+   * callers rely on this method never constructing or revealing a runtime.
    */
   getVisibleAutomationRuntime(input: BrowserTabInput): BrowserAutomationVisibleRuntime {
     const state = this.states.get(input.threadId);
@@ -1282,10 +1300,24 @@ export class DesktopBrowserManager {
 
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
     if (!runtime || runtime.webContents.isDestroyed()) {
-      throw new Error("The visible browser webview has not attached yet.");
+      throw new Error("The visible browser page is not ready yet.");
     }
-    if (runtime.ownsWebContents || runtime.view !== null) {
-      throw new Error("Browser automation refuses a native or fallback browser runtime.");
+    if (runtime.ownsWebContents) {
+      if (
+        !runtime.view ||
+        !this.window ||
+        this.activeThreadId !== input.threadId ||
+        this.attachedRuntimeKey !== runtime.key ||
+        this.getVisibleBoundsForThread(input.threadId) === null
+      ) {
+        throw new Error("The requested native browser page is not currently visible.");
+      }
+      return {
+        threadId: input.threadId,
+        tabId: tab.id,
+        webContents: runtime.webContents,
+        expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+      };
     }
     // A renderer guest can remain alive briefly while its panel is hidden or a
     // different thread is becoming active. It is not the user-visible browser
@@ -1299,6 +1331,55 @@ export class DesktopBrowserManager {
         runtime.webContents.hostWebContents?.id !== this.window.webContents.id)
     ) {
       throw new Error("The requested browser webview is not currently visible.");
+    }
+    return {
+      threadId: input.threadId,
+      tabId: tab.id,
+      webContents: runtime.webContents,
+      expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+    };
+  }
+
+  /**
+   * Returns the canonical agent runtime even when its thread is not visible.
+   * Agent tabs are native WebContentsViews: hiding a view changes only its
+   * bounds, never the page process, DOM, history, or in-flight navigation.
+   */
+  async getAutomationRuntime(
+    input: BrowserTabInput,
+    options: { readonly restore?: boolean } = {},
+  ): Promise<BrowserAutomationVisibleRuntime> {
+    const state = this.states.get(input.threadId);
+    const tab = state ? this.getTab(state, input.tabId) : null;
+    if (!state?.open || !tab) {
+      throw new Error("The requested browser tab is not available in this thread.");
+    }
+    if (state.activeTabId !== tab.id) {
+      throw new Error("The requested browser tab is not the active tab for this thread.");
+    }
+
+    const didChange = this.claimAutomationTab(input.threadId, tab);
+    const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
+    this.noteAutomationRuntimeUse(runtime.key);
+    const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
+    const currentUrl = this.sessionPolicy.resolveDisplayUrl(runtime.webContents.getURL());
+    if ((options.restore ?? true) && (currentUrl.length === 0 || currentUrl !== expectedUrl)) {
+      await this.loadTab(input.threadId, tab.id, { force: true, runtime });
+    } else if (!(options.restore ?? true) && currentUrl.length === 0) {
+      // A fresh WebContentsView has no main frame until its first load. Bootstrap
+      // an inert document so the host's subsequent CDP Page.navigate can observe
+      // lifecycle events even while the view is parked outside the visible shell.
+      await runtime.webContents.loadURL(ABOUT_BLANK_URL);
+      tab.url = expectedUrl;
+      tab.title = defaultTitleForUrl(expectedUrl);
+      tab.lastCommittedUrl = null;
+      tab.lastError = null;
+    } else {
+      this.queueRuntimeStateSync(input.threadId, tab.id);
+    }
+    if (didChange) {
+      this.markThreadStateChanged(input.threadId);
+      this.emitState(input.threadId);
     }
     return {
       threadId: input.threadId,
@@ -1331,6 +1412,7 @@ export class DesktopBrowserManager {
     });
     this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
+    this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = state.tabs.filter((candidate) => candidate.id !== input.tabId);
     if (state.activeTabId === input.tabId) {
       state.activeTabId = state.tabs.at(-1)?.id ?? null;
@@ -1348,6 +1430,10 @@ export class DesktopBrowserManager {
         runtime?.webContents,
       );
     } else {
+      const bounds = this.getVisibleBoundsForThread(input.threadId);
+      if (this.activeThreadId === input.threadId && state.activeTabId && bounds) {
+        this.attachActiveTab(input.threadId, bounds);
+      }
       this.emitState(input.threadId);
     }
     return this.snapshotThreadState(input.threadId, state);
@@ -1403,6 +1489,7 @@ export class DesktopBrowserManager {
   close(input: BrowserThreadInput): ThreadBrowserState {
     this.markHumanControl(input.threadId);
     this.clearSuspendTimer(input.threadId);
+    this.resetRuntimePageZoomForThread(input.threadId);
 
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
@@ -1416,6 +1503,7 @@ export class DesktopBrowserManager {
     for (const tab of existingState?.tabs ?? []) {
       this.annotations.clearProjection(input.threadId, tab.id);
       this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
+      this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
     }
 
     const state = this.getOrCreateState(input.threadId);
@@ -1430,8 +1518,17 @@ export class DesktopBrowserManager {
   }
 
   hide(input: BrowserThreadInput): void {
-    this.markHumanControl(input.threadId);
     const state = this.states.get(input.threadId);
+    const activeTab = state ? this.getActiveTab(state) : null;
+    const keepsAgentRuntimeAlive = Boolean(
+      activeTab && this.automationRuntimeKeys.has(buildRuntimeKey(input.threadId, activeTab.id)),
+    );
+    if (!keepsAgentRuntimeAlive) {
+      this.markHumanControl(input.threadId);
+    }
+    // A hidden browser must never leave the miniature presentation zoom on a
+    // runtime that automation or a later screenshot can reacquire.
+    this.resetRuntimePageZoomForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
@@ -1442,6 +1539,7 @@ export class DesktopBrowserManager {
     }
 
     this.scheduleThreadSuspend(input.threadId);
+    this.enforceBackgroundAutomationRuntimeBudget();
   }
 
   getState(input: BrowserThreadInput): ThreadBrowserState {
@@ -1452,21 +1550,56 @@ export class DesktopBrowserManager {
     this.perfCounters.setPanelBoundsCalls += 1;
     const state = this.getOrCreateState(input.threadId);
     const nextBounds = normalizeBounds(input.bounds);
-    const nextBoundsSignature = browserBoundsSignature(nextBounds);
+    const nextPageZoomFactor = nextBounds
+      ? normalizeBrowserPageZoomFactor(input.pageZoomFactor)
+      : 1;
+    const nextBoundsSignature = browserPresentationSignature(nextBounds, nextPageZoomFactor);
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
     const activeRuntime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
+    if (input.surface === "native" && activeRuntimeKey) {
+      this.rendererOnlyRuntimeKeys.delete(activeRuntimeKey);
+    }
     const requiresRenderer = activeRuntimeKey
       ? this.rendererOnlyRuntimeKeys.has(activeRuntimeKey)
       : false;
+    // Overlay occlusion used to send bounds:null, which dropped the renderer
+    // guest from the visible-automation boundary and made agent tools fail
+    // with BrowserHostUnavailable while the <webview> was still mounted.
+    if (
+      state.open &&
+      nextBounds === null &&
+      (input.surface === "renderer" || requiresRenderer) &&
+      activeRuntime &&
+      !activeRuntime.ownsWebContents
+    ) {
+      this.perfCounters.setPanelBoundsNoopSkips += 1;
+      return;
+    }
+    this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
     this.setActiveBounds(input.threadId, nextBounds);
 
     if (!state.open || nextBounds === null) {
+      this.resetRuntimePageZoomForThread(input.threadId);
       if (this.activeThreadId === input.threadId) {
         this.detachAttachedRuntime();
         this.activeThreadId = null;
         this.scheduleThreadSuspend(input.threadId);
       }
+      return;
+    }
+
+    if (
+      input.surface === "renderer" &&
+      activeTabId &&
+      activeRuntimeKey &&
+      activeRuntime?.ownsWebContents
+    ) {
+      // Park the native view so the floating <webview> can paint, but keep the
+      // WebContents until attachWebview adopts the guest. Destroying here drops
+      // CDP and makes every in-flight agent tool miss the host.
+      this.promoteTabToRendererSurface(input.threadId, activeTabId);
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
       return;
     }
 
@@ -1481,6 +1614,7 @@ export class DesktopBrowserManager {
       this.destroyRuntime(input.threadId, activeTabId);
       const activeTab = this.getTab(state, activeTabId);
       if (activeTab) {
+        activeTab.runtimeSurface = "native";
         suspendTabState(activeTab);
         this.markThreadStateChanged(input.threadId);
       }
@@ -1489,7 +1623,8 @@ export class DesktopBrowserManager {
     }
 
     if ((input.surface === "renderer" || requiresRenderer) && activeTabId && !activeRuntime) {
-      this.activateThreadForPendingRenderer(input.threadId, nextBounds);
+      if (activeRuntimeKey) this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       return;
     }
 
@@ -1511,15 +1646,15 @@ export class DesktopBrowserManager {
         const runtime = this.runtimes.get(activeRuntimeKey);
         if (runtime) {
           this.perfCounters.setPanelBoundsViewportUpdates += 1;
-          this.attachRuntime(runtime, nextBounds);
+          this.attachRuntime(runtime, nextBounds, nextPageZoomFactor);
           return;
         }
       }
-      this.attachActiveTab(input.threadId, nextBounds);
+      this.attachActiveTab(input.threadId, nextBounds, { pageZoomFactor: nextPageZoomFactor });
       return;
     }
 
-    this.activateThread(input.threadId, nextBounds);
+    this.activateThread(input.threadId, nextBounds, nextPageZoomFactor);
   }
 
   // Adopts the renderer-owned <webview> so the visible page and browser host tools
@@ -1545,6 +1680,12 @@ export class DesktopBrowserManager {
     ) {
       throw new Error("The browser webview does not belong to this Synara window and partition.");
     }
+
+    // Promote before adopting. The floating panel's attach effect can run before
+    // setPanelBounds flips runtimeSurface; returning the still-native snapshot
+    // would let the UI treat the unused guest as attached while tools keep the
+    // hidden native page.
+    this.promoteTabToRendererSurface(input.threadId, tab.id);
 
     const key = buildRuntimeKey(input.threadId, tab.id);
     const existingRendererRuntime = this.findRendererRuntimeByWebContentsId(webContents.id);
@@ -1590,9 +1731,23 @@ export class DesktopBrowserManager {
       this.attachRuntime(runtime, bounds);
     }
 
-    const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
+    const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
+    const requiresLocalPreviewBootstrap =
+      isLocalFileUrl(expectedUrl) &&
+      this.sessionPolicy.resolveDisplayUrl(webContents.getURL()) !== expectedUrl;
+    if (requiresLocalPreviewBootstrap) {
+      void this.loadTab(input.threadId, tab.id, {
+        force: true,
+        ...(runtime ? { runtime } : {}),
+      });
+      return this.snapshotThreadState(input.threadId, state);
+    }
+
+    const didChange =
+      tab.status !== LIVE_TAB_STATUS || tab.lastError !== null || tab.runtimeSurface !== "renderer";
     tab.status = LIVE_TAB_STATUS;
     tab.lastError = null;
+    tab.runtimeSurface = "renderer";
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(input.threadId);
@@ -1619,6 +1774,7 @@ export class DesktopBrowserManager {
     }
 
     this.destroyRuntime(input.threadId, input.tabId);
+    this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     const didChange = suspendTabState(tab) || syncThreadLastError(state);
     if (didChange) {
       this.markThreadStateChanged(input.threadId);
@@ -1733,6 +1889,7 @@ export class DesktopBrowserManager {
     this.destroyRuntime(input.threadId, input.tabId);
     this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
+    this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = nextTabs;
 
     if (nextTabs.length === 0) {
@@ -1811,7 +1968,7 @@ export class DesktopBrowserManager {
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
     const webContents = runtime.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
-    const currentUrl = webContents.getURL();
+    const currentUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
@@ -1866,34 +2023,69 @@ export class DesktopBrowserManager {
     clipboard.writeImage(image);
   }
 
-  private activateThread(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+  private activateThread(
+    threadId: ThreadId,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(threadId),
+  ): void {
     const previousThreadId = this.activeThreadId;
     if (this.activeThreadId && this.activeThreadId !== threadId) {
+      this.resetRuntimePageZoomForThread(this.activeThreadId);
       this.scheduleThreadSuspend(this.activeThreadId);
     }
 
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
     this.activeBoundsThreadId = threadId;
+    this.setActivePageZoomFactor(threadId, pageZoomFactor);
     if (previousThreadId && previousThreadId !== threadId) {
       this.updatePopupWindowsForThread(previousThreadId);
     }
     this.resumeThread(threadId);
-    this.attachActiveTab(threadId, bounds);
+    this.attachActiveTab(threadId, bounds, { pageZoomFactor });
     this.updatePopupWindowsForThread(threadId);
+  }
+
+  // Marks a tab renderer-owned and parks any native view so a <webview> can
+  // attach without two pages racing. Does not destroy WebContents: in-flight
+  // agent tools keep CDP until attachWebview adopts the guest.
+  private promoteTabToRendererSurface(threadId: ThreadId, tabId: string): void {
+    const key = buildRuntimeKey(threadId, tabId);
+    const runtime = this.runtimes.get(key);
+    if (runtime?.ownsWebContents && runtime.view) {
+      this.setRuntimeViewHidden(runtime, true);
+    }
+    if (this.attachedRuntimeKey === key) {
+      this.attachedRuntimeKey = null;
+      this.attachedBoundsSignature = null;
+    }
+    this.rendererOnlyRuntimeKeys.add(key);
+    const state = this.states.get(threadId);
+    const tab = state ? this.getTab(state, tabId) : null;
+    if (tab && tab.runtimeSurface !== "renderer") {
+      tab.runtimeSurface = "renderer";
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
   }
 
   // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
   // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
-  private activateThreadForPendingRenderer(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+  private activateThreadForPendingRenderer(
+    threadId: ThreadId,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(threadId),
+  ): void {
     const previousThreadId = this.activeThreadId;
     if (previousThreadId && previousThreadId !== threadId) {
+      this.resetRuntimePageZoomForThread(previousThreadId);
       this.scheduleThreadSuspend(previousThreadId);
       this.updatePopupWindowsForThread(previousThreadId);
     }
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
     this.activeBoundsThreadId = threadId;
+    this.setActivePageZoomFactor(threadId, pageZoomFactor);
     this.clearSuspendTimer(threadId);
     this.updatePopupWindowsForThread(threadId);
   }
@@ -1913,10 +2105,53 @@ export class DesktopBrowserManager {
     }
     this.activeBounds = null;
     this.activeBoundsThreadId = null;
+    this.clearActivePageZoomForThread(threadId);
   }
 
   private getVisibleBoundsForThread(threadId: ThreadId): BrowserPanelBounds | null {
     return this.activeBoundsThreadId === threadId ? this.activeBounds : null;
+  }
+
+  private setActivePageZoomFactor(threadId: ThreadId, pageZoomFactor: number): void {
+    this.activePageZoomThreadId = threadId;
+    this.activePageZoomFactor = normalizeBrowserPageZoomFactor(pageZoomFactor);
+  }
+
+  private clearActivePageZoomForThread(threadId: ThreadId): void {
+    if (this.activePageZoomThreadId !== threadId) {
+      return;
+    }
+    this.activePageZoomThreadId = null;
+    this.activePageZoomFactor = 1;
+  }
+
+  private getVisiblePageZoomFactor(threadId: ThreadId): number {
+    return this.activePageZoomThreadId === threadId ? this.activePageZoomFactor : 1;
+  }
+
+  private setRuntimePageZoomFactor(runtime: LiveTabRuntime, pageZoomFactor: number): void {
+    const nextPageZoomFactor = normalizeBrowserPageZoomFactor(pageZoomFactor);
+    if (this.runtimePageZoomFactors.get(runtime.key) === nextPageZoomFactor) {
+      return;
+    }
+
+    try {
+      runtime.webContents.setZoomFactor(nextPageZoomFactor);
+    } catch {
+      // The guest may be tearing down between a bounds update and its cleanup.
+    }
+    this.runtimePageZoomFactors.set(runtime.key, nextPageZoomFactor);
+  }
+
+  private resetRuntimePageZoomForThread(threadId: ThreadId): void {
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.threadId === threadId) {
+        this.setRuntimePageZoomFactor(runtime, 1);
+      }
+    }
+    if (this.activePageZoomThreadId === threadId) {
+      this.activePageZoomFactor = 1;
+    }
   }
 
   private resumeThread(threadId: ThreadId): void {
@@ -1945,10 +2180,13 @@ export class DesktopBrowserManager {
       }
       const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
       const runtime = this.ensureLiveRuntime(threadId, tab.id);
-      if (wasSuspended) {
+      if (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey)) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
-        didChange = syncTabStateFromRuntime(state, tab, runtime.webContents) || didChange;
+        didChange =
+          syncTabStateFromRuntime(state, tab, runtime.webContents, (url) =>
+            this.sessionPolicy.resolveDisplayUrl(url),
+          ) || didChange;
       }
     }
 
@@ -1957,6 +2195,93 @@ export class DesktopBrowserManager {
       this.markThreadStateChanged(threadId);
       this.emitState(threadId);
     }
+    this.enforceBackgroundAutomationRuntimeBudget();
+  }
+
+  private noteAutomationRuntimeUse(key: string): void {
+    const now = Date.now();
+    this.runtimeLastActiveAtByKey.set(key, now);
+    this.automationRuntimeProtectedUntilByKey.set(
+      key,
+      now + BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS,
+    );
+    this.enforceBackgroundAutomationRuntimeBudget();
+  }
+
+  /**
+   * Keeps background agent pages useful without allowing one Chromium runtime
+   * per historical thread to accumulate for the lifetime of the app. A page
+   * currently displayed by the shell never counts against the background cap;
+   * expired hidden pages are evicted least-recently-used and restored from their
+   * canonical tab URL on the next browser tool call.
+   */
+  private enforceBackgroundAutomationRuntimeBudget(): void {
+    if (this.disposed) return;
+    if (this.backgroundAutomationEvictionTimer !== null) {
+      clearTimeout(this.backgroundAutomationEvictionTimer);
+      this.backgroundAutomationEvictionTimer = null;
+    }
+
+    // An OAuth popup is a live user interaction even when its opener's panel is
+    // hidden. Evicting that opener would sever window.opener and break sign-in.
+    const popupOwnerRuntimeKeys = new Set(
+      [...this.popupRuntimes.values()].map((popup) => buildRuntimeKey(popup.threadId, popup.tabId)),
+    );
+    const backgroundRuntimes = [...this.runtimes.values()].filter(
+      (runtime) =>
+        runtime.ownsWebContents &&
+        runtime.key !== this.attachedRuntimeKey &&
+        !popupOwnerRuntimeKeys.has(runtime.key) &&
+        this.automationRuntimeKeys.has(runtime.key),
+    );
+    let excess = backgroundRuntimes.length - BROWSER_MAX_BACKGROUND_AUTOMATION_RUNTIMES;
+    if (excess <= 0) return;
+
+    const now = Date.now();
+    const evictionCandidates = backgroundRuntimes
+      .filter((runtime) => (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) <= now)
+      .toSorted(
+        (left, right) =>
+          (this.runtimeLastActiveAtByKey.get(left.key) ?? 0) -
+          (this.runtimeLastActiveAtByKey.get(right.key) ?? 0),
+      );
+    const changedThreadIds = new Set<ThreadId>();
+
+    for (const runtime of evictionCandidates) {
+      if (excess <= 0) break;
+      const state = this.states.get(runtime.threadId);
+      const tab = state ? this.getTab(state, runtime.tabId) : null;
+      this.destroyRuntime(runtime.threadId, runtime.tabId);
+      if (state && tab) {
+        const didChange = suspendTabState(tab);
+        if (syncThreadLastError(state) || didChange) {
+          changedThreadIds.add(runtime.threadId);
+        }
+      }
+      excess -= 1;
+      this.perfCounters.inactiveTabBudgetEvictions += 1;
+    }
+
+    for (const threadId of changedThreadIds) {
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
+
+    if (excess <= 0) return;
+    const nextProtectionExpiry = backgroundRuntimes
+      .map((runtime) => this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0)
+      .filter((protectedUntil) => protectedUntil > now)
+      .toSorted((left, right) => left - right)[0];
+    if (nextProtectionExpiry === undefined) return;
+
+    this.backgroundAutomationEvictionTimer = setTimeout(
+      () => {
+        this.backgroundAutomationEvictionTimer = null;
+        this.enforceBackgroundAutomationRuntimeBudget();
+      },
+      Math.max(1, nextProtectionExpiry - now + 1),
+    );
+    this.backgroundAutomationEvictionTimer.unref();
   }
 
   private suspendInactiveTabs(threadId: ThreadId, activeTabId: string | null): boolean {
@@ -2031,6 +2356,12 @@ export class DesktopBrowserManager {
 
     let didChange = false;
     for (const tab of state.tabs) {
+      if (
+        tab.id === state.activeTabId &&
+        this.automationRuntimeKeys.has(buildRuntimeKey(threadId, tab.id))
+      ) {
+        continue;
+      }
       this.destroyRuntime(threadId, tab.id);
       didChange = suspendTabState(tab) || didChange;
     }
@@ -2040,6 +2371,7 @@ export class DesktopBrowserManager {
       this.markThreadStateChanged(threadId);
       this.emitState(threadId);
     }
+    this.enforceBackgroundAutomationRuntimeBudget();
   }
 
   private clearSuspendTimer(threadId: ThreadId): void {
@@ -2093,7 +2425,7 @@ export class DesktopBrowserManager {
   private attachActiveTab(
     threadId: ThreadId,
     bounds: BrowserPanelBounds,
-    options: { forceLoad?: boolean } = {},
+    options: { forceLoad?: boolean; pageZoomFactor?: number } = {},
   ): void {
     const state = this.ensureWorkspace(threadId);
     const activeTab = this.getActiveTab(state);
@@ -2107,16 +2439,26 @@ export class DesktopBrowserManager {
       const rendererRuntime = this.runtimes.get(runtimeKey);
       if (!rendererRuntime || rendererRuntime.ownsWebContents) {
         if (rendererRuntime?.ownsWebContents) this.destroyRuntime(threadId, activeTab.id);
-        this.activateThreadForPendingRenderer(threadId, bounds);
+        this.activateThreadForPendingRenderer(
+          threadId,
+          bounds,
+          options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
+        );
         return;
       }
     }
     const wasSuspended = activeTab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(threadId, activeTab.id);
-    this.attachRuntime(runtime, bounds);
-    if (options.forceLoad || wasSuspended) {
+    this.attachRuntime(
+      runtime,
+      bounds,
+      options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
+    );
+    const shouldLoadProjectedUrl =
+      options.forceLoad || (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey));
+    if (shouldLoadProjectedUrl) {
       void this.loadTab(threadId, activeTab.id, {
-        force: options.forceLoad || wasSuspended,
+        force: true,
         runtime,
       });
     } else {
@@ -2124,13 +2466,18 @@ export class DesktopBrowserManager {
     }
   }
 
-  private attachRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
+  private attachRuntime(
+    runtime: LiveTabRuntime,
+    bounds: BrowserPanelBounds,
+    pageZoomFactor = this.getVisiblePageZoomFactor(runtime.threadId),
+  ): void {
     const window = this.window;
+    this.setRuntimePageZoomFactor(runtime, pageZoomFactor);
     if (!window) {
       return;
     }
 
-    const nextBoundsSignature = browserBoundsSignature(bounds);
+    const nextBoundsSignature = browserPresentationSignature(bounds, pageZoomFactor);
     this.runtimeLastActiveAtByKey.set(runtime.key, Date.now());
     // Renderer-owned <webview> runtimes are already visible in React; keep any
     // old native view detached so it cannot cover the real browser surface.
@@ -2141,14 +2488,17 @@ export class DesktopBrowserManager {
       this.attachedRuntimeKey = runtime.key;
       this.attachedBoundsSignature = nextBoundsSignature;
       this.updatePopupWindowsForThread(runtime.threadId);
+      this.enforceBackgroundAutomationRuntimeBudget();
       return;
     }
     if (!runtime.view) {
       this.attachedRuntimeKey = runtime.key;
       this.attachedBoundsSignature = nextBoundsSignature;
       this.updatePopupWindowsForThread(runtime.threadId);
+      this.enforceBackgroundAutomationRuntimeBudget();
       return;
     }
+    runtime.view.setBorderRadius(0);
     if (this.attachedRuntimeKey === runtime.key) {
       this.setRuntimeViewHidden(runtime, false);
       this.bringRuntimeViewToFront(runtime);
@@ -2168,6 +2518,7 @@ export class DesktopBrowserManager {
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
     this.updatePopupWindowsForThread(runtime.threadId);
+    this.enforceBackgroundAutomationRuntimeBudget();
   }
 
   private bringRuntimeViewToFront(runtime: LiveTabRuntime): void {
@@ -2194,7 +2545,9 @@ export class DesktopBrowserManager {
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
     if (runtime?.view) {
       this.setRuntimeViewHidden(runtime, true);
-      this.window.contentView.removeChildView(runtime.view);
+      if (!this.automationRuntimeKeys.has(runtime.key)) {
+        this.window.contentView.removeChildView(runtime.view);
+      }
     }
     this.attachedRuntimeKey = null;
     this.attachedBoundsSignature = null;
@@ -2204,10 +2557,15 @@ export class DesktopBrowserManager {
     if (!runtime.view) {
       return;
     }
+    const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
-    nativeView.setVisible?.(!hidden);
+    nativeView.setVisible?.(!hidden || keepRenderingInBackground);
     if (hidden) {
-      runtime.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      runtime.view.setBounds(
+        keepRenderingInBackground
+          ? { ...BACKGROUND_AUTOMATION_BOUNDS }
+          : { x: 0, y: 0, width: 0, height: 0 },
+      );
     }
   }
 
@@ -2243,6 +2601,47 @@ export class DesktopBrowserManager {
     return runtime;
   }
 
+  private claimAutomationTab(threadId: ThreadId, tab: BrowserTabState): boolean {
+    const key = buildRuntimeKey(threadId, tab.id);
+    this.automationRuntimeKeys.add(key);
+
+    const runtime = this.runtimes.get(key);
+    const rendererGuestAlive = Boolean(
+      runtime && !runtime.ownsWebContents && !runtime.webContents.isDestroyed(),
+    );
+    if (rendererGuestAlive) {
+      // The floating/renderer guest is the page the user can see. Promoting to a
+      // native WebContentsView would destroy that CDP session mid-turn.
+      if (tab.runtimeSurface !== "renderer") {
+        tab.runtimeSurface = "renderer";
+        return true;
+      }
+      return false;
+    }
+    if (runtime?.ownsWebContents && !runtime.webContents.isDestroyed()) {
+      // A parked native page remains canonical until attachWebview adopts the
+      // visible guest. Keep the pending-renderer flag so attachActiveTab does
+      // not paint that view over the mounting <webview>.
+      return false;
+    }
+
+    this.rendererOnlyRuntimeKeys.delete(key);
+    let didChange = false;
+    if (tab.runtimeSurface !== "native") {
+      tab.runtimeSurface = "native";
+      didChange = true;
+    }
+
+    if (runtime && !runtime.ownsWebContents) {
+      this.destroyRuntime(threadId, tab.id, {
+        preserveAutomationDownloadTracking: true,
+        annotationReason: "replaced",
+      });
+      didChange = suspendTabState(tab) || didChange;
+    }
+    return didChange;
+  }
+
   private createLiveRuntime(threadId: ThreadId, tabId: string): LiveTabRuntime {
     const view = new WebContentsView({
       webPreferences: {
@@ -2250,6 +2649,9 @@ export class DesktopBrowserManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        ...(this.options.annotationPreloadPath
+          ? { preload: this.options.annotationPreloadPath }
+          : {}),
       },
     });
     const runtime: LiveTabRuntime = {
@@ -2261,6 +2663,12 @@ export class DesktopBrowserManager {
       ownsWebContents: true,
       listenerDisposers: [],
     };
+    if (this.automationRuntimeKeys.has(runtime.key)) {
+      view.setBounds({ ...BACKGROUND_AUTOMATION_BOUNDS });
+      const nativeView = view as typeof view & NativeBrowserViewVisibility;
+      nativeView.setVisible?.(true);
+      this.window?.contentView.addChildView(view);
+    }
     this.configureRuntimeWebContents(runtime);
     return runtime;
   }
@@ -2378,6 +2786,14 @@ export class DesktopBrowserManager {
     });
 
     const didNavigate = () => {
+      const state = this.states.get(threadId);
+      const tab = state ? this.getTab(state, tabId) : null;
+      if (state && tab && tab.lastError !== null) {
+        tab.lastError = null;
+        syncThreadLastError(state);
+        this.markThreadStateChanged(threadId);
+        this.emitState(threadId);
+      }
       this.queueRuntimeStateSync(threadId, tabId);
     };
     webContents.on("did-navigate", didNavigate);
@@ -2428,7 +2844,7 @@ export class DesktopBrowserManager {
         return;
       }
 
-      tab.url = validatedURL || tab.url;
+      tab.url = validatedURL ? this.sessionPolicy.resolveDisplayUrl(validatedURL) : tab.url;
       tab.title = defaultTitleForUrl(tab.url);
       tab.isLoading = false;
       tab.lastError = mapBrowserLoadError(errorCode);
@@ -2491,7 +2907,7 @@ export class DesktopBrowserManager {
     const nextUrl = normalizeUrlInput(
       options.force === true ? tab.url : (tab.lastCommittedUrl ?? tab.url),
     );
-    const currentUrl = webContents.getURL();
+    const currentUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const shouldLoad = options.force === true || currentUrl !== nextUrl || currentUrl.length === 0;
 
     if (!shouldLoad) {
@@ -2508,7 +2924,7 @@ export class DesktopBrowserManager {
     this.emitState(threadId);
 
     try {
-      await webContents.loadURL(nextUrl);
+      await webContents.loadURL(this.sessionPolicy.resolveRuntimeUrl(nextUrl));
       this.queueRuntimeStateSync(threadId, tabId);
     } catch (error) {
       if (isAbortedNavigationError(error)) {
@@ -2533,7 +2949,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    const didChange = syncTabStateFromRuntime(state, tab, runtime.webContents, faviconUrls);
+    const didChange = syncTabStateFromRuntime(
+      state,
+      tab,
+      runtime.webContents,
+      (url) => this.sessionPolicy.resolveDisplayUrl(url),
+      faviconUrls,
+    );
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(threadId);
@@ -2609,6 +3031,7 @@ export class DesktopBrowserManager {
     this.clearTabSuspendTimer(threadId, tabId);
     this.pendingRuntimeSyncs.delete(key);
     this.runtimeLastActiveAtByKey.delete(key);
+    this.automationRuntimeProtectedUntilByKey.delete(key);
     this.expectedAutomationInputsByRuntimeKey.delete(key);
     this.automationWindowOpenListenersByRuntimeKey.delete(key);
     if (!preserveAutomationDownloadTracking) {
@@ -2620,6 +3043,9 @@ export class DesktopBrowserManager {
     if (!runtime) {
       return;
     }
+    // Runtime teardown is also a zoom teardown. This covers tab close, suspension,
+    // renderer handoff, and background-runtime eviction—not just an explicit panel hide.
+    this.setRuntimePageZoomFactor(runtime, 1);
     this.annotations.handleRuntimeDetached(
       threadId,
       tabId,
@@ -2645,6 +3071,7 @@ export class DesktopBrowserManager {
     }
 
     this.runtimes.delete(key);
+    this.runtimePageZoomFactors.delete(key);
     const webContents = runtime.webContents;
     for (const disposeListener of runtime.listenerDisposers.splice(0)) {
       disposeListener();
@@ -2680,8 +3107,15 @@ export class DesktopBrowserManager {
     return null;
   }
 
+  private findRuntimeByWebContentsId(webContentsId: number): LiveTabRuntime | null {
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.webContents.id === webContentsId) return runtime;
+    }
+    return null;
+  }
+
   private toAnnotationRuntime(runtime: LiveTabRuntime | null): BrowserAnnotationRuntime | null {
-    if (!runtime || runtime.ownsWebContents || runtime.webContents.isDestroyed()) return null;
+    if (!runtime || runtime.webContents.isDestroyed()) return null;
     return {
       threadId: runtime.threadId,
       tabId: runtime.tabId,
@@ -2711,6 +3145,11 @@ export class DesktopBrowserManager {
   }
 
   private markHumanControl(threadId: ThreadId): void {
+    const state = this.states.get(threadId);
+    const activeTab = state ? this.getActiveTab(state) : null;
+    if (activeTab) {
+      this.runtimeLastActiveAtByKey.set(buildRuntimeKey(threadId, activeTab.id), Date.now());
+    }
     this.humanControlEpochByThreadId.set(
       threadId,
       (this.humanControlEpochByThreadId.get(threadId) ?? 0) + 1,
@@ -3007,9 +3446,10 @@ function syncTabStateFromRuntime(
   state: ThreadBrowserState,
   tab: BrowserTabState,
   webContents: WebContents,
+  resolveDisplayUrl: (url: string) => string,
   faviconUrls?: string[],
 ): boolean {
-  const currentUrl = webContents.getURL();
+  const currentUrl = resolveDisplayUrl(webContents.getURL());
   const nextUrl = currentUrl || tab.url;
   const nextTitle = webContents.getTitle();
   let didChange = false;
@@ -3048,10 +3488,6 @@ function syncTabStateFromRuntime(
       setIfChanged(tab.faviconUrl, faviconUrls[0] ?? tab.faviconUrl, (value) => {
         tab.faviconUrl = value;
       }) || didChange;
-  }
-  if (tab.lastError && !tab.isLoading) {
-    tab.lastError = null;
-    didChange = true;
   }
   didChange = syncThreadLastError(state) || didChange;
   return didChange;

@@ -1,0 +1,175 @@
+# The device helper dlopen's private CoreSimulator/SimulatorKit symbols, which
+# move between Xcode releases. Nothing in the normal CI path would notice: the
+# helper is macOS-only, needs a full Xcode, and is compiled on the user's own
+# machine at first attach. So a toolchain that renames a symbol reaches users as
+# a broken pane rather than a failed build.
+#
+# This job is the tripwire. It is deliberately NOT attached to pull_request:
+# macOS runners are expensive and this catches upstream Xcode drift, which
+# happens on Apple's schedule rather than ours.
+name: Device Helper Matrix
+
+on:
+  schedule:
+    # Mondays 05:00 UTC, before the week starts.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      full_smoke:
+        description: "Boot a simulator and run the full smoke, not just the probe"
+        type: boolean
+        default: true
+
+jobs:
+  # Inventory only: prints what each image actually ships so the pinned pairs in
+  # `probe` can be refreshed when an image drops or adds a version. Kept separate
+  # from the probe jobs so it still reports even when a probe fails.
+  discover:
+    name: Discover Xcodes (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15, macos-26]
+    steps:
+      - name: List installed Xcodes
+        run: |
+          echo "Runner image: ${{ matrix.runner }}"
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "none found"
+          echo "Selected: $(xcode-select -p)"
+          xcodebuild -version
+          echo "iOS runtimes:"
+          xcrun simctl list runtimes 2>/dev/null || echo "simctl unavailable"
+
+  probe:
+    name: Probe ${{ matrix.runner }} / ${{ matrix.xcode }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned to Xcodes each image actually ships (per actions/runner-images
+        # readmes) rather than a cross product, so a job means something instead
+        # of skipping. Spread deliberately: the oldest toolchain we care about,
+        # the newest, and each image's default. Images do drift, so a version
+        # that disappears is skipped with a warning by the guard below rather
+        # than failing — but the pairs here are the ones worth spending a runner
+        # on. Refresh when an image's Xcode set moves.
+        include:
+          # macOS 14 tops out at Xcode 16.2; this is the old-toolchain floor.
+          - runner: macos-14
+            xcode: "15.4"
+          - runner: macos-14
+            xcode: "16.2"
+          - runner: macos-15
+            xcode: "16.4"
+          - runner: macos-15
+            xcode: "26.2"
+          - runner: macos-26
+            xcode: "26.3"
+          # Whatever the newest image selects by default: the toolchain most
+          # likely to have moved a symbol out from under us.
+          - runner: macos-26
+            xcode: default
+    steps:
+      - name: Resolve the toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.xcode }}" = "default" ]; then
+            developer_dir="$(xcode-select -p)"
+          else
+            app="/Applications/Xcode_${{ matrix.xcode }}.app"
+            if [ ! -d "$app" ]; then
+              echo "Xcode ${{ matrix.xcode }} is not installed on ${{ matrix.runner }}; skipping."
+              echo "present=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            developer_dir="$app/Contents/Developer"
+          fi
+          # SimulatorKit ships inside the Xcode bundle; without it the helper
+          # cannot build, and a command line tools install is not enough.
+          if [ ! -d "$developer_dir/Library/PrivateFrameworks/SimulatorKit.framework" ]; then
+            echo "::warning::$developer_dir has no SimulatorKit; skipping."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          echo "developer_dir=$developer_dir" >> "$GITHUB_OUTPUT"
+          DEVELOPER_DIR="$developer_dir" xcodebuild -version
+
+      - name: Checkout
+        if: steps.toolchain.outputs.present == 'true'
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        if: steps.toolchain.outputs.present == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        if: steps.toolchain.outputs.present == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        if: steps.toolchain.outputs.present == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # The blocking check: compile against this toolchain and ask the helper
+      # which capabilities resolved. A moved symbol fails here, needs no
+      # simulator runtime, and is the failure this whole workflow exists to find.
+      - name: Probe (compile + preflight, no simulator)
+        if: steps.toolchain.outputs.present == 'true'
+        env:
+          DEVELOPER_DIR: ${{ steps.toolchain.outputs.developer_dir }}
+          DEVICE_HELPER_PROBE_JSON: ${{ runner.temp }}/device-helper-probe.json
+        run: bun run test:device:probe
+
+      # Runner images do not all ship an iOS runtime, and a missing runtime says
+      # nothing about whether our symbols still resolve. Detected here so the
+      # smoke step can skip cleanly instead of failing the matrix for it.
+      - name: Check for an iOS runtime
+        id: runtime
+        if: steps.toolchain.outputs.present == 'true'
+        env:
+          DEVELOPER_DIR: ${{ steps.toolchain.outputs.developer_dir }}
+        run: |
+          set -euo pipefail
+          # Runtime keys look like `com.apple.CoreSimulator.SimRuntime.iOS-26-3`,
+          # and a runtime with no devices is no use to the smoke, so this counts
+          # bootable iOS devices rather than matching on the runtime name.
+          device_count="$(
+            xcrun simctl list devices available --json |
+              python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(sum(len(v) for k, v in d.items() if "SimRuntime.iOS-" in k))'
+          )"
+          echo "Bootable iOS simulators: $device_count"
+          if [ "$device_count" -gt 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No iOS simulator devices on ${{ matrix.runner }} for Xcode ${{ matrix.xcode }}; the full smoke is skipped. The probe above still verified the symbols."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Full smoke (boots a simulator)
+        if: >-
+          steps.toolchain.outputs.present == 'true' &&
+          steps.runtime.outputs.available == 'true' &&
+          (github.event_name == 'schedule' || inputs.full_smoke)
+        timeout-minutes: 15
+        env:
+          DEVELOPER_DIR: ${{ steps.toolchain.outputs.developer_dir }}
+        run: bun run test:device
+
+      # Uploaded even when the probe failed: that JSON names the capability and
+      # the missing symbol, which is the entire diagnostic for a broken Xcode.
+      - name: Upload probe JSON
+        if: always() && steps.toolchain.outputs.present == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: device-probe-${{ matrix.runner }}-${{ matrix.xcode }}
+          path: ${{ runner.temp }}/device-helper-probe.json
+          if-no-files-found: warn

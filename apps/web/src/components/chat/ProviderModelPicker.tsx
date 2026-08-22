@@ -8,6 +8,7 @@ import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
+import { appHistory } from "../../appNavigation";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
@@ -45,6 +46,7 @@ import {
   type FavoriteModelProvider,
 } from "../../lib/modelFavorites";
 import { Skeleton } from "../ui/skeleton";
+import { PlusIcon } from "~/lib/icons";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -86,7 +88,6 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
 }
 
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
-const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 
 // Removes user-hidden providers from a provider option list while always
 // preserving any providers the caller marks as protected (the active and
@@ -224,13 +225,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
     AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
       compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-    ),
-    hiddenProviderSet,
-    protectedProviderSet,
-  );
-  const visibleUnavailableProviderOptions = filterProviderOptionsByVisibility(
-    UNAVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+    ).filter((option) =>
+      props.providers?.some((provider) => provider.provider === option.value && provider.available),
     ),
     hiddenProviderSet,
     protectedProviderSet,
@@ -417,20 +413,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           </MenuSub>
         );
       })}
-      {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
-      {visibleUnavailableProviderOptions.map((option) => {
-        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
-        return (
-          <MenuItem key={option.value} disabled>
-            <OptionIcon
-              aria-hidden="true"
-              className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
-            />
-            <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
-          </MenuItem>
-        );
-      })}
+      {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
+      <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
+        <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
+        <span>Add Providers</span>
+      </MenuItem>
     </>
   );
 };

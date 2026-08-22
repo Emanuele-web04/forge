@@ -375,7 +375,7 @@ export interface ProfileStatsArchiveShape {
     readonly threadId: string;
   }) => Effect.Effect<boolean, unknown>;
   // Purges every soft-deleted thread that a recorded delete event proves was a
-  // manual delete; retention hides and threads with unknown provenance are kept.
+  // manual delete; legacy retention deletes and unknown provenance are kept.
   // Catches per-thread failures so one bad thread cannot stall the sweep;
   // returns how many threads were purged.
   readonly purgeSoftDeletedManualThreads: (input?: {
@@ -803,6 +803,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* sql`DELETE FROM projection_pending_interactions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_activities WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM message_text_segments WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_turns WHERE thread_id = ${threadId}`;

@@ -5,18 +5,22 @@
 
 import type { ProviderInteractionMode } from "@synara/contracts";
 
-import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+} from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";
 import {
   Menu,
-  MenuCheckboxItem,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
+  MenuSub,
+  MenuSubTrigger,
   MenuTrigger,
 } from "~/components/ui/menu";
 import { CentralIcon } from "~/lib/central-icons";
-import { ListTodoIcon, PlusIcon, WorktreeIcon } from "~/lib/icons";
+import { BugIcon, ListTodoIcon, MessageCircleIcon, PlusIcon, WorktreeIcon } from "~/lib/icons";
 import type { DraftThreadEnvMode } from "../../composerDraftStore";
 
 interface KanbanTaskExtrasMenuProps {
@@ -52,18 +56,38 @@ export function KanbanTaskExtrasMenu({
         <PlusIcon aria-hidden="true" className="size-4" />
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start">
-        <MenuCheckboxItem
-          checked={interactionMode === "plan"}
-          variant="switch"
-          onCheckedChange={(checked) => {
-            onInteractionModeChange(checked === true ? "plan" : "default");
-          }}
-        >
-          <span className="inline-flex items-center gap-2">
-            <ListTodoIcon className="size-4 shrink-0" />
-            Plan mode
-          </span>
-        </MenuCheckboxItem>
+        <MenuSub>
+          <MenuSubTrigger>Mode</MenuSubTrigger>
+          <ComposerPickerMenuSubPopup>
+            <MenuRadioGroup
+              value={interactionMode}
+              onValueChange={(value) => {
+                if (value === "default" || value === "plan" || value === "debug") {
+                  onInteractionModeChange(value);
+                }
+              }}
+            >
+              <MenuRadioItem value="default">
+                <span className="inline-flex items-center gap-2">
+                  <MessageCircleIcon className="size-4 shrink-0" />
+                  Default
+                </span>
+              </MenuRadioItem>
+              <MenuRadioItem value="plan">
+                <span className="inline-flex items-center gap-2">
+                  <ListTodoIcon className="size-4 shrink-0" />
+                  Plan
+                </span>
+              </MenuRadioItem>
+              <MenuRadioItem value="debug">
+                <span className="inline-flex items-center gap-2">
+                  <BugIcon className="size-4 shrink-0" />
+                  Debug
+                </span>
+              </MenuRadioItem>
+            </MenuRadioGroup>
+          </ComposerPickerMenuSubPopup>
+        </MenuSub>
         <MenuSeparator />
         <MenuRadioGroup
           value={envMode}

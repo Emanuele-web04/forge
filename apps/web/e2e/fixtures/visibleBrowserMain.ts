@@ -25,12 +25,26 @@ if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annot
 
 app.setPath("userData", path.join(synaraHome, "electron-userdata"));
 
-const browserManager = new DesktopBrowserManager();
+const browserManager = new DesktopBrowserManager({ annotationPreloadPath });
 let mainWindow: BrowserWindow | null = null;
 let latestState: ThreadBrowserState | null = null;
 let shellReady = false;
+let panelRevealEnabled = true;
 const annotationEvents: BrowserAnnotationEvent[] = [];
 const rendererLifecycleHide = createBrowserPanelHideScheduler();
+function setPanelVisible(visible: boolean): void {
+  browserManager.setPanelBounds({
+    threadId,
+    surface: "native",
+    bounds: visible ? { x: 0, y: 34, width: 1_000, height: 726 } : null,
+  });
+  if (!visible) {
+    browserManager.hide({ threadId });
+    return;
+  }
+  pushState();
+  mainWindow?.webContents.send("synara-e2e:open-panel");
+}
 function pushState(): void {
   if (shellReady && latestState && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("synara-e2e:browser-state", latestState);
@@ -70,13 +84,7 @@ const pipeServer = new BrowserUsePipeServer(browserManager, {
     // cleanup before it can masquerade as a user takeover.
     rendererLifecycleHide.schedule(threadId, () => browserManager.hide({ threadId }));
     rendererLifecycleHide.cancel(threadId);
-    browserManager.setPanelBounds({
-      threadId,
-      surface: "renderer",
-      bounds: { x: 0, y: 34, width: 1_000, height: 726 },
-    });
-    pushState();
-    mainWindow?.webContents.send("synara-e2e:open-panel");
+    if (panelRevealEnabled) setPanelVisible(true);
   },
 });
 
@@ -86,6 +94,10 @@ Object.assign(globalThis, {
     annotationEvents,
     threadId,
     pipePath,
+    setPanelRevealEnabled(enabled: boolean) {
+      panelRevealEnabled = enabled;
+      setPanelVisible(enabled);
+    },
   },
 });
 

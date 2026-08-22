@@ -23,6 +23,7 @@ import {
   makePiRuntimeEventBase,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  toPiProviderModelDescriptor,
 } from "./PiAdapter";
 
 describe("Pi native Synara gateway tools", () => {
@@ -211,6 +212,50 @@ function makePiModel(input: {
 }
 
 describe("getPiDiscoverableModels", () => {
+  it("normalizes the malformed Pi extension model metadata before returning it through RPC", () => {
+    const descriptor = toPiProviderModelDescriptor(
+      {
+        provider: "openrouter",
+        id: "google/gemma-4-26b-a4b-it",
+        name: "Google: Gemma 4 26B A4B ",
+        reasoning: false,
+      } as Model<Api>,
+      () => " OpenRouter ",
+    );
+
+    expect(descriptor).toMatchObject({
+      slug: "openrouter/google/gemma-4-26b-a4b-it",
+      name: "Google: Gemma 4 26B A4B",
+      upstreamProviderId: "openrouter",
+      upstreamProviderName: "OpenRouter",
+    });
+  });
+
+  it("omits models whose normalized identity would no longer resolve in the registry", () => {
+    expect(
+      toPiProviderModelDescriptor(
+        {
+          provider: " openrouter",
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Google: Gemma 4 26B A4B",
+          reasoning: false,
+        } as Model<Api>,
+        () => "OpenRouter",
+      ),
+    ).toBeNull();
+    expect(
+      toPiProviderModelDescriptor(
+        {
+          provider: "openrouter",
+          id: " google/gemma-4-26b-a4b-it",
+          name: "Google: Gemma 4 26B A4B",
+          reasoning: false,
+        } as Model<Api>,
+        () => "OpenRouter",
+      ),
+    ).toBeNull();
+  });
+
   it("isolates extension providers between sessions that share an agent directory", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
@@ -406,13 +451,16 @@ describe("getPiSupportedThinkingOptions", () => {
     expect(getPiSupportedThinkingOptions(makePiModel({ reasoning: false }))).toEqual([]);
   });
 
-  it("advertises xhigh only when the concrete Pi model supports it", () => {
-    const withoutXHigh = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
+  it("advertises xhigh and max only when the concrete Pi model supports them", () => {
+    const withoutExtended = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
     const withXHigh = getPiSupportedThinkingOptions(
       makePiModel({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } }),
     );
+    const withMax = getPiSupportedThinkingOptions(
+      makePiModel({ reasoning: true, thinkingLevelMap: { max: "max" } }),
+    );
 
-    expect(withoutXHigh.map((option) => option.value)).toEqual([
+    expect(withoutExtended.map((option) => option.value)).toEqual([
       "off",
       "minimal",
       "low",
@@ -426,6 +474,14 @@ describe("getPiSupportedThinkingOptions", () => {
       "medium",
       "high",
       "xhigh",
+    ]);
+    expect(withMax.map((option) => option.value)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "max",
     ]);
   });
 
@@ -444,6 +500,25 @@ describe("getPiSupportedThinkingOptions", () => {
     );
 
     expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high"]);
+  });
+
+  it("preserves kimi-k3 style ladders that expose low, high, and max", () => {
+    const options = getPiSupportedThinkingOptions(
+      makePiModel({
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      }),
+    );
+
+    expect(options.map((option) => option.value)).toEqual(["low", "high", "max"]);
   });
 });
 

@@ -4,14 +4,16 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
+import type { ThreadId } from "@synara/contracts";
 import { GoRepoForked } from "react-icons/go";
 
 import {
-  PR_STATE_PRESENTATION_ICONS,
-  resolvePrStatePresentation,
-} from "../pullRequest/pullRequestStatePresentation";
-import { PR_FINE_TEXT_CLASS_NAME } from "../pullRequest/pullRequestText";
+  resolveThreadPullRequestFallback,
+  type ThreadPullRequest,
+} from "~/hooks/useThreadPullRequests";
+import { PrStateChip } from "../pullRequest/PrStateChip";
 import { resolveThreadStatusPill } from "../Sidebar.logic";
+import { ThreadStatusPillChip } from "../ThreadStatusPillChip";
 import { ProviderIcon } from "../ProviderIcon";
 import {
   GitBranchIcon,
@@ -29,11 +31,15 @@ import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import { KANBAN_COLUMN_LABELS, kanbanThreadCardId, type KanbanCard } from "./kanban.logic";
 
+/** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
+export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
+
 export interface KanbanCardViewProps {
   card: KanbanCard;
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
   /** The in-column original while its overlay clone is being dragged. */
@@ -80,47 +86,14 @@ function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
   if (!pill || REDUNDANT_COLUMN_PILL_LABELS.has(pill.label)) {
     return null;
   }
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5 text-[11px]", pill.colorClass)}>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          pill.dotClass,
-          pill.pulse ? "animate-pulse" : "",
-        )}
-      />
-      <span className="truncate">{pill.label}</span>
-    </span>
-  );
-}
-
-function KanbanCardPrChip({
-  pr,
-}: {
-  pr: NonNullable<NonNullable<KanbanCard["thread"]>["lastKnownPr"]>;
-}) {
-  const presentation = resolvePrStatePresentation(pr);
-  const PrIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
-  return (
-    <span
-      title={`#${pr.number} ${presentation.label}: ${pr.title}`}
-      className={cn(
-        // The PR type scale, not a pixel: this chip is the same fine print as every other PR
-        // surface, so it tracks the user's font-size setting with them.
-        PR_FINE_TEXT_CLASS_NAME,
-        "flex shrink-0 items-center gap-0.5",
-        presentation.colorClass,
-      )}
-    >
-      <PrIcon className="size-3 shrink-0" aria-hidden />#{pr.number}
-    </span>
-  );
+  return <ThreadStatusPillChip pill={pill} />;
 }
 
 function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
+  prByThreadId,
   isOverlay: isOverlayProp,
   isDragSource: isDragSourceProp,
   nowMs,
@@ -139,7 +112,17 @@ function KanbanCardViewComponent({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
   }).worktreeBadgeLabel;
-  const pr = card.thread?.lastKnownPr ?? null;
+  // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+  // checkout moved on); rows the board root has not resolved yet get the same validation
+  // without live status instead of the raw — possibly stale — persisted badge.
+  const pr = card.thread
+    ? prByThreadId.has(card.threadId)
+      ? (prByThreadId.get(card.threadId) ?? null)
+      : resolveThreadPullRequestFallback({
+          branch: card.thread.branch,
+          lastKnownPr: card.thread.lastKnownPr ?? null,
+        })
+    : null;
   const activeWorkElapsed =
     card.activeWorkStartedAt && nowMs
       ? formatElapsed(card.activeWorkStartedAt, new Date(nowMs).toISOString())
@@ -207,7 +190,7 @@ function KanbanCardViewComponent({
             />
           </span>
         ) : null}
-        {pr ? <KanbanCardPrChip pr={pr} /> : null}
+        {pr ? <PrStateChip pr={pr} /> : null}
         {card.draftHasAttachments ? (
           <PaperclipIcon className="size-3 shrink-0 text-muted-foreground/70" aria-hidden />
         ) : null}

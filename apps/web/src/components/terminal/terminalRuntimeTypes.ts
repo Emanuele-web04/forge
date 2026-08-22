@@ -48,7 +48,7 @@ export interface TerminalPendingWrite {
   queuedAt: number;
 }
 
-export type TerminalRuntimeStatus = "connecting" | "replaying" | "ready" | "error";
+export type TerminalRuntimeStatus = "connecting" | "replaying" | "ready" | "exited" | "error";
 
 export interface TerminalRuntimeEntry {
   runtimeKey: string;

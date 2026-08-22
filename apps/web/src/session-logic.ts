@@ -8,7 +8,7 @@ import {
 } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
-import { orderedActivities } from "./workLog";
+import { orderedActivities, parseTaskListTasks } from "./workLog";
 
 import type {
   ChatMessage,
@@ -225,33 +225,8 @@ function toActiveTaskListState(activity: OrchestrationThreadActivity): ActiveTas
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
       : null;
-  const rawTasks = payload?.tasks;
-  if (!Array.isArray(rawTasks)) {
-    return null;
-  }
-  const tasks = rawTasks
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const record = entry as Record<string, unknown>;
-      if (typeof record.task !== "string") {
-        return null;
-      }
-      const status =
-        record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
-      return {
-        task: record.task,
-        status,
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        task: string;
-        status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
-  if (rawTasks.length > 0 && tasks.length === 0) {
+  const tasks = parseTaskListTasks(payload);
+  if (!tasks) {
     return null;
   }
   return {

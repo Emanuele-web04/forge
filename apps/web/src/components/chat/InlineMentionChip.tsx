@@ -31,6 +31,7 @@ interface InlineMentionChipProps {
   /** When set, the chip renders as an openable anchor instead of a static span. */
   href?: string;
   onActivate?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  onContextMenu?: (event: MouseEvent<HTMLAnchorElement>) => void;
   /** Warm-up hook fired on hover/focus so activating the chip feels instant. */
   onHoverPrefetch?: (() => void) | undefined;
 }
@@ -89,6 +90,7 @@ export function InlineMentionChip(props: InlineMentionChipProps) {
         title={props.path}
         {...(href !== undefined ? { href } : {})}
         {...(handleActivate ? { onClick: handleActivate } : {})}
+        {...(props.onContextMenu ? { onContextMenu: props.onContextMenu } : {})}
         {...(handleHoverPrefetch
           ? { onPointerEnter: handleHoverPrefetch, onFocus: handleHoverPrefetch }
           : {})}

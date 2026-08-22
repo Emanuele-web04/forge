@@ -39,7 +39,10 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
   const splitTerminalRightStore = useTerminalStateStore((s) => s.splitTerminalRight);
   const splitTerminalDownStore = useTerminalStateStore((s) => s.splitTerminalDown);
   const setActiveTerminalStore = useTerminalStateStore((s) => s.setActiveTerminal);
-  const closeTerminalStore = useTerminalStateStore((s) => s.closeTerminal);
+  const closeTerminalAndEnsureReplacementStore = useTerminalStateStore(
+    (s) => s.closeTerminalAndEnsureReplacement,
+  );
+  const closeExitedTerminalStore = useTerminalStateStore((s) => s.closeExitedTerminal);
   const closeTerminalGroupStore = useTerminalStateStore((s) => s.closeTerminalGroup);
   const setTerminalHeightStore = useTerminalStateStore((s) => s.setTerminalHeight);
   const resizeTerminalSplitStore = useTerminalStateStore((s) => s.resizeTerminalSplit);
@@ -99,8 +102,30 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
       return;
     }
     disposeAndCloseTerminalSession({ api, threadId, terminalId });
-    closeTerminalStore(threadId, terminalId);
+    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
     bumpFocusRequest();
+  };
+
+  const disposeExitedTerminal = (terminalId: string) => {
+    disposeAndCloseTerminalSession({
+      api: readNativeApi(),
+      threadId,
+      terminalId,
+      processAlreadyExited: true,
+    });
+  };
+
+  const handleTerminalSessionExited = (terminalId: string) => {
+    disposeExitedTerminal(terminalId);
+    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
+    bumpFocusRequest();
+  };
+
+  const handleDockTerminalSessionExited = (terminalId: string) => {
+    disposeExitedTerminal(terminalId);
+    const disposition = closeExitedTerminalStore(threadId, terminalId);
+    bumpFocusRequest();
+    return disposition;
   };
 
   const closeTerminalGroup = (groupId: string) => closeTerminalGroupStore(threadId, groupId);
@@ -128,6 +153,8 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     moveTerminalToNewGroup,
     activateTerminal,
     closeTerminal,
+    handleTerminalSessionExited,
+    handleDockTerminalSessionExited,
     closeTerminalGroup,
     setTerminalHeight,
     resizeTerminalSplit,

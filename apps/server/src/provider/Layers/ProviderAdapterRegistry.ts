@@ -10,6 +10,7 @@
 import { Effect, Layer } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
+import { assertProviderAdapterConformance } from "../providerAdapterConformance.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
   ProviderAdapterRegistry,
@@ -45,6 +46,11 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* OpenCodeAdapter,
             yield* PiAdapter,
           ];
+
+    for (const adapter of adapters) {
+      assertProviderAdapterConformance(adapter);
+    }
+
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {

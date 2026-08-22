@@ -22,6 +22,23 @@ export function automationRunResultSummary(
   return trimmed ? trimmed.slice(0, AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS) : null;
 }
 
+export function automationRunResultSummaryWithNotice(
+  baseSummary: string | null | undefined,
+  notice: string,
+): string | null {
+  const normalizedBase = baseSummary?.trim();
+  if (!normalizedBase) {
+    return automationRunResultSummary(notice);
+  }
+  const separator = "\n\n";
+  const availableBaseChars = Math.max(
+    0,
+    AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS - notice.length - separator.length,
+  );
+  const truncatedBase = normalizedBase.slice(0, availableBaseChars).trimEnd();
+  return automationRunResultSummary(`${truncatedBase}${separator}${notice}`);
+}
+
 export function normalizeAutomationCompletionReason(value: string | null | undefined): string {
   const trimmed = value?.trim();
   return trimmed ? trimmed.slice(0, AUTOMATION_COMPLETION_REASON_MAX_CHARS) : "No reason given.";

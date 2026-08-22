@@ -10,12 +10,14 @@ import type {
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
+import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
+import { PullRequestAvatar } from "../../pullRequest/PullRequestAvatar";
 import { PullRequestCheckStatusIcon } from "../../pullRequest/PullRequestCheckStatusIcon";
 import { PullRequestDiffStat } from "../../pullRequest/PullRequestDiffStat";
 import { PullRequestConflictIcon } from "../../pullRequest/pullRequestStatePresentation";
@@ -175,7 +177,21 @@ function CommentsMenuRow({
           "flex items-center justify-between gap-2 text-[length:var(--app-font-size-ui-xs,10px)]",
         )}
       >
-        <span className="min-w-0 truncate">{comment.path ?? comment.author ?? ""}</span>
+        {comment.author ? (
+          <span className="shrink-0" title={comment.author}>
+            <PullRequestAvatar
+              actor={{
+                login: comment.author,
+                name: null,
+                // Review-thread authors are users or bots, never team slugs, so the
+                // login-derived avatar is safe here (same as pullRequestOperations).
+                avatarUrl: githubAvatarUrlForLogin(comment.author),
+                url: null,
+              }}
+            />
+          </span>
+        ) : null}
+        <span className="min-w-0 flex-1 truncate">{comment.path ?? comment.author ?? ""}</span>
         {comment.createdAt ? (
           <span className="shrink-0 tabular-nums">{formatRelativeTime(comment.createdAt)}</span>
         ) : null}
@@ -198,6 +214,7 @@ export function EnvironmentPullRequestSection({
   activeThreadId,
   projectId,
   configuredRepositories,
+  showDiffColors: showDiffColorsProp,
   onOpenUrl,
   onClose,
 }: {
@@ -207,10 +224,12 @@ export function EnvironmentPullRequestSection({
   activeThreadId: ThreadId | null;
   projectId: ProjectId | null;
   configuredRepositories: ReadonlyArray<{ readonly nameWithOwner: string }>;
+  showDiffColors?: boolean;
   /** Open non-PR URLs in the in-app browser panel. */
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const showDiffColors = showDiffColorsProp ?? true;
   const openPane = useRightDockStore((store) => store.openPane);
   // Shares the cached git status the git block already fetches — no extra RPC.
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
@@ -322,9 +341,11 @@ export function EnvironmentPullRequestSection({
           icon={<DiffIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="flex min-w-0 items-center gap-1.5">
-              {/* Muted like every other pull request diff stat, not the green/red used by
-                  working-tree diffs — PR change counts read as ambient metadata. */}
-              <PullRequestDiffStat additions={diffStat.additions} deletions={diffStat.deletions} />
+              <PullRequestDiffStat
+                additions={diffStat.additions}
+                deletions={diffStat.deletions}
+                tone={showDiffColors ? "diff" : "muted"}
+              />
               {diffStat.filesLabel ? (
                 <span className="truncate text-muted-foreground">{diffStat.filesLabel}</span>
               ) : null}
@@ -483,7 +504,10 @@ export function EnvironmentPullRequestSection({
                     }
                   />
                 ) : (
-                  <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+                  // shrink-0 children: when the list overflows max-h-64, flex would otherwise
+                  // shrink the rows (their line-clamp overflow-hidden spans have no automatic
+                  // minimum size) and clip the text instead of scrolling.
+                  <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto [&>*]:shrink-0">
                     {comments.map((comment) => (
                       <CommentsMenuRow
                         key={comment.id}

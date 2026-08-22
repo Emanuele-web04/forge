@@ -18,6 +18,7 @@ import {
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadHandoff,
+  ThreadGoalAchievements,
 } from "@synara/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
@@ -35,6 +36,9 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
+    goalAchievements: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(ThreadGoalAchievements)),
+    ).pipe(Schema.withDecodingDefault(() => null)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -80,6 +84,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_messages_json,
           thread_markers_json,
           notes,
+          goal,
+          goal_started_at,
+          goal_paused_at,
+          goal_achievements_json,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -87,6 +95,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at,
           updated_at,
           archived_at,
+          settled_at,
           deleted_at
         )
         VALUES (
@@ -122,6 +131,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pinnedMessages === null ? null : JSON.stringify(row.pinnedMessages)},
           ${row.threadMarkers === null ? null : JSON.stringify(row.threadMarkers)},
           ${row.notes},
+          ${row.goal},
+          ${row.goalStartedAt ?? null},
+          ${row.goalPausedAt ?? null},
+          ${row.goalAchievements == null ? null : JSON.stringify(row.goalAchievements)},
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
@@ -129,6 +142,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.createdAt},
           ${row.updatedAt},
           ${row.archivedAt ?? null},
+          ${row.settledAt ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -164,6 +178,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_messages_json = excluded.pinned_messages_json,
           thread_markers_json = excluded.thread_markers_json,
           notes = excluded.notes,
+          goal = excluded.goal,
+          goal_started_at = excluded.goal_started_at,
+          goal_paused_at = excluded.goal_paused_at,
+          goal_achievements_json = excluded.goal_achievements_json,
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
@@ -171,6 +189,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
+          settled_at = excluded.settled_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -213,6 +232,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -220,6 +243,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          settled_at AS "settledAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -264,6 +288,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -271,6 +299,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          settled_at AS "settledAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

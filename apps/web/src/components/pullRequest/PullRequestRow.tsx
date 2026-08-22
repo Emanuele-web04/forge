@@ -22,13 +22,19 @@ import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
+import { PullRequestStackPosition } from "./PullRequestStackPosition";
 
 function TruncatedTitle({ title, number }: { title: string; number: number }) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className={cn(PR_BODY_TEXT_CLASS_NAME, "truncate font-medium text-foreground")}>
+          <span
+            className={cn(
+              PR_BODY_TEXT_CLASS_NAME,
+              "min-w-0 flex-1 truncate font-medium text-foreground",
+            )}
+          >
             {title}
           </span>
         }
@@ -46,6 +52,7 @@ export const PullRequestRow = function PullRequestRow({
   entry,
   selected,
   showProjectTitle: showProjectTitleProp,
+  showDiffColors: showDiffColorsProp,
   onClick,
   onTogglePinned,
 }: {
@@ -53,10 +60,12 @@ export const PullRequestRow = function PullRequestRow({
   selected: boolean;
   /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
+  showDiffColors?: boolean;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
+  const showDiffColors = showDiffColorsProp ?? true;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
@@ -100,6 +109,7 @@ export const PullRequestRow = function PullRequestRow({
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <TruncatedTitle title={entry.title} number={entry.number} />
+            {entry.stack ? <PullRequestStackPosition stack={entry.stack} /> : null}
           </span>
           {/* Fine print, set once on the line: author, repository and branch are one thought at
               one size — the branch used to be the only part stepped down, which made the line
@@ -138,7 +148,11 @@ export const PullRequestRow = function PullRequestRow({
           )}
         >
           <span>{formatRelativeTime(entry.updatedAt)}</span>
-          <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            tone={showDiffColors ? "diff" : "muted"}
+          />
         </span>
       </button>
       <Tooltip>

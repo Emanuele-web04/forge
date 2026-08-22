@@ -77,13 +77,14 @@ export interface ProjectionFullThreadDiffContext {
 /**
  * Narrow projection row backing managed-worktree retention.
  *
- * Soft-deleted threads are intentionally included: thread retention soft-deletes
- * and never purges, yet the worktree those threads own still sits on disk and must
- * stay eligible for snapshot + reclaim.
+ * Soft-deleted threads are intentionally included because purge can be deferred
+ * while provider delivery is unresolved; their worktrees must remain eligible
+ * for snapshot and reclaim until the rows are removed.
  */
 export interface ProjectionManagedWorktreeThread {
   readonly id: ThreadId;
   readonly archivedAt: string | null;
+  readonly deletedAt: string | null;
   readonly worktreePath: string | null;
   readonly associatedWorktreePath: string | null;
 }
@@ -214,6 +215,18 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadShellById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * True when the thread id is already bound to an aggregate, including
+   * soft-deleted threads that the active-only reads above hide.
+   *
+   * Callers that decide whether to dispatch `thread.create` must use this:
+   * the command decider rejects re-creating a thread id that still has a
+   * tombstone, so an active-only existence check would loop on rejections.
+   */
+  readonly threadIdExistsIncludingDeleted: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
 
   /**
    * Recover the parent thread for legacy synthetic subagent IDs.

@@ -81,7 +81,7 @@ describe("openInitialBackendWindow", () => {
     expect(options.setReadinessInFlight).not.toHaveBeenCalled();
   });
 
-  it("skips startup work when a window already exists", () => {
+  it("keeps observing readiness when a packaged window already exists", () => {
     const options = createOptions({
       hasExistingWindow: vi.fn(() => true),
     });
@@ -89,6 +89,7 @@ describe("openInitialBackendWindow", () => {
     openInitialBackendWindow(options);
 
     expect(options.createWindow).not.toHaveBeenCalled();
-    expect(options.waitForBackendWindowReady).not.toHaveBeenCalled();
+    expect(options.waitForBackendWindowReady).toHaveBeenCalledTimes(1);
+    expect(options.setReadinessInFlight).toHaveBeenCalledWith(expect.any(Promise));
   });
 });

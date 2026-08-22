@@ -8,10 +8,11 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
+import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
 
-import { GitCoreLive, makeGitCore } from "./GitCore.ts";
+import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { type ProcessRunResult, runProcess } from "../../processRunner.ts";
@@ -152,6 +153,22 @@ function commitWithDate(
 
 it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
+    it.effect("truncates captured output without stopping progress consumption", () =>
+      Effect.gen(function* () {
+        const lines: string[] = [];
+        const output = yield* collectGitOutput(
+          { operation: "test output", cwd: process.cwd(), args: ["status"] },
+          Stream.fromIterable([new TextEncoder().encode("first\nsecond\nthird\n")]),
+          8,
+          (line) => Effect.sync(() => lines.push(line)),
+          "truncate",
+        );
+
+        expect(output).toBe("first\nse");
+        expect(lines).toEqual(["first", "second", "third"]);
+      }),
+    );
+
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
         const result = yield* runTruncatedNodeCommand({
@@ -1246,6 +1263,151 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const expectedHead = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const wtPath = path.join(tmp, "wt-branch-backed");
+        const result = yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "synara/abcd1234",
+        });
+
+        expect(result.worktree).toEqual({
+          path: wtPath,
+          ref: expectedHead,
+          branch: "synara/abcd1234",
+        });
+        expect(yield* git(wtPath, ["symbolic-ref", "--short", "HEAD"])).toBe("synara/abcd1234");
+        expect(yield* git(tmp, ["rev-parse", "refs/heads/synara/abcd1234"])).toBe(expectedHead);
+
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+        const remainingBranches = yield* git(tmp, ["branch", "--list", "synara/abcd1234"]);
+        expect(remainingBranches).toBe("");
+      }),
+    );
+
+    it.effect("reports setup phases at the real command boundaries", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-phase-events");
+        const phases: string[] = [];
+        yield* core.createDetachedWorktree(
+          {
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/ph123456",
+            copyChangesFrom: tmp,
+          },
+          {
+            onPhase: (phase) =>
+              Effect.sync(() => {
+                phases.push(phase);
+              }),
+          },
+        );
+
+        expect(phases).toEqual(["branch", "worktree", "copy-changes"]);
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+      }),
+    );
+
+    it.effect("does not report branch creation before preliminary validation", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const phases: string[] = [];
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree(
+            {
+              cwd: tmp,
+              ref: "refs/heads/missing",
+              path: path.join(tmp, "wt-invalid-ref"),
+              newBranch: "synara/notstarted",
+            },
+            {
+              onPhase: (phase) =>
+                Effect.sync(() => {
+                  phases.push(phase);
+                }),
+            },
+          ),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(phases).toEqual([]);
+        expect(yield* git(tmp, ["branch", "--list", "synara/notstarted"])).toBe("");
+      }),
+    );
+
+    it.effect("deletes the pre-created branch when worktree add fails", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-rollback-branch");
+        // A plain file at the target path makes `git worktree add` fail after
+        // the branch has already been created.
+        yield* writeTextFile(wtPath, "occupied\n");
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/rollback1",
+          }),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(yield* git(tmp, ["branch", "--list", "synara/rollback1"])).toBe("");
+      }),
+    );
+
+    it.effect("removeWorktree reclamation never deletes user-named branches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-user-branch");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "feature/user-owned",
+        });
+
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+        const remainingBranches = yield* git(tmp, ["branch", "--list", "feature/user-owned"]);
+        expect(remainingBranches).toContain("feature/user-owned");
+      }),
+    );
+
     it.effect("atomically replaces an incomplete worktree snapshot", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1720,6 +1882,38 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reads branch identity without requiring full status details", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        const nonRepo = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["checkout", "-b", "feature/branch-context"]);
+        yield* git(tmp, ["push", "-u", "origin", "feature/branch-context"]);
+        const core = yield* GitCore;
+
+        expect(yield* core.readBranchContext(tmp)).toEqual({
+          isRepo: true,
+          branch: "feature/branch-context",
+          upstreamRef: "origin/feature/branch-context",
+        });
+
+        yield* git(tmp, ["checkout", "--detach"]);
+        expect(yield* core.readBranchContext(tmp)).toEqual({
+          isRepo: true,
+          branch: null,
+          upstreamRef: null,
+        });
+        expect(yield* core.readBranchContext(nonRepo)).toEqual({
+          isRepo: false,
+          branch: null,
+          upstreamRef: null,
+        });
+      }),
+    );
+
     it.effect("preserves adversarial filenames in status details", () =>
       Effect.gen(function* () {
         if (process.platform === "win32") return;
@@ -1937,6 +2131,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
         const core = yield* GitCore;
+        const fileSystem = yield* FileSystem.FileSystem;
 
         yield* core.createBranch({ cwd: tmp, branch: "feature/diff-scopes" });
         yield* core.checkoutBranch({ cwd: tmp, branch: "feature/diff-scopes" });
@@ -1948,6 +2143,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["add", "staged.txt"]);
         yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
         yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+        yield* fileSystem.writeFile(path.join(tmp, "untracked.bin"), new Uint8Array([0, 1, 2, 3]));
 
         const branchPatch = (yield* core.readBranchPatch(tmp)).patch;
         expect(branchPatch).toContain("diff --git a/branch.txt b/branch.txt");
@@ -1964,6 +2160,75 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(unstagedPatch).toContain("diff --git a/README.md b/README.md");
         expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
         expect(unstagedPatch).not.toContain("staged.txt");
+
+        const scopePatches = [
+          ["branch", branchPatch],
+          ["staged", stagedPatch],
+          ["unstaged", unstagedPatch],
+          ["workingTree", (yield* core.readWorkingTreePatch(tmp)).patch],
+        ] as const;
+        for (const [scope, patch] of scopePatches) {
+          expect(yield* core.readDiffStats(tmp, scope)).toEqual(
+            summarizeUnifiedPatchTotals(patch) ?? {
+              additions: 0,
+              deletions: 0,
+              fileCount: 0,
+            },
+          );
+        }
+      }),
+    );
+
+    it.effect("surfaces tracked numstat failures", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: bad object",
+          }),
+        );
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "staged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.tracked",
+            detail: "fatal: bad object",
+          });
+        }
+      }),
+    );
+
+    it.effect("surfaces untracked numstat failures instead of undercounting", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation.endsWith(".untrackedFiles")) {
+            return Effect.succeed({ code: 0, stdout: "vanished.txt\0", stderr: "" });
+          }
+          if (input.operation.endsWith(".untrackedNumstat")) {
+            // `--no-index` also exits 1 when the path cannot be read.
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access 'vanished.txt'",
+            });
+          }
+          return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+        });
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "unstaged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.untrackedNumstat",
+            detail: "error: Could not access 'vanished.txt'",
+          });
+        }
       }),
     );
 

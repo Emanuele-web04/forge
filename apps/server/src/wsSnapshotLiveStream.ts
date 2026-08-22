@@ -7,6 +7,64 @@ export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
   | { readonly kind: "event"; readonly event: OrchestrationEvent };
 
+export interface ResnapshotReport {
+  readonly snapshotSequence: number;
+  readonly highWaterSequence: number;
+  readonly replayCount: number;
+  readonly replayLimit: number;
+}
+
+/**
+ * Detects a resnapshot demand that restarting the stream cannot satisfy.
+ *
+ * A healthy resnapshot cycle strictly advances the snapshot fence: the client
+ * restarts, the server serves a fresh snapshot at (or near) the journal head,
+ * and the gap closes. When the snapshot fence is frozen — a stalled or missing
+ * projector — every restart re-reads the same fence and re-demands the same
+ * resnapshot forever. Track the fence of the last demand per stream key; a
+ * repeat demand at a non-advancing fence is escalated to a non-retryable
+ * failure so clients stop tearing the transport down and surface the fault.
+ *
+ * Callers must key the tracker per subscriber (client id + stream name), not
+ * per stream name alone: two clients demanding the same stale stream
+ * concurrently are two first offenses, not one restart cycle — a shared key
+ * would hand the second client a non-retryable verdict before either had
+ * actually restarted. The fence itself is shared database state, so each
+ * subscriber's chain still converges on the same evidence; per-subscriber
+ * keying only ensures the "did not advance" comparison spans one
+ * subscription's own retries. State is cleared the moment that subscriber's
+ * stream start succeeds.
+ */
+export function makeResnapshotEscalationTracker(): {
+  readonly shouldEscalate: (streamKey: string, report: ResnapshotReport) => boolean;
+  readonly recordHealthyStart: (streamKey: string) => void;
+} {
+  const lastDemandedFenceByStreamKey = new Map<string, number>();
+  // Entries for subscribers that disconnect mid-failure are never cleared by a
+  // healthy start, so bound the map: evict the oldest insertions once the
+  // ceiling is reached. Losing an old entry merely re-grants one retryable
+  // demand to that subscriber — safe, since escalation is a loop guard, not a
+  // correctness fence.
+  const MAX_TRACKED_STREAM_KEYS = 4_096;
+  return {
+    shouldEscalate: (streamKey, report) => {
+      const previousFence = lastDemandedFenceByStreamKey.get(streamKey);
+      lastDemandedFenceByStreamKey.delete(streamKey);
+      if (lastDemandedFenceByStreamKey.size >= MAX_TRACKED_STREAM_KEYS) {
+        const oldestKey = lastDemandedFenceByStreamKey.keys().next().value;
+        if (oldestKey !== undefined) {
+          lastDemandedFenceByStreamKey.delete(oldestKey);
+        }
+      }
+      lastDemandedFenceByStreamKey.set(streamKey, report.snapshotSequence);
+      return previousFence !== undefined && report.snapshotSequence <= previousFence;
+    },
+    recordHealthyStart: (streamKey) => {
+      lastDemandedFenceByStreamKey.delete(streamKey);
+    },
+  };
+}
+
 /**
  * Attach live delivery first, capture a snapshot and durable high-water fence,
  * replay the exact gap, then continue with strictly newer live events.
@@ -34,12 +92,16 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
    * and stream an empty replay forever instead of surfacing the deletion.
    */
   readonly resumeSubjectExists?: Effect.Effect<boolean, E>;
-  readonly onResnapshotRequired?: (report: {
-    readonly snapshotSequence: number;
-    readonly highWaterSequence: number;
-    readonly replayCount: number;
-    readonly replayLimit: number;
-  }) => Effect.Effect<void, never>;
+  readonly onResnapshotRequired?: (report: ResnapshotReport) => Effect.Effect<void, never>;
+  /**
+   * Loop guard: pairs a stable stream key with a process-wide tracker so a
+   * resnapshot demand whose fence did not advance since the previous demand
+   * fails non-retryable instead of prompting another identical restart.
+   */
+  readonly resnapshotEscalation?: {
+    readonly streamKey: string;
+    readonly tracker: ReturnType<typeof makeResnapshotEscalationTracker>;
+  };
 }): Stream.Stream<SnapshotLiveStreamItem<Snapshot>, E | WsRpcError> {
   return Stream.unwrap(
     Effect.gen(function* () {
@@ -68,6 +130,9 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         const subjectExists =
           input.resumeSubjectExists === undefined ? true : yield* input.resumeSubjectExists;
         if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+          input.resnapshotEscalation?.tracker.recordHealthyStart(
+            input.resnapshotEscalation.streamKey,
+          );
           const replay = input.replay(resumeFromSequence, highWaterSequence).pipe(
             Stream.filter(
               (event) => event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
@@ -86,12 +151,28 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
       const highWaterSequence = yield* input.getHighWaterSequence;
       const replayCount = Math.max(0, highWaterSequence - snapshotSequence);
       if (replayCount > ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+        const report: ResnapshotReport = {
+          snapshotSequence,
+          highWaterSequence,
+          replayCount,
+          replayLimit: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
+        };
         if (input.onResnapshotRequired) {
-          yield* input.onResnapshotRequired({
-            snapshotSequence,
-            highWaterSequence,
-            replayCount,
-            replayLimit: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
+          yield* input.onResnapshotRequired(report);
+        }
+        const escalate =
+          input.resnapshotEscalation?.tracker.shouldEscalate(
+            input.resnapshotEscalation.streamKey,
+            report,
+          ) === true;
+        if (escalate) {
+          return yield* new WsRpcError({
+            message:
+              `Orchestration snapshot is still ${replayCount} events behind after a restart; ` +
+              "the snapshot fence is not advancing (a projection is stalled or missing). " +
+              "Restart the server or run repair local state.",
+            code: "ORCHESTRATION_SNAPSHOT_STALLED",
+            retryable: false,
           });
         }
         return yield* new WsRpcError({
@@ -100,6 +181,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
           retryable: true,
         });
       }
+      input.resnapshotEscalation?.tracker.recordHealthyStart(input.resnapshotEscalation.streamKey);
 
       const replay = input.replay(snapshotSequence, highWaterSequence).pipe(
         Stream.filter(

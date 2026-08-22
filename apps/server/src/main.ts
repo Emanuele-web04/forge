@@ -32,6 +32,7 @@ import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
@@ -42,16 +43,17 @@ import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
+  discoverServerRuntime,
   pairExternalMcpClient,
   resolveExternalMcpBaseDir,
   serveExternalMcpStdio,
+  verifyServerRuntime,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -301,6 +303,7 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(providerLayer),
   );
   const providerRuntimeReconcilerLayer = ProviderRuntimeReconcilerLive.pipe(
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
@@ -312,31 +315,9 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(providerRuntimeReconcilerLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
-    Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
 };
-
-export const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getCounts().pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather startup projection counts for telemetry", { cause }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-});
 
 export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
   const safeConfig: Record<string, unknown> = { ...config };
@@ -398,7 +379,6 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
-    yield* Effect.forkChild(recordStartupHeartbeat);
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
@@ -597,6 +577,77 @@ const mcpPairCommand = Command.make(
     }),
 ).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
 
+const serverStatusCommand = Command.make(
+  "status",
+  {
+    url: Flag.string("url").pipe(
+      Flag.withDescription("Synara server base URL to probe."),
+      Flag.optional,
+    ),
+    json: Flag.boolean("json").pipe(
+      Flag.withDescription("Print machine-readable JSON."),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ url, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const discovered = Option.isSome(url)
+        ? { url: url.value }
+        : (() => {
+            const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+            try {
+              const runtime = discoverServerRuntime(baseDir);
+              return { url: runtime.state.origin, runtime };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Failed to discover a running Synara server.",
+              };
+            }
+          })();
+      const result =
+        "error" in discovered
+          ? {
+              reachable: false as const,
+              ready: false as const,
+              url: "[undiscovered]",
+              error: discovered.error,
+            }
+          : yield* Effect.promise(async () => {
+              try {
+                if ("runtime" in discovered) {
+                  await verifyServerRuntime(discovered.runtime, globalThis.fetch);
+                }
+                return await fetchSynaraServerStatus({ url: discovered.url });
+              } catch (cause) {
+                return {
+                  reachable: false as const,
+                  ready: false as const,
+                  url: discovered.url,
+                  error:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Failed to verify the discovered Synara server.",
+                };
+              }
+            });
+      process.stdout.write(
+        json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
+      );
+      if (!result.ready) {
+        process.exitCode = 1;
+      }
+    }),
+).pipe(Command.withDescription("Check whether a Synara server is reachable and ready."));
+
+const serverToolsCommand = Command.make("server").pipe(
+  Command.withDescription("Inspect and manage a running Synara server."),
+  Command.withSubcommands([serverStatusCommand]),
+);
+
 const mcpCommand = Command.make("mcp").pipe(
   Command.withDescription("Manage Synara's loopback external MCP bridge."),
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
@@ -604,7 +655,7 @@ const mcpCommand = Command.make("mcp").pipe(
 
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([mcpCommand]),
+  Command.withSubcommands([serverToolsCommand, mcpCommand]),
 );
 
 export const synaraCli = serverCommand;

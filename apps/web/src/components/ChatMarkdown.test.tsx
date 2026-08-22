@@ -37,6 +37,17 @@ async function renderUserMarkdown(text: string) {
   );
 }
 
+describe("streamingCodeHighlightIntervalMs", () => {
+  it("keeps the base cadence for small blocks and stretches it with block size", async () => {
+    const { streamingCodeHighlightIntervalMs } = await import("./ChatMarkdown");
+    expect(streamingCodeHighlightIntervalMs(0)).toBe(160);
+    expect(streamingCodeHighlightIntervalMs(8_000)).toBe(160);
+    expect(streamingCodeHighlightIntervalMs(44_000)).toBe(580);
+    expect(streamingCodeHighlightIntervalMs(80_000)).toBe(1_000);
+    expect(streamingCodeHighlightIntervalMs(500_000)).toBe(1_000);
+  });
+});
+
 describe("ChatMarkdown", () => {
   it("uses the theme foreground token for markdown text", async () => {
     const markup = await renderMarkdown("Theme-aware text");
@@ -134,6 +145,33 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("$USD$");
     expect(markup).toContain("$PATH$");
     expect(markup).not.toContain('class="katex"');
+  });
+
+  it("renders a table whose delimiter row is missing cells", async () => {
+    // Models regularly emit a delimiter row with fewer cells than the header;
+    // GFM rejects the whole block on the mismatch and the table degrades into
+    // one run-on paragraph of pipes. The repair pass pads the delimiter row.
+    const markup = await renderMarkdown(
+      [
+        "Studio vs. normal mode:",
+        "",
+        "| | Normal mode | Studio |",
+        "|---|---|",
+        "| Purpose | Focused, interactive work | Long-running, agent-led work |",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<th>Studio</th>");
+    expect(markup).toContain("<td>Purpose</td>");
+    expect(markup).not.toContain("|---|");
+  });
+
+  it("keeps pipe-and-dash lines inside code fences out of table repair", async () => {
+    const markup = await renderMarkdown(["```", "| a | b |", "|---|", "```"].join("\n"));
+
+    expect(markup).not.toContain("<table>");
+    expect(markup).toContain("|---|");
   });
 
   it("renders exact thread marker ranges without changing markdown structure", async () => {

@@ -234,6 +234,27 @@ describe("describePullRequestComment", () => {
     expect(display.title).toBe("Actual finding");
   });
 
+  it("strips description metadata markers, including multi-line ones", () => {
+    const display = describePullRequestComment(
+      makeComment({
+        body: "**Gateway compensation skips branch cleanup**\n\n<sub>Medium Severity</sub> <!-- DESCRIPTION START --> When a worktree creation fails, refs leak. <!-- DESCRIPTION\nEND -->",
+      }),
+    );
+    expect(display.title).toBe("Gateway compensation skips branch cleanup");
+    expect(display.snippet).toBe("Medium Severity When a worktree creation fails, refs leak.");
+  });
+
+  it("preserves literal HTML comments inside inline code", () => {
+    const display = describePullRequestComment(
+      makeComment({
+        body: "Preserve the literal `<!-- feature-flag -->` token in generated HTML.",
+      }),
+    );
+    expect(display.title).toBe(
+      "Preserve the literal <!-- feature-flag --> token in generated HTML.",
+    );
+  });
+
   it("strips markdown links and HTML tags but keeps their text", () => {
     const display = describePullRequestComment(
       makeComment({

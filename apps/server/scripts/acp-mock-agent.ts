@@ -21,6 +21,7 @@ const emitUpstreamAssistantMessageIds =
 const emitReasoningThenToolCall = process.env.SYNARA_ACP_EMIT_REASONING_THEN_TOOL_CALL === "1";
 const emitGenericToolPlaceholders = process.env.SYNARA_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.SYNARA_ACP_EMIT_ASK_QUESTION === "1";
+const failSessionNewOnce = process.env.SYNARA_ACP_FAIL_SESSION_NEW_ONCE === "1";
 const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
@@ -37,6 +38,7 @@ let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
+let sessionNewAttempts = 0;
 const cancelledSessions = new Set<string>();
 
 function logExit(reason: string): void {
@@ -288,6 +290,13 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
 app.onRequest(OfficialAcp.methods.agent.authenticate, () => ({}));
 
 app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
+  sessionNewAttempts += 1;
+  if (failSessionNewOnce && sessionNewAttempts === 1) {
+    throw new OfficialAcp.RequestError(-32603, "Path not found.", {
+      code: "FS_NOT_FOUND",
+      detail: "No such file or directory (os error 2)",
+    });
+  }
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {

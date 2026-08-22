@@ -60,7 +60,7 @@ function targetByName(
   return { ref: element.ref, snapshotId: snapshot.snapshotId };
 }
 
-test("production MCP controls the exact visible Electron webview", async () => {
+test("production MCP controls one persistent Electron page across visibility changes", async () => {
   const mainPath = process.env.SYNARA_E2E_ELECTRON_MAIN;
   if (!mainPath) throw new Error("Electron E2E main bundle was not prepared.");
   const site = await startVisibleBrowserFixtureSite();
@@ -93,8 +93,45 @@ test("production MCP controls the exact visible Electron webview", async () => {
   try {
     const page = await electronApp.firstWindow();
     await expect(page.locator("html")).toHaveAttribute("data-shell-ready", "true");
-    const visibleGuestUrl = () =>
-      page.locator("webview").evaluate((element) => (element as Electron.WebviewTag).getURL());
+    const runtimeDetails = (scopedTabId: string) =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const state = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  runtimes: Map<string, { webContents: { id: number; getURL(): string } }>;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          const runtime = state.browserManager.runtimes.get(`${input.threadId}:${input.tabId}`);
+          if (!runtime) throw new Error("Expected the native browser runtime to be live.");
+          return { id: runtime.webContents.id, url: runtime.webContents.getURL() };
+        },
+        { threadId, tabId: scopedTabId },
+      );
+    const sendNativeInput = (scopedTabId: string, event: Record<string, unknown>) =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const state = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  runtimes: Map<
+                    string,
+                    { webContents: { sendInputEvent(event: Record<string, unknown>): void } }
+                  >;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          const runtime = state.browserManager.runtimes.get(`${input.threadId}:${input.tabId}`);
+          if (!runtime) throw new Error("Expected the native browser runtime to be live.");
+          runtime.webContents.sendInputEvent(input.event);
+        },
+        { threadId, tabId: scopedTabId, event },
+      );
 
     const mcp = createBrowserMcpHarness({
       pipePath,
@@ -121,38 +158,33 @@ test("production MCP controls the exact visible Electron webview", async () => {
     });
     const tabId = opened.structuredContent.tabId;
     expect(typeof tabId).toBe("string");
-    await expect(page.locator("webview")).toBeVisible();
-    const visibleBox = await page.locator("webview").boundingBox();
-    expect(visibleBox?.width).toBeGreaterThan(100);
-    expect(visibleBox?.height).toBeGreaterThan(100);
+    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", String(tabId));
+    const initialRuntime = await runtimeDetails(String(tabId));
+    expect(initialRuntime.url).toBe(site.initialUrl);
 
-    const rendererWebContentsId = await page
-      .locator("webview")
-      .evaluate((element) => (element as Electron.WebviewTag).getWebContentsId());
-    const mainRuntime = await electronApp.evaluate(
-      ({ webContents }, input) => {
-        const state = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                  webContents: { id: number };
-                };
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        const runtime = state.browserManager.getVisibleAutomationRuntime(input);
-        return {
-          runtimeWebContentsId: runtime.webContents.id,
-          electronWebContentsId: webContents.fromId(runtime.webContents.id)?.id ?? null,
-        };
-      },
-      { threadId, tabId: String(tabId) },
-    );
-    expect(mainRuntime).toEqual({
-      runtimeWebContentsId: rendererWebContentsId,
-      electronWebContentsId: rendererWebContentsId,
+    await electronApp.evaluate(() => {
+      (
+        globalThis as typeof globalThis & {
+          __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+        }
+      ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
+    });
+    await mcp.call("browser_evaluate", {
+      expression: `document.body.dataset.backgroundAgent = "continued"; true`,
+      idempotencyKey: key(),
+    });
+    const backgroundProbe = await mcp.call("browser_evaluate", {
+      expression: `document.body.dataset.backgroundAgent`,
+      idempotencyKey: key(),
+    });
+    expect(backgroundProbe.structuredContent.value).toBe("continued");
+    expect((await runtimeDetails(String(tabId))).id).toBe(initialRuntime.id);
+    await electronApp.evaluate(() => {
+      (
+        globalThis as typeof globalThis & {
+          __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+        }
+      ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(true);
     });
 
     const navigated = await mcp.call("browser_navigate", {
@@ -160,10 +192,10 @@ test("production MCP controls the exact visible Electron webview", async () => {
       waitUntil: "domcontentloaded",
     });
     expect(navigated.structuredContent).toMatchObject({ tabId, finalUrl: site.appUrl });
-    expect(await visibleGuestUrl()).toBe(site.appUrl);
+    expect((await runtimeDetails(String(tabId))).url).toBe(site.appUrl);
 
     // A real provider may use evaluate for a client-side navigation. Prove the
-    // CDP target and the composited WebView remain the same physical guest,
+    // CDP target and the native view remain the same physical page,
     // rather than allowing metadata to advance on a hidden runtime.
     await mcp.call("browser_evaluate", {
       expression: `location.href = ${JSON.stringify(site.nextUrl)}; true`,
@@ -172,25 +204,8 @@ test("production MCP controls the exact visible Electron webview", async () => {
     await mcp.call("browser_wait", {
       conditions: [{ kind: "url", exact: site.nextUrl }],
     });
-    expect(await visibleGuestUrl()).toBe(site.nextUrl);
-    const runtimeAfterEvaluateNavigation = await electronApp.evaluate(
-      (_electron, input) => {
-        const state = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                  webContents: { id: number };
-                };
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        return state.browserManager.getVisibleAutomationRuntime(input).webContents.id;
-      },
-      { threadId, tabId: String(tabId) },
-    );
-    expect(runtimeAfterEvaluateNavigation).toBe(rendererWebContentsId);
+    expect((await runtimeDetails(String(tabId))).url).toBe(site.nextUrl);
+    expect((await runtimeDetails(String(tabId))).id).toBe(initialRuntime.id);
     await mcp.call("browser_navigate", {
       tabId,
       url: site.appUrl,
@@ -451,39 +466,6 @@ test("production MCP controls the exact visible Electron webview", async () => {
       );
     }
     const popupTabId = String(popupClick.structuredContent.openedTabId);
-    const popupMounted = await Promise.race([
-      page
-        .waitForFunction(
-          (expectedTabId) =>
-            document.querySelector(`webview[data-tab-id="${CSS.escape(expectedTabId)}"]`) !== null,
-          popupTabId,
-          { timeout: 5_000 },
-        )
-        .then(
-          () => true,
-          () => false,
-        ),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 6_000)),
-    ]);
-    if (!popupMounted) {
-      const managerState = await electronApp.evaluate(
-        (_electron, input) => {
-          const state = (
-            globalThis as typeof globalThis & {
-              __synaraVisibleBrowserE2E: {
-                browserManager: { getState(value: { threadId: string }): unknown };
-              };
-            }
-          ).__synaraVisibleBrowserE2E;
-          return state.browserManager.getState(input);
-        },
-        { threadId },
-      );
-      throw new Error(
-        `target=_blank tab was correlated but its renderer WebView did not mount; manager=${JSON.stringify(managerState)}`,
-      );
-    }
-    await expect(page.locator(`webview[data-tab-id="${popupTabId}"]`)).toBeVisible();
     const popupTabs = await mcp.call("browser_tabs");
     expect(popupTabs.structuredContent).toMatchObject({
       activeTabId: popupTabId,
@@ -504,7 +486,7 @@ test("production MCP controls the exact visible Electron webview", async () => {
       closedTabId: popupTabId,
       activeTabId: tabId,
     });
-    await expect(page.locator(`webview[data-tab-id="${String(tabId)}"]`)).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", String(tabId));
 
     await mcp.call("browser_navigate", {
       tabId,
@@ -672,15 +654,20 @@ test("production MCP controls the exact visible Electron webview", async () => {
       conditions: [{ kind: "text", text: "Agent clicks: 1", state: "present" }],
     });
 
-    const currentBox = await page.locator("webview").boundingBox();
-    if (!currentBox) throw new Error("Visible webview lost its bounds.");
-    // Return to the top using an actual outer Playwright action, then click the
-    // embedded guest at its real screen coordinates (no CDP or IPC shortcut).
-    await page.locator("webview").hover({ position: { x: 30, y: 30 } });
-    await page.mouse.wheel(0, -100_000);
-    // Playwright resolves mouse.wheel after dispatch, while Chromium applies
-    // guest scrolling asynchronously. Observe convergence through the public
-    // browser tool instead of assuming the first compositor frame is final.
+    // Return to the top through Electron's native input path. Playwright's
+    // renderer-scoped mouse cannot target a sibling WebContentsView.
+    await sendNativeInput(String(tabId), { type: "mouseMove", x: 30, y: 30 });
+    for (let step = 0; step < 32; step += 1) {
+      await sendNativeInput(String(tabId), {
+        type: "mouseWheel",
+        x: 30,
+        y: 30,
+        deltaY: 1_000,
+        canScroll: true,
+      });
+    }
+    // Electron acknowledges input before Chromium applies guest scrolling.
+    // Observe convergence through the public browser tool.
     await expect
       .poll(
         async () => {
@@ -715,12 +702,25 @@ test("production MCP controls the exact visible Electron webview", async () => {
         (error: unknown) => error,
       );
     // Let the request enter its polling loop so this is a real concurrent human
-    // takeover, not an already-aborted request that never reached the WebView.
+    // takeover, not an already-aborted request that never reached the page.
     await new Promise((resolve) => setTimeout(resolve, 75));
-    await page.mouse.click(
-      currentBox.x + rect.x + rect.width / 2,
-      currentBox.y + rect.y + rect.height / 2,
-    );
+    const manualX = Math.round(rect.x + rect.width / 2);
+    const manualY = Math.round(rect.y + rect.height / 2);
+    await sendNativeInput(String(tabId), { type: "mouseMove", x: manualX, y: manualY });
+    await sendNativeInput(String(tabId), {
+      type: "mouseDown",
+      x: manualX,
+      y: manualY,
+      button: "left",
+      clickCount: 1,
+    });
+    await sendNativeInput(String(tabId), {
+      type: "mouseUp",
+      x: manualX,
+      y: manualY,
+      button: "left",
+      clickCount: 1,
+    });
     const interruptionError = await interruptedByManualClick;
     expect(interruptionError).toBeInstanceOf(Error);
     expect((interruptionError as Error).message).toMatch(/BrowserInterruptedByHuman/);
@@ -775,13 +775,15 @@ test("production MCP controls the exact visible Electron webview", async () => {
       activeTabId: null,
       tabs: [],
     });
-    // Keep one inert guest pooled for the mounted browser panel. Physical
-    // WebView destruction at this IPC boundary can deadlock Electron; the
-    // logical tab/runtime/CDP route is gone and the pooled surface is blank,
-    // invisible, and cannot intercept human input.
-    await expect(page.locator("webview")).toHaveCSS("visibility", "hidden");
-    await expect(page.locator("webview")).toHaveCSS("pointer-events", "none");
-    await expect(page.locator("html")).toHaveAttribute("data-pooled-webview-url", "about:blank");
+    const runtimeCount = await electronApp.evaluate(() => {
+      const manager = (
+        globalThis as typeof globalThis & {
+          __synaraVisibleBrowserE2E: { browserManager: { runtimes: Map<string, unknown> } };
+        }
+      ).__synaraVisibleBrowserE2E.browserManager;
+      return manager.runtimes.size;
+    });
+    expect(runtimeCount).toBe(0);
   } finally {
     try {
       await closeElectronApplication(electronApp);

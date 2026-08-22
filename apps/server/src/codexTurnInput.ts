@@ -1,14 +1,18 @@
 import type { ProviderMentionReference, ProviderSkillReference } from "@synara/contracts";
 
+export type CodexImageInputItem =
+  | { readonly type: "image"; readonly url: string }
+  | { readonly type: "localImage"; readonly path: string };
+
 export type CodexTurnInputItem =
   | { readonly type: "text"; readonly text: string; readonly text_elements: [] }
-  | { readonly type: "image"; readonly url: string }
+  | CodexImageInputItem
   | { readonly type: "skill"; readonly name: string; readonly path: string }
   | { readonly type: "mention"; readonly name: string; readonly path: string };
 
 export function buildCodexTurnInput(input: {
   readonly input?: string;
-  readonly attachments?: ReadonlyArray<{ readonly type: "image"; readonly url: string }>;
+  readonly attachments?: ReadonlyArray<CodexImageInputItem>;
   readonly skills?: ReadonlyArray<ProviderSkillReference>;
   readonly mentions?: ReadonlyArray<ProviderMentionReference>;
 }): CodexTurnInputItem[] {
@@ -21,10 +25,7 @@ export function buildCodexTurnInput(input: {
     });
   }
   for (const attachment of input.attachments ?? []) {
-    items.push({
-      type: "image",
-      url: attachment.url,
-    });
+    items.push(attachment);
   }
   for (const skill of input.skills ?? []) {
     items.push({

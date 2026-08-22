@@ -1,3 +1,5 @@
+export const DEFAULT_TOAST_TIMEOUT_MS = 10_000;
+
 export function shouldHideCollapsedToastContent(
   visibleToastIndex: number,
   visibleToastCount: number,

@@ -152,6 +152,9 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: Schema.optional(ProviderUsageStatus),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
+  // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
+  stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
@@ -257,6 +260,18 @@ export const ServerDiagnosticsResult = Schema.Struct({
 });
 export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
 
+export const ServerVoicePrewarmInput = Schema.Struct({
+  provider: ProviderKind,
+  cwd: TrimmedNonEmptyString,
+  threadId: Schema.optional(ThreadId),
+});
+export type ServerVoicePrewarmInput = typeof ServerVoicePrewarmInput.Type;
+
+export const ServerVoicePrewarmResult = Schema.Struct({
+  ready: Schema.Boolean,
+});
+export type ServerVoicePrewarmResult = typeof ServerVoicePrewarmResult.Type;
+
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
   cwd: TrimmedNonEmptyString,
@@ -338,7 +353,10 @@ export const ServerGenerateAutomationIntentResult = Schema.Struct({
 });
 export type ServerGenerateAutomationIntentResult = typeof ServerGenerateAutomationIntentResult.Type;
 
-export const ServerUpsertKeybindingInput = KeybindingRule;
+export const ServerUpsertKeybindingInput = Schema.Struct({
+  rule: KeybindingRule,
+  replacing: Schema.optional(KeybindingRule),
+});
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 
 export const ServerUpsertKeybindingResult = Schema.Struct({
@@ -391,6 +409,7 @@ export const ServerLifecycleStreamEvent = Schema.Union([
       task: Schema.Literal("thread-retention"),
       state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
+      // Legacy wire name retained so older clients can read retention progress.
       deletedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),

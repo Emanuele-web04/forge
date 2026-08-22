@@ -16,6 +16,18 @@ export interface DiffRouteSearch {
   diffFilePath?: string | undefined;
 }
 
+export function diffRouteSearchEquals(left: DiffRouteSearch, right: DiffRouteSearch): boolean {
+  return (
+    left.splitViewId === right.splitViewId &&
+    left.view === right.view &&
+    left.editorFilePath === right.editorFilePath &&
+    left.panel === right.panel &&
+    left.diff === right.diff &&
+    left.diffTurnId === right.diffTurnId &&
+    left.diffFilePath === right.diffFilePath
+  );
+}
+
 function isDiffOpenValue(value: unknown): boolean {
   return value === "1" || value === 1 || value === true;
 }

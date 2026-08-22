@@ -4,10 +4,8 @@ import type { WorkLogLiveActivity } from "../workLog";
 import {
   formatLiveActivityMeta,
   formatLiveActivityElapsed,
-  formatLiveActivityPrimary,
   formatLiveActivityProgress,
   formatLiveActivityStateLabel,
-  friendlyLiveCommandTarget,
   liveActivityElapsedMs,
 } from "./liveActivityPresentation";
 
@@ -25,33 +23,6 @@ function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogL
 }
 
 describe("live activity presentation", () => {
-  it("uses a friendly PowerShell name instead of leaking the full wrapper command", () => {
-    const command =
-      '"C:\\Users\\Example\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe" -Command "powershell -NoProfile -Command \\"1..8\\""';
-
-    expect(friendlyLiveCommandTarget(command)).toBe("PowerShell");
-    expect(
-      formatLiveActivityPrimary({
-        activity: runningActivity(),
-        heading: "Running command",
-        rawCommand: command,
-      }),
-    ).toBe("Running command · PowerShell");
-  });
-
-  it("preserves the existing target for non-command activity", () => {
-    expect(
-      formatLiveActivityPrimary({
-        activity: runningActivity({
-          state: "completed",
-          label: "Read",
-        }),
-        heading: "Read",
-        displayTarget: "Read app.ts",
-      }),
-    ).toBe("Read app.ts");
-  });
-
   it("renders recent activity and elapsed time from one normalized state", () => {
     const activity = runningActivity();
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
@@ -80,9 +51,8 @@ describe("live activity presentation", () => {
       progress: 1,
     });
 
-    expect(formatLiveActivityMeta(completed, Date.parse("2026-07-26T14:03:00.000Z"))).toBe(
-      "2m 14s elapsed · 100%",
-    );
+    // A tool call that simply succeeded says so with its own verb; no status tail.
+    expect(formatLiveActivityMeta(completed, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
 
     expect(
       formatLiveActivityMeta(

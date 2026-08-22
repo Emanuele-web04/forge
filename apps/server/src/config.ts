@@ -80,10 +80,10 @@ export interface ServerDerivedPaths {
   readonly logsDir: string;
   readonly serverLogPath: string;
   readonly serverRuntimeStatePath: string;
+  readonly quitResumeStatePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
-  readonly anonymousIdPath: string;
   readonly environmentIdPath: string;
 }
 
@@ -159,10 +159,10 @@ export const deriveServerPaths = Effect.fn(function* (
     logsDir,
     serverLogPath: join(logsDir, "server.log"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
+    quitResumeStatePath: join(stateDir, "quit-resume.json"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
-    anonymousIdPath: join(stateDir, "anonymous-id"),
     environmentIdPath: join(stateDir, "environment-id"),
   };
 });

@@ -8,10 +8,12 @@ import {
   type ReactNode,
   startTransition,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import { useAppSettings } from "../../appSettings";
@@ -23,6 +25,8 @@ import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
+import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
@@ -41,7 +45,13 @@ import type { FileCommentSelection } from "../../lib/fileComments";
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
-import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
+import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
+import {
+  clearSidechatPaneRetention,
+  getSidechatPaneRetentionVersion,
+  sidechatPaneRetentionRemainingMs,
+  subscribeSidechatPaneRetention,
+} from "../../lib/sidechatCreation";
 import {
   prefetchWorkspaceFile,
   resolveDockFileOpenTarget,
@@ -49,9 +59,11 @@ import {
   WorkspaceFileOpenerContext,
   type WorkspaceFileOpener,
 } from "../../lib/workspaceFileOpener";
+import { requestExplorerReveal } from "../../explorerRevealRequestStore";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveActivePane,
+  findMissingSidechatPaneIds,
   type RightDockPane,
   type RightDockPaneKind,
 } from "../../rightDockStore.logic";
@@ -73,9 +85,12 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
+  LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
+import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
+import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
 import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
@@ -86,6 +101,11 @@ import {
 } from "./composerPickerStyles";
 import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import {
+  selectFloatingBrowserRequested,
+  useFloatingBrowserRequestStore,
+} from "./floatingBrowserRequestStore";
+import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
+import {
   pullRequestDetailInputFromPane,
   pullRequestPaneTabLabel,
 } from "../pullRequest/pullRequestDetail.logic";
@@ -93,6 +113,7 @@ import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneSt
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
 import {
   collectParentDirectoryPaths,
   resolveFilePreviewWorkspaceRoot,
@@ -213,13 +234,16 @@ export function SingleChatSurface(props: {
     gitCwd: workspaceRoot,
     isGitRepo: hasGitRepository,
   });
+  const hasDeviceSupport = useDeviceSupport();
   const dockLauncherItems = resolveRightDockLauncherItems({
     hasWorkspace: workspaceRoot !== null,
     hasGitRepository,
     hasReview: dockDiffTotals.fileCount > 0,
+    hasDeviceSupport,
   });
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
@@ -270,8 +294,23 @@ export function SingleChatSurface(props: {
   const [editorDiffFiles, setEditorDiffFiles] = useState<ReadonlyArray<FileDiffMetadata>>([]);
   const [editorDiffFilesLoading, setEditorDiffFilesLoading] = useState(false);
   const [editorDiffOptionsControl, setEditorDiffOptionsControl] = useState<ReactNode | null>(null);
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [searchPaletteMode, setSearchPaletteMode] = useState<WorkspaceSearchPaletteMode>("files");
+  const floatingBrowserRequested = useFloatingBrowserRequestStore(
+    useMemo(() => selectFloatingBrowserRequested(props.threadId), [props.threadId]),
+  );
+  const requestFloatingBrowser = useFloatingBrowserRequestStore((store) => store.request);
+  const dismissFloatingBrowserForThread = useFloatingBrowserRequestStore((store) => store.dismiss);
+  const dismissFloatingBrowser = useCallback(() => {
+    dismissFloatingBrowserForThread(props.threadId);
+  }, [dismissFloatingBrowserForThread, props.threadId]);
 
   const activePane = resolveActivePane(dockState);
+  const floatingBrowserVisible = shouldRenderFloatingBrowserPanel({
+    hostThreadId: props.threadId,
+    floatingThreadId: floatingBrowserRequested ? props.threadId : null,
+    dockBrowserVisible: dockState.open && activePane?.kind === "browser",
+  });
   const {
     activePaneRuntimeMode,
     requestActivePaneLive: requestActiveDockPaneLive,
@@ -302,6 +341,10 @@ export function SingleChatSurface(props: {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
   };
+  const handleToggleDevice = () => {
+    requestImmediateDockHydration("device");
+    toggleSingletonPane(props.threadId, { kind: "device" });
+  };
   const handleToggleRightDock = () => {
     setDockOpen(props.threadId, !dockState.open);
   };
@@ -317,6 +360,50 @@ export function SingleChatSurface(props: {
       diffFilePath: filePath ?? null,
     });
   };
+
+  // Stable identities: these feed memoized result rows in the search palette,
+  // so recreating them per render would defeat the rows' React.memo bailout.
+  const handleOpenWorkspaceSearchFile = useCallback(
+    (relativePath: string) => {
+      requestImmediateDockHydration("file");
+      openPane(props.threadId, { kind: "file", filePath: relativePath });
+    },
+    [requestImmediateDockHydration, openPane, props.threadId],
+  );
+
+  const handleOpenWorkspaceSearchDirectory = useCallback(
+    (relativePath: string) => {
+      requestImmediateDockHydration("explorer");
+      openPane(props.threadId, { kind: "explorer" });
+      requestExplorerReveal(props.threadId, relativePath);
+    },
+    [requestImmediateDockHydration, openPane, props.threadId],
+  );
+
+  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
+  // snippet (content) search. Registered with capture so it wins over page-level
+  // defaults (print, browser find) while the chat surface is mounted.
+  useEffect(() => {
+    // Editor view returns before rendering the palette, so leave its shortcuts
+    // available to the editor instead of swallowing them invisibly.
+    if (editorViewActive) return;
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.repeat || event.altKey) return;
+      const isPrimaryModifier = event.ctrlKey || event.metaKey;
+      if (!isPrimaryModifier) return;
+      const key = event.key.toLowerCase();
+      if (key !== "p" && key !== "f") return;
+      if (key === "f" && !event.shiftKey) return;
+      if (key === "p" && event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [editorViewActive]);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -553,17 +640,30 @@ export function SingleChatSurface(props: {
         currentThreadId: props.threadId,
         requestedThreadId,
         requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
-        openBrowserPane: (threadId) => openPane(threadId, { kind: "browser" }),
-        navigateToThread: (threadId, panel) => {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId },
-            replace: true,
-            search: () => ({ panel }),
-          });
-        },
+        showFloatingBrowser: requestFloatingBrowser,
+        rememberFloatingBrowser: requestFloatingBrowser,
       });
     },
+  });
+
+  useDeviceEventBridge({
+    onOpenPaneRequested: hasDeviceSupport
+      ? (event) => {
+          routeSingleDevicePaneOpenRequest({
+            currentThreadId: props.threadId,
+            requestedThreadId: event.threadId,
+            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
+            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+            navigateToThread: (threadId) => {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId },
+                replace: true,
+              });
+            },
+          });
+        }
+      : null,
   });
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
@@ -573,6 +673,62 @@ export function SingleChatSurface(props: {
   // selector, which re-emits on every streaming token of any thread and would
   // otherwise re-render the entire chat surface + right dock + active pane.
   const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
+  const sidechatPaneRetentionVersion = useSyncExternalStore(
+    subscribeSidechatPaneRetention,
+    getSidechatPaneRetentionVersion,
+    getSidechatPaneRetentionVersion,
+  );
+  useEffect(() => {
+    if (!threadsHydrated) {
+      return;
+    }
+    const existingThreadIds = new Set(threadSummaries.map((thread) => thread.id));
+    for (const pane of dockState.panes) {
+      if (pane.kind === "sidechat" && pane.threadId && existingThreadIds.has(pane.threadId)) {
+        clearSidechatPaneRetention(pane.threadId);
+      }
+    }
+    const missingPaneIds = findMissingSidechatPaneIds(dockState, existingThreadIds);
+    if (missingPaneIds.length === 0) {
+      return;
+    }
+
+    const timerIds: number[] = [];
+    for (const paneId of missingPaneIds) {
+      const pane = dockState.panes.find((candidate) => candidate.id === paneId);
+      const remainingGraceMs = pane?.threadId ? sidechatPaneRetentionRemainingMs(pane.threadId) : 0;
+      if (remainingGraceMs === null) {
+        continue;
+      }
+      if (remainingGraceMs <= 0) {
+        if (pane?.threadId) {
+          clearSidechatPaneRetention(pane.threadId);
+        }
+        closePane(props.threadId, paneId);
+        continue;
+      }
+      timerIds.push(
+        window.setTimeout(() => {
+          if (pane?.threadId) {
+            clearSidechatPaneRetention(pane.threadId);
+          }
+          closePane(props.threadId, paneId);
+        }, remainingGraceMs),
+      );
+    }
+    return () => {
+      for (const timerId of timerIds) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [
+    closePane,
+    dockState,
+    props.threadId,
+    sidechatPaneRetentionVersion,
+    threadSummaries,
+    threadsHydrated,
+  ]);
   const editorProjectOptions = projects.flatMap((project) =>
     project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
   );
@@ -616,7 +772,6 @@ export function SingleChatSurface(props: {
       });
     });
   };
-  const hasSidechatPane = dockState.panes.some((pane) => pane.kind === "sidechat");
   const hasNamedFilePane = dockState.panes.some(
     (pane) => pane.kind === "file" && pane.filePath !== null,
   );
@@ -624,15 +779,10 @@ export function SingleChatSurface(props: {
     (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
   );
   let paneLabelOverrides: Record<string, string | undefined> | undefined;
-  if (hasSidechatPane || hasNamedFilePane || hasNumberedPullRequestPane) {
-    const titleByThreadId = hasSidechatPane
-      ? new Map(threadSummaries.map((summary) => [summary.id, summary.title]))
-      : null;
+  if (hasNamedFilePane || hasNumberedPullRequestPane) {
     const overrides: Record<string, string | undefined> = {};
     for (const pane of dockState.panes) {
-      if (pane.kind === "sidechat" && pane.threadId) {
-        overrides[pane.id] = titleByThreadId?.get(pane.threadId) || "Side";
-      } else if (pane.kind === "file" && pane.filePath) {
+      if (pane.kind === "file" && pane.filePath) {
         overrides[pane.id] = basenameOfPath(pane.filePath);
       } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
         overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
@@ -658,23 +808,28 @@ export function SingleChatSurface(props: {
     if (kind === "sidechat") {
       // Sidechat spawns a thread; reuse the composer's /side flow (correct model
       // selection) published via the registry instead of opening an empty pane.
-      const createSidechat = getSidechatCreator(props.threadId);
-      if (!createSidechat) {
-        toastManager.add({
-          type: "warning",
-          title: "Side is unavailable",
-          description: "Open a server-backed main thread before starting Side.",
+      void waitForSidechatCreator(props.threadId)
+        .then((createSidechat) => {
+          if (!createSidechat) {
+            toastManager.add({
+              type: "warning",
+              title: "Side chat is unavailable",
+              description: "Open a server-backed main thread before starting a Side chat.",
+            });
+            return;
+          }
+          return createSidechat();
+        })
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not start Side chat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating Side chat.",
+          });
         });
-        return;
-      }
-      void createSidechat().catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not start Side",
-          description:
-            error instanceof Error ? error.message : "An error occurred while creating Side.",
-        });
-      });
       return;
     }
     openPane(props.threadId, { kind });
@@ -697,6 +852,19 @@ export function SingleChatSurface(props: {
             />
           </Suspense>
         );
+      case "device":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
+            <LazyDevicePanel
+              mode="sidebar"
+              threadId={props.threadId}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              isVisible={context.isVisible}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          </Suspense>
+        );
       case "pullRequest":
         return (
           <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
@@ -704,6 +872,12 @@ export function SingleChatSurface(props: {
               pane={pane}
               pollingEnabled={context.isVisible}
               onClose={() => closePane(props.threadId, pane.id)}
+              onSelectPullRequest={(number) =>
+                updatePane(props.threadId, pane.id, {
+                  pullRequestNumber: number,
+                  pullRequestInitialTab: "summary",
+                })
+              }
             />
           </Suspense>
         );
@@ -743,6 +917,7 @@ export function SingleChatSurface(props: {
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
             />
           </Suspense>
         );
@@ -760,6 +935,7 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
             <DockExplorerPane
+              threadId={props.threadId}
               workspaceRoot={workspaceRoot}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
@@ -782,6 +958,9 @@ export function SingleChatSurface(props: {
       case "sidechat":
         if (!pane.threadId) {
           return <RightDockPanePlaceholder kind="sidechat" />;
+        }
+        if (!threadSummaries.some((thread) => thread.id === pane.threadId)) {
+          return <PanelStateMessage>Loading side chat...</PanelStateMessage>;
         }
         if (context.runtimeMode === "preview") {
           return null;
@@ -962,6 +1141,7 @@ export function SingleChatSurface(props: {
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
+              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
               onSplitSurface={handleSplitSurface}
@@ -971,6 +1151,18 @@ export function SingleChatSurface(props: {
                 onClick: handleOpenEditorView,
               }}
             />
+            {floatingBrowserVisible ? (
+              <FloatingBrowserPanel
+                key={props.threadId}
+                threadId={props.threadId}
+                onClose={dismissFloatingBrowser}
+                onPopToSidebar={() => {
+                  dismissFloatingBrowser();
+                  requestImmediateDockHydration("browser");
+                  openPane(props.threadId, { kind: "browser" });
+                }}
+              />
+            ) : null}
           </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock
@@ -981,15 +1173,30 @@ export function SingleChatSurface(props: {
           addMenuKinds={availableDockPaneKinds}
           launcherItems={dockLauncherItems}
           motionKey={props.threadId}
-          activePaneRuntimeMode={activePaneRuntimeMode}
+          activePaneRuntimeMode={
+            floatingBrowserVisible && activePane?.kind === "browser"
+              ? "preview"
+              : activePaneRuntimeMode
+          }
+          browserRuntimeMode={floatingBrowserVisible ? "preview" : "live"}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => closePane(props.threadId, paneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
-          onOpenChange={(open) => setDockOpen(props.threadId, open)}
+          onOpenChange={(open) => {
+            setDockOpen(props.threadId, open);
+          }}
           onAddPane={handleAddDockPane}
           renderPane={renderDockPane}
+        />
+        <WorkspaceSearchPalette
+          open={searchPaletteOpen}
+          mode={searchPaletteMode}
+          onOpenChange={setSearchPaletteOpen}
+          cwd={workspaceRoot}
+          onOpenFile={handleOpenWorkspaceSearchFile}
+          onOpenDirectory={handleOpenWorkspaceSearchDirectory}
         />
       </div>
     </WorkspaceFileOpenerContext.Provider>

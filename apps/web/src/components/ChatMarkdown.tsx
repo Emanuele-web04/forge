@@ -5,6 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
@@ -33,8 +34,11 @@ import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeF
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
+import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
+import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -51,6 +55,7 @@ import { InlineAgentChip } from "./chat/InlineAgentChip";
 import { InlineLinkChip } from "./InlineLinkChip";
 import { InlineMentionChip } from "./chat/InlineMentionChip";
 import { InlineSkillChip } from "./chat/InlineSkillChip";
+import { InlineSlashCommandChip } from "./chat/InlineSlashCommandChip";
 import {
   COMPOSER_CHIP_SEGMENT_ATTRIBUTE,
   COMPOSER_CHIP_TAG_NAME,
@@ -769,6 +774,7 @@ function OpenableFileChip(props: {
 }) {
   const opener = useWorkspaceFileOpener();
   const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  const revealPath = isLocalAbsolutePath(chipPath) ? chipPath : undefined;
   return (
     <InlineMentionChip
       path={chipPath}
@@ -779,6 +785,16 @@ function OpenableFileChip(props: {
         event.stopPropagation();
         const forceExternalEditor = event.metaKey || event.ctrlKey;
         openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void showFileReferenceContextMenu({
+          path: chipPath,
+          ...(revealPath ? { revealPath } : {}),
+          position: { x: event.clientX, y: event.clientY },
+          onReferenceInChat: undefined,
+        });
       }}
       {...(opener?.prefetchFile
         ? { onHoverPrefetch: () => opener.prefetchFile?.(props.targetPath) }
@@ -814,6 +830,9 @@ function ComposerChipElement(props: {
   }
   if (segment.type === "agent-mention") {
     return <InlineAgentChip alias={segment.alias} color={segment.color} />;
+  }
+  if (segment.type === "slash-command") {
+    return <InlineSlashCommandChip command={segment.command} />;
   }
   return <InlineLinkChip url={segment.url} interactive />;
 }
@@ -927,12 +946,46 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
+// While a message streams, its open code block grows on every reveal commit (~25/s) and
+// each commit re-tokenizes the whole block — quadratic in block length and the single
+// largest renderer cost of a code-heavy turn. Highlight at most this often while
+// streaming; the prefix already on screen stays put and the trailing value always lands,
+// so the block converges to exactly the settled highlight.
+// Each highlight costs roughly linearly in block length, so the cadence also stretches
+// with size: small blocks stay at the base interval, a block at
+// `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
+// `STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS`, keeping per-second tokenization work bounded.
+const STREAMING_CODE_HIGHLIGHT_INTERVAL_MS = 160;
+const STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS = 1_000;
+const STREAMING_CODE_HIGHLIGHT_BASE_CHARS = 8_000;
+const STREAMING_CODE_HIGHLIGHT_SLOW_CHARS = 80_000;
+
+export function streamingCodeHighlightIntervalMs(codeLength: number): number {
+  if (codeLength <= STREAMING_CODE_HIGHLIGHT_BASE_CHARS) {
+    return STREAMING_CODE_HIGHLIGHT_INTERVAL_MS;
+  }
+  const progress = Math.min(
+    1,
+    (codeLength - STREAMING_CODE_HIGHLIGHT_BASE_CHARS) /
+      (STREAMING_CODE_HIGHLIGHT_SLOW_CHARS - STREAMING_CODE_HIGHLIGHT_BASE_CHARS),
+  );
+  return Math.round(
+    STREAMING_CODE_HIGHLIGHT_INTERVAL_MS +
+      progress * (STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS - STREAMING_CODE_HIGHLIGHT_INTERVAL_MS),
+  );
+}
+
 function SuspenseShikiCodeBlock({
   language,
-  code,
+  code: liveCode,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
+  const code = useThrottledStreamingValue(
+    liveCode,
+    isStreaming,
+    streamingCodeHighlightIntervalMs(liveCode.length),
+  );
   const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
   return (
     <LoadedShikiCodeBlock
@@ -1039,8 +1092,13 @@ function ChatMarkdown({
   const smoothedText = useSmoothStreamedText(text, isStreaming);
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
+  // Table repair runs first and can change text length, so the thread-marker
+  // plugin below must resolve offsets against the same repaired text.
   const normalizedText = useMemo(
-    () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
+    () =>
+      isUserVariant
+        ? smoothedText
+        : protectLiteralMarkdownDollars(repairMarkdownTableDelimiters(smoothedText)),
     [isUserVariant, smoothedText],
   );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
@@ -1049,9 +1107,15 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  // Marker offsets are applied against mdast positions, which come from the
+  // repaired text — validate them against the same string. A marker recorded
+  // after a repaired delimiter row fails its `selectedText` check and is
+  // dropped instead of highlighting a shifted range.
   const threadMarkerRemarkPlugin = useMemo(
     () =>
-      markers && markers.length > 0 ? createThreadMarkerRemarkPlugin({ text, markers }) : null,
+      markers && markers.length > 0
+        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers })
+        : null,
     [markers, text],
   );
   const composerChipsRemarkPlugin = useMemo(

@@ -4,7 +4,17 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
+  /* Always-on status spinners (sidebar running-thread glyph) rotate in discrete
+     steps (~18 fps) instead of a continuous 60 fps spin. The desktop shell is a
+     transparent window over macOS vibrancy and the sidebar surface carries a
+     backdrop-filter, so EVERY presented frame re-blurs the whole sidebar in the
+     GPU process and re-composites the vibrancy in WindowServer — a 12px spinner
+     at 60 fps kept the GPU process at ~18% CPU / +100MB and the renderer at ~9%.
+     Fewer frames is the only lever that cuts all of that; at this size the 15°
+     steps are visually indistinguishable from a smooth spin. */
+  --animate-spin-stepped: spin-stepped 1.3s steps(24, end) infinite;
   --font-sans: var(--font-ui-family);
+  --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
@@ -62,6 +72,11 @@
       background-position: -200% 0;
     }
   }
+  @keyframes spin-stepped {
+    to {
+      transform: rotate(360deg);
+    }
+  }
 }
 
 @layer base {
@@ -76,19 +91,15 @@
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
        hairlines (chat/dock/diff headers) AND the right-side pane splits
        (diff/browser/dock). All resolve through here so those divider directions read
-       as the same line. The rounded sidebar↔chat seam is intentionally NOT one of
-       these — it stays at full --color-border (see --seam-line) so the card's outer
-       edge reads as before.
+       as the same line. The straight sidebar↔route seam is intentionally NOT one of
+       these — it stays at full --color-border (see --seam-line) so the outer content
+       edge remains distinct.
        (Chat headers previously used the lighter --color-border-light and looked off.)
        Held at a fraction of --color-border so these internal dividers sit slightly MORE
        transparent than card/input borders — color-mix toward transparent scales the
        border's alpha (same proven form as the seam-hover tint below) and stays
        theme-aware because --color-border already differs per theme. */
     --app-surface-divider: color-mix(in srgb, var(--color-border) 60%, transparent);
-    /* Rounded-corner radius of the chat card's seam side. Defined once here so the card
-       radius, the seam ring clip-path, the right-side border-radius, and the backing
-       strip width stay in lockstep. (All call sites still carry a 0.75rem fallback.) */
-    --app-content-card-radius: 0.9rem;
   }
 }
 
@@ -106,9 +117,8 @@
      without duplicating sidebar markup or class strings. */
   .app-sidebar-surface {
     background: var(--app-sidebar-surface, var(--card));
-    box-shadow: var(--app-sidebar-shadow, none);
-    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
   /* Small circular icon badges that sit directly on the sidebar surface inside
@@ -125,116 +135,28 @@
       0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
-  /* ─── Chat card seam (sidebar ↔ chat divider) ─────────────────────────────────
-     ONE seam only. Do NOT add a border to the sidebar surface, and do NOT draw a
-     divider line on the SidebarRail — either one makes a SECOND vertical line.
+  /* ─── Content seam (sidebar ↔ route divider) ──────────────────────────────────
+     Chat, settings, kanban, automations, and the other route surfaces share one
+     square content edge. The visible seam belongs to the content surface; the
+     SidebarRail remains only the resize hit-area so a second line is never drawn. */
 
-     The card is `overflow-hidden` + rounded on the seam side, so anything painted
-     INSIDE it is clipped to that rounded shape. That means:
-       • The corner WEDGE (the area outside the radius, between the curve and the
-         square outer corner) can never be filled from inside the card — it must be
-         backed by the PARENT. `.chat-content-card-backing` paints that parent with the
-         exact sidebar material (same color token AND same backdrop-filter), so the wedge
-         reads as the sidebar continuing under the card instead of a transparent
-         "triangle" (translucent shell) or a mismatched flat fill ("overlay").
-       • The DIVIDER is a 1px inset RING on ::before (`box-shadow: inset 0 0 0 1px`),
-         NOT a CSS border. The ring follows the inherited rounded corner; we then
-         clip-path it to just the seam-side radius strip so only the left/right curve
-         + vertical line show — never the straight top/bottom/opposite strokes (those
-         straight strokes were the "angle"/L the seam must not have). Color is
-         `--seam-line`; the content-seam SidebarRail intensifies it on hover. */
-  /* Inset routes such as settings start at x=0 and offset content via padding,
-     so clip the fill to the content box (backs only the chat area, never the sidebar
-     padding). Plain fill, NO backdrop-filter: a backdrop-filter escapes the macOS
-     window's rounded-corner clip and paints over the window edge. */
-  [data-slot="sidebar-inset"]:has(.chat-content-card) {
-    background-color: var(--app-sidebar-surface, var(--card));
-    background-clip: content-box;
-  }
-
-  /* Chat route: the backing wrapper starts AT the seam, so a narrow strip on the seam
-     side fills the card's rounded-corner wedge with the exact sidebar material
-     (color + blur). Width = corner radius keeps the (blurred) strip in the middle of
-     the window, so it never overlaps the macOS window's rounded corners the way a
-     full-bleed backdrop-filter did. */
-  .chat-content-card-backing {
-    position: relative;
-  }
-
-  .chat-content-card-backing::after {
-    content: "";
-    position: absolute;
-    z-index: 0;
-    top: 0;
-    bottom: 0;
-    /* Faded out unless the sidebar is open (see expanded rule below): when collapsed the
-       wrapper reaches the window edge, and a blurred strip there would paint over the
-       macOS window's rounded corner. Driven by opacity (not display) + a transition so
-       the wedge fades in step with the slide — at rest collapsed it is opacity:0, so it
-       still never paints over the window corner. */
-    display: block;
-    opacity: 0;
-    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
-    width: var(--app-content-card-radius, 0.75rem);
-    pointer-events: none;
-    background-color: var(--app-sidebar-surface, var(--card));
-    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
-    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
-  }
-
-  [data-sidebar-side="left"] .chat-content-card-backing::after {
-    left: 0;
-  }
-
-  /* Only when the chat layout's own sidebar is expanded is the seam (and its wedge) in the
-     middle of the window, safely away from the window's corners — so only then paint the
-     strip. Direct-child :has() so the nested right-dock sidebar-wrapper can't drive this. */
-  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="expanded"])
-    .chat-content-card-backing::after {
-    opacity: 1;
-  }
-
-  /* Seam tokens + soft depth, side-agnostic so each value lives in ONE place. The card
-     reads as a RAISED surface floating over the sidebar — a distinct material from the
-     flat macOS window border, not one more competing hairline next to it.
-       • --seam-line   : color of the ::before ring (the vertical divider + corner curve);
-                         the content-seam SidebarRail intensifies it on hover (rule below).
-       • --seam-shadow-*: the depth shadow. Geometry (blur/spread) is shared here; only the
-                         horizontal direction (--seam-shadow-x) and the alpha (light vs dark)
-                         change. The default x=0 is a harmless fallback if no sidebar side is
-                         resolved; real surfaces always set a side below.
-     Keep the shadow subtle: dark mode needs more alpha to register over the dark sidebar.
-     The card's own overflow:hidden never clips this outset shadow, so it lands on the
-     sidebar; when the sidebar is collapsed the seam sits at the window edge and the shadow
-     simply falls off-screen. */
+  /* Seam token, side-agnostic so the value lives in ONE place. The route separates from
+     the sidebar with a flat 1px divider only — no depth shadow is cast onto the sidebar.
+       • --seam-line : color of the straight vertical divider; the content-seam
+                       SidebarRail intensifies it on hover (rule below). */
   .chat-content-card {
-    /* The rounded outer seam reads stronger than --color-border (and NOT the more-transparent
-       --app-surface-divider used by the internal hairlines/splits): the card's outer
+    /* The outer seam reads stronger than --color-border (and NOT the more-transparent
+       --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 8%);
-    --seam-shadow-color: rgba(0, 0, 0, 0.1);
-    --seam-shadow-x: 0px;
-    /* Soft, low-spread depth: a modest blur + negative spread keeps the shadow near the
-       seam edge rather than fanning across the sidebar, just enough to lift the card. */
-    box-shadow: var(--seam-shadow-x) 0 12px -10px var(--seam-shadow-color);
-    /* Match the left sidebar shell's SIDEBAR_OFFCANVAS_MOTION_CLASS slide
-       (`duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]`) so the seam corner
-       rounds/squares and the depth shadow fades IN STEP with the offcanvas animation
-       instead of snapping at frame 0 (the collapsed rule below flips both). */
-    transition:
-      box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1),
-      border-radius 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --seam-line: --alpha(var(--color-black) / 12%);
   }
 
   .dark .chat-content-card {
-    --seam-shadow-color: rgba(0, 0, 0, 0.36);
     --seam-line: --alpha(var(--color-white) / 8%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
-    --seam-shadow-x: -6.5px;
-    border-radius: var(--app-content-card-radius, 0.75rem) 0 0
-      var(--app-content-card-radius, 0.75rem);
+    border-radius: 0;
   }
 
   .chat-content-card::before {
@@ -243,39 +165,25 @@
     inset: 0;
     z-index: 1;
     pointer-events: none;
-    border-radius: inherit;
-    box-shadow: inset 0 0 0 1px var(--seam-line);
-    /* Fade the seam ring with the slide (collapsed rule sets opacity:0) — `display`
+    border-radius: 0;
+    /* Fade the seam divider with the slide (collapsed rule sets opacity:0) — `display`
        can't transition, so opacity is what keeps this in step with the animation. */
     transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
-  /* Keep only the seam-side radius strip: the vertical edge + both curves on that
-     side, clipping away the straight top/bottom strokes and the opposite edge. */
+  /* A single inset stroke produces the straight content edge without adding
+     layout width or painting top/bottom borders. */
   [data-sidebar-side="left"] .chat-content-card::before {
-    clip-path: inset(0 calc(100% - var(--app-content-card-radius, 0.75rem)) 0 0);
+    box-shadow: inset 0.6px 0 0 var(--seam-line);
   }
 
   [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
     --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
   }
 
-  /* Sidebar collapsed (offcanvas): the card fills the window edge-to-edge, so its rounded
-     seam corner would sit ON TOP of the macOS window's OWN rounded corner — two mismatched
-     curves overlapping. Square the card and drop the seam ring + depth here; the window's
-     own corner is then the only one. (The backing strip is already expanded-only.)
-     Use the DIRECT-CHILD combinator: only the chat layout's own sidebar is a direct child of
-     this wrapper; the right dock nests its own sidebar-wrapper, so a plain descendant :has()
-     would also fire on the dock's (always-collapsed) sidebar. */
-  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
-    .chat-content-card {
-    border-radius: 0;
-    /* Fade the depth shadow via its color token rather than `box-shadow: none` —
-       Chromium snaps box-shadow to/from `none`, but keeping the geometry and only
-       driving the color to transparent interpolates cleanly with the slide. */
-    --seam-shadow-color: transparent;
-  }
-
+  /* Sidebar collapsed (offcanvas): drop the divider because the content fills the
+     window edge-to-edge. Use the direct-child combinator so the nested right dock
+     cannot drive the main content seam. */
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
     .chat-content-card::before {
     opacity: 0;
@@ -285,9 +193,9 @@
      Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
      same color as the vertical seam via --app-surface-divider. Painted as a 1px
      background gradient, NOT a CSS border or a positioned pseudo-element: a border would
-     bleed into the seam corner, and an absolutely-positioned line would force the header
+     paint across the seam edge, and an absolutely-positioned line would force the header
      to become a containing block (header toolbars rely on their own stacking/portals).
-     A gradient is layout-neutral and can be shortened on one side (see the card rule). */
+     A gradient is layout-neutral and does not affect the header's layout. */
   .chat-surface-divider {
     background-image: linear-gradient(var(--app-surface-divider), var(--app-surface-divider));
     background-repeat: no-repeat;
@@ -295,22 +203,12 @@
     background-size: 100% 1px;
   }
 
-  /* Inside the rounded card, the horizontal hairline and the vertical seam stroke meet at
-     the seam corner. Two 1px semi-transparent lines sharing a pixel double their alpha and
-     read as a brighter dot, so pull the hairline 1px off the seam side: it butts against
-     the seam stroke instead of crossing it. Anchor to the far edge and shrink the width so
-     only the seam-side end retracts. */
-  [data-sidebar-side="left"] .chat-content-card .chat-surface-divider {
-    background-size: calc(100% - 1px) 1px;
-    background-position: right bottom;
-  }
-
   /* Settings uses a route-level surface so the frosted window material is not
      hidden by nested scroll containers. */
   .app-settings-surface {
     background: var(--app-settings-surface, var(--color-background-surface));
-    backdrop-filter: var(--app-settings-backdrop-filter, none);
     -webkit-backdrop-filter: var(--app-settings-backdrop-filter, none);
+    backdrop-filter: var(--app-settings-backdrop-filter, none);
   }
 
   /* Animate terminal run state in CSS so many open terminals don't schedule JS timers. */
@@ -496,6 +394,9 @@
     system-ui,
     sans-serif
   );
+  /* Display/wordmark face: Cal Sans ships as a single semibold-looking cut, so
+     consumers should pair it with a normal font-weight. */
+  --font-display-family: "Cal Sans", var(--font-ui-family);
   --font-mono-family: var(
     --theme-font-code-family,
     "JetBrains Mono Variable",
@@ -511,8 +412,7 @@
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.025);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 64%, transparent);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -622,8 +522,7 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.024);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 72%, transparent);
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
@@ -1210,6 +1109,28 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+.editor-file-editor {
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  padding: 1rem;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.editor-file-editor:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
 /* Line-number gutter for the read-only file preview. Rendered via CSS counters
    on the per-line spans (Shiki and the plain fallback both emit .line), so the
    numbers stay out of text selection, clipboard copies, and the selection
@@ -1510,8 +1431,8 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, var(--background) 88%, transparent);
   color: var(--foreground);
   text-decoration: none;
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   transition:
     background-color 120ms ease,
     color 120ms ease,
@@ -2284,6 +2205,8 @@ label:has(> select#reasoning-effort) select {
    "Working for …" status line via the `shimmer` class. Provides `shimmer`,
    `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
    `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
+   One deliberate deviation: the animation is duty-cycled via `--shimmer-timing`
+   (see the note inside `@utility shimmer`).
    Docs: https://ui.shadcn.com/docs/utils/shimmer */
 @property --shimmer-angle {
   syntax: "<angle>";
@@ -2332,7 +2255,15 @@ label:has(> select#reasoning-effort) select {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
-  animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
+  /* Local deviation from the vendored utility: the sweep is duty-cycled with a stepped
+     timing function instead of `linear`. A `background-position` animation on a
+     `background-clip: text` element cannot run on the compositor, so every animation
+     frame re-rasterizes the label and — because the "Working…" line sits under the
+     composer's backdrop blur — re-blurs the glass. At 120 Hz that is ~240 repaints per
+     2 s cycle; 60 steps keep 30 hops/s (video-smooth on a label this small) and measured
+     ~-6 CPU points (renderer + GPU process) on the transcript perf harness while
+     streaming. `--shimmer-timing` lets a caller restore `linear` where the hop would show. */
+  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(60)) infinite;
 
   @variant dark {
     --_highlight: var(
@@ -2426,8 +2357,8 @@ label:has(> select#reasoning-effort) select {
   font-weight: 500;
   letter-spacing: 0.01em;
   line-height: 1;
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   text-decoration: none;
   user-select: none;
 }
@@ -2522,6 +2453,39 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
+/* Raised-chrome outline — the single border shared by every surface that floats over
+   the transcript as a solid card: the composer input shell and its attached banners,
+   the stacked rail above it, the docked Environment panel, and kanban cards. These all
+   drew the same color before this token existed (the light recipe below; plain
+   `--border` in dark), so they live on one knob and cannot drift apart again.
+
+   `--surface-border-strength` thins that base color toward transparent. Lower it to
+   make the whole raised-chrome outline recede; 100% restores the full-weight border.
+   Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
+   they are transient overlays, not part of this raised-card family. */
+:root {
+  --surface-border-strength: 72%;
+  --surface-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
+      var(--surface-border-strength),
+    transparent
+  );
+  /* Light keeps rail and input identical; only dark splits them (see below). */
+  --composer-stacked-border: var(--surface-border);
+}
+
+.dark {
+  --surface-border: color-mix(in srgb, var(--border) var(--surface-border-strength), transparent);
+  /* The stacked rail reads as a translucent continuation of the input shell, so it
+     runs at half the heavy token — matching the live-changes strip. */
+  --composer-stacked-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--surface-border-strength),
+    transparent
+  );
+}
+
 /* Composer shell/surface corner geometry — single source of truth so radius
    tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
 :root {
@@ -2612,17 +2576,67 @@ diffs-container {
   border-top-right-radius: 0;
 }
 
-/* Stacked rail above the composer input: the composer's own surface color at
-   half opacity, so the rail reads as a lighter continuation of the input shell
-   rather than a differently-colored block. */
+/* Composer glass — the same material as the floating menus/pickers
+   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
+
+   The blur lives on a `::before` at `z-index: -1` rather than on the element itself,
+   exactly like the popup primitive: `backdrop-filter` on the element would make it a
+   containing block and clip the composer's anchored pickers (which rely on
+   `overflow-visible`). Painted behind the element's own translucent fill, the layer
+   frosts the transcript scrolling underneath (see composerOverlay.ts).
+
+   Fill comes from the SAME token the floating menus use (`--popover`, via
+   `--app-composer-picker-surface`), not from `--composer-surface`. In dark mode
+   `--composer-surface` resolves to `--color-background-control-opaque`, which sits
+   within a couple of RGB steps of the chat background — thinning a color to 72% of
+   the color already behind it is a no-op, so the composer read as a flat slab even
+   with the blur running. `--popover` is the elevated token the handoff menu and the
+   pickers are built from, so the composer now lifts off the transcript exactly the
+   way they do.
+
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. */
+:root {
+  --composer-glass-opacity: 55%;
+  --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
+  --composer-glass-filter: blur(40px) saturate(150%);
+  /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
+     `--composer-glass-opacity` knob is the only thing thinning it. */
+  --composer-glass-surface: var(--popover);
+}
+
+.chat-composer-surface,
 .chat-composer-stacked-top {
-  background: color-mix(in srgb, var(--composer-surface) 50%, transparent);
+  position: relative;
+}
+
+.chat-composer-surface::before,
+.chat-composer-stacked-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  -webkit-backdrop-filter: var(--composer-glass-filter);
+  backdrop-filter: var(--composer-glass-filter);
+}
+
+/* Stacked rail above the composer input: the elevated glass surface at its
+   dedicated opacity, so the rail reads as a lighter continuation of the input. */
+.chat-composer-stacked-top {
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-stacked-opacity),
+    transparent
+  );
 }
 
 .chat-composer-surface {
-  background: var(--composer-surface);
-  backdrop-filter: var(--app-composer-backdrop-filter, none);
-  -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-opacity),
+    transparent
+  );
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken
@@ -2632,8 +2646,8 @@ diffs-container {
   border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
   filter: none !important;
-  backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 .dark .sidebar-segmented-picker {
@@ -2687,8 +2701,8 @@ diffs-container {
     --app-composer-picker-surface,
     color-mix(in oklab, var(--popover) 70%, transparent)
   );
-  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
   -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
 }
 
 /* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
@@ -2724,15 +2738,15 @@ diffs-container {
 
 /* Fixed width — only the composer model/effort/provider pickers opt in. */
 .composer-picker-menu-fixed.composer-picker-menu--normal {
-  width: 13rem;
-  min-width: 13rem;
-  max-width: min(13rem, 92vw);
+  width: 14.5rem;
+  min-width: 14.5rem;
+  max-width: min(14.5rem, 92vw);
 }
 
 .composer-picker-menu-fixed.composer-picker-menu--small {
-  width: 10rem;
-  min-width: 10rem;
-  max-width: min(10rem, 92vw);
+  width: 11.25rem;
+  min-width: 11.25rem;
+  max-width: min(11.25rem, 92vw);
 }
 
 /* Size-aware option rows inside composer picker shells. */
@@ -2826,6 +2840,15 @@ diffs-container {
   --picker-option-min-h: 2.75rem;
   --picker-option-px: 0.625rem;
   --picker-option-py: 0.3125rem;
+}
+
+/* Sidebar Synara/Studio surface switcher: tight shell inset, airy option rows.
+   Composer picker tokens otherwise pin option py to ~1px and win over Tailwind. */
+.sidebar-surface-picker-menu {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 0;
+  --picker-option-px: 0.75rem;
+  --picker-option-py: 0.5625rem;
 }
 
 .runtime-mode-menu-item {

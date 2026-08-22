@@ -79,8 +79,35 @@ export function toPersistenceDecodeCauseError(operation: string) {
     });
 }
 
+/**
+ * The projection cursor table is non-empty but a projector the snapshot
+ * sequence depends on has no cursor row. The snapshot fence is unknowable in
+ * this state: reporting any number would either serve stale data as fresh or
+ * demand an unsatisfiable resnapshot forever. Reachable only through an
+ * interrupted projection rebuild (repair/restore), so it names the missing
+ * cursors and points at the recovery path instead of guessing.
+ */
+export class ProjectionStateIncompleteError extends Schema.TaggedErrorClass<ProjectionStateIncompleteError>()(
+  "ProjectionStateIncompleteError",
+  {
+    missingProjectors: Schema.Array(Schema.String),
+    knownProjectors: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return (
+      `Projection state is incomplete: missing cursor rows for ${this.missingProjectors.join(", ")} ` +
+      `(present: ${this.knownProjectors.join(", ") || "none"}). ` +
+      "The snapshot sequence cannot be derived; restart the server so the projection " +
+      "bootstrap can rebuild the missing cursors, or run repair local state."
+    );
+  }
+}
+
 export const isPersistenceError = (u: unknown) =>
-  Schema.is(PersistenceSqlError)(u) || Schema.is(PersistenceDecodeError)(u);
+  Schema.is(PersistenceSqlError)(u) ||
+  Schema.is(PersistenceDecodeError)(u) ||
+  Schema.is(ProjectionStateIncompleteError)(u);
 
 export class MigrationLineageError extends Schema.TaggedErrorClass<MigrationLineageError>()(
   "MigrationLineageError",
@@ -157,7 +184,10 @@ export type OrchestrationCommandReceiptRepositoryError =
 
 export type ProviderSessionRuntimeRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
-export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type ProjectionRepositoryError =
+  | PersistenceSqlError
+  | PersistenceDecodeError
+  | ProjectionStateIncompleteError;
 
 export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 

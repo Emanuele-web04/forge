@@ -56,6 +56,20 @@ If you are thinking about a non-trivial change, open an issue first.
 
 That gives you a chance to check whether the direction fits before spending time on a larger patch.
 
+## Testing
+
+Run the full workspace test suite from the repository root with:
+
+```bash
+bun run test
+```
+
+For focused web tests, pass paths relative to `apps/web` through the dedicated root command:
+
+```bash
+bun run test:web:focused src/path/to/example.test.ts
+```
+
 ## Be Realistic
 
 Opening a PR does not create an obligation on our side.

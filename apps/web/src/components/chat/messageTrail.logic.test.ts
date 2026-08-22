@@ -116,6 +116,32 @@ describe("deriveMessageTrailItems", () => {
     ]);
     expect(item?.responsePreview).toBe("real final reply");
   });
+
+  it("returns the same items reference for the same entries array", () => {
+    const entries = [messageEntry("u1", "user", "ask"), messageEntry("a1", "assistant", "reply")];
+
+    expect(deriveMessageTrailItems(entries)).toBe(deriveMessageTrailItems(entries));
+  });
+
+  it("reflects a mid-list message replacement despite the per-message preview cache", () => {
+    const unchangedUser = messageEntry("u1", "user", "  first   question ");
+    const before = deriveMessageTrailItems([
+      unchangedUser,
+      messageEntry("a1", "assistant", "old reply"),
+      messageEntry("u2", "user", "second question"),
+    ]);
+    // New entries array with the middle message replaced by a new object — the
+    // store never mutates messages in place, so a text change means a new object.
+    const after = deriveMessageTrailItems([
+      unchangedUser,
+      messageEntry("a1", "assistant", "  corrected   reply "),
+      messageEntry("u2", "user", "second question"),
+    ]);
+
+    expect(before.map((item) => item.responsePreview)).toEqual(["old reply", ""]);
+    expect(after.map((item) => item.responsePreview)).toEqual(["corrected reply", ""]);
+    expect(after.map((item) => item.preview)).toEqual(["first question", "second question"]);
+  });
 });
 
 describe("resolveActiveTrailMessageId", () => {

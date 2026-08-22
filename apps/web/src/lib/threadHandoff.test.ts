@@ -1,8 +1,11 @@
 import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
   type ModelSelection,
   type OrchestrationThreadActivity,
+  type ProviderKind,
+  type ServerProviderStatus,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -66,6 +69,38 @@ describe("threadHandoff", () => {
     expect(imported!.text).not.toContain("<assistant_selection>");
   });
 
+  it("imports only the transcript through the requested message", () => {
+    const message = (id: string, role: "user" | "assistant", text: string) => ({
+      id: MessageId.makeUnsafe(id),
+      role,
+      text,
+      createdAt: "2026-07-23T10:00:00.000Z",
+      streaming: false as const,
+      source: "native" as const,
+    });
+    const thread = {
+      messages: [
+        message("m1", "user", "first ask"),
+        message("m2", "assistant", "first answer"),
+        message("m3", "user", "second ask"),
+        message("m4", "assistant", "second answer"),
+      ],
+    };
+
+    const scoped = buildThreadHandoffImportedMessages(thread, {
+      throughMessageId: MessageId.makeUnsafe("m2"),
+    });
+    expect(scoped.map((imported) => imported.text)).toEqual(["first ask", "first answer"]);
+
+    // No cutoff (and an unknown cutoff) keeps the whole importable transcript.
+    expect(buildThreadHandoffImportedMessages(thread)).toHaveLength(4);
+    expect(
+      buildThreadHandoffImportedMessages(thread, {
+        throughMessageId: MessageId.makeUnsafe("missing"),
+      }),
+    ).toHaveLength(4);
+  });
+
   it("does not import a source provider's configured context window", () => {
     const activity = (kind: string): OrchestrationThreadActivity => ({
       id: EventId.makeUnsafe(`activity-${kind}`),
@@ -88,24 +123,58 @@ describe("threadHandoff", () => {
     expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
   });
 
-  it("lists all supported handoff targets except the active provider", () => {
-    const providers = [
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "antigravity",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ] as const;
+  it("excludes disabled, missing, unavailable, and unauthenticated handoff targets", () => {
+    const readyStatus = (
+      provider: ProviderKind,
+      overrides: Partial<ServerProviderStatus> = {},
+    ): ServerProviderStatus => ({
+      provider,
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: "2026-08-07T12:00:00.000Z",
+      ...overrides,
+    });
+    const providerSettings = {
+      ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+      antigravity: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers.antigravity,
+        enabled: false,
+      },
+    };
 
-    for (const source of providers) {
-      expect(resolveAvailableHandoffTargetProviders(source)).toEqual(
-        providers.filter((provider) => provider !== source),
-      );
-    }
+    expect(
+      resolveAvailableHandoffTargetProviders({
+        sourceProvider: "codex",
+        providerSettings,
+        providerStatuses: [
+          readyStatus("codex"),
+          readyStatus("claudeAgent"),
+          readyStatus("cursor", { available: false, status: "error" }),
+          readyStatus("antigravity"),
+          readyStatus("grok", { authStatus: "unauthenticated" }),
+          readyStatus("kilo", { authStatus: "unknown" }),
+        ],
+      }),
+    ).toEqual(["claudeAgent", "kilo"]);
+  });
+
+  it("does not expose targets before enabled-provider settings are available", () => {
+    expect(
+      resolveAvailableHandoffTargetProviders({
+        sourceProvider: "codex",
+        providerSettings: undefined,
+        providerStatuses: [
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-08-07T12:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 
   it("preserves the source thread title for the created handoff thread", () => {

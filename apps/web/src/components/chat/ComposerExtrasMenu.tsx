@@ -5,14 +5,12 @@
 
 import { type ProviderInteractionMode } from "@synara/contracts";
 import { useId, useRef, type ChangeEvent } from "react";
-import { GoTasklist } from "react-icons/go";
 
-import { PaperclipIcon, PlusIcon } from "~/lib/icons";
+import { BugIcon, ListTodoIcon, MessageCircleIcon, PaperclipIcon, PlusIcon } from "~/lib/icons";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
 import {
   Menu,
-  MenuCheckboxItem,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -26,18 +24,18 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   interactionMode: ProviderInteractionMode;
   supportsFastMode: boolean;
   fastModeEnabled: boolean;
-  onAddPhotos: (files: File[]) => void;
+  onAddAttachments: (files: File[]) => void;
   onToggleFastMode: () => void;
-  onSetPlanMode: (enabled: boolean) => void;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
 }) {
   const inputId = useId();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Reset the hidden input so selecting the same image twice still emits a change event.
+  // Reset the hidden input so selecting the same file twice still emits a change event.
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length > 0) {
-      props.onAddPhotos(files);
+      props.onAddAttachments(files);
     }
     event.target.value = "";
   };
@@ -47,9 +45,8 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
       <input
         id={inputId}
         ref={fileInputRef}
-        data-testid="composer-photo-input"
+        data-testid="composer-file-input"
         type="file"
-        accept="image/*"
         multiple
         className="sr-only"
         onChange={handleFileInputChange}
@@ -65,7 +62,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             />
           }
         >
-          <PlusIcon aria-hidden="true" className="size-4" />
+          <PlusIcon aria-hidden="true" className="size-4 text-primary" />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="start">
           <MenuItem
@@ -74,22 +71,42 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             }}
           >
             <PaperclipIcon className="size-4 shrink-0" />
-            Add image
+            Add files
           </MenuItem>
 
           <MenuSeparator />
-          <MenuCheckboxItem
-            checked={props.interactionMode === "plan"}
-            variant="switch"
-            onCheckedChange={(checked) => {
-              props.onSetPlanMode(checked === true);
-            }}
-          >
-            <span className="inline-flex items-center gap-2">
-              <GoTasklist className="size-4 shrink-0" />
-              Plan mode
-            </span>
-          </MenuCheckboxItem>
+          <MenuSub>
+            <MenuSubTrigger>Mode</MenuSubTrigger>
+            <ComposerPickerMenuSubPopup>
+              <MenuRadioGroup
+                value={props.interactionMode}
+                onValueChange={(value) => {
+                  if (value === "default" || value === "plan" || value === "debug") {
+                    props.onInteractionModeChange(value);
+                  }
+                }}
+              >
+                <MenuRadioItem value="default">
+                  <span className="inline-flex items-center gap-2">
+                    <MessageCircleIcon className="size-4 shrink-0" />
+                    Default
+                  </span>
+                </MenuRadioItem>
+                <MenuRadioItem value="plan">
+                  <span className="inline-flex items-center gap-2">
+                    <ListTodoIcon className="size-4 shrink-0" />
+                    Plan
+                  </span>
+                </MenuRadioItem>
+                <MenuRadioItem value="debug">
+                  <span className="inline-flex items-center gap-2">
+                    <BugIcon className="size-4 shrink-0" />
+                    Debug
+                  </span>
+                </MenuRadioItem>
+              </MenuRadioGroup>
+            </ComposerPickerMenuSubPopup>
+          </MenuSub>
 
           {props.supportsFastMode ? (
             <>

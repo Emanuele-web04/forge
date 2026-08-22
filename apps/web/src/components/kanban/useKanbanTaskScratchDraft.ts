@@ -5,7 +5,7 @@
 
 import type { ModelSlug, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   filterPromptProviderMentionReferences,
@@ -13,9 +13,14 @@ import {
   providerMentionReferencesEqual,
   providerSkillReferencesEqual,
 } from "~/lib/composerMentions";
-import { buildComposerImageAttachmentsFromFiles } from "~/lib/composerSend";
+import { effectiveComposerAttachmentCount } from "~/lib/composerSend";
+import { useComposerImageIntake } from "~/hooks/useComposerImageIntake";
 import { newThreadId } from "~/lib/utils";
-import { useComposerDraftStore, useComposerThreadDraft } from "../../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  useComposerDraftStore,
+  useComposerThreadDraft,
+} from "../../composerDraftStore";
 import { buildModelSelection } from "../../providerModelOptions";
 import { toastManager } from "../ui/toast";
 
@@ -108,18 +113,36 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
   };
 
+  const existingAttachmentCount = useCallback(
+    () =>
+      effectiveComposerAttachmentCount(
+        useComposerDraftStore.getState().draftsByThreadId[scratchThreadId],
+      ),
+    [scratchThreadId],
+  );
+  const commitImages = useCallback(
+    (images: ComposerImageAttachment[]) =>
+      useComposerDraftStore.getState().addImages(scratchThreadId, images),
+    [scratchThreadId],
+  );
+  const handleImageError = useCallback((error: string | null) => {
+    if (error) toastManager.add({ type: "warning", title: error });
+  }, []);
+  const {
+    addImages: enqueueComposerImages,
+    isPreparingImages,
+    pendingImageCount,
+    waitForPending: waitForPendingImages,
+  } = useComposerImageIntake({
+    threadId: scratchThreadId,
+    existingAttachmentCount,
+    commitImages,
+    onError: handleImageError,
+  });
+
   const addComposerImages = (files: readonly File[]) => {
     if (files.length === 0) return;
-    const { images, error } = buildComposerImageAttachmentsFromFiles({
-      files,
-      existingAttachmentCount: composerImages.length + composerAssistantSelections.length,
-    });
-    if (images.length > 0) {
-      useComposerDraftStore.getState().addImages(scratchThreadId, images);
-    }
-    if (error) {
-      toastManager.add({ type: "warning", title: error });
-    }
+    enqueueComposerImages(files);
   };
 
   const removeComposerImage = (imageId: string) => {
@@ -149,6 +172,9 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     composerSkills,
     composerMentions,
     nonPersistedComposerImageIdSet,
+    isPreparingImages,
+    pendingImageCount,
+    waitForPendingImages,
     selectedProvider,
     selectedModel,
     selectedModelSupportsAutoMode,

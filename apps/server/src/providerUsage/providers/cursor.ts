@@ -2,13 +2,13 @@
 // Purpose: Live Cursor usage fetcher. Reads the Cursor access token from its VS Code-style
 // state.vscdb (key cursorAuth/accessToken) or the macOS keychain ("cursor-access-token")
 // read-only, then calls the Cursor DashboardService (Connect RPC) for the current billing
-// period usage + credit grants. Reference: openusage plugins/cursor/plugin.js.
+// period usage + credit grants.
 
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
-import { decodeJwtExpMs, readKeychainPassword } from "../credentials";
+import { credentialFingerprint, decodeJwtExpMs, readKeychainPassword } from "../credentials";
 import { fetchJson, isAuthFailureStatus } from "../http";
 import {
   asFiniteNumber,
@@ -37,19 +37,23 @@ interface CursorAuth {
   plan?: string;
 }
 
-function stateDbPaths(ctx: ProviderUsageContext): string[] {
+export function cursorStateDbPaths(
+  ctx: Pick<ProviderUsageContext, "homeDir" | "env" | "platform">,
+): string[] {
   const segments = ["Cursor", "User", "globalStorage", "state.vscdb"];
   if (ctx.platform === "darwin") {
     return [nodePath.join(ctx.homeDir, "Library", "Application Support", ...segments)];
   }
-  if (ctx.platform === "win32" && ctx.env.APPDATA) {
-    return [nodePath.join(ctx.env.APPDATA, ...segments)];
+  if (ctx.platform === "win32") {
+    const roaming = ctx.env.APPDATA?.trim() || nodePath.join(ctx.homeDir, "AppData", "Roaming");
+    return [nodePath.join(roaming, ...segments)];
   }
-  return [nodePath.join(ctx.homeDir, ".config", ...segments)];
+  const configHome = ctx.env.XDG_CONFIG_HOME?.trim() || nodePath.join(ctx.homeDir, ".config");
+  return [nodePath.join(configHome, ...segments)];
 }
 
 async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth | null> {
-  for (const dbPath of stateDbPaths(ctx)) {
+  for (const dbPath of cursorStateDbPaths(ctx)) {
     const values = await readItemTableValues({ dbPath, keys: [ACCESS_TOKEN_KEY, PLAN_KEY] });
     const accessToken = asString(values[ACCESS_TOKEN_KEY]);
     if (accessToken) {
@@ -73,6 +77,10 @@ function cursorHeaders(accessToken: string): Record<string, string> {
     Accept: "application/json",
     "Connect-Protocol-Version": "1",
   };
+}
+
+function cursorAuthCacheKey(ctx: ProviderUsageContext, auth: CursorAuth | null): string {
+  return auth ? `${ctx.homeDir}:${credentialFingerprint(auth.accessToken)}` : `${ctx.homeDir}:none`;
 }
 
 export function parseCursorUsage(input: {
@@ -139,6 +147,9 @@ export function parseCursorUsage(input: {
 
 export const cursorUsageFetcher: ProviderUsageFetcher = {
   provider: "cursor",
+  async cacheKey(ctx) {
+    return cursorAuthCacheKey(ctx, await resolveCursorAuth(ctx));
+  },
   async fetch(ctx) {
     const auth = await resolveCursorAuth(ctx);
     if (!auth) {

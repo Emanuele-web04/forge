@@ -40,7 +40,9 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
   collectPersistedGeneratedImagePaths,
+  nextRuntimeJournalSafetyPollDelayMs,
   ProviderRuntimeIngestionLive,
+  selectProviderRuntimeJournalStream,
 } from "./ProviderRuntimeIngestion.ts";
 import {
   OrchestrationEngineService,
@@ -181,6 +183,48 @@ type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][numbe
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
 describe("ProviderRuntimeIngestion", () => {
+  it("backs off idle journal safety polls and returns to the fast recovery cadence", () => {
+    let delayMs = 250;
+    const idleDelays: number[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      delayMs = nextRuntimeJournalSafetyPollDelayMs(delayMs, false);
+      idleDelays.push(delayMs);
+    }
+
+    expect(idleDelays).toEqual([500, 1_000, 2_000, 4_000, 5_000, 5_000]);
+    expect(nextRuntimeJournalSafetyPollDelayMs(delayMs, true)).toBe(250);
+  });
+
+  it("uses an already-persisted runtime stream without appending the event again", async () => {
+    const event: ProviderRuntimeEvent = {
+      type: "runtime.warning",
+      eventId: asEventId("evt-already-persisted-stream"),
+      provider: "codex",
+      createdAt: "2026-08-07T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { message: "already durable" },
+    };
+    const persisted = { sequence: 42, event };
+    let appendCalls = 0;
+
+    const selected = await Effect.runPromise(
+      Stream.runCollect(
+        selectProviderRuntimeJournalStream({
+          streamEvents: Stream.succeed(event),
+          streamPersistedEvents: Stream.succeed(persisted),
+          append: (candidate) =>
+            Effect.sync(() => {
+              appendCalls += 1;
+              return { sequence: 43, event: candidate };
+            }),
+        }),
+      ).pipe(Effect.map((events) => Array.from(events))),
+    );
+
+    expect(selected).toEqual([persisted]);
+    expect(appendCalls).toBe(0);
+  });
+
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
     unknown
@@ -377,6 +421,265 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(persisted.sequence);
   });
 
+  it("quarantines a command identity collision without blocking later assistant output", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-after-command-collision");
+    const itemId = asItemId("assistant-after-command-collision");
+    const collisionEvent: ProviderRuntimeEvent = {
+      type: "runtime.warning",
+      eventId: asEventId("evt-command-identity-collision"),
+      provider: "cursor",
+      createdAt: "2026-07-14T00:00:00.000Z",
+      threadId,
+      payload: { message: "Current warning shape" },
+    };
+    const collisionCommandId = CommandId.makeUnsafe(
+      `provider:${collisionEvent.eventId}:thread-activity-append:${threadId}:runtime.warning:${collisionEvent.eventId}`,
+    );
+
+    // Model a crash/upgrade boundary: this event's command id was accepted
+    // under an older projection shape, but its runtime-journal row was never
+    // acknowledged. Replaying the current shape must collide deterministically.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: collisionCommandId,
+        threadId,
+        activity: {
+          id: collisionEvent.eventId,
+          tone: "info",
+          kind: "runtime.warning",
+          summary: "Legacy warning shape",
+          payload: { message: "Legacy warning shape" },
+          turnId: null,
+          createdAt: collisionEvent.createdAt,
+        },
+        createdAt: collisionEvent.createdAt,
+      }),
+    );
+
+    const collisionRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append(collisionEvent),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:00.500Z",
+        threadId,
+        turnId,
+        payload: {},
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "content.delta",
+        eventId: asEventId("evt-assistant-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:01.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "The journal kept moving.",
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "item.completed",
+        eventId: asEventId("evt-assistant-complete-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:02.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      }),
+    );
+    const terminalRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-complete-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:03.000Z",
+        threadId,
+        turnId,
+        payload: { state: "completed" },
+      }),
+    );
+
+    await harness.startIngestion();
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === `assistant:${itemId}` &&
+          message.text === "The journal kept moving." &&
+          message.streaming === false,
+      ),
+    );
+    expect(thread.messages.find((message) => message.id === `assistant:${itemId}`)?.text).toBe(
+      "The journal kept moving.",
+    );
+    expect(
+      thread.activities.find((activity) => activity.id === collisionEvent.eventId)?.summary,
+    ).toBe("Legacy warning shape");
+    expect(thread.session).toMatchObject({ status: "ready", activeTurnId: null });
+    expect(thread.latestTurn).toMatchObject({ turnId, state: "completed" });
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(terminalRow.sequence);
+    expect(collisionRow.sequence).toBeLessThan(terminalRow.sequence);
+  });
+
+  it("quarantines a previously rejected command without blocking later assistant output", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const threadId = asThreadId("thread-1");
+    const lateThreadId = asThreadId("thread-2");
+    const turnId = asTurnId("turn-after-rejected-command");
+    const itemId = asItemId("assistant-after-rejected-command");
+    const rejectedEvent: ProviderRuntimeEvent = {
+      type: "runtime.warning",
+      eventId: asEventId("evt-previously-rejected"),
+      provider: "cursor",
+      createdAt: "2026-07-14T00:00:00.000Z",
+      threadId: lateThreadId,
+      payload: { message: "Warning for a rejected command" },
+    };
+    const rejectedCommandId = CommandId.makeUnsafe(
+      `provider:${rejectedEvent.eventId}:thread-activity-append:${lateThreadId}:runtime.warning:${rejectedEvent.eventId}`,
+    );
+
+    // Model a durable rejection: the exact command this event replays into was
+    // already rejected by an invariant (thread-2 did not exist yet when it was
+    // first dispatched), so every replay raises PreviouslyRejected — retrying
+    // the journal row can never succeed.
+    await expect(
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: rejectedCommandId,
+          threadId: lateThreadId,
+          activity: {
+            id: rejectedEvent.eventId,
+            createdAt: rejectedEvent.createdAt,
+            tone: "info",
+            kind: "runtime.warning",
+            summary: "Runtime warning",
+            payload: {
+              message: "Warning for a rejected command",
+              detail: "Warning for a rejected command",
+            },
+            turnId: null,
+          },
+          createdAt: rejectedEvent.createdAt,
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-2-create"),
+        threadId: lateThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Late thread",
+        modelSelection: {
+          provider: "cursor",
+          model: "cursor-default",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const rejectedRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append(rejectedEvent),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-after-rejected-command"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:00.500Z",
+        threadId,
+        turnId,
+        payload: {},
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "content.delta",
+        eventId: asEventId("evt-assistant-after-rejected-command"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:01.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "The journal kept moving.",
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "item.completed",
+        eventId: asEventId("evt-assistant-complete-after-rejected-command"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:02.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      }),
+    );
+    const terminalRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-complete-after-rejected-command"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:03.000Z",
+        threadId,
+        turnId,
+        payload: { state: "completed" },
+      }),
+    );
+
+    await harness.startIngestion();
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === `assistant:${itemId}` &&
+          message.text === "The journal kept moving." &&
+          message.streaming === false,
+      ),
+    );
+    expect(thread.messages.find((message) => message.id === `assistant:${itemId}`)?.text).toBe(
+      "The journal kept moving.",
+    );
+    expect(thread.latestTurn).toMatchObject({ turnId, state: "completed" });
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(terminalRow.sequence);
+    expect(rejectedRow.sequence).toBeLessThan(terminalRow.sequence);
+  });
+
   it("REL-01C gate: rebuilds accepted buffered output before a terminal event", async () => {
     const harness = await createHarness({ startIngestion: false });
     const turnId = asTurnId("turn-buffered-restart");
@@ -491,6 +794,220 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.find((message) => message.id === messageId)?.text).toBe("streamed once");
   });
 
+  it("marks streamed assistant text segments at tool-intervention boundaries", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-segment-interleave");
+    const itemId = asItemId("item-segment-interleave");
+    const threadId = asThreadId("thread-1");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const eventId = (suffix: string) => asEventId(`evt-segment-${suffix}`);
+    // Plan text before any tool activity.
+    await push({
+      type: "content.delta",
+      eventId: eventId("1"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:00.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Plan: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("2"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "scan files." },
+    });
+    // A tool call runs between the second and third text deltas.
+    const toolItemId = asItemId("tool-segment-interleave");
+    await push({
+      type: "item.started",
+      eventId: eventId("3"),
+      provider: "pi",
+      // Provider events can share the same millisecond. The causal event
+      // boundary must still split assistant text around the tool row.
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "inProgress", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("4"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Found the file: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("5"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:21.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "a.test.ts" },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("6"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:30.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "completed", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("7"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:40.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Done." },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("8"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:45.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:item-segment-interleave" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry) => entry.id === "assistant:item-segment-interleave",
+    );
+    const toolStarted = thread.activities.find((activity) => activity.kind === "tool.started");
+    expect(message?.text).toBe("Plan: scan files.Found the file: a.test.tsDone.");
+    expect(
+      message?.textSegments?.map(({ startedAt, endedAt, text }) => ({
+        startedAt,
+        endedAt,
+        text,
+      })),
+    ).toEqual([
+      {
+        startedAt: "2026-07-14T00:10:00.000Z",
+        // Buffered turns flush all segments at the terminal event, so the
+        // emit-time is the completion's time; only startedAt drives the
+        // interleaved timeline position.
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Plan: scan files.",
+      },
+      {
+        startedAt: "2026-07-14T00:10:01.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Found the file: a.test.ts",
+      },
+      {
+        startedAt: "2026-07-14T00:10:40.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Done.",
+      },
+    ]);
+    expect(message?.textSegments?.[0]?.sequence).toBeLessThan(toolStarted?.sequence ?? -1);
+    expect(toolStarted?.sequence).toBeLessThan(message?.textSegments?.[1]?.sequence ?? -1);
+  });
+
+  it("does not split assistant text for a row emitted by another thread", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-07-14T00:20:00.000Z";
+    const secondThreadId = asThreadId("thread-2");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-2-create"),
+        threadId: secondThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Second Thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const firstThreadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-thread-scoped-segments");
+    const itemId = asItemId("item-thread-scoped-segments");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    await push({
+      type: "content.delta",
+      eventId: asEventId("evt-thread-scoped-segment-1"),
+      provider: "pi",
+      createdAt,
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "One " },
+    });
+    await push({
+      type: "runtime.warning",
+      eventId: asEventId("evt-thread-scoped-warning"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:01.000Z",
+      threadId: secondThreadId,
+      payload: { message: "Unrelated warning" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: asEventId("evt-thread-scoped-segment-2"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:02.000Z",
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "message." },
+    });
+    await push({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-scoped-complete"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:03.000Z",
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:item-thread-scoped-segments" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry) => entry.id === "assistant:item-thread-scoped-segments",
+    );
+    expect(message?.text).toBe("One message.");
+    expect(message?.textSegments).toBeUndefined();
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -531,6 +1048,101 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("requests another goal turn after a clean active-goal completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-active-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-goal"),
+        threadId: asThreadId("thread-1"),
+        goal: "Finish every requirement",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-active-goal-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-active-goal-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((collected) => Array.from(collected)),
+      ),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "thread.goal-continuation-requested",
+        payload: expect.objectContaining({
+          threadId: asThreadId("thread-1"),
+          sourceTurnId: turnId,
+          trigger: "turn-completed",
+        }),
+      }),
+    );
+  });
+
+  it("pauses an active goal instead of continuing after an interrupted completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-interrupted-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-interrupted-goal"),
+        threadId: asThreadId("thread-1"),
+        goal: "Do not resurrect after interrupt",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-interrupted-goal-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-interrupted-goal-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "interrupted" && entry.goalPausedAt != null,
+    );
+    expect(thread.goalPausedAt).toBeTruthy();
+    await harness.drain();
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((collected) => Array.from(collected)),
+      ),
+    );
+    expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(false);
   });
 
   it("applies provider session.state.changed transitions directly", async () => {
@@ -718,6 +1330,72 @@ describe("ProviderRuntimeIngestion", () => {
       harness.engine,
       (thread) => thread.session?.status === "ready" && thread.session?.activeTurnId === null,
     );
+  });
+
+  it("settles orphaned pending interactions when a provider session (re)starts", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // A user-input request left behind by a previous runtime: its in-memory
+    // callback cannot survive the restart, so no response can ever consume it.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-orphaned"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: asEventId("activity-user-input-requested-orphaned"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-orphaned",
+            lifecycleGeneration: "generation-before-restart",
+            questions: [],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-session-restarted-orphaned"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId: "user-input-request-orphaned",
+      lifecycleGeneration: "generation-before-restart",
+      detail: expect.stringContaining(
+        "Stale pending user-input request: user-input-request-orphaned",
+      ),
+    });
+
+    // Re-ingesting another session start must not duplicate the settlement.
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-session-restarted-orphaned-again"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    const readModelAfter = await Effect.runPromise(harness.engine.getReadModel());
+    const failuresAfter = readModelAfter.threads
+      .find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))
+      ?.activities.filter((activity) => activity.kind === "provider.user-input.respond.failed");
+    expect(failuresAfter).toHaveLength(1);
   });
 
   it("clears running turn state when a stop emits turn.aborted without a turn id", async () => {
@@ -3993,6 +4671,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.text.length).toBe(oversizedText.length);
     expect(message?.text).toBe(oversizedText);
     expect(message?.streaming).toBe(false);
+    expect(message?.textSegments).toBeUndefined();
   });
 
   it("does not duplicate assistant completion when item.completed is followed by turn.completed", async () => {
@@ -6174,6 +6853,163 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     expect(childThread.title).toBe("Harper [reviewer]");
+  });
+
+  it("keeps ingesting after a subagent child thread is deleted instead of re-creating it", async () => {
+    const harness = await createHarness();
+    const childThreadId = asThreadId("subagent:thread-1:child-provider-deleted");
+    const collabEvent = {
+      type: "item.updated",
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-deleted-child"),
+      itemId: asItemId("item-collab-deleted"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverThreadIds: ["child-provider-deleted"],
+          },
+        },
+      },
+    } as const;
+
+    harness.emit({
+      ...collabEvent,
+      eventId: asEventId("evt-collab-deleted-child-1"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    await waitForThread(
+      harness.engine,
+      (entry) => entry.parentThreadId === "thread-1",
+      2000,
+      childThreadId,
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-delete-native-child"),
+        threadId: childThreadId,
+      }),
+    );
+
+    // A later provider event for the same child must not try to resurrect the
+    // tombstoned thread: `thread.create` would be rejected, and the rejection is
+    // stored against a deterministic command id, so every later replay of this
+    // event would fail on the stored rejection.
+    harness.emit({
+      ...collabEvent,
+      eventId: asEventId("evt-collab-deleted-child-2"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const child = readModel.threads.find((thread) => thread.id === childThreadId);
+    expect(child?.deletedAt).not.toBeNull();
+
+    // The journal keeps flowing: a blocked row would pin the cursor and stall
+    // every thread's projection.
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-after-deleted-child"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      payload: { message: "still ingesting" },
+    });
+    await harness.drain();
+    const parent = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-after-deleted-child",
+      ),
+    );
+    expect(parent.id).toBe("thread-1");
+  });
+
+  it("starts when an accepted open-turn row can no longer replay its stored command", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const eventId = asEventId("evt-open-turn-unreplayable");
+    const event: ProviderRuntimeEvent = {
+      type: "item.updated",
+      eventId,
+      provider: "codex",
+      createdAt: "2026-07-14T00:03:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-open-turn-unreplayable"),
+      itemId: asItemId("item-collab-unreplayable"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverThreadIds: ["child-provider-unreplayable"],
+          },
+        },
+      },
+    };
+
+    // Bind the child-create command id to a rejected command, the way a build
+    // that reshaped provider command ids leaves receipts the next build can
+    // never reuse. The startup rebuild runs on the server's boot path, so a row
+    // it can never replay must degrade to a warning, not a crash loop.
+    const rejected = await Effect.runPromise(
+      Effect.result(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(
+            `provider:${eventId}:subagent-thread-create:subagent:thread-1:child-provider-unreplayable`,
+          ),
+          threadId: asThreadId("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: "Duplicate",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: event.createdAt,
+        }),
+      ),
+    );
+    expect(rejected._tag).toBe("Failure");
+
+    const persisted = await Effect.runPromise(harness.runtimeEventRepository.append(event));
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: event.createdAt,
+        }),
+      ),
+    ).toBe(true);
+
+    await harness.startIngestion();
+
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "runtime.warning",
+        eventId: asEventId("evt-after-unreplayable-open-turn"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:03:01.000Z",
+        threadId: asThreadId("thread-1"),
+        payload: { message: "still ingesting" },
+      }),
+    );
+    await harness.drain();
+    const parent = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-after-unreplayable-open-turn",
+      ),
+    );
+    expect(parent.id).toBe("thread-1");
   });
 
   it("caps native child materialization per parent turn and deduplicates replay", async () => {

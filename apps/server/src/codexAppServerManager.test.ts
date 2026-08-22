@@ -28,11 +28,13 @@ import {
 } from "./codexProcessEnv";
 import {
   buildCodexInitializeParams,
+  buildCodexThreadOpenRequest,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   __codexCliVersionGateTesting,
   CodexAppServerManager,
   classifyCodexStderrLine,
+  formatCodexThreadResumeError,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
@@ -1386,6 +1388,84 @@ describe("isRecoverableThreadResumeError", () => {
   });
 });
 
+describe("buildCodexThreadOpenRequest", () => {
+  const sessionOverrides = {
+    model: null,
+    cwd: "/tmp/project",
+    approvalPolicy: "never" as const,
+    approvalsReviewer: "user" as const,
+    sandbox: "danger-full-access" as const,
+  };
+
+  it("forks an external thread into a new provider-owned thread", () => {
+    expect(
+      buildCodexThreadOpenRequest({
+        forkSourceThreadId: "external-thread",
+        sessionOverrides,
+      }),
+    ).toEqual({
+      method: "thread/fork",
+      params: {
+        ...sessionOverrides,
+        threadId: "external-thread",
+      },
+    });
+  });
+
+  it("resumes an existing provider thread without start-only options", () => {
+    expect(
+      buildCodexThreadOpenRequest({
+        resumeThreadId: "existing-thread",
+        sessionOverrides,
+      }),
+    ).toEqual({
+      method: "thread/resume",
+      params: {
+        ...sessionOverrides,
+        threadId: "existing-thread",
+      },
+    });
+  });
+
+  it("starts a fresh thread with raw events disabled", () => {
+    expect(buildCodexThreadOpenRequest({ sessionOverrides })).toEqual({
+      method: "thread/start",
+      params: {
+        ...sessionOverrides,
+        experimentalRawEvents: false,
+      },
+    });
+  });
+
+  it("rejects conflicting resume and fork sources", () => {
+    expect(() =>
+      buildCodexThreadOpenRequest({
+        forkSourceThreadId: "fork-source",
+        resumeThreadId: "resume-source",
+        sessionOverrides,
+      }),
+    ).toThrow("cannot resume and fork at the same time");
+  });
+});
+
+describe("formatCodexThreadResumeError", () => {
+  it("explains how to resolve an active writer conflict", () => {
+    const formatted = formatCodexThreadResumeError(
+      new Error("thread/resume failed: thread external-thread already has an active writer"),
+      "external-thread",
+    );
+
+    expect(formatted.message).toBe(
+      "Codex thread external-thread is open in another Codex client. Close that client before continuing the original thread, or import it as a copy instead.",
+    );
+  });
+
+  it("preserves unrelated resume errors", () => {
+    const original = new Error("thread/resume failed: permission denied");
+    expect(formatCodexThreadResumeError(original, "external-thread")).toBe(original);
+  });
+});
+
 describe("readCodexAccountSnapshot", () => {
   it("disables spark for chatgpt plus accounts", () => {
     expect(
@@ -1797,6 +1877,57 @@ describe("sendTurn", () => {
     });
   });
 
+  it("maps Debug to native default collaboration while preserving full-access overrides", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Investigate the crash",
+      interactionMode: "debug",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Investigate the crash",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.3-codex",
+          reasoning_effort: "medium",
+          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+  });
+
+  it("preserves auto-review overrides in Debug mode", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("auto");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Investigate and fix the flaky test",
+      interactionMode: "debug",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        ...autoTurnOverrides,
+        collaborationMode: expect.objectContaining({ mode: "default" }),
+      }),
+    );
+  });
+
   it("keeps the session model when interaction mode is set without an explicit model", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.model = "gpt-5.2-codex";
@@ -1972,6 +2103,113 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("restarts the idle grace period after a discovery request settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      const context = {
+        discovery: true,
+        session: { cwd: "/repo" },
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        nextRequestId: 1,
+        stopping: false,
+      };
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", context);
+      vi.spyOn(
+        manager as unknown as {
+          writeMessage: () => Promise<void>;
+        },
+        "writeMessage",
+      ).mockResolvedValue(undefined);
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+      const request = (
+        manager as unknown as {
+          sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+        }
+      ).sendRequest(context, "model/list", {});
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      (
+        manager as unknown as {
+          handleResponse: (context: unknown, response: unknown) => void;
+        }
+      ).handleResponse(context, { id: 1, result: {} });
+      await request;
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops an idle discovery session after its configured grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", {
+        stopping: false,
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+      });
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+      expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("wires model discovery through model/list", async () => {
     const manager = new CodexAppServerManager();
     const context = {
@@ -2161,6 +2399,218 @@ describe("CodexAppServerManager discovery", () => {
       ).resolveContextForDiscovery(),
     ).resolves.toBe(discoveryContext);
     expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd());
+  });
+
+  it("reuses one in-flight discovery startup for concurrent callers", async () => {
+    const manager = new CodexAppServerManager();
+    const context = { discovery: true };
+    let resolveStartup!: (value: unknown) => void;
+    const startup = new Promise<unknown>((resolve) => {
+      resolveStartup = resolve;
+    });
+    const createDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          createDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "createDiscoverySession",
+      )
+      .mockReturnValue(startup);
+    const getOrCreateDiscoverySession = (
+      manager as unknown as {
+        getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+      }
+    ).getOrCreateDiscoverySession.bind(manager);
+
+    const first = getOrCreateDiscoverySession("/repo");
+    const second = getOrCreateDiscoverySession("/repo");
+
+    expect(createDiscoverySession).toHaveBeenCalledTimes(1);
+    resolveStartup(context);
+    await expect(Promise.all([first, second])).resolves.toEqual([context, context]);
+  });
+
+  it("waits for an in-flight discovery startup before stopAll completes", async () => {
+    const manager = new CodexAppServerManager();
+    let resolveStartup!: (value: unknown) => void;
+    const startup = new Promise<unknown>((resolve) => {
+      resolveStartup = resolve;
+    });
+    vi.spyOn(
+      manager as unknown as {
+        createDiscoverySession: (cwd: string) => Promise<unknown>;
+      },
+      "createDiscoverySession",
+    ).mockReturnValue(startup);
+    const stopDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          stopDiscoverySession: (cwd: string) => Promise<void>;
+        },
+        "stopDiscoverySession",
+      )
+      .mockResolvedValue(undefined);
+
+    const pendingStartup = (
+      manager as unknown as {
+        getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+      }
+    ).getOrCreateDiscoverySession("/repo");
+    (
+      manager as unknown as {
+        discoverySessions: Map<string, unknown>;
+      }
+    ).discoverySessions.set("/repo", { status: "connecting" });
+    const stopping = manager.stopAll();
+    await Promise.resolve();
+    expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+    resolveStartup({ discovery: true });
+    await expect(Promise.all([pendingStartup, stopping])).resolves.toEqual([
+      { discovery: true },
+      undefined,
+    ]);
+    expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    expect(stopDiscoverySession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a live thread for voice auth even when the project cwd is a worktree", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_voice",
+        runtimeMode: "full-access",
+        cwd: "/provider/repo",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_voice", context);
+    const resolveContextForDiscovery = vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string, cwd?: string) => Promise<unknown>;
+      },
+      "resolveContextForDiscovery",
+    );
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ authMethod: "chatgpt", authToken: "voice-token" });
+
+    const resolveVoiceTranscriptionAuth = (
+      manager as unknown as {
+        resolveVoiceTranscriptionAuth: (input: {
+          cwd: string;
+          threadId: string;
+          refreshToken: boolean;
+        }) => Promise<unknown>;
+      }
+    ).resolveVoiceTranscriptionAuth.bind(manager);
+    await expect(
+      resolveVoiceTranscriptionAuth({
+        cwd: "/worktrees/repo-2",
+        threadId: "thread_voice",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    await expect(
+      resolveVoiceTranscriptionAuth({
+        cwd: "/worktrees/repo-3",
+        threadId: "thread_voice",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    expect(resolveContextForDiscovery).not.toHaveBeenCalled();
+    expect(sendRequest).toHaveBeenCalledTimes(1);
+    expect(sendRequest).toHaveBeenCalledWith(context, "getAuthStatus", {
+      includeToken: true,
+      refreshToken: false,
+    });
+  });
+
+  it("uses discovery for voice auth while the requested thread is still connecting", async () => {
+    const manager = new CodexAppServerManager();
+    const connectingContext = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        threadId: "thread_connecting",
+        runtimeMode: "full-access",
+        cwd: "/repo",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+    };
+    const discoveryContext = { discovery: true };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_connecting", connectingContext);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string, cwd?: string) => Promise<unknown>;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockResolvedValue(discoveryContext);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ authMethod: "chatgpt", authToken: "voice-token" });
+
+    const loadVoiceTranscriptionAuth = (
+      manager as unknown as {
+        loadVoiceTranscriptionAuth: (input: {
+          cwd: string;
+          threadId: string;
+          refreshToken: boolean;
+        }) => Promise<unknown>;
+      }
+    ).loadVoiceTranscriptionAuth.bind(manager);
+
+    await expect(
+      loadVoiceTranscriptionAuth({
+        cwd: "/repo",
+        threadId: "thread_connecting",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, "/repo");
+    expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "getAuthStatus", {
+      includeToken: true,
+      refreshToken: false,
+    });
+    expect(sendRequest).not.toHaveBeenCalledWith(
+      connectingContext,
+      "getAuthStatus",
+      expect.anything(),
+    );
   });
 
   it("retries skills/list with cwd when a runtime rejects cwds", async () => {

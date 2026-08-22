@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
+  ThreadGoalAchievement,
   ThreadMarker,
 } from "@synara/contracts";
 import {
@@ -12,6 +13,7 @@ import {
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
+  THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
   TurnId,
 } from "@synara/contracts";
@@ -31,6 +33,7 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
@@ -44,6 +47,7 @@ import {
   listActiveProjectsByWorkspaceRoot,
   listActiveSpaces,
   listThreadsByProjectId,
+  requireApprovalNotResponded,
   requireProject,
   requireProjectAbsent,
   requireProjectHasNoThreads,
@@ -59,6 +63,8 @@ import {
   requireThreadNotArchived,
   threadHasInFlightTurn,
   threadHasCheckpointRevertInProgress,
+  threadResumePreconditionDetail,
+  threadResumePreconditionViolation,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -319,6 +325,81 @@ function resolveCreatedThreadWorkspaceMetadata(
         : {}),
     }),
   };
+}
+
+/**
+ * Stamps authoritative goal timestamps for `thread.meta.update`. `goalAchieved`
+ * takes precedence over everything: it records a ThreadGoalAchievement (with
+ * pause-adjusted elapsed time, anchored to the thread's latest turn) and clears
+ * the goal in the same event. A goal change takes precedence over `goalPaused`
+ * in the same command: a newly set goal starts the pursuit clock, an edit of an
+ * existing goal keeps the running clock and pause state, and clearing resets
+ * everything. Pause freezes the clock at `goalPausedAt`; resume rebases
+ * `goalStartedAt` so the paused span is excluded from the elapsed time.
+ */
+function resolveThreadGoalPatch(
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  currentThread: OrchestrationThread,
+  occurredAt: string,
+): {
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: readonly ThreadGoalAchievement[];
+} {
+  const activeGoal = (currentThread.goal ?? "").trim();
+  if (command.goalAchieved === true) {
+    if (activeGoal.length === 0) {
+      return {};
+    }
+    const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+    const pausedMs = Date.parse(currentThread.goalPausedAt ?? "");
+    const occurredMs = Date.parse(occurredAt);
+    const endMs = Number.isFinite(pausedMs) ? pausedMs : occurredMs;
+    const elapsedMs =
+      Number.isFinite(startedMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startedMs) : null;
+    const achievement: ThreadGoalAchievement = {
+      goal: activeGoal,
+      achievedAt: occurredAt,
+      elapsedMs,
+      turnId: currentThread.latestTurn?.turnId ?? null,
+    };
+    return {
+      goal: "",
+      goalStartedAt: null,
+      goalPausedAt: null,
+      goalAchievements: [...(currentThread.goalAchievements ?? []), achievement].slice(
+        -THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
+      ),
+    };
+  }
+  if (command.goal !== undefined) {
+    if (command.goal.trim().length === 0) {
+      return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
+    }
+    if (activeGoal.length > 0) {
+      return { goal: command.goal };
+    }
+    return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
+  }
+  if (command.goalPaused === undefined || activeGoal.length === 0) {
+    return {};
+  }
+  const pausedAt = currentThread.goalPausedAt ?? null;
+  if (command.goalPaused) {
+    return pausedAt === null ? { goalPausedAt: occurredAt } : {};
+  }
+  if (pausedAt === null) {
+    return {};
+  }
+  const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+  const pausedMs = Date.parse(pausedAt);
+  const occurredMs = Date.parse(occurredAt);
+  const rebasedStartedAt =
+    Number.isFinite(startedMs) && Number.isFinite(pausedMs) && Number.isFinite(occurredMs)
+      ? new Date(occurredMs - Math.max(0, pausedMs - startedMs)).toISOString()
+      : occurredAt;
+  return { goalStartedAt: rebasedStartedAt, goalPausedAt: null };
 }
 
 function resolveThreadWorkspaceMetadataPatch(
@@ -883,7 +964,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
+      // Provider-native threads mirror subagents the provider already runs;
+      // Synara never starts a session for them, so the Auto-mode capability
+      // check can only reject the projection (and durably poison the runtime
+      // journal replaying it), never prevent an unverified Auto session.
+      if (command.creationSource !== "provider_native") {
+        yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1068,7 +1155,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
-          title: command.title,
+          title: command.sidechatSourceThreadId
+            ? command.title
+            : buildForkThreadTitle(
+                sourceThread,
+                listThreadsByProjectId(readModel, command.projectId),
+              ),
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
@@ -1215,7 +1307,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
-      if (command.modelSelection !== undefined) {
+      // Provider-native threads: see thread.create — the selection mirrors the
+      // provider's own subagent, so the Auto-mode capability check doesn't apply.
+      if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, thread.runtimeMode);
       }
       const occurredAt = nowIso();
@@ -1235,6 +1329,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.isSettled !== undefined
+            ? { settledAt: command.isSettled ? occurredAt : null }
+            : {}),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
             : {}),
@@ -1251,6 +1348,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          ...(command.goalStartBehavior !== undefined
+            ? { goalStartBehavior: command.goalStartBehavior }
+            : {}),
+          ...resolveThreadGoalPatch(command, thread, occurredAt),
           updatedAt: occurredAt,
         },
       };
@@ -1530,7 +1631,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.interaction-mode.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
@@ -1546,6 +1647,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.interaction-mode-set",
         payload: {
           threadId: command.threadId,
+          previousInteractionMode: thread.interactionMode,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
         },
@@ -1558,6 +1660,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.resumePrecondition !== undefined) {
+        // Quit-resume continuations are only valid while the thread is exactly as
+        // it was recorded; checked here so it holds inside the serialized dispatch.
+        const violation = threadResumePreconditionViolation(
+          targetThread,
+          command.resumePrecondition,
+        );
+        if (violation !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: threadResumePreconditionDetail(command.threadId, violation),
+          });
+        }
+      }
       if (threadHasCheckpointRevertInProgress(targetThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1565,10 +1681,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      // A quit-resume command is planned just before commands are admitted.
+      // Respect settings changed before its serialized dispatch instead of
+      // replaying the planner's stale permission or interaction mode.
+      const runtimeMode =
+        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+      const interactionMode =
+        command.resumePrecondition === undefined
+          ? command.interactionMode
+          : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
         command,
         command.modelSelection ?? targetThread.modelSelection,
-        command.runtimeMode,
+        runtimeMode,
       );
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1635,8 +1760,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
-        runtimeMode: command.runtimeMode,
-        interactionMode: command.interactionMode,
+        runtimeMode,
+        interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;
@@ -1737,12 +1862,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1756,6 +1881,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      if ((thread.goal ?? "").trim().length === 0 || thread.goalPausedAt != null) {
+        return interruptEvent;
+      }
+
+      const pausedAt = nowIso();
+      const pauseEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: pausedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          goalPausedAt: pausedAt,
+          updatedAt: pausedAt,
+        },
+      };
+      return [
+        pauseEvent,
+        {
+          ...interruptEvent,
+          causationEventId: pauseEvent.eventId,
+        },
+      ];
     }
 
     case "thread.task.stop": {
@@ -1807,6 +1958,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         readModel,
         command,
         threadId: command.threadId,
+      });
+      yield* requireApprovalNotResponded({
+        readModel,
+        command,
+        threadId: command.threadId,
+        requestId: command.requestId,
+        ...(command.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: command.lifecycleGeneration }
+          : {}),
       });
       return {
         ...withEventBase({
@@ -2071,6 +2231,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.goal.continue": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-continuation-requested",
+        payload: {
+          threadId: command.threadId,
+          goalStartedAt: command.goalStartedAt,
+          trigger: command.trigger,
+          ...(command.sourceTurnId !== undefined ? { sourceTurnId: command.sourceTurnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,
@@ -2153,6 +2337,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.segmentStartedAt ? { segmentStartedAt: command.segmentStartedAt } : {}),
+          ...(command.segmentSequence !== undefined
+            ? { segmentSequence: command.segmentSequence }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,

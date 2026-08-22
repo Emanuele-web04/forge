@@ -1056,6 +1056,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
       if (event.type === "exited") {
         flushPendingWrites(entry);
+        setRuntimeStatus(entry, "exited");
+        entry.callbacks.onTerminalActivityChange(entry.terminalId, {
+          hasRunningSubprocess: false,
+          agentState: null,
+        });
         const details = [
           typeof event.exitCode === "number" ? `code ${event.exitCode}` : null,
           typeof event.exitSignal === "number" ? `signal ${event.exitSignal}` : null,

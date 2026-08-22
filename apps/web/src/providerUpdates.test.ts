@@ -7,6 +7,7 @@ import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getNotifiableProviderUpdateStatuses,
   getVisibleProviderUpdateStatuses,
   isProviderLatestVersionKnowable,
   isProviderUpdateActive,
@@ -146,6 +147,46 @@ describe("getVisibleProviderUpdateStatuses", () => {
         oneClickOnly: true,
       }).map((provider) => provider.provider),
     ).toEqual(["codex"]);
+  });
+});
+
+describe("getNotifiableProviderUpdateStatuses", () => {
+  it("suppresses cached update advisories until a live version check completes", () => {
+    const providers = [providerStatus("claudeAgent")];
+    const settings = serverSettings();
+
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers,
+        serverSettings: settings,
+        liveVersionCheckCompleted: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers,
+        serverSettings: settings,
+        liveVersionCheckCompleted: true,
+      }).map((provider) => provider.provider),
+    ).toEqual(["claudeAgent"]);
+  });
+
+  it("keeps notifications limited to one-click updates after verification", () => {
+    const manualOnly = providerStatus("claudeAgent", {
+      versionAdvisory: {
+        ...providerStatus("claudeAgent").versionAdvisory!,
+        updateCommand: null,
+        canUpdate: false,
+      },
+    });
+
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers: [manualOnly],
+        serverSettings: serverSettings(),
+        liveVersionCheckCompleted: true,
+      }),
+    ).toEqual([]);
   });
 });
 

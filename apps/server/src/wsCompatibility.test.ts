@@ -1,4 +1,5 @@
 import {
+  WS_CLIENT_REQUIRED_CAPABILITIES,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
@@ -33,6 +34,8 @@ describe("WebSocket compatibility bootstrap", () => {
     expect(result.serverInstanceId.length).toBeGreaterThan(0);
     expect(result.capabilities).toContain("orchestration.cursor-safe-streams");
     expect(result.capabilities).toContain("orchestration.thread-detail-snapshot");
+    expect(result.capabilities).toContain("projects.github-provisioning");
+    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain("projects.github-provisioning");
   });
 
   it("returns terminal update guidance and rejects feature calls without negotiated query data", async () => {

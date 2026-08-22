@@ -19,6 +19,7 @@ export const PullRequestList = function PullRequestList({
   selectedRepo,
   selectedNumber,
   showProjectTitle: showProjectTitleProp,
+  showDiffColors: showDiffColorsProp,
   onSelect,
   onTogglePinned,
 }: {
@@ -28,15 +29,18 @@ export const PullRequestList = function PullRequestList({
   selectedRepo: string | undefined;
   selectedNumber: number | undefined;
   showProjectTitle?: boolean;
+  showDiffColors?: boolean;
   onSelect: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
+  const showDiffColors = showDiffColorsProp ?? true;
   const renderEntry = (entry: PullRequestListEntry) => (
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}
       entry={entry}
       showProjectTitle={showProjectTitle}
+      showDiffColors={showDiffColors}
       selected={
         selectedProjectId === entry.projectId &&
         selectedRepo === entry.repository &&

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import {
   CommandId,
   DEFAULT_TERMINAL_ID,
+  DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
@@ -12,10 +13,14 @@ import {
   WS_METHODS,
   WsBootstrapRpcGroup,
   WsCompatibilityError,
+  WsDeviceRpcGroup,
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
+  type DeviceEvent,
   type GitActionProgressEvent,
+  type GitHubProjectProvisionProgressEvent,
+  type GitWorktreeSetupProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
@@ -46,13 +51,22 @@ import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuer
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import {
+  isThreadDetailEventFor,
+  THREAD_DETAIL_EVENT_TYPES,
+} from "@synara/shared/threadDetailEvents";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
+import { DeviceService } from "./device/Services/DeviceService";
+import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
+import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
+import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -75,13 +89,16 @@ import {
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
+import { ProjectionStateIncompleteError } from "./persistence/Errors";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
+import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
@@ -97,8 +114,13 @@ import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
-import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import {
+  WorkspaceFileConflictError,
+  WorkspaceFileDeletedError,
+  WorkspaceFileSystem,
+} from "./workspace/Services/WorkspaceFileSystem";
 import {
   MAX_STREAMS_PER_RPC_CLIENT,
   MAX_THREAD_STREAMS_PER_RPC_CLIENT,
@@ -106,6 +128,7 @@ import {
 } from "./wsStreamAdmission";
 import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
   CurrentWsSessionRole,
   provideWsConnectionSession,
@@ -126,9 +149,16 @@ import {
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
-import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
+import {
+  makeCursorSafeSnapshotLiveStream,
+  makeResnapshotEscalationTracker,
+} from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+import {
+  GitHubProjectProvisioningError,
+  makeGitHubProjectProvisioner,
+} from "./project/githubProjectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -137,12 +167,24 @@ export function canManageExternalMcp(role: "owner" | "client"): boolean {
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 
+// Bounded window a thread subscription waits for the projector to commit the
+// thread's detail read model before failing with THREAD_SNAPSHOT_NOT_FOUND.
+// Covers subscribe-vs-projection races on freshly created threads; a thread
+// that truly does not exist still fails, just this much later.
+const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
+const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
+
 class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
   "synara/WsRequestAdmissionMiddleware",
   { error: WsRpcError, requiredForClient: false },
 ) {}
 
-const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.middleware(WsRequestAdmissionMiddleware);
+// The device group is defined separately in contracts because its engine is
+// macOS-only, but it is served on the same socket: one connection, one
+// admission middleware, one exhaustive handler map.
+const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup).middleware(
+  WsRequestAdmissionMiddleware,
+);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
@@ -178,7 +220,9 @@ interface ProcessTableRow {
 }
 
 function redactAndTruncateProcessArgs(args: string): string {
-  const redacted = redactSensitiveProcessArgs(args);
+  const redacted = redactSensitiveProcessArgs(args, {
+    truncateSensitiveEnvironmentRemainder: true,
+  });
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;
@@ -241,14 +285,30 @@ function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
 }
 
 function toWsRpcError(cause: unknown, fallbackMessage: string) {
-  return Schema.is(WsRpcError)(cause)
-    ? cause
-    : new WsRpcError({
-        message:
-          cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
-        cause,
-      });
+  if (Schema.is(WsRpcError)(cause)) {
+    return cause;
+  }
+  // Missing projector cursors make the snapshot fence underivable. Mark the
+  // failure non-retryable with its own code so clients surface a diagnosable
+  // fault instead of restarting the stream into the same condition forever.
+  if (Schema.is(ProjectionStateIncompleteError)(cause)) {
+    return new WsRpcError({
+      message: cause.message,
+      code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+      retryable: false,
+      cause,
+    });
+  }
+  return new WsRpcError({
+    message: cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
+    cause,
+  });
 }
+
+// Process-wide so a subscriber's restart chain survives its own reconnects
+// (the client id is stable across a socket reconnect), but keyed per
+// subscriber inside the tracker — see makeResnapshotEscalationTracker.
+const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
 
 const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
   Effect.fail(
@@ -274,31 +334,6 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
-function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
-  return (
-    event.aggregateKind === "thread" &&
-    event.aggregateId === threadId &&
-    (event.type === "thread.message-sent" ||
-      event.type === "thread.proposed-plan-upserted" ||
-      event.type === "thread.activity-appended" ||
-      event.type === "thread.turn-diff-completed" ||
-      event.type === "thread.reverted" ||
-      event.type === "thread.conversation-rolled-back" ||
-      event.type === "thread.session-set" ||
-      event.type === "thread.meta-updated" ||
-      event.type === "thread.pinned-message-added" ||
-      event.type === "thread.pinned-message-removed" ||
-      event.type === "thread.pinned-message-done-set" ||
-      event.type === "thread.pinned-message-label-set" ||
-      event.type === "thread.marker-added" ||
-      event.type === "thread.marker-removed" ||
-      event.type === "thread.marker-done-set" ||
-      event.type === "thread.marker-label-set" ||
-      event.type === "thread.archived" ||
-      event.type === "thread.unarchived")
-  );
-}
-
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -309,6 +344,7 @@ const makeWsRpcHandlersLayer = () =>
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
+      const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -332,6 +368,17 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      // Optional so route-level tests and non-macOS builds can mount the RPC
+      // group without a device engine; the handlers below then refuse cleanly
+      // with the same unsupported-platform answer the backend would give.
+      const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
+      const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
+        homeDir: config.homeDir,
+        fileSystem,
+        path,
+        git,
+        github,
+      });
       const streamAdmission = yield* makeWsStreamAdmission({
         recordRejection: (incident) =>
           threadDiagnostics
@@ -413,6 +460,25 @@ const makeWsRpcHandlersLayer = () =>
               }),
             ),
           );
+
+      // A thread subscription can race the projector: the client subscribes the
+      // moment a create/turn RPC resolves, while the detail read model commits
+      // asynchronously behind the journal. Failing straight away with
+      // THREAD_SNAPSHOT_NOT_FOUND tears the stream down for a thread the server
+      // is actively running. Waiting here is safe because the cursor-safe
+      // stream attaches its live tap before evaluating the snapshot effect, so
+      // no event that commits during the wait is lost.
+      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
+          while (true) {
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            if (Option.isSome(detail) || Date.now() >= deadline) {
+              return detail;
+            }
+            yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
+          }
+        });
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -633,6 +699,13 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
+      const refreshGitStatusInBackground = (cwd: string) =>
+        gitStatusBroadcaster.refreshStatus(cwd).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
         homeDir: config.homeDir,
         worktreesDir: config.worktreesDir,
@@ -744,6 +817,30 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const toProjectProvisionRpcError = (cause: unknown) =>
+        cause instanceof GitHubProjectProvisioningError
+          ? new WsRpcError({
+              message: cause.message,
+              code: cause.code,
+              retryable: cause.retryable,
+            })
+          : toWsRpcError(cause, "Failed to clone and add the GitHub project");
+
+      const findRegisteredProjectId = (workspaceRoot: string) =>
+        orchestrationEngine
+          .getReadModel()
+          .pipe(
+            Effect.map(
+              (readModel) =>
+                readModel.projects.find(
+                  (project) =>
+                    project.kind === "project" &&
+                    project.deletedAt === null &&
+                    workspaceRootsEqual(project.workspaceRoot, workspaceRoot),
+                )?.id ?? null,
+            ),
+          );
+
       const requireOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
           return yield* Effect.fail(
@@ -807,18 +904,24 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
-        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
-          rpcEffect(
-            Stream.runCollect(
-              orchestrationEngine.readEvents(
-                clamp(input.fromSequenceExclusive, {
-                  maximum: Number.MAX_SAFE_INTEGER,
-                  minimum: 0,
-                }),
-              ),
-            ).pipe(Effect.map((events) => Array.from(events))),
+        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
+          const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
+            maximum: Number.MAX_SAFE_INTEGER,
+            minimum: 0,
+          });
+          const replay =
+            input.threadId === undefined
+              ? orchestrationEngine.readEvents(fromSequenceExclusive)
+              : orchestrationEngine.readThreadEvents(
+                  input.threadId,
+                  fromSequenceExclusive,
+                  THREAD_DETAIL_EVENT_TYPES,
+                );
+          return rpcEffect(
+            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
-          ),
+          );
+        },
         [ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers]: (input) =>
           rpcEffect(
             providerCommandReactor.listBlockingDeliveries({
@@ -826,6 +929,20 @@ const makeWsRpcHandlersLayer = () =>
               limit: input.limit ?? 50,
             }),
             "Failed to load provider delivery blockers",
+          ),
+        [ORCHESTRATION_WS_METHODS.prepareQuitResume]: (input) =>
+          rpcEffect(
+            // Gated as a whole (not just its dispatches) so the record can never be
+            // written while startup is still claiming the previous quit's record.
+            runtimeStartup.enqueueCommand(
+              prepareQuitResume({
+                request: input,
+                recordPath: config.quitResumeStatePath,
+                getReadModel: orchestrationEngine.getReadModel,
+                dispatch: dispatchOrchestrationCommand,
+              }),
+            ),
+            "Failed to prepare chats for resume after quit",
           ),
         [ORCHESTRATION_WS_METHODS.reconcileProviderDelivery]: (input) =>
           rpcEffect(
@@ -856,6 +973,12 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: "orchestration.shell" },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
+              resnapshotEscalation: {
+                streamKey: `${clientId}:orchestration.shell`,
+                tracker: resnapshotEscalationTracker,
+              },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
@@ -905,6 +1028,12 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
+              resnapshotEscalation: {
+                streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
+                tracker: resnapshotEscalationTracker,
+              },
               // Cursor resume: a client holding cached detail replays only the
               // gap. Out-of-range cursors (negative or overflowing gap) fall
               // back to the snapshot inside the stream factory.
@@ -913,21 +1042,22 @@ const makeWsRpcHandlersLayer = () =>
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
               // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
-              resumeSubjectExists: projectionReadModelQuery
-                .getThreadDetailSnapshotById(input.threadId)
-                .pipe(
-                  Effect.map(Option.isSome),
-                  Effect.mapError((cause) =>
-                    toWsRpcError(cause, "Failed to verify thread before cursor resume"),
-                  ),
+              // The shell read shares the detail loader's active-thread
+              // predicate but skips hydrating and validating the transcript,
+              // which the resume path would discard for a boolean anyway.
+              resumeSubjectExists: projectionReadModelQuery.getThreadShellById(input.threadId).pipe(
+                Effect.map(Option.isSome),
+                Effect.mapError((cause) =>
+                  toWsRpcError(cause, "Failed to verify thread before cursor resume"),
                 ),
+              ),
               onResnapshotRequired: (report) =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(
                     stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     ),
                     {
                       label: "orchestration.thread-detail",
@@ -936,7 +1066,7 @@ const makeWsRpcHandlersLayer = () =>
                   ),
                 ),
               ),
-              snapshot: projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -959,9 +1089,14 @@ const makeWsRpcHandlersLayer = () =>
               getHighWaterSequence: getOrchestrationHighWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
-                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .readThreadEventsThrough(
+                    input.threadId,
+                    fromSequenceExclusive,
+                    throughSequenceInclusive,
+                    THREAD_DETAIL_EVENT_TYPES,
+                  )
                   .pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     Stream.mapError((cause) =>
                       toWsRpcError(cause, "Failed to replay thread events"),
                     ),
@@ -1008,19 +1143,53 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           rpcEffect(workspaceEntries.search(input), "Failed to search workspace entries"),
+        [WS_METHODS.projectsSearchContent]: (input) =>
+          rpcEffect(workspaceEntries.searchContent(input), "Failed to search workspace content"),
+        [WS_METHODS.projectsPrewarmSearchIndex]: (input) =>
+          rpcEffect(
+            workspaceEntries.prewarmSearchIndex(input),
+            "Failed to prewarm workspace search index",
+          ),
         [WS_METHODS.projectsDiscoverScripts]: (input) =>
           rpcEffect(workspaceEntries.discoverScripts(input), "Failed to discover project scripts"),
         [WS_METHODS.projectsSearchLocalEntries]: (input) =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
+          rpcEffect(
+            Effect.promise(async () => ({
+              fullPath: await resolveOutOfRootFileReference({
+                workspaceRoot: input.cwd,
+                relativePath: input.relativePath,
+                homeDir: config.homeDir,
+              }),
+            })),
+            "Failed to resolve file reference outside the workspace",
+          ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
             "Failed to create local file preview grant",
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
-          rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
+          workspaceFileSystem.writeFile(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkspaceFileConflictError
+                ? new WsRpcError({
+                    message: cause.message,
+                    code: "WORKSPACE_FILE_CONFLICT",
+                    retryable: false,
+                  })
+                : cause instanceof WorkspaceFileDeletedError
+                  ? new WsRpcError({
+                      message: cause.message,
+                      code: "WORKSPACE_FILE_DELETED",
+                      retryable: false,
+                    })
+                  : toWsRpcError(cause, "Failed to write workspace file"),
+            ),
+          ),
         [WS_METHODS.projectsRunDevServer]: (input) =>
           rpcEffect(devServerManager.run(input), "Failed to start dev server"),
         [WS_METHODS.projectsStopDevServer]: (input) =>
@@ -1047,6 +1216,107 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }),
             ),
+          ),
+        [WS_METHODS.projectsProvisionFromGitHub]: (input) =>
+          bufferLiveUiStream(
+            Stream.callback<GitHubProjectProvisionProgressEvent, WsRpcError>((queue) =>
+              Effect.gen(function* () {
+                const checkout = yield* githubProjectProvisioner.provisionCheckout(input, {
+                  publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                });
+                let registrationCommitted = false;
+                const registerCheckout = Effect.gen(function* () {
+                  yield* Queue.offer(queue, {
+                    operationId: input.operationId,
+                    kind: "phase",
+                    phase: "registering",
+                    message: "Adding project to Synara",
+                  });
+
+                  const { command: normalizedCommand, prepareWorkspaceRoot } =
+                    yield* normalizeDispatchCommand({
+                      command: {
+                        type: "project.create",
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        kind: "project",
+                        title: path.basename(checkout.workspaceRoot),
+                        workspaceRoot: checkout.workspaceRoot,
+                        createWorkspaceRootIfMissing: false,
+                        defaultModelSelection: input.defaultModelSelection,
+                        spaceId: input.newProjectSpaceId,
+                        createdAt: input.createdAt,
+                      },
+                    });
+                  if (normalizedCommand.type !== "project.create") {
+                    return yield* Effect.die(
+                      new Error("GitHub project provisioning normalized an unexpected command"),
+                    );
+                  }
+
+                  const existingProjectId = yield* findRegisteredProjectId(
+                    normalizedCommand.workspaceRoot,
+                  );
+                  // Re-adding an existing checkout opens the existing project as-is. In
+                  // particular, it must not silently move that project between Spaces;
+                  // newProjectSpaceId applies only when project.create runs below.
+                  const registration = existingProjectId
+                    ? { projectId: existingProjectId, created: false }
+                    : yield* dispatchOrchestrationCommand(normalizedCommand).pipe(
+                        Effect.map(() => ({ projectId: input.projectId, created: true })),
+                        Effect.catch((cause) =>
+                          findRegisteredProjectId(normalizedCommand.workspaceRoot).pipe(
+                            Effect.flatMap((racedProjectId) =>
+                              racedProjectId
+                                ? Effect.succeed({ projectId: racedProjectId, created: false })
+                                : Effect.fail(cause),
+                            ),
+                          ),
+                        ),
+                      );
+                  // This assignment is synchronous, so a pending interruption cannot run
+                  // recovery between a successful dispatch and recording that fact.
+                  registrationCommitted = true;
+                  if (registration.created && prepareWorkspaceRoot) {
+                    yield* prepareWorkspaceRoot;
+                  }
+
+                  return {
+                    operationId: input.operationId,
+                    repository: checkout.repository,
+                    workspaceRoot: normalizedCommand.workspaceRoot,
+                    projectId: registration.projectId,
+                    checkout: checkout.checkout,
+                  } as const;
+                }).pipe(
+                  Effect.onError(() =>
+                    recoverUnregisteredGitHubCheckout({
+                      checkout,
+                      registrationCommitted,
+                      moveWorkspaceRoot: (workspaceRoot, recoveryPath) =>
+                        fileSystem.rename(workspaceRoot, recoveryPath),
+                    }),
+                  ),
+                  // Promotion and registration form one critical section. If the client cancels
+                  // after cloning, finish registration first so its workspace is never moved out
+                  // from under a committed project. Recovery must share the same guarantee.
+                  Effect.uninterruptible,
+                );
+
+                const result = yield* registerCheckout;
+                yield* Queue.offer(queue, {
+                  operationId: input.operationId,
+                  kind: "completed",
+                  result,
+                });
+                yield* Queue.end(queue);
+              }).pipe(
+                Effect.catch((cause) =>
+                  Queue.fail(queue, toProjectProvisionRpcError(cause)).pipe(Effect.asVoid),
+                ),
+              ),
+            ),
+            { label: "projects.github-provision" },
           ),
         [WS_METHODS.studioListThreadOutputs]: (input) =>
           rpcEffect(
@@ -1125,20 +1395,21 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              refreshGitStatusAfter(
-                input.cwd,
-                gitManager.runStackedAction(input, {
+              gitManager
+                .runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                }),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
-              ),
+                })
+                .pipe(
+                  Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                  }),
+                ),
             ),
             { label: "git.stacked-action" },
           ),
@@ -1182,12 +1453,33 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
-          rpcEffect(
-            refreshGitStatusAfter(
-              input.cwd,
-              git.withMutation(input.cwd, git.createDetachedWorktree(input)),
-            ),
-            "Failed to create detached worktree",
+          bufferLiveUiStream(
+            Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
+              const progressId = input.progressId ?? null;
+              return refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(
+                  input.cwd,
+                  git.createDetachedWorktree(input, {
+                    onPhase: (phase) =>
+                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+                        Effect.asVoid,
+                      ),
+                  }),
+                ),
+              ).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) =>
+                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
+                  onSuccess: (result) =>
+                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
+                      Effect.andThen(Queue.end(queue)),
+                      Effect.asVoid,
+                    ),
+                }),
+              );
+            }),
+            { label: "git.create-detached-worktree" },
           ),
         [WS_METHODS.gitRemoveWorktree]: (input) =>
           rpcEffect(
@@ -1438,14 +1730,14 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to load server diagnostics",
           ),
-        [WS_METHODS.serverTranscribeVoice]: (input) =>
+        [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
             providerAdapterRegistry
               .getByProvider(input.provider)
               .pipe(
                 Effect.flatMap((adapter) =>
-                  adapter.transcribeVoice
-                    ? adapter.transcribeVoice(input)
+                  adapter.prewarmVoice
+                    ? adapter.prewarmVoice(input)
                     : Effect.fail(
                         new Error(
                           `Voice transcription is unavailable for provider '${input.provider}'.`,
@@ -1453,6 +1745,25 @@ const makeWsRpcHandlersLayer = () =>
                       ),
                 ),
               ),
+            "Voice transcription prewarm failed",
+          ),
+        [WS_METHODS.serverTranscribeVoice]: (input) =>
+          rpcEffect(
+            voiceUploadAdmissionGate.run(
+              providerAdapterRegistry
+                .getByProvider(input.provider)
+                .pipe(
+                  Effect.flatMap((adapter) =>
+                    adapter.transcribeVoice
+                      ? adapter.transcribeVoice(input)
+                      : Effect.fail(
+                          new Error(
+                            `Voice transcription is unavailable for provider '${input.provider}'.`,
+                          ),
+                        ),
+                  ),
+                ),
+            ),
             "Voice transcription failed",
           ),
         [WS_METHODS.serverGenerateThreadRecap]: (input) =>
@@ -1496,7 +1807,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
             keybindings
-              .upsertKeybindingRule(input)
+              .upsertKeybindingRule(input.rule, input.replacing)
               .pipe(
                 Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
               ),
@@ -1689,6 +2000,44 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
+
+        ...makeWsDeviceHandlers(deviceService),
+        [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "device.events" },
+            // Device pushes are lossy by design: thread state is a versioned
+            // full snapshot, so a client that falls behind converges on the
+            // next one rather than needing every intermediate state.
+            //
+            // `Stream.never`, not `Stream.empty`, where no device engine can
+            // run. This is an infinite subscription, and the client treats one
+            // that completes as a zombie socket: it forces a full reconnect to
+            // recover it, and an empty stream completes instantly, so the pair
+            // loops. That churn restarts every other subscription with it,
+            // which is how unrelated RPCs began missing their replies on Linux
+            // CI. Staying open and silent is what "no events will ever arrive"
+            // actually means.
+            //
+            // Gated on `supported`, not just on the service existing: the layer
+            // is provided on every platform so callers need not branch on null,
+            // and off darwin it resolves to a service whose backend reports
+            // unsupported-platform. `makeWsDeviceHandlers` already branches the
+            // same way.
+            deviceService?.supported !== true
+              ? Stream.never
+              : bufferLiveUiStream(
+                  Stream.callback<DeviceEvent>((queue) =>
+                    Effect.gen(function* () {
+                      const unsubscribe = deviceService.manager.onEvent((event) => {
+                        Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+                      });
+                      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+                    }),
+                  ),
+                  { label: "device.events" },
+                ),
+          ),
       });
     }),
   );
@@ -1755,6 +2104,24 @@ export function authenticateRpcWebSocketUpgrade(input: {
     return Effect.succeed(null);
   }
   return input.serverAuth.authenticateWebSocketUpgrade(input.request);
+}
+
+/**
+ * Apply the feature socket's authentication policy to the separate device
+ * frame socket. The desktop bridge still supplies the loopback-only legacy
+ * `?token=` credential, so this path must share the same compatibility rule as
+ * the RPC socket rather than calling ServerAuth directly.
+ */
+export function authorizeDeviceFrameWebSocketUpgrade(input: {
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly legacyToken: string | null;
+  readonly request: AuthRequest;
+  readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
+}): Effect.Effect<boolean> {
+  return authenticateRpcWebSocketUpgrade(input).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
 }
 
 export function makeWebsocketRpcRouteLayer<R>(
@@ -1945,7 +2312,29 @@ export const makeWebsocketNegotiationRouteLayer = () =>
     makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
   );
 
-export const websocketRpcRouteLayer = Layer.merge(
+/**
+ * Video rides a second WebSocket (see `deviceFrameRoute`), so it is admitted by
+ * the same rules as the RPC upgrade: trusted origin, then whatever
+ * authentication the config requires.
+ */
+const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
+  authorizeUpgrade: (request) =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const serverAuth = yield* ServerAuth;
+      const url = trustedWebSocketRequestUrl(request, config);
+      if (url === null) return false;
+      return yield* authorizeDeviceFrameWebSocketUpgrade({
+        config,
+        legacyToken: url.searchParams.get("token"),
+        request: makeEffectAuthRequest(request),
+        serverAuth,
+      });
+    }),
+});
+
+export const websocketRpcRouteLayer = Layer.mergeAll(
+  deviceFrameRouteLayer,
   makeWebsocketNegotiationRouteLayer(),
   // The registry must be provided here so the upgrade route and the RPC
   // middleware (built from the same source effect) share one instance.

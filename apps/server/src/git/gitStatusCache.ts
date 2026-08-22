@@ -82,6 +82,7 @@ export function splitRemoteStatus(status: GitStatusResult): GitStatusRemoteResul
   return {
     hasUpstream: status.hasUpstream,
     upstreamBranch: status.upstreamBranch,
+    configuredPrBaseBranch: status.configuredPrBaseBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
     pr: status.pr,
@@ -95,6 +96,7 @@ export function splitRemoteStatusDetails(
   return {
     hasUpstream: status.hasUpstream,
     upstreamBranch: status.upstreamBranch,
+    configuredPrBaseBranch: status.configuredPrBaseBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
     pr: cachedRemote?.pr ?? null,

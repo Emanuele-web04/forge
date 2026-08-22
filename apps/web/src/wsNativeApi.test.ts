@@ -348,12 +348,14 @@ describe("wsNativeApi", () => {
     const onTerminalEvent = vi.fn();
     const onDomainEvent = vi.fn();
     const onActionProgress = vi.fn();
+    const onWorktreeSetupProgress = vi.fn();
 
     api.terminal.onEvent(onTerminalEvent);
     expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
     const unsubscribeDomainEvent = api.orchestration.onDomainEvent(onDomainEvent);
     expect(channelListeners.get(ORCHESTRATION_WS_CHANNELS.domainEvent)?.size).toBe(1);
     api.git.onActionProgress(onActionProgress);
+    api.git.onWorktreeSetupProgress(onWorktreeSetupProgress);
 
     const terminalEvent = {
       threadId: "thread-1",
@@ -395,6 +397,11 @@ describe("wsNativeApi", () => {
       phase: "commit",
       label: "Committing...",
     });
+    emitPush(WS_CHANNELS.gitWorktreeSetupProgress, {
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
+    });
 
     expect(onTerminalEvent).toHaveBeenCalledTimes(1);
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
@@ -410,6 +417,12 @@ describe("wsNativeApi", () => {
       kind: "phase_started",
       phase: "commit",
       label: "Committing...",
+    });
+    expect(onWorktreeSetupProgress).toHaveBeenCalledTimes(1);
+    expect(onWorktreeSetupProgress).toHaveBeenCalledWith({
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
     });
   });
 
@@ -541,7 +554,10 @@ describe("wsNativeApi", () => {
   });
 
   it("forwards workspace file writes to the websocket project method", async () => {
-    requestMock.mockResolvedValue({ relativePath: "plan.md" });
+    requestMock.mockResolvedValue({
+      relativePath: "plan.md",
+      version: `sha256:${"1".repeat(64)}`,
+    });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
     const api = createWsNativeApi();
@@ -563,6 +579,9 @@ describe("wsNativeApi", () => {
       relativePath: "src/app.ts",
       contents: "export {};\n",
       truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
     });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
@@ -763,6 +782,54 @@ describe("wsNativeApi", () => {
     );
   });
 
+  it("forwards cancellable GitHub project provisioning and its progress events", async () => {
+    const input = {
+      operationId: "operation-1",
+      repository: "openai/codex",
+      destinationParent: "/projects",
+      directoryName: "codex",
+      commandId: CommandId.makeUnsafe("command-1"),
+      projectId: ProjectId.makeUnsafe("project-1"),
+      newProjectSpaceId: null,
+      defaultModelSelection: { provider: "codex" as const, model: "gpt-5" },
+      createdAt: "2026-08-04T00:00:00.000Z",
+    };
+    const result = {
+      operationId: input.operationId,
+      repository: input.repository,
+      workspaceRoot: "/projects/codex",
+      projectId: input.projectId,
+      checkout: "created" as const,
+    };
+    requestMock.mockResolvedValue(result);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const progressListener = vi.fn();
+    api.projects.onProvisionProgress(progressListener);
+    const controller = new AbortController();
+
+    await expect(
+      api.projects.provisionFromGitHub(input, { signal: controller.signal }),
+    ).resolves.toEqual(result);
+    emitPush(WS_CHANNELS.projectProvisionProgress, {
+      operationId: input.operationId,
+      kind: "phase",
+      phase: "cloning",
+      message: "Cloning openai/codex",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromGitHub, input, {
+      timeoutMs: null,
+      signal: controller.signal,
+    });
+    expect(progressListener).toHaveBeenCalledWith({
+      operationId: input.operationId,
+      kind: "phase",
+      phase: "cloning",
+      message: "Cloning openai/codex",
+    });
+  });
+
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {
     requestMock.mockResolvedValue({ diff: "patch" });
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -776,6 +843,19 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
       threadId: "thread-1",
       toTurnCount: 1,
+    });
+  });
+
+  it("scopes orchestration replay requests to the visible thread when provided", async () => {
+    requestMock.mockResolvedValue([]);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.orchestration.replayEvents(41, ThreadId.makeUnsafe("thread-1"));
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.replayEvents, {
+      fromSequenceExclusive: 41,
+      threadId: "thread-1",
     });
   });
 
@@ -960,18 +1040,26 @@ describe("wsNativeApi", () => {
     );
   });
 
-  it("uses the desktop voice bridge when available", async () => {
+  it("uses the bounded server upload even when the desktop bridge is available", async () => {
     const transcribeVoice = vi.fn().mockResolvedValue({ text: "hello" });
     Object.defineProperty(getWindowForTest(), "desktopBridge", {
       configurable: true,
       writable: true,
       value: {
+        getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret",
         server: {
           transcribeVoice,
         },
       },
     });
 
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();
     await api.server.transcribeVoice({
@@ -983,18 +1071,27 @@ describe("wsNativeApi", () => {
       durationMs: 1000,
     });
 
-    expect(transcribeVoice).toHaveBeenCalledWith({
-      provider: "codex",
-      cwd: "/repo",
-      audioBase64: "UklGRgAAAAAAAAAAAAAAAAAAAAA=",
-      mimeType: "audio/wav",
-      sampleRateHz: 24_000,
-      durationMs: 1000,
-    });
+    expect(transcribeVoice).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/voice/transcribe?"),
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
     );
+  });
+
+  it("prewarms voice state through the persistent server transport", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.server.prewarmVoice?.({ provider: "codex", cwd: "/repo" });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverPrewarmVoice, {
+      provider: "codex",
+      cwd: "/repo",
+    });
   });
 
   it("uses the bounded HTTP upload instead of WebSocket RPC for browser voice", async () => {
@@ -1031,5 +1128,36 @@ describe("wsNativeApi", () => {
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
     );
+  });
+
+  it("falls back to WebSocket voice RPC when an older server has no upload route", async () => {
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("Not Found", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    requestMock.mockResolvedValueOnce({ text: "legacy transport" });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const input = {
+      provider: "codex" as const,
+      cwd: "/repo",
+      audioBase64: "AQID",
+      mimeType: "audio/wav",
+      sampleRateHz: 24_000,
+      durationMs: 1000,
+    };
+
+    await expect(api.server.transcribeVoice(input)).resolves.toEqual({
+      text: "legacy transport",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverTranscribeVoice, input, {
+      timeoutMs: null,
+    });
   });
 });

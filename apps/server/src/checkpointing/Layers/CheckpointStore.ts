@@ -78,7 +78,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       });
       const indexPathRaw = indexPathResult.stdout.trim();
       if (indexPathResult.code !== 0 || indexPathRaw.length === 0) {
-        return false;
+        return null;
       }
 
       const indexPath = path.isAbsolute(indexPathRaw)
@@ -86,14 +86,15 @@ const makeCheckpointStore = Effect.gen(function* () {
         : path.resolve(cwd, indexPathRaw);
       const indexExists = yield* fs.exists(indexPath).pipe(Effect.orElseSucceed(() => false));
       if (!indexExists) {
-        return false;
+        return null;
       }
 
       // Preserve Git's stat cache in the throwaway index. Starting every
       // checkpoint from `read-tree HEAD` discards it, forcing `git add -A` to
       // rescan and re-hash the whole worktree before every user turn.
+      const indexInfo = yield* fs.stat(indexPath);
       yield* fs.copyFile(indexPath, tempIndexPath);
-      return true;
+      return indexInfo;
     });
 
   const resolveCheckpointCommit = (
@@ -158,14 +159,42 @@ const makeCheckpointStore = Effect.gen(function* () {
               GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
             };
 
-            const seededFromWorkingIndex = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
-            if (!seededFromWorkingIndex && (yield* hasHeadCommit(input.cwd))) {
+            const workingIndexInfo = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
+            if (workingIndexInfo === null && (yield* hasHeadCommit(input.cwd))) {
               yield* git.execute({
                 operation,
                 cwd: input.cwd,
                 args: ["read-tree", "HEAD"],
                 env: commitEnv,
               });
+            }
+            if (workingIndexInfo !== null) {
+              // A copied index can describe a rapid same-size rewrite as clean
+              // when its cached stat tuple still matches. Really-refresh makes
+              // Git verify those racily-clean entries and leaves changed paths
+              // for the following add to hash, without discarding the cache for
+              // the rest of a large workspace.
+              yield* git.execute({
+                operation,
+                cwd: input.cwd,
+                args: ["update-index", "--really-refresh"],
+                env: commitEnv,
+                allowNonZeroExit: true,
+              });
+
+              // Copying or refreshing the temporary index advances its file
+              // timestamp. Git uses that timestamp to decide whether an entry
+              // whose cached stat tuple still matches is "racily clean" and
+              // needs hashing. Restore the working index's original timestamp
+              // so rapid same-size rewrites remain newer than (or equal to) the
+              // index snapshot and `git add` verifies their contents.
+              if (workingIndexInfo.mtime !== undefined) {
+                yield* fs.utimes(
+                  tempIndexPath,
+                  workingIndexInfo.atime ?? workingIndexInfo.mtime,
+                  workingIndexInfo.mtime,
+                );
+              }
             }
 
             yield* git.execute({

@@ -43,6 +43,8 @@ interface UseKanbanTaskSubmitInput {
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
   readonly providerStatuses: readonly ServerProviderStatus[];
+  readonly isPreparingImages: boolean;
+  readonly waitForPendingImages: () => Promise<void>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -64,6 +66,8 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     assistantDeliveryMode,
     providerOptionsForDispatch,
     providerStatuses,
+    isPreparingImages,
+    waitForPendingImages,
     onOpenChange,
   } = input;
   const navigate = useNavigate();
@@ -74,7 +78,11 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   const isCreatingRef = useRef(false);
 
   const canCreate =
-    selectedProjectId !== null && hasSendableContent && selectedModel !== null && !isCreating;
+    selectedProjectId !== null &&
+    hasSendableContent &&
+    selectedModel !== null &&
+    !isCreating &&
+    !isPreparingImages;
 
   const handleCreate = async () => {
     if (
@@ -88,6 +96,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     isCreatingRef.current = true;
+    await waitForPendingImages();
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.

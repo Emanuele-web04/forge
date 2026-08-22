@@ -1,4 +1,5 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 export interface ProcessRunOptions {
@@ -10,6 +11,8 @@ export interface ProcessRunOptions {
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
   outputMode?: "error" | "truncate" | undefined;
+  onStdoutChunk?: ((chunk: string) => void) | undefined;
+  onStderrChunk?: ((chunk: string) => void) | undefined;
 }
 
 export interface ProcessRunResult {
@@ -107,6 +110,7 @@ function appendChunkWithinLimit(
   currentBytes: number,
   chunk: Buffer,
   maxBytes: number,
+  decoder: StringDecoder,
 ): {
   next: string;
   nextBytes: number;
@@ -116,17 +120,11 @@ function appendChunkWithinLimit(
   if (remaining <= 0) {
     return { next: target, nextBytes: currentBytes, truncated: true };
   }
-  if (chunk.length <= remaining) {
-    return {
-      next: `${target}${chunk.toString()}`,
-      nextBytes: currentBytes + chunk.length,
-      truncated: false,
-    };
-  }
+  const accepted = chunk.length <= remaining ? chunk : chunk.subarray(0, remaining);
   return {
-    next: `${target}${chunk.subarray(0, remaining).toString()}`,
-    nextBytes: currentBytes + remaining,
-    truncated: true,
+    next: `${target}${decoder.write(accepted)}`,
+    nextBytes: currentBytes + accepted.length,
+    truncated: chunk.length > remaining,
   };
 }
 
@@ -168,6 +166,10 @@ export async function runProcess(
     let settled = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    const stdoutObserverDecoder = options.onStdoutChunk ? new StringDecoder("utf8") : null;
+    const stderrObserverDecoder = options.onStderrChunk ? new StringDecoder("utf8") : null;
 
     const scheduleForceKill = (): void => {
       if (forceKillTimer) clearTimeout(forceKillTimer);
@@ -218,30 +220,41 @@ export async function runProcess(
     const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer | string): Error | null => {
       if (aborted) return null;
       const chunkBuffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      const text = chunkBuffer.toString();
       const byteLength = chunkBuffer.length;
       if (stream === "stdout") {
         if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stdout, stdoutBytes, chunkBuffer, maxBufferBytes);
+          const appended = appendChunkWithinLimit(
+            stdout,
+            stdoutBytes,
+            chunkBuffer,
+            maxBufferBytes,
+            stdoutDecoder,
+          );
           stdout = appended.next;
           stdoutBytes = appended.nextBytes;
           stdoutTruncated = stdoutTruncated || appended.truncated;
           return null;
         }
-        stdout += text;
+        stdout += stdoutDecoder.write(chunkBuffer);
         stdoutBytes += byteLength;
         if (stdoutBytes > maxBufferBytes) {
           return normalizeBufferError(command, args, "stdout", maxBufferBytes);
         }
       } else {
         if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stderr, stderrBytes, chunkBuffer, maxBufferBytes);
+          const appended = appendChunkWithinLimit(
+            stderr,
+            stderrBytes,
+            chunkBuffer,
+            maxBufferBytes,
+            stderrDecoder,
+          );
           stderr = appended.next;
           stderrBytes = appended.nextBytes;
           stderrTruncated = stderrTruncated || appended.truncated;
           return null;
         }
-        stderr += text;
+        stderr += stderrDecoder.write(chunkBuffer);
         stderrBytes += byteLength;
         if (stderrBytes > maxBufferBytes) {
           return normalizeBufferError(command, args, "stderr", maxBufferBytes);
@@ -250,7 +263,35 @@ export async function runProcess(
       return null;
     };
 
+    const notifyOutputObserver = (
+      observer: ((chunk: string) => void) | undefined,
+      decoder: StringDecoder | null,
+      chunk: Buffer | string,
+    ): void => {
+      if (!observer || !decoder) return;
+      try {
+        const text = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        if (text.length > 0) observer(text);
+      } catch {
+        // Live-output observers are best effort and must never crash the child-process lifecycle.
+      }
+    };
+
+    const flushOutputObserver = (
+      observer: ((chunk: string) => void) | undefined,
+      decoder: StringDecoder | null,
+    ): void => {
+      if (!observer || !decoder) return;
+      try {
+        const text = decoder.end();
+        if (text.length > 0) observer(text);
+      } catch {
+        // Live-output observers are best effort and must never crash the child-process lifecycle.
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStdoutChunk, stdoutObserverDecoder, chunk);
       const error = appendOutput("stdout", chunk);
       if (error) {
         fail(error);
@@ -258,6 +299,7 @@ export async function runProcess(
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStderrChunk, stderrObserverDecoder, chunk);
       const error = appendOutput("stderr", chunk);
       if (error) {
         fail(error);
@@ -271,6 +313,11 @@ export async function runProcess(
     });
 
     child.once("close", (code, signal) => {
+      if (!stdoutTruncated) stdout += stdoutDecoder.end();
+      if (!stderrTruncated) stderr += stderrDecoder.end();
+      flushOutputObserver(options.onStdoutChunk, stdoutObserverDecoder);
+      flushOutputObserver(options.onStderrChunk, stderrObserverDecoder);
+
       const result: ProcessRunResult = {
         stdout,
         stderr,

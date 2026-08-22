@@ -27,6 +27,7 @@ import {
   CircleQuestionIcon,
   EyeIcon,
   GitHubIcon,
+  GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
@@ -64,28 +65,27 @@ import {
   isPrefixedToolArgumentSummary,
 } from "../../lib/toolArgumentSummary";
 import {
-  deriveReadableCommandDisplay,
+  deriveFriendlyCommandTarget,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
+  isSynaraBrowserToolCall,
   normalizeToolTextForComparison,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
-import {
-  formatLiveActivityMeta,
-  formatLiveActivityPrimary,
-  useLiveActivityNow,
-} from "../../lib/liveActivityPresentation";
+import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
+import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
 
 const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+// Rest tone is the shared quiet-label gray (same one the composer pickers use for
+// their effort/thinking labels) so a tool row and the picker below it read as one
+// muted tone; hover still lifts the whole row to full foreground.
 const WORK_ROW_MUTED_HOVER_TONE: Record<"tool-row" | "file-row", string> = {
-  "tool-row":
-    "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
-  "file-row":
-    "text-muted-foreground/70 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+  "tool-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground`,
+  "file-row": `${MUTED_LABEL_TEXT_CLASS_NAME} transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground`,
 };
 const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, { additions: number; deletions: number }> =
   new Map();
@@ -157,7 +157,9 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
 
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
     const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveReadableCommandDisplay(command).target;
+    // Running and settled command rows share one target so the row text only
+    // swaps tense ("Searching for foo in src" → "Searched for foo in src").
+    if (command) return deriveFriendlyCommandTarget(command);
   }
 
   if (workEntry.preview) return workEntry.preview;
@@ -273,6 +275,7 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
 // row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
+  if (isSynaraBrowserWorkEntry(workEntry)) return GlobeIcon;
   if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
   if (workEntry.itemType === "mcp_tool_call") return McpIcon;
   return workEntryIcon(workEntry);
@@ -293,6 +296,15 @@ function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus 
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
     ? "running"
     : "completed";
+}
+
+function isSynaraBrowserWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return isSynaraBrowserToolCall({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    status: toolWorkEntryStatus(workEntry),
+  });
 }
 
 function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -340,6 +352,12 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  // Task progress is semantic copy, not a tool lifecycle status. Preserve the
+  // trailing "completed" instead of passing it through the compact tool-label
+  // normalizer, which intentionally strips lifecycle suffixes.
+  if (workEntry.activityKind === "turn.tasks.updated") {
+    return capitalizePhrase(workEntry.label);
+  }
   const synaraTitle = deriveSynaraMcpToolTitle({
     toolName: workEntry.toolName,
     title: workEntry.toolTitle,
@@ -462,35 +480,40 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
+  const isSynaraBrowserToolRow = !isGitHubToolRow && isSynaraBrowserWorkEntry(workEntry);
+  const isSynaraToolRow =
+    !isGitHubToolRow && !isSynaraBrowserToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
-    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
-  const LeftIcon = isGitHubToolRow
-    ? GitHubIcon
-    : isSynaraToolRow
-      ? SynaraToolIcon
-      : isMcpToolRow
-        ? McpIcon
-        : EntryIcon;
+    workEntry.itemType === "mcp_tool_call" &&
+    !isGitHubToolRow &&
+    !isSynaraBrowserToolRow &&
+    !isSynaraToolRow;
+  const LeftIcon = workEntryLeftIcon(workEntry);
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
-      : isSynaraToolRow
-        ? "synara"
-        : isMcpToolRow
-          ? "mcp"
-          : undefined;
+      : isSynaraBrowserToolRow
+        ? "browser"
+        : isSynaraToolRow
+          ? "synara"
+          : isMcpToolRow
+            ? "mcp"
+            : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry);
-  const preview = isSynaraToolRow
-    ? sanitizeSynaraMcpToolPreview({
-        preview: rawPreview,
-        heading,
-        status: toolWorkEntryStatus(workEntry),
-      })
-    : rawPreview;
-  const defaultDisplayText = webFetchUrl
+  const preview =
+    isSynaraBrowserToolRow || isSynaraToolRow
+      ? sanitizeSynaraMcpToolPreview({
+          preview: rawPreview,
+          heading,
+          status: toolWorkEntryStatus(workEntry),
+        })
+      : rawPreview;
+  // One sentence per row, live or settled: the tool's own verb plus what it acted
+  // on ("Searched for foo in src"). Lifecycle state is never spelled out here —
+  // the verb already carries the tense and `liveActivityMetaText` covers the rest.
+  const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : isReasoningUpdateWorkEntry(workEntry) && preview
       ? preview
@@ -500,14 +523,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     Boolean(preview) &&
     normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const displayText = workEntry.liveActivity
-    ? formatLiveActivityPrimary({
-        activity: workEntry.liveActivity,
-        heading,
-        displayTarget: showInlineAgentTaskPreview ? heading : defaultDisplayText,
-        rawCommand,
-      })
-    : defaultDisplayText;
   const hoverText =
     rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
@@ -676,12 +691,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
-                      className="truncate font-medium leading-5 text-muted-foreground/72"
+                      className={cn("truncate font-medium leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}
                       style={{ fontSize: `${rowFontSizePx}px` }}
                     >
-                      <span data-work-entry-display-text="true">
-                        {workEntry.liveActivity ? displayText : heading}
-                      </span>
+                      <span data-work-entry-display-text="true">{heading}</span>
                       {liveActivityMetaText ? (
                         <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
                       ) : null}
@@ -692,7 +705,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       isStreaming={false}
                       className="leading-relaxed"
                       style={{
-                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
+                        color: MUTED_LABEL_TEXT_COLOR,
                         fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
                         lineHeight: compact ? "18px" : "19px",
                       }}
@@ -924,7 +937,7 @@ function ToolDetailsDisclosure(props: {
       {props.children}
       <DisclosureChevron
         open={open}
-        className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
+        className="text-muted-foreground/70 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
       />
     </button>
   );

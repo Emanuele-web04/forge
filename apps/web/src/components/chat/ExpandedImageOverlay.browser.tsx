@@ -4,6 +4,7 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { ExpandedImageOverlay } from "./ExpandedImageOverlay";
 
 describe("ExpandedImageOverlay", () => {
@@ -57,6 +58,38 @@ describe("ExpandedImageOverlay", () => {
       expect(onNavigate).toHaveBeenNthCalledWith(2, 1);
       expect(onClose).toHaveBeenCalledOnce();
     } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("signals native surfaces when the overlay opens and closes", async () => {
+    const onOcclusionChange = vi.fn();
+    window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, onOcclusionChange);
+    const screen = await render(
+      <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
+    );
+
+    try {
+      expect(onOcclusionChange).not.toHaveBeenCalled();
+
+      await screen.rerender(
+        <ExpandedImageOverlay
+          expandedImage={{
+            images: [{ src: "data:image/png;base64,preview", name: "Preview image" }],
+            index: 0,
+          }}
+          onClose={vi.fn()}
+          onNavigate={vi.fn()}
+        />,
+      );
+      expect(onOcclusionChange).toHaveBeenCalledTimes(1);
+
+      await screen.rerender(
+        <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
+      );
+      expect(onOcclusionChange).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, onOcclusionChange);
       await screen.unmount();
     }
   });

@@ -1,4 +1,7 @@
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
+import {
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+} from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -8,13 +11,13 @@ import type {
 import * as composerImageBlobStore from "./composerImageBlobStore";
 import {
   buildComposerFileAttachmentsFromFiles,
-  buildComposerImageAttachmentsFromFiles,
   buildUploadComposerAttachments,
   stageUploadComposerAttachments,
   effectiveComposerAttachmentCount,
   findPendingBlobComposerAttachments,
   hydratePendingBlobComposerAttachments,
   readFileAsDataUrl,
+  prepareComposerImageAttachmentsFromFiles,
 } from "./composerSend";
 
 describe("composerSend attachment builders", () => {
@@ -29,11 +32,11 @@ describe("composerSend attachment builders", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps image-specific unsupported-file errors while sharing cap handling", () => {
+  it("keeps image-specific unsupported-file errors while sharing cap handling", async () => {
     const textFile = new File(["hello"], "notes.txt", { type: "text/plain" });
     const imageFile = new File(["png"], "screen.png", { type: "image/png" });
 
-    const result = buildComposerImageAttachmentsFromFiles({
+    const result = await prepareComposerImageAttachmentsFromFiles({
       files: [textFile, imageFile],
       existingAttachmentCount: 0,
     });
@@ -82,6 +85,24 @@ describe("composerSend attachment builders", () => {
     expect(result.error).toBe(
       `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
     );
+  });
+
+  it("does not consume an attachment slot when oversized image preparation fails", async () => {
+    const unsupported = new File(["gif"], "animation.gif", { type: "image/gif" });
+    Object.defineProperty(unsupported, "size", {
+      configurable: true,
+      value: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
+    });
+    const valid = new File(["png"], "screen.png", { type: "image/png" });
+
+    const result = await prepareComposerImageAttachmentsFromFiles({
+      files: [unsupported, valid],
+      existingAttachmentCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1,
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.file).toBe(valid);
+    expect(result.error).toContain("cannot be optimized automatically");
   });
 
   it("reads genuine empty files instead of treating them as folders", async () => {

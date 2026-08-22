@@ -15,6 +15,12 @@ import type { Effect, Stream } from "effect";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
 
+export interface OrchestrationEventReplayFilter {
+  readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
+  readonly activityKinds?: ReadonlyArray<string>;
+  readonly includeBoundaryEvent?: boolean;
+}
+
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
  */
@@ -48,6 +54,15 @@ export interface OrchestrationEventStoreShape {
     readonly eventTypes?: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, OrchestrationEventStoreError>;
 
+  /** Replay one thread's events after an exclusive global sequence cursor. */
+  readonly readThreadEventsFromSequence: (
+    threadId: string,
+    sequenceExclusive: number,
+    limit?: number,
+    throughSequenceInclusive?: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *
@@ -62,6 +77,7 @@ export interface OrchestrationEventStoreShape {
     sequenceExclusive: number,
     limit?: number,
     throughSequenceInclusive?: number,
+    filter?: OrchestrationEventReplayFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**

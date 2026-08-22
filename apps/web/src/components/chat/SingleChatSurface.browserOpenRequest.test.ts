@@ -1,5 +1,5 @@
 import { ThreadId } from "@synara/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 
@@ -7,37 +7,35 @@ const CURRENT_THREAD_ID = ThreadId.makeUnsafe("thread-current");
 const REQUESTED_THREAD_ID = ThreadId.makeUnsafe("thread-requested");
 
 describe("routeSingleBrowserPanelOpenRequest", () => {
-  it("opens the current thread browser immediately without navigating", () => {
+  it("shows the current thread browser as a floating panel without navigating", () => {
     const calls: string[] = [];
-    const navigateToThread = vi.fn();
 
     routeSingleBrowserPanelOpenRequest({
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: CURRENT_THREAD_ID,
       requestImmediateBrowserHydration: () => calls.push("hydrate"),
-      openBrowserPane: (threadId) => calls.push(`open:${threadId}`),
-      navigateToThread,
+      rememberFloatingBrowser: (threadId) => calls.push(`remember:${threadId}`),
+      showFloatingBrowser: (threadId) => calls.push(`float:${threadId}`),
     });
 
-    expect(calls).toEqual(["hydrate", `open:${CURRENT_THREAD_ID}`]);
-    expect(navigateToThread).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      `remember:${CURRENT_THREAD_ID}`,
+      "hydrate",
+      `float:${CURRENT_THREAD_ID}`,
+    ]);
   });
 
-  it("initializes the requested thread browser before navigating to it", () => {
+  it("leaves the current chat untouched for a background thread request", () => {
     const calls: string[] = [];
 
     routeSingleBrowserPanelOpenRequest({
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: REQUESTED_THREAD_ID,
       requestImmediateBrowserHydration: () => calls.push("hydrate"),
-      openBrowserPane: (threadId) => calls.push(`open:${threadId}`),
-      navigateToThread: (threadId, panel) => calls.push(`navigate:${threadId}:${panel}`),
+      rememberFloatingBrowser: (threadId) => calls.push(`remember:${threadId}`),
+      showFloatingBrowser: (threadId) => calls.push(`float:${threadId}`),
     });
 
-    expect(calls).toEqual([
-      "hydrate",
-      `open:${REQUESTED_THREAD_ID}`,
-      `navigate:${REQUESTED_THREAD_ID}:browser`,
-    ]);
+    expect(calls).toEqual([`remember:${REQUESTED_THREAD_ID}`]);
   });
 });

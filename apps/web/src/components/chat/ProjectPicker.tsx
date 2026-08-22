@@ -10,10 +10,12 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
+import { useAppSettings } from "../../appSettings";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
@@ -25,13 +27,14 @@ import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { FolderClosed } from "../FolderClosed";
 import { SpaceIcon } from "../SpaceIcon";
-import { PickerTriggerButton } from "./PickerTriggerButton";
 import { PickerPanelShell } from "./PickerPanelShell";
+import { PickerTriggerButton } from "./PickerTriggerButton";
 import {
   Combobox,
   ComboboxEmpty,
   ComboboxGroup,
   ComboboxGroupLabel,
+  ComboboxInput,
   ComboboxItem,
   ComboboxList,
   ComboboxPopup,
@@ -163,7 +166,14 @@ export const ProjectPicker = memo(function ProjectPicker({
   const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
+  const { settings } = useAppSettings();
+  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
+  const sidebarThreads = useStore(
+    useMemo(
+      () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
+      [hideAutomationRunThreads],
+    ),
+  );
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -174,6 +184,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [isLoadingDirectories, setIsLoadingDirectories] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [directoryEntries, setDirectoryEntries] = useState<readonly ProjectDirectoryEntry[]>([]);
+  const [resetTriggerFocused, setResetTriggerFocused] = useState(false);
+  const resetInFlightRef = useRef(false);
   const isProjectSelectionMode = selectionMode === "project";
 
   const activeFolderOptions = useMemo(() => {
@@ -476,6 +488,11 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
 
   const handleResetToHome = useCallback(() => {
+    if (resetInFlightRef.current) {
+      return;
+    }
+    resetInFlightRef.current = true;
+    setErrorMessage(null);
     try {
       // Statement form, not `onResetToHome?.()` or a ternary, for the same reason as
       // `handleAddNewProject`: any value block inside a `try` is one the compiler rejects.
@@ -485,17 +502,24 @@ export const ProjectPicker = memo(function ProjectPicker({
       }
       void Promise.resolve(reset)
         .then(() => {
+          resetInFlightRef.current = false;
           setOpen(false);
         })
         .catch((error) => {
+          resetInFlightRef.current = false;
           setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+          setOpen(true);
         });
     } catch (error) {
+      resetInFlightRef.current = false;
       setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+      setOpen(true);
     }
   }, [onResetToHome]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
+  const canResetFromTrigger =
+    renderTrigger === undefined && selectedFolderOption !== null && onResetToHome !== undefined;
   const addProjectLabel =
     addActionLabel ?? (isProjectSelectionMode ? "New project" : "Add new project");
   const loadingAddProjectLabel = isProjectSelectionMode
@@ -512,9 +536,6 @@ export const ProjectPicker = memo(function ProjectPicker({
         key={folder.cwd}
         index={index}
         value={folder.cwd}
-        onClick={() => {
-          handleSelectActiveFolder(folder);
-        }}
         className={cn(
           selected &&
             "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
@@ -537,6 +558,25 @@ export const ProjectPicker = memo(function ProjectPicker({
     );
   };
 
+  const handleValueChange = useCallback(
+    (selectedValue: string | null) => {
+      if (!selectedValue) return;
+      const activeFolder = activeFolderOptions.find((entry) => entry.cwd === selectedValue);
+      if (activeFolder) {
+        handleSelectActiveFolder(activeFolder);
+        return;
+      }
+      const localFolder = localFolderOptions.find((entry) => entry.absolutePath === selectedValue);
+      if (localFolder) {
+        if (onSelectWorkspaceRoot) {
+          onSelectWorkspaceRoot(localFolder.absolutePath);
+        }
+        setOpen(false);
+      }
+    },
+    [activeFolderOptions, handleSelectActiveFolder, localFolderOptions, onSelectWorkspaceRoot],
+  );
+
   return (
     <Combobox
       items={selectableDirectoryPaths}
@@ -544,27 +584,78 @@ export const ProjectPicker = memo(function ProjectPicker({
       autoHighlight
       onOpenChange={handleOpenChange}
       open={open}
+      onValueChange={handleValueChange}
     >
-      <ComboboxTrigger
-        render={
-          renderTrigger ?? (
-            <PickerTriggerButton
-              data-testid={
-                isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
-              }
-              icon={<FolderClosed className="size-3.5" />}
-              label={triggerLabel}
-              hideChevron
-              {...(triggerClassName ? { className: triggerClassName } : {})}
-            />
-          )
-        }
-      />
+      {renderTrigger ? (
+        <ComboboxTrigger render={renderTrigger} />
+      ) : (
+        <div className="group/project-picker-trigger relative inline-flex min-w-0 max-w-full">
+          <ComboboxTrigger
+            render={
+              <PickerTriggerButton
+                data-testid={
+                  isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
+                }
+                icon={
+                  <FolderClosed
+                    className={cn(
+                      "size-3.5 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                      canResetFromTrigger && "group-hover/project-picker-trigger:opacity-0",
+                      resetTriggerFocused && "opacity-0",
+                    )}
+                  />
+                }
+                label={triggerLabel}
+                hideChevron
+                {...(triggerClassName ? { className: triggerClassName } : {})}
+              />
+            }
+          />
+          {canResetFromTrigger ? (
+            <button
+              type="button"
+              data-testid="project-picker-reset-trigger"
+              aria-label={resetActionLabel}
+              title={resetActionLabel}
+              className={cn(
+                "group/reset-project pointer-events-none absolute top-1/2 left-0.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center",
+                "opacity-0 transition-opacity duration-150 ease-out",
+                "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+                "group-hover/project-picker-trigger:pointer-events-auto group-hover/project-picker-trigger:opacity-100",
+                "motion-reduce:transition-none",
+              )}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onFocus={() => setResetTriggerFocused(true)}
+              onBlur={() => setResetTriggerFocused(false)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                handleResetToHome();
+              }}
+            >
+              <span className="inline-flex size-3.5 items-center justify-center rounded-full bg-muted-foreground/58 text-background transition-colors duration-150 group-hover/reset-project:bg-muted-foreground/75 motion-reduce:transition-none">
+                <XIcon className="size-2" aria-hidden />
+              </span>
+            </button>
+          ) : null}
+        </div>
+      )}
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder={searchPlaceholder}
-          query={query}
-          onQueryChange={setQuery}
+          searchInput={
+            <ComboboxInput
+              className="rounded-md border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
+              inputClassName="ring-0"
+              placeholder={searchPlaceholder}
+              showTrigger={false}
+              size="sm"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          }
           footer={
             <>
               <button
@@ -636,10 +727,6 @@ export const ProjectPicker = memo(function ProjectPicker({
                     key={absolutePath}
                     index={filteredActiveFolderOptions.length + index}
                     value={absolutePath}
-                    onClick={() => {
-                      onSelectWorkspaceRoot?.(absolutePath);
-                      setOpen(false);
-                    }}
                     className={cn(
                       absolutePath === selectedWorkspaceRoot &&
                         "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",

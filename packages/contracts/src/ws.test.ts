@@ -198,6 +198,27 @@ it.effect("accepts git.actionProgress push envelopes", () =>
   }),
 );
 
+it.effect("accepts git.worktreeSetupProgress push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 5,
+      channel: WS_CHANNELS.gitWorktreeSetupProgress,
+      data: {
+        progressId: "progress-1",
+        kind: "phase_started",
+        phase: "branch",
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.gitWorktreeSetupProgress);
+  }),
+);
+
 it.effect("accepts automation.event push envelopes", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {

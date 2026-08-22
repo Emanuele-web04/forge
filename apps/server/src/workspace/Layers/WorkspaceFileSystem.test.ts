@@ -57,11 +57,14 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           relativePath: "src/app.ts",
         });
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           relativePath: "src/app.ts",
           contents: "export const value = 1;\n",
           truncated: false,
+          encoding: "utf8",
+          lineEnding: "lf",
         });
+        expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
       }),
     );
 
@@ -81,7 +84,27 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           relativePath: "large.txt",
           contents: "abc",
           truncated: true,
+          version: null,
+          encoding: null,
+          lineEnding: null,
         });
+      }),
+    );
+
+    it.effect("refuses binary files instead of exposing them as editable text", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* Effect.promise(() =>
+          NodeFs.writeFile(path.join(cwd, "binary.dat"), Buffer.from([0x01, 0x00, 0x02])),
+        );
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "binary.dat" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("File appears to be binary");
       }),
     );
 
@@ -105,11 +128,14 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
             previewGrant: grant.grant,
           });
 
-          expect(result).toEqual({
+          expect(result).toMatchObject({
             relativePath: absolutePath,
             contents: "local file\n",
             truncated: false,
+            encoding: "utf8",
+            lineEnding: "lf",
           });
+          expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
         }),
     );
 
@@ -150,11 +176,14 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           relativePath: "chatReferences.test.ts",
         });
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           relativePath: "apps/web/src/lib/chatReferences.test.ts",
           contents: "export const v = 1;\n",
           truncated: false,
+          encoding: "utf8",
+          lineEnding: "lf",
         });
+        expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
       }),
     );
 
@@ -260,8 +289,129 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           .readFileString(path.join(cwd, "plans/effect-rpc.md"))
           .pipe(Effect.orDie);
 
-        expect(result).toEqual({ relativePath: "plans/effect-rpc.md" });
+        expect(result.relativePath).toBe("plans/effect-rpc.md");
+        expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
         expect(saved).toBe("# Plan\n");
+      }),
+    );
+
+    it.effect("safely saves the loaded version while preserving UTF-8 BOM and CRLF", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const absolutePath = path.join(cwd, "notes.txt");
+        yield* Effect.promise(() =>
+          NodeFs.writeFile(
+            absolutePath,
+            Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from("one\r\ntwo\r\n")]),
+          ),
+        );
+
+        const loaded = yield* workspaceFileSystem.readFile({ cwd, relativePath: "notes.txt" });
+        expect(loaded).toMatchObject({
+          contents: "one\ntwo\n",
+          encoding: "utf8-bom",
+          lineEnding: "crlf",
+          truncated: false,
+        });
+
+        const saved = yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: loaded.relativePath,
+          contents: "one edited\ntwo\n",
+          expectedVersion: loaded.version!,
+          encoding: loaded.encoding!,
+          lineEnding: loaded.lineEnding!,
+        });
+        const savedBytes = yield* Effect.promise(() => NodeFs.readFile(absolutePath));
+
+        expect(saved.version).toMatch(/^sha256:[0-9a-f]{64}$/);
+        expect(saved.version).not.toBe(loaded.version);
+        expect(savedBytes.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+        expect(savedBytes.subarray(3).toString("utf8")).toBe("one edited\r\ntwo\r\n");
+      }),
+    );
+
+    it.effect("refuses a guarded save when the file changed after loading", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const absolutePath = path.join(cwd, "shared.txt");
+        yield* writeTextFile(cwd, "shared.txt", "loaded\n");
+        const loaded = yield* workspaceFileSystem.readFile({ cwd, relativePath: "shared.txt" });
+        yield* Effect.promise(() => NodeFs.writeFile(absolutePath, "agent!\n"));
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: loaded.relativePath,
+            contents: "manual edit\n",
+            expectedVersion: loaded.version!,
+            encoding: loaded.encoding!,
+            lineEnding: loaded.lineEnding!,
+          })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceFileConflictError");
+        expect(error.message).toContain("changed on disk");
+        expect(yield* Effect.promise(() => NodeFs.readFile(absolutePath, "utf8"))).toBe("agent!\n");
+      }),
+    );
+
+    it.effect("refuses a guarded save when the loaded file was deleted", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const absolutePath = path.join(cwd, "removed.txt");
+        yield* writeTextFile(cwd, "removed.txt", "loaded\n");
+        const loaded = yield* workspaceFileSystem.readFile({ cwd, relativePath: "removed.txt" });
+        yield* Effect.promise(() => NodeFs.unlink(absolutePath));
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: loaded.relativePath,
+            contents: "manual edit\n",
+            expectedVersion: loaded.version!,
+            encoding: loaded.encoding!,
+            lineEnding: loaded.lineEnding!,
+          })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceFileDeletedError");
+        expect(error.message).toContain("removed from disk");
+        expect(yield* Effect.promise(() => NodeFs.stat(absolutePath).catch(() => null))).toBeNull();
+      }),
+    );
+
+    it.effect("surfaces permission failures from guarded saves", () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return;
+
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const absolutePath = path.join(cwd, "read-only.txt");
+        yield* writeTextFile(cwd, "read-only.txt", "loaded\n");
+        const loaded = yield* workspaceFileSystem.readFile({ cwd, relativePath: "read-only.txt" });
+        yield* Effect.promise(() => NodeFs.chmod(absolutePath, 0o444));
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: loaded.relativePath,
+            contents: "manual edit\n",
+            expectedVersion: loaded.version!,
+            encoding: loaded.encoding!,
+            lineEnding: loaded.lineEnding!,
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("workspaceFileSystem.writeFile failed");
+        expect(yield* Effect.promise(() => NodeFs.readFile(absolutePath, "utf8"))).toBe("loaded\n");
       }),
     );
 
@@ -297,7 +447,14 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
 
         const error = yield* workspaceFileSystem
-          .writeFile({ cwd, relativePath: "../escape.md", contents: "# nope\n" })
+          .writeFile({
+            cwd,
+            relativePath: "../escape.md",
+            contents: "# nope\n",
+            expectedVersion: `sha256:${"0".repeat(64)}`,
+            encoding: "utf8",
+            lineEnding: "lf",
+          })
           .pipe(Effect.flip);
 
         expect(error.message).toContain(
@@ -387,7 +544,8 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           NodeFs.readFile(path.join(cwd, "actual/new/deep/file.txt"), "utf8"),
         );
 
-        expect(result).toEqual({ relativePath: "linked-inside/new/deep/file.txt" });
+        expect(result.relativePath).toBe("linked-inside/new/deep/file.txt");
+        expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
         expect(saved).toBe("allowed\n");
       }),
     );

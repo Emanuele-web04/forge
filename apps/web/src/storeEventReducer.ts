@@ -14,6 +14,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
+import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
 import {
   addThreadMarker,
   removeThreadMarker,
@@ -112,7 +113,11 @@ function markInteractionResponding(
       interaction.interactionKind !== interactionKind ||
       interaction.requestId !== event.payload.requestId ||
       interaction.lifecycleGeneration !== lifecycleGeneration ||
-      (interaction.status !== "pending" && interaction.status !== "retryable")
+      !isPendingInteractionResponseClaimable({
+        status: interaction.status,
+        responseRequestedAt: interaction.responseRequestedAt,
+        requestedAt: event.payload.createdAt,
+      })
     ) {
       return interaction;
     }
@@ -348,10 +353,17 @@ function reconcileLatestTurnFromSession(
         : session.status === "ready"
           ? ("completed" as const)
           : null;
+  // A non-error session snapshot whose updatedAt predates the running turn's
+  // start reflects the state from before that turn existed; settling on it
+  // would close a just-started turn with a bogus fresh completedAt (and fire a
+  // phantom completion notification). Errors still settle regardless: an error
+  // snapshot is terminal whatever its ordering.
   if (
     settledState !== null &&
     thread.latestTurn?.state === "running" &&
-    (session.activeTurnId == null || settledState === "error")
+    (session.activeTurnId == null || settledState === "error") &&
+    (settledState === "error" ||
+      session.updatedAt >= (thread.latestTurn.startedAt ?? thread.latestTurn.requestedAt))
   ) {
     return buildLatestTurn({
       previous: thread.latestTurn,
@@ -650,9 +662,16 @@ function mergeStreamingMessage(
 
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
-  // Single scan: the previous implementation ran `find` and `findIndex` with the same predicate
-  // over the (up to MAX_THREAD_MESSAGES) message list for every streaming delta.
-  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
+  // Single backward scan: streaming deltas target the newest message, so walking from the tail
+  // finds it in O(1) instead of scanning the (up to MAX_THREAD_MESSAGES) list front-to-back on
+  // every delta. Message ids are unique per thread, so scan direction cannot change the match.
+  let existingIndex = -1;
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    if (thread.messages[index]!.id === payload.messageId) {
+      existingIndex = index;
+      break;
+    }
+  }
   const existingMessage = existingIndex >= 0 ? thread.messages[existingIndex] : undefined;
   const incomingMessage = normalizeChatMessage(
     {
@@ -900,6 +919,8 @@ function applyOrchestrationEvent(
             nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
             (event.payload.isPinned === undefined ||
               event.payload.isPinned === (thread.isPinned ?? false)) &&
+            (event.payload.settledAt === undefined ||
+              (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -917,6 +938,13 @@ function applyOrchestrationEvent(
             (event.payload.threadMarkers === undefined ||
               deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
             (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
+            (event.payload.goal === undefined || event.payload.goal === (thread.goal ?? "")) &&
+            (event.payload.goalStartedAt === undefined ||
+              (event.payload.goalStartedAt ?? null) === (thread.goalStartedAt ?? null)) &&
+            (event.payload.goalPausedAt === undefined ||
+              (event.payload.goalPausedAt ?? null) === (thread.goalPausedAt ?? null)) &&
+            (event.payload.goalAchievements === undefined ||
+              deepEqualJson(event.payload.goalAchievements, thread.goalAchievements ?? null)) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -935,6 +963,9 @@ function applyOrchestrationEvent(
             associatedWorktreeRef: nextAssociatedWorktreeRef,
             createBranchFlowCompleted: nextCreateBranchFlowCompleted,
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+            ...(event.payload.settledAt !== undefined
+              ? { settledAt: event.payload.settledAt }
+              : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
               : {}),
@@ -966,6 +997,20 @@ function applyOrchestrationEvent(
                 }
               : {}),
             ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
+            ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
+            ...(event.payload.goalStartedAt !== undefined
+              ? { goalStartedAt: event.payload.goalStartedAt }
+              : {}),
+            ...(event.payload.goalPausedAt !== undefined
+              ? { goalPausedAt: event.payload.goalPausedAt }
+              : {}),
+            ...(event.payload.goalAchievements !== undefined
+              ? {
+                  goalAchievements: event.payload.goalAchievements as NonNullable<
+                    Thread["goalAchievements"]
+                  >,
+                }
+              : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),
           };

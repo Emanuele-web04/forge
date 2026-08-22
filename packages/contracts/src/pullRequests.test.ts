@@ -3,6 +3,7 @@ import { Schema } from "effect";
 
 import {
   PullRequestCommentInput,
+  PullRequestActionResult,
   PullRequestDetail,
   PullRequestListEntry,
   PullRequestReviewRequestCountResult,
@@ -16,6 +17,7 @@ const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput)
 const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
   PullRequestReviewRequestCountResult,
 );
+const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
 
 function listEntry() {
   return {
@@ -47,9 +49,24 @@ describe("PullRequestListEntry", () => {
     expect(decoded.isPinned).toBe(false);
     expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.stack).toBeNull();
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
     ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
+  });
+
+  it("decodes compact stack metadata for list rows", () => {
+    expect(
+      decodeListEntry({
+        ...listEntry(),
+        stack: {
+          number: 8,
+          size: 3,
+          position: 2,
+          baseBranch: "main",
+        },
+      }).stack,
+    ).toEqual({ number: 8, size: 3, position: 2, baseBranch: "main" });
   });
 });
 
@@ -96,6 +113,101 @@ describe("PullRequestDetail", () => {
     });
 
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.stack).toBeNull();
+    expect(decoded.stackMetadataIncomplete).toBe(false);
+    expect(
+      decodeDetail({ ...decoded, stackMetadataIncomplete: true }).stackMetadataIncomplete,
+    ).toBe(true);
+  });
+
+  it("decodes a complete stack while preserving bottom-to-top positions", () => {
+    const decoded = decodeDetail({
+      projectId: "project-1",
+      projectTitle: "Project One",
+      workspaceRoot: "/workspace/project-one",
+      repository: "acme/widgets",
+      number: 43,
+      title: "Top layer",
+      body: "Description",
+      url: "https://github.com/acme/widgets/pull/43",
+      author: null,
+      state: "open",
+      isDraft: false,
+      mergeable: "MERGEABLE",
+      mergeability: "mergeable",
+      mergeStateStatus: "CLEAN",
+      reviewDecision: null,
+      additions: 2,
+      deletions: 1,
+      changedFiles: 1,
+      headBranch: "feature/top",
+      baseBranch: "feature/base",
+      createdAt: "2026-07-13T08:00:00.000Z",
+      updatedAt: "2026-07-14T08:00:00.000Z",
+      mergedAt: null,
+      closedAt: null,
+      maintainerCanModify: true,
+      reviewers: [],
+      labels: [],
+      checks: [],
+      comments: [],
+      commentsTruncated: false,
+      commentsIncomplete: false,
+      commits: [],
+      mergeCapabilities: {
+        merge: true,
+        squash: true,
+        rebase: true,
+        deleteBranchOnMerge: false,
+      },
+      stack: {
+        number: 8,
+        size: 2,
+        position: 2,
+        baseBranch: "main",
+        entries: [
+          {
+            position: 1,
+            number: 42,
+            title: "Base layer",
+            url: "https://github.com/acme/widgets/pull/42",
+            headBranch: "feature/base",
+            baseBranch: "main",
+            state: "open",
+            isDraft: false,
+            mergeability: "mergeable",
+            mergeStateStatus: "CLEAN",
+          },
+          {
+            position: 2,
+            number: 43,
+            title: "Top layer",
+            url: "https://github.com/acme/widgets/pull/43",
+            headBranch: "feature/top",
+            baseBranch: "feature/base",
+            state: "open",
+            isDraft: false,
+            mergeability: "mergeable",
+            mergeStateStatus: "CLEAN",
+          },
+        ],
+      },
+    });
+
+    expect(decoded.stack?.entries.map((entry) => entry.number)).toEqual([42, 43]);
+  });
+});
+
+describe("PullRequestActionResult", () => {
+  it("defaults old mutation acknowledgements to no merge outcome", () => {
+    expect(
+      decodeActionResult({
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 42,
+        workspaceRoot: "/workspace/project-one",
+      }).mergeOutcome,
+    ).toBeNull();
   });
 });
 

@@ -347,3 +347,20 @@ export function sanitizeBrowserAnnotationUrl(value: string): string {
     return "";
   }
 }
+
+/**
+ * Returns the private live URL identity used to distinguish annotation
+ * documents while intentionally ignoring only the fragment. Unlike the public
+ * annotation URL sanitizer, this keeps query state so unrelated private pages
+ * cannot share a marker projection.
+ */
+export function browserAnnotationDocumentIdentityUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}

@@ -18,10 +18,12 @@ import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 export function PullRequestDockPane({
   pane,
   onClose,
+  onSelectPullRequest,
   pollingEnabled: pollingEnabledProp,
 }: {
   pane: RightDockPane;
   onClose?: (() => void) | undefined;
+  onSelectPullRequest?: ((number: number) => void) | undefined;
   pollingEnabled?: boolean;
 }) {
   const pollingEnabled = pollingEnabledProp ?? true;
@@ -36,6 +38,7 @@ export function PullRequestDockPane({
       initialTab={pane.pullRequestInitialTab ?? "summary"}
       pollingEnabled={pollingEnabled}
       {...(onClose ? { onClose } : {})}
+      {...(onSelectPullRequest ? { onSelectPullRequest } : {})}
     />
   );
 }

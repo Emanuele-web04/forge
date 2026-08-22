@@ -106,6 +106,17 @@
         const tabId = latestState?.activeTabId;
         const tab = latestState?.tabs?.find((candidate) => candidate.id === tabId);
         if (!latestState?.open || !tabId || !tab) return;
+        if (tab.runtimeSurface === "native") {
+          if (webview) {
+            webview.style.visibility = "hidden";
+            webview.style.pointerEvents = "none";
+          }
+          mountedTabId = null;
+          attachedWebviewKey = null;
+          document.documentElement.dataset.nativeRuntimeTabId = tabId;
+          return;
+        }
+        delete document.documentElement.dataset.nativeRuntimeTabId;
         if (!webview) {
           webview = document.createElement("webview");
           webview.setAttribute("partition", "persist:synara-browser");
@@ -140,6 +151,7 @@
         latestState = state;
         document.documentElement.dataset.browserVersion = String(state.version);
         if (!state.open || !state.activeTabId) {
+          delete document.documentElement.dataset.nativeRuntimeTabId;
           if (webview) {
             webview.style.visibility = "hidden";
             webview.style.pointerEvents = "none";

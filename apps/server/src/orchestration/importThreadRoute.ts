@@ -400,6 +400,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
+    const importResumeCursor = providerResumeCursorForImport(
+      thread.modelSelection.provider,
+      externalId,
+    );
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
       provider: thread.modelSelection.provider,
@@ -407,7 +411,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
         : {}),
       modelSelection: thread.modelSelection,
-      resumeCursor: providerResumeCursorForImport(thread.modelSelection.provider, externalId),
+      ...(thread.modelSelection.provider === "codex"
+        ? { forkSourceResumeCursor: importResumeCursor }
+        : { resumeCursor: importResumeCursor }),
       runtimeMode: thread.runtimeMode,
     });
 

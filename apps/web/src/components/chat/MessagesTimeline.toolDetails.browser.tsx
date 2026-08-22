@@ -71,7 +71,7 @@ function LiveActivityTimeline() {
         label: "Bash",
         tone: "tool",
         itemType: "command_execution",
-        toolTitle: "Running command",
+        toolTitle: "Running",
         command: "bun install",
         liveActivity: {
           state: "running_tool",
@@ -194,7 +194,7 @@ describe("MessagesTimeline tool details", () => {
     const screen = await render(<LiveActivityTimeline />, { container: host });
 
     try {
-      expect(document.body.textContent ?? "").toContain("Running command · bun install");
+      expect(document.body.textContent ?? "").toContain("Running bun install");
       expect(document.body.textContent ?? "").toContain("Active");
       expect(document.body.textContent ?? "").toContain("2m 14s elapsed");
       expect(document.body.textContent ?? "").toContain("42%");
@@ -203,7 +203,7 @@ describe("MessagesTimeline tool details", () => {
       const activityMeta = document.querySelector("[data-live-activity-meta='true']");
       expect(displayText?.closest("p")).toBe(activityMeta?.closest("p"));
       expect(displayText?.closest("p")?.textContent ?? "").toContain(
-        "Running command · bun install · Active",
+        "Running bun install · Active",
       );
 
       const trigger = document.querySelector<HTMLButtonElement>(
@@ -219,6 +219,49 @@ describe("MessagesTimeline tool details", () => {
       for (const time of document.querySelectorAll<HTMLTimeElement>("time[datetime]")) {
         expect(time.textContent).toBe(formatTimestamp(time.dateTime, "24-hour"));
       }
+    } finally {
+      await screen.unmount();
+      host.remove();
+      await settleLayout();
+    }
+  });
+
+  it("states settled tool calls as a sentence without a lifecycle tail", async () => {
+    const host = createTimelineHost();
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "work-settled-command",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Ran command",
+          tone: "tool",
+          itemType: "command_execution",
+          toolTitle: "Searched",
+          command: `rg -n "toolDetails" apps/web/src`,
+          liveActivity: {
+            state: "completed",
+            label: "Searched",
+            startedAt: "2026-03-17T19:12:28.000Z",
+            lastActivityAt: "2026-03-17T19:12:29.000Z",
+            elapsedSeconds: 1,
+          },
+        }}
+        chatMetaFontSizePx={12}
+        textFontSizePx={13}
+        density="compact"
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        timestampFormat="locale"
+      />,
+      { container: host },
+    );
+
+    try {
+      const rowText = document.querySelector("[data-work-entry-display-text='true']")?.textContent;
+      expect(rowText).toBe("Searched for toolDetails in web/src");
+      expect(document.querySelector("[data-live-activity-meta='true']")).toBeNull();
+      expect(document.body.textContent ?? "").not.toContain("Completed");
+      expect(document.body.textContent ?? "").not.toContain("elapsed");
     } finally {
       await screen.unmount();
       host.remove();

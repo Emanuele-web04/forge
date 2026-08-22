@@ -4,6 +4,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
 import {
   addPinnedMessage,
@@ -65,10 +66,6 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
   return "completed" as const;
-}
-
-function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
-  return checkpointRef?.startsWith("provider-diff:") === true;
 }
 
 function isTerminalLatestTurn(
@@ -306,6 +303,65 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   };
 }
 
+/**
+ * Mirrors the SQLite message_text_segments projection in the in-memory read
+ * model: streamed assistant deltas accumulate into the current segment, a
+ * row-making provider event between deltas starts a new segment at its own
+ * time (segmentStartedAt), and completion keeps the boundaries when the
+ * collated segment text matches the final text. Single-segment messages and
+ * edits/rewrites/imports need no side table metadata and drop the segments.
+ */
+function deriveNextMessageTextSegments(
+  previous: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
+  input: {
+    readonly text: string;
+    readonly streaming: boolean;
+    readonly segmentStartedAt: string | undefined;
+    readonly sequence: number;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  },
+): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
+  if (input.streaming) {
+    if (input.segmentStartedAt) {
+      return [
+        ...(previous ?? []),
+        {
+          sequence: input.sequence,
+          startedAt: input.segmentStartedAt,
+          endedAt: input.updatedAt,
+          text: input.text,
+        },
+      ];
+    }
+    if (previous && previous.length > 0) {
+      const tail = previous[previous.length - 1]!;
+      return [
+        ...previous.slice(0, -1),
+        { ...tail, text: `${tail.text}${input.text}`, endedAt: input.updatedAt },
+      ];
+    }
+    return [
+      {
+        sequence: input.sequence,
+        startedAt: input.createdAt,
+        endedAt: input.updatedAt,
+        text: input.text,
+      },
+    ];
+  }
+
+  // Completion / edit / rewrite / import.
+  if (previous && previous.length > 1) {
+    const collatedSegmentText = previous.map((segment) => segment.text).join("");
+    if (collatedSegmentText === input.text || input.text.length === 0) {
+      const tail = previous[previous.length - 1]!;
+      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
+    }
+  }
+  return undefined;
+}
+
 export function projectEvent(
   model: OrchestrationReadModel,
   event: OrchestrationEvent,
@@ -515,6 +571,7 @@ export function projectEvent(
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
+            settledAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -641,6 +698,7 @@ export function projectEvent(
                   }
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+              ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }
                 : {}),
@@ -660,6 +718,14 @@ export function projectEvent(
                 ? { threadMarkers: payload.threadMarkers }
                 : {}),
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+              ...(payload.goalStartedAt !== undefined
+                ? { goalStartedAt: payload.goalStartedAt }
+                : {}),
+              ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
+              ...(payload.goalAchievements !== undefined
+                ? { goalAchievements: payload.goalAchievements }
+                : {}),
               updatedAt: payload.updatedAt,
             }),
           };
@@ -936,14 +1002,31 @@ export function projectEvent(
         let cappedMessages: ReadonlyArray<OrchestrationMessage>;
         if (existingIndex >= 0) {
           const entry = thread.messages[existingIndex]!;
+          const resolvedText = message.streaming
+            ? `${entry.text}${message.text}`
+            : message.text.length > 0
+              ? message.text
+              : entry.text;
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(entry.textSegments, {
+                  // For streaming deltas the segment owns only this delta's
+                  // text (resolvedText is the whole accumulated message).
+                  text: message.streaming ? message.text : resolvedText,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           const nextMessages = thread.messages.slice();
+          const entryWithoutTextSegments = { ...entry };
+          delete entryWithoutTextSegments.textSegments;
           nextMessages[existingIndex] = {
-            ...entry,
-            text: message.streaming
-              ? `${entry.text}${message.text}`
-              : message.text.length > 0
-                ? message.text
-                : entry.text,
+            ...entryWithoutTextSegments,
+            text: resolvedText,
+            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,
             source: message.source,
             updatedAt: message.updatedAt,
@@ -957,13 +1040,33 @@ export function projectEvent(
           };
           cappedMessages = nextMessages;
         } else {
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(undefined, {
+                  text: message.text,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           cappedMessages =
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  message,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
                 ]
-              : [...thread.messages, message];
+              : [
+                  ...thread.messages,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
+                ];
         }
 
         return {
@@ -1120,27 +1223,28 @@ export function projectEvent(
           payload.preserveLatestTurn === true ||
           (previousLatestCheckpointTurnCount !== undefined &&
             previousLatestCheckpointTurnCount > payload.checkpointTurnCount);
+        const matchingLatestTurn =
+          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
         const latestTurn = preservesNewerLatestTurn
           ? thread.latestTurn
-          : // A provider-diff placeholder only carries live diff totals; it must never
-            // change the turn lifecycle — neither close a running turn nor flip an
-            // already-settled one to "interrupted" when it loses the race against
-            // session settlement.
-            isProviderDiffPlaceholderRef(payload.checkpointRef) &&
-              payload.status === "missing" &&
-              thread.latestTurn?.turnId === payload.turnId
-            ? thread.latestTurn
+          : matchingLatestTurn !== null
+            ? {
+                // Checkpoints describe filesystem state; the provider session is
+                // the lifecycle authority. In particular, a successful empty git
+                // capture must not turn an interrupted, answer-less turn into a
+                // completed one merely because both checkpoint commands and
+                // runtime ingestion subscribe to the same terminal event.
+                ...matchingLatestTurn,
+                assistantMessageId: preservedAssistantMessageId,
+              }
             : {
+                // Historical/sessionless checkpoint projections have no matching
+                // lifecycle row to enrich, so retain the legacy reconstruction
+                // behavior for those imports and rollback paths.
                 turnId: payload.turnId,
                 state: checkpointStatusToLatestTurnState(payload.status),
-                requestedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? thread.latestTurn.requestedAt
-                    : payload.completedAt,
-                startedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                    : payload.completedAt,
+                requestedAt: payload.completedAt,
+                startedAt: payload.completedAt,
                 completedAt: payload.completedAt,
                 assistantMessageId: preservedAssistantMessageId,
               };
@@ -1278,7 +1382,7 @@ export function projectEvent(
 
           const activities = upsertThreadActivity(thread.activities, {
             ...payload.activity,
-            sequence: event.sequence,
+            sequence: payload.activity.sequence ?? event.sequence,
           });
 
           return {

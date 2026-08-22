@@ -352,7 +352,11 @@ export function GitPanel(props: {
 
       <div className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden border-t border-border/70">
         {selectedFileDiff ? (
-          <SelectedFileDiff fileDiff={selectedFileDiff} theme={theme} />
+          <SelectedFileDiff
+            key={`${buildFileDiffRenderKey(selectedFileDiff)}:${theme}`}
+            fileDiff={selectedFileDiff}
+            theme={theme}
+          />
         ) : (
           <PanelStateMessage density="compact">Select a file to view its diff.</PanelStateMessage>
         )}

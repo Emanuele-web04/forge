@@ -6,6 +6,8 @@
  * provider-agnostic by converting tagged markdown into canonical runtime events.
  */
 
+import type { ProviderInteractionMode } from "@synara/contracts";
+
 export const PROVIDER_PLAN_MODE_PROMPT_PREFIX = [
   "Synara plan mode is active.",
   "Do not implement or mutate files in this turn. You may inspect or ask targeted questions as needed.",
@@ -20,7 +22,7 @@ const PROPOSED_PLAN_BLOCK_REGEX = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_pl
 
 export function withProviderPlanModePrompt(input: {
   readonly text: string;
-  readonly interactionMode?: "default" | "plan" | undefined;
+  readonly interactionMode?: ProviderInteractionMode | undefined;
 }): string {
   if (input.interactionMode !== "plan") {
     return input.text;

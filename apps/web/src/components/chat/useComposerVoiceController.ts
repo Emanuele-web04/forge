@@ -7,7 +7,11 @@ import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@sy
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Project } from "../../types";
-import { formatVoiceRecordingDuration, useVoiceRecorder } from "../../lib/voiceRecorder";
+import {
+  formatVoiceRecordingDuration,
+  isVoiceRecordingCancelledError,
+  useVoiceRecorder,
+} from "../../lib/voiceRecorder";
 import { readNativeApi } from "../../nativeApi";
 import type { RefreshProviderStatusesNow } from "../../hooks/useProviderStatusRefresh";
 import { toastManager } from "../ui/toast";
@@ -125,7 +129,15 @@ export function useComposerVoiceController(
         setIsVoiceTranscribing(false);
       }
     });
-  }, [cancelVoiceRecording, threadId]);
+  }, [cancelVoiceRecording, selectedProvider, threadId]);
+
+  useEffect(
+    () => () => {
+      voiceTranscriptionRequestIdRef.current += 1;
+      voiceRecordingStartedAtRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (canStartVoiceNotes || !isVoiceRecording) {
@@ -196,7 +208,18 @@ export function useComposerVoiceController(
     try {
       await startVoiceRecording();
       voiceRecordingStartedAtRef.current = performance.now();
+      const api = readNativeApi();
+      void api?.server
+        .prewarmVoice?.({
+          provider: "codex",
+          cwd: activeProject.cwd,
+          ...(activeThreadId ? { threadId: activeThreadId } : {}),
+        })
+        .catch(() => undefined);
     } catch (error) {
+      if (isVoiceRecordingCancelledError(error)) {
+        return;
+      }
       toastManager.add({
         type: "error",
         title: "Could not start recording",

@@ -92,6 +92,42 @@ export const PullRequestMergeCapabilities = Schema.Struct({
 });
 export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.Type;
 
+export const PullRequestStackEntry = Schema.Struct({
+  position: PositiveInt,
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  headBranch: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  state: PullRequestState,
+  isDraft: Schema.Boolean,
+  mergeability: GitPullRequestMergeability,
+  mergeStateStatus: Schema.NullOr(Schema.String),
+});
+export type PullRequestStackEntry = typeof PullRequestStackEntry.Type;
+
+/**
+ * GitHub orders stack entries from the ultimate base branch upwards. `position` is the selected
+ * pull request's one-based position, so merging that PR affects entries `1...position` atomically.
+ */
+export const PullRequestStack = Schema.Struct({
+  number: PositiveInt,
+  size: PositiveInt,
+  position: PositiveInt,
+  baseBranch: TrimmedNonEmptyString,
+  entries: Schema.Array(PullRequestStackEntry),
+});
+export type PullRequestStack = typeof PullRequestStack.Type;
+
+/** Compact stack identity used by list rows; full entries stay detail-only. */
+export const PullRequestStackSummary = Schema.Struct({
+  number: PositiveInt,
+  size: PositiveInt,
+  position: PositiveInt,
+  baseBranch: TrimmedNonEmptyString,
+});
+export type PullRequestStackSummary = typeof PullRequestStackSummary.Type;
+
 export const PullRequestProjectContext = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
@@ -127,6 +163,10 @@ export const PullRequestListEntry = Schema.Struct({
   // the field (brief version skew during dev restarts must not reject whole payloads).
   mergeability: Schema.optional(GitPullRequestMergeability).pipe(
     Schema.withDecodingDefault(() => "unknown"),
+  ),
+  // Stack support is additive and the server may briefly be on an older build during restarts.
+  stack: Schema.optional(Schema.NullOr(PullRequestStackSummary)).pipe(
+    Schema.withDecodingDefault(() => null),
   ),
   labels: Schema.Array(PullRequestLabel),
 });
@@ -219,6 +259,15 @@ export const PullRequestDetail = Schema.Struct({
   commentsIncomplete: Schema.Boolean,
   commits: Schema.Array(PullRequestCommit),
   mergeCapabilities: PullRequestMergeCapabilities,
+  // A missing field is a standalone PR or a brief older-server/newer-client version skew.
+  stack: Schema.optional(Schema.NullOr(PullRequestStack)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  // Stack lookup is optional for rendering detail, but merge UX must distinguish an unavailable
+  // lookup from a confirmed standalone pull request.
+  stackMetadataIncomplete: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -270,6 +319,11 @@ export const PullRequestActionResult = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   workspaceRoot: TrimmedNonEmptyString,
+  // Async merges may finish immediately or be handed to GitHub's merge queue. Older servers and
+  // non-merge actions omit the field, which decodes as null for rolling dev restarts.
+  mergeOutcome: Schema.optional(Schema.NullOr(Schema.Literals(["merged", "enqueued"]))).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
 });
 export type PullRequestActionResult = typeof PullRequestActionResult.Type;
 

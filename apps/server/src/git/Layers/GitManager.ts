@@ -15,7 +15,6 @@ import {
   sanitizeFeatureBranchName,
 } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
-import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";
@@ -1235,6 +1234,11 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     textGenerationParams?: GitTextGenerationParams,
+    prOptions?: {
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+      readonly draft?: boolean | undefined;
+    },
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1276,38 +1280,45 @@ export const makeGitManager = Effect.gen(function* () {
           `Cannot create a pull request from '${headContext.headBranch}' into itself. Create or switch to a feature branch and retry.`,
         );
       }
-      const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
-      const originRemoteUrl = headContext.isCrossRepository
-        ? yield* readConfigValueNullable(cwd, "remote.origin.url")
-        : null;
-      const targetRemoteName = headContext.isCrossRepository
-        ? originRemoteUrl
-          ? "origin"
-          : null
-        : headContext.remoteName;
-      const remoteBaseRef = targetRemoteName
-        ? `refs/remotes/${targetRemoteName}/${baseBranch}`
-        : null;
-      const useRemoteBaseRef = remoteBaseRef !== null && (yield* gitRefExists(cwd, remoteBaseRef));
-      const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
-      const prTemplate = Option.getOrUndefined(
-        yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
-      );
+      let prTitle = prOptions?.title;
+      let prBody = prOptions?.body;
+      if (prTitle === undefined || prBody === undefined) {
+        const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
+        const originRemoteUrl = headContext.isCrossRepository
+          ? yield* readConfigValueNullable(cwd, "remote.origin.url")
+          : null;
+        const targetRemoteName = headContext.isCrossRepository
+          ? originRemoteUrl
+            ? "origin"
+            : null
+          : headContext.remoteName;
+        const remoteBaseRef = targetRemoteName
+          ? `refs/remotes/${targetRemoteName}/${baseBranch}`
+          : null;
+        const useRemoteBaseRef =
+          remoteBaseRef !== null && (yield* gitRefExists(cwd, remoteBaseRef));
+        const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
+        const prTemplate = Option.getOrUndefined(
+          yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
+        );
 
-      const generated = yield* textGeneration.generatePrContent({
-        cwd,
-        baseBranch,
-        headBranch: headContext.headBranch,
-        commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-        diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-        diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-        ...(prTemplate !== undefined ? { prTemplate } : {}),
-        ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
-      });
+        const generated = yield* textGeneration.generatePrContent({
+          cwd,
+          baseBranch,
+          headBranch: headContext.headBranch,
+          commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+          diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+          diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+          ...(prTemplate !== undefined ? { prTemplate } : {}),
+          ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
+        });
+        prTitle ??= generated.title;
+        prBody ??= generated.body;
+      }
 
       const bodyFile = path.join(tempDir, `synara-pr-body-${process.pid}-${randomUUID()}.md`);
       yield* fileSystem
-        .writeFileString(bodyFile, generated.body)
+        .writeFileString(bodyFile, prBody)
         .pipe(
           Effect.mapError((cause) =>
             gitManagerError("runPrStep", "Failed to write pull request body temp file.", cause),
@@ -1318,8 +1329,9 @@ export const makeGitManager = Effect.gen(function* () {
           cwd,
           baseBranch,
           headSelector: headContext.preferredHeadSelector,
-          title: generated.title,
+          title: prTitle,
           bodyFile,
+          ...(prOptions?.draft !== undefined ? { draft: prOptions.draft } : {}),
         })
         .pipe(
           Effect.as(null),
@@ -1348,7 +1360,7 @@ export const makeGitManager = Effect.gen(function* () {
           status: "created" as const,
           baseBranch,
           headBranch: headContext.headBranch,
-          title: generated.title,
+          title: prTitle,
         };
       }
 
@@ -1362,19 +1374,26 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
+  const pullRequestForBranch: GitManagerShape["pullRequestForBranch"] = Effect.fnUntraced(
+    function* (input) {
+      const latest = yield* findLatestPr(input.cwd, {
+        branch: input.branch,
+        upstreamRef: input.upstreamRef,
+      });
+      return latest ? toResolvedPullRequest(latest) : null;
+    },
+  );
+
   const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input) {
     const details = yield* gitCore.statusDetails(input.cwd);
 
     const pr =
       details.branch !== null
-        ? yield* findLatestPr(input.cwd, {
+        ? yield* pullRequestForBranch({
+            cwd: input.cwd,
             branch: details.branch,
             upstreamRef: details.upstreamRef,
-          }).pipe(
-            // Status and PR-resolution surfaces share one mapper so their shapes cannot drift.
-            Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)),
-            Effect.catch(() => Effect.succeed(null)),
-          )
+          }).pipe(Effect.catch(() => Effect.succeed(null)))
         : null;
 
     return {
@@ -1383,6 +1402,7 @@ export const makeGitManager = Effect.gen(function* () {
       workingTree: details.workingTree,
       hasUpstream: details.hasUpstream,
       upstreamBranch: details.upstreamBranch,
+      configuredPrBaseBranch: details.configuredPrBaseBranch,
       aheadCount: details.aheadCount,
       behindCount: details.behindCount,
       pr,
@@ -1404,15 +1424,9 @@ export const makeGitManager = Effect.gen(function* () {
       }
     },
   );
-
-  // Same reason as summarizeDiff below: the badge surfaces need three integers, not the patch.
-  // Deriving them from the very patch readWorkingTreeDiff would have returned keeps the numbers
-  // identical to the ones a client-side parse produced, so no surface changes what it displays.
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
-      const { patch } = yield* readWorkingTreeDiff(input);
-      const totals = summarizeUnifiedPatchTotals(patch);
-      return totals ?? { additions: 0, deletions: 0, fileCount: 0 };
+      return yield* gitCore.readDiffStats(input.cwd, input.scope ?? "workingTree");
     },
   );
 
@@ -2607,13 +2621,21 @@ The local stash entry was kept for recovery.`,
           phases,
         });
 
-        if (input.action === "push" && initialStatus.hasWorkingTreeChanges) {
+        if (
+          input.action === "push" &&
+          initialStatus.hasWorkingTreeChanges &&
+          !input.allowDirtyWorkingTree
+        ) {
           return yield* gitManagerError(
             "runStackedAction",
             "Commit or stash local changes before pushing.",
           );
         }
-        if (input.action === "create_pr" && initialStatus.hasWorkingTreeChanges) {
+        if (
+          input.action === "create_pr" &&
+          initialStatus.hasWorkingTreeChanges &&
+          !input.allowDirtyWorkingTree
+        ) {
           return yield* gitManagerError(
             "runStackedAction",
             "Commit local changes before creating a PR.",
@@ -2712,7 +2734,11 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams, {
+                      title: input.prTitle,
+                      body: input.prBody,
+                      draft: input.prDraft,
+                    });
                   }),
                 ),
               )
@@ -2748,6 +2774,7 @@ The local stash entry was kept for recovery.`,
 
   return {
     status,
+    pullRequestForBranch,
     readWorkingTreeDiff,
     readWorkingTreeDiffStats,
     summarizeDiff,

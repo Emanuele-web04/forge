@@ -56,6 +56,15 @@ import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDeskto
 export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
 export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 
+// Pane kinds whose content has a natural width, opened at that size rather than
+// at the even split. The device pane frames a portrait phone, so its useful
+// width is whatever lets the phone reach full height: a ~19.5:9 chassis stays
+// height-bound well past 480px, and opening narrower only shrinks the device
+// while leaving empty space above and below it.
+const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
+  device: 38 * 16,
+};
+
 interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
@@ -76,6 +85,7 @@ interface RightDockProps {
   onAddPane: (kind: RightDockPaneKind) => void;
   motionKey?: string;
   activePaneRuntimeMode?: DockPaneRuntimeMode;
+  browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
@@ -174,6 +184,7 @@ export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  const browserRuntimeMode = props.browserRuntimeMode ?? "live";
   // The dock is the right-most surface when open, so its header sits under the
   // fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
@@ -187,6 +198,7 @@ export function RightDock(props: RightDockProps) {
   // freely; the next open re-centers the split.
   const contentRef = useRef<HTMLDivElement | null>(null);
   const minWidth = props.minWidth;
+  const activePaneKind = activePane?.kind ?? null;
   useEffect(() => {
     if (!props.state.open) {
       return;
@@ -196,11 +208,15 @@ export function RightDock(props: RightDockProps) {
     if (!wrapper || !shell) {
       return;
     }
-    const halfWidth = Math.round(shell.getBoundingClientRect().width / 2);
-    if (halfWidth > 0) {
-      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, halfWidth)}px`);
+    // A phone-shaped pane has a natural width: half the shell leaves the device
+    // stranded in empty space, so kinds that render a fixed-aspect object open
+    // at their own comfortable size instead of the even split.
+    const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
+    const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
+    if (openWidth > 0) {
+      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
     }
-  }, [props.state.open, minWidth]);
+  }, [props.state.open, minWidth, activePaneKind]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
@@ -328,9 +344,14 @@ export function RightDock(props: RightDockProps) {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;
               // Keep-mounted panes that are not the active tab are already
-              // hydrated, so they render live (just hidden); the active pane uses
-              // the deferred-aware runtime mode from the activation hook.
-              const runtimeMode: DockPaneRuntimeMode = isActive ? activePaneRuntimeMode : "live";
+              // hydrated; browser panes may use an explicit runtime mode so a
+              // floating browser can own the live guest while the dock stays preview-only.
+              const runtimeMode: DockPaneRuntimeMode =
+                pane.kind === "browser"
+                  ? browserRuntimeMode
+                  : isActive
+                    ? activePaneRuntimeMode
+                    : "live";
               return (
                 <div
                   key={pane.id}

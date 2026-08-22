@@ -41,7 +41,13 @@ export async function waitForBackendStartupReady(
 
     listeningPromise.then(
       () => settleResolve("listening"),
-      (error) => settleReject(error),
+      (error) => {
+        if (settled) {
+          return;
+        }
+        options.cancelHttpWait();
+        settleReject(error);
+      },
     );
     httpReadyPromise.then(
       () => settleResolve("http"),

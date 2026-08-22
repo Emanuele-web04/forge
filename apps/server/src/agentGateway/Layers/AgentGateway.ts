@@ -19,6 +19,7 @@ import {
   CommandId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
+  THREAD_GOAL_MAX_CHARS,
   ThreadId,
   type ProviderKind,
   type RuntimeMode,
@@ -69,6 +70,8 @@ import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts"
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
+import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
@@ -81,7 +84,27 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 // tool definition, so repeating the full policy here adds tens of thousands of
 // context characters per round without adding authority or safety.
 const AGENT_GATEWAY_INSTRUCTIONS =
-  "Synara tools are thread-scoped. Use browser_* only for Synara's visible WebView; follow the provider-delivered <synara_host_context> for full policy.";
+  "Synara tools are thread-scoped. Use browser_* only for Synara's shared in-app browser runtime; follow the provider-delivered <synara_host_context> for full policy.";
+
+function readThreadGoalArg(args: Record<string, unknown>): string {
+  if (!("goal" in args)) {
+    throw new ToolInputError(`Missing required argument "goal".`);
+  }
+  const value = args.goal;
+  if (value === null) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw new ToolInputError(`Argument "goal" must be a string or null.`);
+  }
+  const goal = value.trim();
+  if (goal.length > THREAD_GOAL_MAX_CHARS) {
+    throw new ToolInputError(
+      `Argument "goal" must be at most ${THREAD_GOAL_MAX_CHARS} characters.`,
+    );
+  }
+  return goal;
+}
 
 export const makeAgentGateway = Effect.gen(function* () {
   const credentials = yield* AgentGatewayCredentials;
@@ -103,6 +126,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
   );
+  // Optional and platform-gated: off macOS (and in tests that do not provide
+  // it) the agent never sees the device_* tools at all, rather than being
+  // offered eleven tools that can only report an unsupported platform.
+  const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
       serverSettings.getSettings,
@@ -217,7 +244,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads use a detached HEAD at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
+        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -243,7 +270,7 @@ export const makeAgentGateway = Effect.gen(function* () {
                 baseRef: {
                   type: "string",
                   description:
-                    "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+                    "Local Git revision, #PR, or GitHub pull-request URL the worktree is pinned at. Defaults to the selected checkout's HEAD.",
                 },
                 runtimeMode: {
                   type: "string",
@@ -281,7 +308,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. Worktree threads start at a detached HEAD. For two or more threads use one synara_create_threads call instead.",
+        "Create exactly one standalone Synara thread. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -302,7 +329,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           baseRef: {
             type: "string",
             description:
-              "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+              "Local Git revision, #PR, or GitHub pull-request URL the worktree is pinned at. Defaults to the selected checkout's HEAD.",
           },
           runtimeMode: {
             type: "string",
@@ -572,6 +599,87 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const setThreadGoal: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_set_thread_goal",
+      description:
+        "Set a persistent goal for a thread. Only set a goal when the user has explicitly asked for one (for example, 'keep working until X' or 'the goal of this thread is Y') or when dispatching a thread explicitly created to pursue a stated objective. Do NOT infer or invent goals from ordinary tasks or set one as a side effect of normal work. Clearing requires the same explicit user intent. When the active goal's objective has been accomplished, pass achieved: true instead of clearing: Synara records the achievement (with the time it took) and clears the goal. If the same external blocker prevents meaningful progress for three consecutive goal turns, pass blocked: true to pause the goal. Do not mark a goal blocked merely because the work is difficult, incomplete, or would benefit from clarification.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Thread to update. Defaults to your own thread when omitted.",
+          },
+          goal: {
+            type: ["string", "null"],
+            maxLength: THREAD_GOAL_MAX_CHARS,
+            description:
+              "Persistent objective. Pass null or an empty string to clear it. Ignored when achieved or blocked is true.",
+          },
+          achieved: {
+            type: "boolean",
+            description:
+              "Pass true when the active goal's objective has been accomplished. Records a goal achievement and clears the goal.",
+          },
+          blocked: {
+            type: "boolean",
+            description:
+              "Pass true only after the same external blocker prevents meaningful progress for three consecutive goal turns. Pauses the active goal.",
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      annotations: { title: "Set a Synara thread goal", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
+        if ("achieved" in args && typeof args.achieved !== "boolean") {
+          return yield* Effect.fail(new ToolInputError(`Argument "achieved" must be a boolean.`));
+        }
+        if ("blocked" in args && typeof args.blocked !== "boolean") {
+          return yield* Effect.fail(new ToolInputError(`Argument "blocked" must be a boolean.`));
+        }
+        const achieved = args.achieved === true;
+        const blocked = args.blocked === true;
+        if (achieved && blocked) {
+          return yield* Effect.fail(
+            new ToolInputError(`Arguments "achieved" and "blocked" are mutually exclusive.`),
+          );
+        }
+        const goal = achieved || blocked ? "" : readThreadGoalArg(args);
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
+        if ((achieved || blocked) && (target.goal ?? "").trim().length === 0) {
+          return yield* Effect.fail(
+            new ToolInputError(
+              `Thread has no active goal to mark ${achieved ? "achieved" : "blocked"}.`,
+            ),
+          );
+        }
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:goal`),
+            threadId: target.id,
+            ...(achieved ? { goalAchieved: true } : blocked ? { goalPaused: true } : { goal }),
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson(
+          achieved
+            ? { threadId: target.id, goal: null, achieved: true }
+            : blocked
+              ? { threadId: target.id, goal: target.goal, blocked: true, paused: true }
+              : { threadId: target.id, goal: goal || null },
+        );
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const automationTools = makeAgentGatewayAutomationTools({
     automationService,
     requireThreadShell,
@@ -618,8 +726,12 @@ export const makeAgentGateway = Effect.gen(function* () {
     interruptThread,
     setThreadTitle,
     setThreadArchived,
+    setThreadGoal,
     ...automationTools,
     ...browserTools,
+    ...(deviceService?.supported === true
+      ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
+      : []),
   ];
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({

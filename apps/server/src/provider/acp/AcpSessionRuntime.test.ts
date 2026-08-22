@@ -8,9 +8,11 @@ import {
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   makeAcpIncomingFrameGuard,
+  runAcpFreshSessionSetup,
   sessionConfigOptionsFromSetup,
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
+import * as AcpErrors from "./AcpErrors.ts";
 
 describe("makeAcpIncomingFrameGuard", () => {
   const encode = (value: string) => new TextEncoder().encode(value);
@@ -102,6 +104,52 @@ describe("awaitAcpChildExit", () => {
 
     expect(successfulCompleted).toBe(true);
     expect(failedCompleted).toBe(true);
+  });
+});
+
+describe("runAcpFreshSessionSetup", () => {
+  it("retries one matching fresh-session failure and then succeeds", async () => {
+    const retryable = new AcpErrors.AcpRequestError({
+      code: -32603,
+      errorMessage: "Path not found.",
+      data: { code: "FS_NOT_FOUND" },
+    });
+    let attempts = 0;
+    const setup = Effect.suspend(() => {
+      attempts += 1;
+      return attempts === 1 ? Effect.fail(retryable) : Effect.succeed("session-ready");
+    });
+
+    await expect(
+      Effect.runPromise(
+        runAcpFreshSessionSetup(setup, {
+          shouldRetry: (error) => error === retryable,
+        }),
+      ),
+    ).resolves.toBe("session-ready");
+    expect(attempts).toBe(2);
+  });
+
+  it("does not retry a non-matching failure", async () => {
+    const terminal = new AcpErrors.AcpRequestError({
+      code: -32603,
+      errorMessage: "Permission denied.",
+      data: { code: "FS_PERMISSION_DENIED" },
+    });
+    let attempts = 0;
+    const setup = Effect.suspend(() => {
+      attempts += 1;
+      return Effect.fail(terminal);
+    });
+
+    await expect(
+      Effect.runPromise(
+        runAcpFreshSessionSetup(setup, {
+          shouldRetry: () => false,
+        }),
+      ),
+    ).rejects.toThrow("Permission denied.");
+    expect(attempts).toBe(1);
   });
 });
 

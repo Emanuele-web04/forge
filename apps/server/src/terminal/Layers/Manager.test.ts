@@ -24,6 +24,7 @@ import {
   type TerminalSubprocessActivity,
 } from "./Manager";
 import type { ProcessTreeKiller } from "../processTreeKiller";
+import type { ProcessChildrenSnapshotObserver } from "../windowsProcessSnapshot";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -229,6 +230,7 @@ describe("TerminalManager", () => {
     options: {
       shellResolver?: () => string;
       subprocessChecker?: (terminalPid: number) => Promise<boolean | TerminalSubprocessActivity>;
+      processSnapshotObserver?: ProcessChildrenSnapshotObserver;
       processTreeKiller?: ProcessTreeKiller;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
@@ -247,6 +249,9 @@ describe("TerminalManager", () => {
       historyLineLimit,
       shellResolver: options.shellResolver ?? (() => "/bin/bash"),
       ...(options.subprocessChecker ? { subprocessChecker: options.subprocessChecker } : {}),
+      ...(options.processSnapshotObserver
+        ? { processSnapshotObserver: options.processSnapshotObserver }
+        : {}),
       ...(options.processTreeKiller ? { processTreeKiller: options.processTreeKiller } : {}),
       ...(options.subprocessPollIntervalMs
         ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
@@ -655,6 +660,108 @@ describe("TerminalManager", () => {
       1_200,
     );
 
+    manager.dispose();
+  });
+
+  it("applies one shared process snapshot to multiple terminals per poll cycle", async () => {
+    let captureCount = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        captureCount += 1;
+        if (captureCount === 1) return new Map();
+        return new Map([
+          [9000, [{ pid: 9100, command: "node.exe serve.js" }]],
+          [9001, [{ pid: 9101, command: "node.exe build.js" }]],
+        ]);
+      }),
+      retryDelayMs: () => 0,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 100,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput({ terminalId: "default" }));
+    await waitFor(() => captureCount === 1);
+    await manager.open(openInput({ terminalId: "sidecar" }));
+    await manager.write({ threadId: "thread-1", terminalId: "sidecar", data: "echo active\r" });
+
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.terminalId === "default" &&
+            event.hasRunningSubprocess,
+        ) &&
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.terminalId === "sidecar" &&
+            event.hasRunningSubprocess,
+        ),
+      1_200,
+    );
+
+    expect(observer.capture).toHaveBeenCalledTimes(2);
+    manager.dispose();
+  });
+
+  it("honors process snapshot retry backoff instead of probing at the terminal cadence", async () => {
+    let backoffMs = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        backoffMs = 120;
+        return null;
+      }),
+      retryDelayMs: () => backoffMs,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 10,
+    });
+
+    await manager.open(openInput());
+    await waitFor(() => vi.mocked(observer.capture).mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(observer.capture).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => vi.mocked(observer.capture).mock.calls.length === 2, 300);
+    manager.dispose();
+  });
+
+  it("preserves the last activity state while a shared snapshot is unavailable", async () => {
+    let captureCount = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        captureCount += 1;
+        return captureCount === 1
+          ? new Map([[9000, [{ pid: 9100, command: "node.exe build.js" }]]])
+          : null;
+      }),
+      retryDelayMs: () => 0,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 20,
+    });
+    const activityEvents: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      if (event.type === "activity") activityEvents.push(event);
+    });
+
+    await manager.open(openInput());
+    await waitFor(() => captureCount >= 2);
+
+    expect(activityEvents).toHaveLength(1);
+    expect(activityEvents[0]).toMatchObject({ hasRunningSubprocess: true });
     manager.dispose();
   });
 

@@ -26,7 +26,10 @@ import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscov
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { serveExternalMcpStdio, writeExternalMcpClientCredential } from "../bridge.ts";
-import { computeExternalMcpRuntimeProof } from "../runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+} from "../runtimeProof.ts";
 import { ExternalMcpGateway } from "../Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "../Services/ExternalMcpService.ts";
 import { ExternalMcpRepositoryLive } from "./ExternalMcpRepository.ts";
@@ -240,14 +243,18 @@ describe("external MCP gateway stdio flow", () => {
           stdout: "0123456789abcdef0123456789abcdef01234567\n",
           stderr: "",
         }),
-      createDetachedWorktree: (input: { readonly path?: string; readonly ref: string }) =>
+      createDetachedWorktree: (input: {
+        readonly path?: string;
+        readonly ref: string;
+        readonly newBranch?: string;
+      }) =>
         Effect.sync(() => {
           worktreeCreates.push(input);
           return {
             worktree: {
               path: input.path ?? path.join(worktreesDir, "generated"),
               ref: input.ref,
-              branch: null,
+              branch: input.newBranch ?? null,
             },
           };
         }),
@@ -383,9 +390,9 @@ describe("external MCP gateway stdio flow", () => {
         });
         const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
           if (String(url).endsWith("/api/mcp/external/runtime-challenge")) {
-            const challenge = JSON.parse(String(init?.body)) as { nonce: string };
+            const nonce = new Headers(init?.headers).get(EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER)!;
             return Response.json({
-              proof: computeExternalMcpRuntimeProof(RUNTIME_SECRET, challenge.nonce),
+              proof: computeExternalMcpRuntimeProof(RUNTIME_SECRET, nonce),
             });
           }
           const response = await Effect.runPromise(

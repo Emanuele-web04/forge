@@ -16,6 +16,12 @@ const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
+export const ProjectFileEncoding = Schema.Literals(["utf8", "utf8-bom"]);
+export type ProjectFileEncoding = typeof ProjectFileEncoding.Type;
+
+export const ProjectFileLineEnding = Schema.Literals(["lf", "crlf", "cr", "mixed"]);
+export type ProjectFileLineEnding = typeof ProjectFileLineEnding.Type;
+
 export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
 
@@ -100,6 +106,49 @@ export const ProjectSearchEntriesResult = Schema.Struct({
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
+// Exported so server and web enforce the same bounds the schema validates —
+// a drifted local copy turns into schema-decode failures instead of graceful UI.
+export const PROJECT_SEARCH_CONTENT_MAX_LIMIT = 100;
+export const PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
+export const PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH = 1024;
+
+export const ProjectSearchContentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)).check(
+    Schema.isMinLength(PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH),
+  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_CONTENT_MAX_LIMIT)),
+  ),
+});
+export type ProjectSearchContentInput = typeof ProjectSearchContentInput.Type;
+
+export const ProjectContentMatch = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  lineNumber: PositiveInt,
+  lineText: Schema.String.check(Schema.isMaxLength(PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH)),
+});
+export type ProjectContentMatch = typeof ProjectContentMatch.Type;
+
+export const ProjectSearchContentResult = Schema.Struct({
+  matches: Schema.Array(ProjectContentMatch),
+  truncated: Schema.Boolean,
+});
+export type ProjectSearchContentResult = typeof ProjectSearchContentResult.Type;
+
+// Fire-and-forget warm-up of the server's workspace search index. The search
+// palette calls this when it opens so the first keystroke's query doesn't pay
+// for the index build; the response returns before the build completes.
+export const ProjectPrewarmSearchIndexInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type ProjectPrewarmSearchIndexInput = typeof ProjectPrewarmSearchIndexInput.Type;
+
+export const ProjectPrewarmSearchIndexResult = Schema.Struct({
+  started: Schema.Boolean,
+});
+export type ProjectPrewarmSearchIndexResult = typeof ProjectPrewarmSearchIndexResult.Type;
+
 export const ProjectSearchLocalEntriesInput = Schema.Struct({
   rootPath: TrimmedNonEmptyString,
   query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
@@ -128,11 +177,15 @@ export const ProjectWriteFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
   contents: Schema.String.check(Schema.isMaxLength(PROJECT_READ_FILE_MAX_BYTES)),
+  expectedVersion: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  encoding: Schema.optional(ProjectFileEncoding),
+  lineEnding: Schema.optional(ProjectFileLineEnding),
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 
 export const ProjectWriteFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
@@ -150,8 +203,30 @@ export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   contents: Schema.String,
   truncated: Schema.Boolean,
+  version: Schema.NullOr(TrimmedNonEmptyString),
+  encoding: Schema.NullOr(ProjectFileEncoding),
+  lineEnding: Schema.NullOr(ProjectFileLineEnding),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+// Locates a chat file reference that failed to read inside the workspace root:
+// the server retries the workspace-relative path against ancestor directories
+// of the root (bounded to the user's home directory) and returns the absolute
+// path of the real file, or null when no candidate exists. Reading the located
+// file still goes through the preview-grant flow — this method never returns
+// file contents.
+export const ProjectResolveOutOfRootFileReferenceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectResolveOutOfRootFileReferenceInput =
+  typeof ProjectResolveOutOfRootFileReferenceInput.Type;
+
+export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
+  fullPath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectResolveOutOfRootFileReferenceResult =
+  typeof ProjectResolveOutOfRootFileReferenceResult.Type;
 
 export const ProjectCreateLocalFilePreviewGrantInput = Schema.Struct({
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),

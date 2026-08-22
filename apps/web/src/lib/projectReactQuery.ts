@@ -3,10 +3,13 @@ import type {
   ProjectEntry,
   ProjectListDirectoriesResult,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectDiscoverScriptsResult,
+  ProjectSearchContentResult,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@synara/contracts";
+import { PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
@@ -18,6 +21,8 @@ export const projectQueryKeys = {
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
+  resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
+    ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -28,6 +33,8 @@ export const projectQueryKeys = {
   ) => ["projects", "search-entries", cwd, query, limit, kind] as const,
   searchLocalEntries: (rootPath: string | null, query: string, limit: number) =>
     ["projects", "search-local-entries", rootPath, query, limit] as const,
+  searchContent: (cwd: string | null, query: string, limit: number) =>
+    ["projects", "search-content", cwd, query, limit] as const,
 };
 
 // Scope live file-change invalidations to one workspace so unrelated
@@ -41,6 +48,9 @@ export function invalidateProjectFileQueriesForCwds(
     uniqueCwds.flatMap((cwd) => [
       queryClient.invalidateQueries({ queryKey: ["projects", "list-directories", cwd] as const }),
       queryClient.invalidateQueries({ queryKey: ["projects", "read-file", cwd] as const }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "resolve-out-of-root-file-reference", cwd] as const,
+      }),
       queryClient.invalidateQueries({ queryKey: ["projects", "search-entries", cwd] as const }),
     ]),
   );
@@ -53,6 +63,11 @@ const DEFAULT_DISCOVER_SCRIPTS_DEPTH = 2;
 const DEFAULT_DISCOVER_SCRIPTS_STALE_TIME = 30_000;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_LIMIT = 50;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME = 10_000;
+const DEFAULT_SEARCH_CONTENT_LIMIT = 50;
+const DEFAULT_SEARCH_CONTENT_STALE_TIME = 10_000;
+// Mirrors the schema bound in contracts: below this length the server would
+// reject the request at decode time, so the query must stay disabled.
+export const SEARCH_CONTENT_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
 const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
 const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
@@ -68,7 +83,26 @@ const EMPTY_SEARCH_LOCAL_ENTRIES_RESULT: ProjectSearchLocalEntriesResult = {
   entries: [],
   truncated: false,
 };
+const EMPTY_SEARCH_CONTENT_RESULT: ProjectSearchContentResult = {
+  matches: [],
+  truncated: false,
+};
 const ABSOLUTE_LOCAL_READ_CWD = "/";
+
+// Fire-and-forget warm-up of the server's workspace search index, called when
+// the search palette opens so the first keystroke's query never pays for a
+// cold index build. Failures are irrelevant: the search itself builds the
+// index anyway, just later.
+export function prewarmProjectSearchIndex(cwd: string | null): void {
+  if (!cwd) return;
+  try {
+    void ensureNativeApi()
+      .projects.prewarmSearchIndex({ cwd })
+      .catch(() => undefined);
+  } catch {
+    // Native API not ready yet — nothing to warm.
+  }
+}
 
 export function isLocalPreviewGrantUsable(
   grant: Pick<ProjectCreateLocalFilePreviewGrantResult, "expiresAt"> | null | undefined,
@@ -156,6 +190,32 @@ export function projectReadFileQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
+  });
+}
+
+// Locates a workspace-relative reference that failed to read because it never
+// existed under the workspace root: the server retries it against ancestors of
+// the root (bounded to the home directory) and returns the real absolute path,
+// or null. The caller then reopens the file through the preview-grant flow.
+export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions<ProjectResolveOutOfRootFileReferenceResult>({
+    queryKey: projectQueryKeys.resolveOutOfRootFileReference(input.cwd, input.relativePath),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.relativePath) {
+        throw new Error("Out-of-root file reference resolution is unavailable.");
+      }
+      return api.projects.resolveOutOfRootFileReference({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    staleTime: 30_000,
   });
 }
 
@@ -260,5 +320,36 @@ export function projectSearchLocalEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.rootPath !== null && trimmedQuery.length >= 2,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_LOCAL_ENTRIES_RESULT,
+  });
+}
+
+export function projectSearchContentQueryOptions(input: {
+  cwd: string | null;
+  query: string;
+  enabled?: boolean;
+  limit?: number;
+  staleTime?: number;
+}) {
+  const limit = input.limit ?? DEFAULT_SEARCH_CONTENT_LIMIT;
+  const trimmedQuery = input.query.trim();
+  return queryOptions({
+    queryKey: projectQueryKeys.searchContent(input.cwd, trimmedQuery, limit),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Workspace content search is unavailable.");
+      }
+      return api.projects.searchContent({
+        cwd: input.cwd,
+        query: trimmedQuery,
+        limit,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      trimmedQuery.length >= SEARCH_CONTENT_MIN_QUERY_LENGTH,
+    staleTime: input.staleTime ?? DEFAULT_SEARCH_CONTENT_STALE_TIME,
+    placeholderData: (previous) => previous ?? EMPTY_SEARCH_CONTENT_RESULT,
   });
 }

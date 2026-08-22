@@ -80,7 +80,7 @@ import {
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -102,7 +102,8 @@ const PI_THINKING_OPTIONS: ReadonlyArray<{
   { value: "low", label: "Low", description: "Faster reasoning" },
   { value: "medium", label: "Medium", description: "Balanced reasoning", isDefault: true },
   { value: "high", label: "High", description: "Deeper reasoning" },
-  { value: "xhigh", label: "Extra High", description: "Maximum reasoning" },
+  { value: "xhigh", label: "Extra High", description: "Extra-high reasoning" },
+  { value: "max", label: "Max", description: "Maximum reasoning" },
 ];
 const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "off",
@@ -496,7 +497,8 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "xhigh"
+    value === "xhigh" ||
+    value === "max"
   );
 }
 
@@ -585,6 +587,43 @@ export function getPiDiscoverableModels(
   registry: Pick<ModelRegistry, "getAvailable" | "getAll">,
 ): ReadonlyArray<Model<Api>> {
   return ensurePiAnthropicCatalogModels(registry.getAvailable(), registry.getAll());
+}
+
+/**
+ * Pi extensions own their provider catalogs, so normalize their display metadata
+ * before it crosses Synara's trimmed-string RPC contract. A single malformed
+ * extension model must not make the complete Pi catalog unavailable.
+ */
+export function toPiProviderModelDescriptor(
+  model: Model<Api>,
+  getProviderDisplayName: (provider: string) => string,
+): ProviderListModelsResult["models"][number] | null {
+  const provider = trimToUndefined(model.provider);
+  const modelId = trimToUndefined(model.id);
+  if (!provider || !modelId || provider !== model.provider || modelId !== model.id) {
+    return null;
+  }
+
+  const slug = `${provider}/${modelId}`;
+  const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
+  return {
+    slug,
+    name: trimToUndefined(model.name) ?? slug,
+    upstreamProviderId: provider,
+    upstreamProviderName: trimToUndefined(getProviderDisplayName(model.provider)) ?? provider,
+    ...(supportedThinkingOptions.length > 0
+      ? {
+          supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
+            value: option.value,
+            label: option.label,
+            description: option.description,
+          })),
+          ...(supportedThinkingOptions.some((option) => option.value === DEFAULT_PI_THINKING_LEVEL)
+            ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
+            : {}),
+        }
+      : {}),
+  };
 }
 
 function isPiAnthropicEnsuredModelId(modelId: string): modelId is PiAnthropicEnsuredModelId {
@@ -1285,21 +1324,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
     const runtimeEventIngress = yield* makeBoundedCallbackIngress<
-      ProviderRuntimeEvent,
+      SizedProviderRuntimeEvent,
       never,
       never
     >(
-      (event) =>
-        (nativeEventLogger && event.raw
-          ? nativeEventLogger.write(event.raw, event.threadId).pipe(Effect.ignore)
+      (item) =>
+        (nativeEventLogger && item.event.raw
+          ? nativeEventLogger.write(item.event.raw, item.event.threadId).pipe(Effect.ignore)
           : Effect.void
-        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, event)), Effect.asVoid),
+        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, item.event)), Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 
@@ -2698,28 +2737,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           });
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = getPiDiscoverableModels(registry).map((model) => {
-            const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
-            return {
-              slug: `${model.provider}/${model.id}`,
-              name: model.name,
-              upstreamProviderId: model.provider,
-              upstreamProviderName: registry.getProviderDisplayName(model.provider),
-              ...(supportedThinkingOptions.length > 0
-                ? {
-                    supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
-                      value: option.value,
-                      label: option.label,
-                      description: option.description,
-                    })),
-                    ...(supportedThinkingOptions.some(
-                      (option) => option.value === DEFAULT_PI_THINKING_LEVEL,
-                    )
-                      ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
-                      : {}),
-                  }
-                : {}),
-            };
+          const models = getPiDiscoverableModels(registry).flatMap((model) => {
+            const descriptor = toPiProviderModelDescriptor(
+              model,
+              registry.getProviderDisplayName.bind(registry),
+            );
+            return descriptor ? [descriptor] : [];
           });
           return {
             models,

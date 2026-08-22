@@ -197,6 +197,9 @@ export interface DraftThreadState {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
+  // Goal staged before the thread exists server-side; persisted via
+  // `thread.meta.update` when the first send promotes the draft.
+  goal?: string;
   isTemporary?: boolean;
   promotedTo?: ThreadId;
 }
@@ -215,6 +218,8 @@ interface DraftThreadMutationOptions {
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;
   isTemporary?: boolean;
+  // Empty string clears the staged goal; undefined leaves it unchanged.
+  goal?: string;
 }
 
 type DraftThreadCreatedAtMode = "accept-empty" | "preserve-existing-on-empty";
@@ -287,7 +292,7 @@ export interface ComposerDraftStoreState {
     savedDraft: ComposerPromptHistorySavedDraft | null,
   ) => void;
   restorePromptHistorySavedDraft: (threadId: ThreadId) => void;
-  addPromptHistorySavedDraftImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
+  addPromptHistorySavedDraftImage: (threadId: ThreadId, image: ComposerImageAttachment) => boolean;
   syncPromptHistorySavedDraftPersistedAttachments: (
     threadId: ThreadId,
     attachments: PersistedComposerImageAttachment[],
@@ -322,11 +327,11 @@ export interface ComposerDraftStoreState {
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
   insertQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn, index: number) => void;
   removeQueuedTurn: (threadId: ThreadId, queuedTurnId: string) => void;
-  addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
-  addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
+  addImage: (threadId: ThreadId, image: ComposerImageAttachment) => boolean;
+  addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => number;
   removeImage: (threadId: ThreadId, imageId: string) => void;
   removeAppSnapCapture: (captureId: string) => void;
-  addFiles: (threadId: ThreadId, files: ComposerFileAttachment[]) => void;
+  addFiles: (threadId: ThreadId, files: ComposerFileAttachment[]) => number;
   removeFile: (threadId: ThreadId, fileId: string) => void;
   addAssistantSelection: (
     threadId: ThreadId,
@@ -433,6 +438,8 @@ export function buildDraftThreadState(input: {
         ? false
         : existingThread?.isTemporary === true;
   const nextPromotedTo = existingThread?.promotedTo;
+  const nextGoal =
+    options?.goal === undefined ? existingThread?.goal : options.goal.trim() || undefined;
 
   return {
     projectId: input.projectId,
@@ -458,6 +465,7 @@ export function buildDraftThreadState(input: {
         : (options.lastKnownPr ?? null),
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
+    ...(nextGoal ? { goal: nextGoal } : {}),
     ...(nextIsTemporary ? { isTemporary: true } : {}),
     ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
   };
@@ -482,6 +490,7 @@ export function draftThreadStatesEqual(
     (left.workingDirectory ?? null) === (right.workingDirectory ?? null) &&
     Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     left.envMode === right.envMode &&
+    (left.goal ?? "") === (right.goal ?? "") &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
     left.promotedTo === right.promotedTo
   );

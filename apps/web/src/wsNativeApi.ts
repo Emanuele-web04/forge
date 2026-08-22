@@ -24,6 +24,8 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type GitWorktreeSetupProgressEvent,
+  type GitHubProjectProvisionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -41,7 +43,11 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
+  type DeviceEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -55,6 +61,27 @@ import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 export type { WsThreadStreamFailure } from "./wsTransport";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
+
+export function readWsServerCapabilities(): ReadonlyArray<string> | null {
+  return instance?.transport.getCompatibility()?.capabilities ?? null;
+}
+
+export function onWsServerCapabilitiesChange(
+  listener: (capabilities: ReadonlyArray<string> | null) => void,
+  options?: { readonly replayCurrent?: boolean },
+): () => void {
+  if (!instance) createWsNativeApi();
+  const transport = instance?.transport;
+  if (!transport) {
+    if (options?.replayCurrent) listener(null);
+    return () => undefined;
+  }
+  return transport.onCompatibilityChange(
+    (compatibility: WsBootstrapNegotiateResult | null) =>
+      listener(compatibility?.capabilities ?? null),
+    options,
+  );
+}
 
 function createListenerRegistry<T>() {
   const listeners = new Set<(payload: T) => void>();
@@ -106,6 +133,9 @@ const serverProviderStatusesUpdatedListeners =
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
+const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
+const projectProvisionProgressListeners =
+  createListenerRegistry<GitHubProjectProvisionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -126,6 +156,7 @@ function omitNullUserInputAnswers(
 const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
@@ -140,9 +171,12 @@ function clearWsNativeApiListeners(): void {
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
+  gitWorktreeSetupProgressListeners.clear();
+  projectProvisionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
+  deviceEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -228,6 +262,9 @@ async function requestVoiceTranscriptionUpload(
     | ServerVoiceTranscriptionResult
     | { readonly error?: unknown }
     | null;
+  if (response.status === 404 || response.status === 405) {
+    throw new VoiceUploadRouteUnavailableError();
+  }
   if (!response.ok || !payload || !("text" in payload)) {
     const message =
       payload && "error" in payload && typeof payload.error === "string"
@@ -237,6 +274,8 @@ async function requestVoiceTranscriptionUpload(
   }
   return payload;
 }
+
+class VoiceUploadRouteUnavailableError extends Error {}
 
 function createFallbackTab(url = "about:blank") {
   return {
@@ -416,6 +455,12 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
   });
+  transport.subscribe(WS_CHANNELS.gitWorktreeSetupProgress, (message) => {
+    gitWorktreeSetupProgressListeners.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.projectProvisionProgress, (message) => {
+    projectProvisionProgressListeners.emit(message.data);
+  });
   transport.subscribe(WS_CHANNELS.terminalEvent, (message) => {
     terminalEventListeners.emit(message.data);
   });
@@ -424,6 +469,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
+  });
+  transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
+    deviceEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
@@ -476,7 +524,12 @@ export function createWsNativeApi(): NativeApi {
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
+      searchContent: (input) => transport.request(WS_METHODS.projectsSearchContent, input),
+      prewarmSearchIndex: (input) =>
+        transport.request(WS_METHODS.projectsPrewarmSearchIndex, input),
       readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      resolveOutOfRootFileReference: (input) =>
+        transport.request(WS_METHODS.projectsResolveOutOfRootFileReference, input),
       createLocalFilePreviewGrant: (input) =>
         transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
@@ -484,6 +537,12 @@ export function createWsNativeApi(): NativeApi {
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
       listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
       onDevServerEvent: projectDevServerEventListeners.subscribe,
+      provisionFromGitHub: (input, options) =>
+        transport.request(WS_METHODS.projectsProvisionFromGitHub, input, {
+          timeoutMs: null,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      onProvisionProgress: projectProvisionProgressListeners.subscribe,
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -531,8 +590,12 @@ export function createWsNativeApi(): NativeApi {
         }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
+      // Worktree materialization scales with checkout size; progress events
+      // keep the UI honest while the stream runs, so no fixed timeout.
       createDetachedWorktree: (input) =>
-        transport.request(WS_METHODS.gitCreateDetachedWorktree, input),
+        transport.request(WS_METHODS.gitCreateDetachedWorktree, input, {
+          timeoutMs: null,
+        }),
       removeWorktree: (input) => transport.request(WS_METHODS.gitRemoveWorktree, input),
       createBranch: (input) => transport.request(WS_METHODS.gitCreateBranch, input),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
@@ -549,6 +612,7 @@ export function createWsNativeApi(): NativeApi {
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
       onActionProgress: gitActionProgressListeners.subscribe,
+      onWorktreeSetupProgress: gitWorktreeSetupProgressListeners.subscribe,
     },
     pullRequests: {
       list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
@@ -647,11 +711,16 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
         }),
-      transcribeVoice: (input) => {
-        if (window.desktopBridge?.server?.transcribeVoice) {
-          return window.desktopBridge.server.transcribeVoice(input);
+      prewarmVoice: (input) => transport.request(WS_METHODS.serverPrewarmVoice, input),
+      transcribeVoice: async (input) => {
+        try {
+          return await requestVoiceTranscriptionUpload(input);
+        } catch (error) {
+          if (!(error instanceof VoiceUploadRouteUnavailableError)) {
+            throw error;
+          }
+          return transport.request(WS_METHODS.serverTranscribeVoice, input, { timeoutMs: null });
         }
-        return requestVoiceTranscriptionUpload(input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
@@ -690,14 +759,17 @@ export function createWsNativeApi(): NativeApi {
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
-      replayEvents: (fromSequenceExclusive) =>
+      replayEvents: (fromSequenceExclusive, threadId) =>
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
           fromSequenceExclusive,
+          ...(threadId === undefined ? {} : { threadId }),
         }),
       listProviderDeliveryBlockers: (input = {}) =>
         transport.request(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers, input),
       reconcileProviderDelivery: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, input),
+      prepareQuitResume: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.prepareQuitResume, input),
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
@@ -737,6 +809,34 @@ export function createWsNativeApi(): NativeApi {
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
+    },
+    device: {
+      list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
+      // Booting a cold simulator routinely outruns the default RPC deadline.
+      boot: (input) => transport.request(DEVICE_WS_METHODS.boot, input, { timeoutMs: null }),
+      shutdown: (input) => transport.request(DEVICE_WS_METHODS.shutdown, input),
+      attach: (input) => transport.request(DEVICE_WS_METHODS.attach, input),
+      detach: (input) => transport.request(DEVICE_WS_METHODS.detach, input),
+      getThreadState: (input) => transport.request(DEVICE_WS_METHODS.getThreadState, input),
+      tap: (input) => transport.request(DEVICE_WS_METHODS.tap, input),
+      swipe: (input) => transport.request(DEVICE_WS_METHODS.swipe, input),
+      typeText: (input) => transport.request(DEVICE_WS_METHODS.typeText, input),
+      keyEvent: (input) => transport.request(DEVICE_WS_METHODS.keyEvent, input),
+      pressButton: (input) => transport.request(DEVICE_WS_METHODS.pressButton, input),
+      installApp: (input) =>
+        transport.request(DEVICE_WS_METHODS.installApp, input, { timeoutMs: null }),
+      launchApp: (input) => transport.request(DEVICE_WS_METHODS.launchApp, input),
+      openUrl: (input) => transport.request(DEVICE_WS_METHODS.openUrl, input),
+      screenshot: (input) => transport.request(DEVICE_WS_METHODS.screenshot, input),
+      startRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.startRecording, input, { timeoutMs: null }),
+      stopRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.stopRecording, input, { timeoutMs: null }),
+      describeUi: (input) => transport.request(DEVICE_WS_METHODS.describeUi, input),
+      // A scroll loop runs several swipe/describe round-trips on the device.
+      scrollToElement: (input) =>
+        transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
+      onEvent: deviceEventListeners.subscribe,
     },
     browser: {
       open: async (input) => {

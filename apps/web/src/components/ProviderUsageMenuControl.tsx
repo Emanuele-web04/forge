@@ -14,7 +14,7 @@ import {
 import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import type { ProviderRateLimit } from "~/lib/rateLimits";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
 
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { ChatHeaderButton } from "./chat/chatHeaderControls";
@@ -32,15 +32,18 @@ export interface ProviderUsageMenuModel {
   isLoading: boolean;
 }
 
+// Module-level: the selector memoizes on store slices, so recreating it per render would
+// defeat the memo and rebuild every thread on each streaming flush.
+const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
+
 export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
   const { settings } = useAppSettings();
-  const selectAllThreads = createAllThreadsSelector();
-  const threads = useStore(selectAllThreads);
+  const threads = useStore(selectAccountRateLimitThreads);
   const usageSummary = useProviderUsageSummary({
     provider,
     threads,
     codexHomePath: settings.codexHomePath || null,
-    fetchProviderData: false,
+    fetchOpenUsageData: false,
   });
   const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const primaryRow = selectPrimaryProviderUsageDisplayRow(usageRows);

@@ -4,11 +4,15 @@ export const PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES = 32 * 1024 * 1024;
 export const PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE = 64;
 export const PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES = 512 * 1024;
 
+export interface SizedProviderRuntimeEvent {
+  readonly event: ProviderRuntimeEvent;
+  readonly bytes: number;
+}
+
 export function isTerminalProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return event.type === "turn.completed" || event.type === "session.exited";
 }
-
-export function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
+function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
   try {
     return Buffer.byteLength(JSON.stringify(event), "utf8");
   } catch {
@@ -22,12 +26,12 @@ export function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
  */
 export function compactProviderRuntimeEventForIngress(
   event: ProviderRuntimeEvent,
-): ProviderRuntimeEvent {
+): SizedProviderRuntimeEvent {
   const originalBytes = providerRuntimeEventBytes(event);
   if (originalBytes <= PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES || event.raw === undefined) {
-    return event;
+    return { event, bytes: originalBytes };
   }
-  return {
+  const compactedEvent: ProviderRuntimeEvent = {
     ...event,
     raw: {
       source: event.raw.source,
@@ -39,5 +43,9 @@ export function compactProviderRuntimeEventForIngress(
         originalBytes,
       },
     },
+  };
+  return {
+    event: compactedEvent,
+    bytes: providerRuntimeEventBytes(compactedEvent),
   };
 }

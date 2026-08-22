@@ -6,6 +6,10 @@ import type {
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
+import {
+  parseQuitConfirmationRequest,
+  parseQuitConfirmationResponse,
+} from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
 
@@ -74,6 +78,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
+  setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
   showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),
@@ -100,6 +106,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
     },
   },
+  customTitleBar: {
+    getState: () => ipcRenderer.invoke(IPC.customTitleBarGetState),
+    setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
+    relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -110,6 +121,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
+  },
+  onQuitConfirmationRequest: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const request = parseQuitConfirmationRequest(payload);
+      if (request) listener(request);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationRequest, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationRequest, wrappedListener);
+    };
+  },
+  replyQuitConfirmation: (response) => {
+    const parsed = parseQuitConfirmationResponse(response);
+    if (!parsed) return;
+    ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
   },
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);

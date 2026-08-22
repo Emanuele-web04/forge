@@ -6,7 +6,7 @@
 
 import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
@@ -18,26 +18,23 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { useNowMs } from "~/hooks/useNowMs";
+import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { splitShortcutLabel } from "~/keybindings";
 import { ArrowLeftIcon, PlusIcon } from "~/lib/icons";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 // Kanban-scoped "Create task" shortcut: ⌘⌥T on macOS, Ctrl+Alt+T elsewhere —
 // matching the app's mod convention (meta on mac, ctrl otherwise) and the ⌘⌥
 // "create new X" family. Matched on event.code so it survives Alt remapping the
 // produced character on some layouts.
-function getNavigatorPlatform(): string {
-  return typeof navigator === "undefined" ? "" : navigator.platform;
-}
-
-const NEW_TASK_SHORTCUT_LABEL = isMacPlatform(getNavigatorPlatform()) ? "⌥⌘T" : "Ctrl+Alt+T";
+const NEW_TASK_SHORTCUT_LABEL = isMacNavigatorPlatform() ? "⌥⌘T" : "Ctrl+Alt+T";
 const NEW_TASK_SHORTCUT_PARTS = splitShortcutLabel(NEW_TASK_SHORTCUT_LABEL);
 
 function isNewTaskShortcut(event: KeyboardEvent): boolean {
   if (event.code !== "KeyT" || event.repeat || event.shiftKey || !event.altKey) {
     return false;
   }
-  return isMacPlatform(getNavigatorPlatform())
+  return isMacNavigatorPlatform()
     ? event.metaKey && !event.ctrlKey
     : event.ctrlKey && !event.metaKey;
 }
@@ -53,7 +50,7 @@ import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
-import type { KanbanCard } from "./kanban.logic";
+import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate();
@@ -71,6 +68,25 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     project.inProgress.some((card) => card.activeWorkStartedAt !== null),
   );
   const nowMs = useNowMs(hasActiveCardWork);
+
+  // PR badges resolve like the sidebar's: live git status per checkout validates the
+  // persisted PR instead of trusting stale lastKnownPr metadata. Scoped to the cards the
+  // current surface renders (one board, or each overview column's capped list).
+  const allProjects = useStore((state) => state.projects);
+  const projectCwdById = useMemo(
+    () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
+    [allProjects],
+  );
+  const renderedCardThreads = useMemo(() => {
+    const cards = projectBoard
+      ? [...projectBoard.inProgress, ...projectBoard.draft, ...projectBoard.done]
+      : board.projects.flatMap((candidate) => overviewVisibleKanbanCards(candidate).visibleCards);
+    return cards.flatMap((card) => (card.thread ? [card.thread] : []));
+  }, [board.projects, projectBoard]);
+  const prByThreadId = useThreadPullRequests({
+    threads: renderedCardThreads,
+    projectCwdById,
+  });
 
   const [newTaskDialog, setNewTaskDialog] = useState<{
     key: number;
@@ -221,6 +237,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onOpenCard={handleOpenCard}
               onCardContextMenu={onCardContextMenu}
               onNewTask={handleNewDraftInProjectBoard}
+              prByThreadId={prByThreadId}
               nowMs={nowMs}
             />
           ) : (
@@ -230,6 +247,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onOpenCard={handleOpenCard}
               onCardContextMenu={onCardContextMenu}
               onNewTask={handleNewTask}
+              prByThreadId={prByThreadId}
               nowMs={nowMs}
             />
           )}

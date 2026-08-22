@@ -32,6 +32,7 @@ import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
+import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -50,7 +51,7 @@ import {
   useSidebar,
 } from "~/components/ui/sidebar";
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -79,7 +80,8 @@ function ThreadRetentionMaintenanceToast() {
         return;
       }
 
-      const { state, deletedCount, totalCount, error } = event.payload;
+      // `deletedCount` is the legacy wire name; retention now archives.
+      const { state, deletedCount: archivedCount, totalCount, error } = event.payload;
       const eventMs = Date.parse(event.payload.at);
       const isStaleEvent = Number.isFinite(eventMs)
         ? Date.now() - eventMs > MAINTENANCE_EVENT_STALE_MS
@@ -91,7 +93,7 @@ function ThreadRetentionMaintenanceToast() {
       if (state === "started") {
         toastIdRef.current = toastManager.add({
           type: "loading",
-          title: "Hiding old chats...",
+          title: "Archiving old chats...",
           description: "Preparing background maintenance.",
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
@@ -104,18 +106,18 @@ function ThreadRetentionMaintenanceToast() {
           toastIdRef.current ??
           toastManager.add({
             type: "loading",
-            title: "Hiding old chats...",
+            title: "Archiving old chats...",
             timeout: 0,
             data: { allowCrossThreadVisibility: true },
           });
         toastIdRef.current = toastId;
         toastManager.update(toastId, {
           type: "loading",
-          title: "Hiding old chats...",
+          title: "Archiving old chats...",
           description:
             totalCount && totalCount > 0
-              ? `${deletedCount ?? 0} of ${totalCount} chats hidden.`
-              : `${deletedCount ?? 0} chats hidden.`,
+              ? `${archivedCount ?? 0} of ${totalCount} chats archived.`
+              : `${archivedCount ?? 0} chats archived.`,
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -150,11 +152,11 @@ function ThreadRetentionMaintenanceToast() {
       if (!toastId) return;
       toastManager.update(toastId, {
         type: "success",
-        title: "Old chats hidden",
+        title: "Old chats archived",
         description:
-          deletedCount && deletedCount > 0
-            ? `${deletedCount} old chats hidden from the app.`
-            : "No old chats needed hiding.",
+          archivedCount && archivedCount > 0
+            ? `${archivedCount} old chats moved to Settings → Archived, where you can restore them.`
+            : "No old chats needed archiving.",
         timeout: 3500,
         data: { allowCrossThreadVisibility: true },
       });
@@ -168,7 +170,7 @@ function resolveBrowserNavigationShortcut(
   event: KeyboardEvent,
   platform: string,
 ): "back" | "forward" | null {
-  const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
+  const isMac = isMacPlatform(platform);
   const key = event.key.toLowerCase();
 
   if (
@@ -238,11 +240,13 @@ function ChatRouteGlobalShortcuts() {
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
+  const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeThreadTerminalState = activeContextThreadId
@@ -277,8 +281,13 @@ function ChatRouteGlobalShortcuts() {
   // The remembered project is global, so it is unusable the moment you switch Space. Fall
   // back to this Space's most recently touched project rather than to nothing.
   const latestUsableProjectId = useMemo(
-    () => resolveLatestProjectTargetIdWithFallback(activeSpaceProjects, latestProjectId),
-    [activeSpaceProjects, latestProjectId],
+    () =>
+      resolveLatestProjectTargetIdWithFallback(
+        activeSpaceProjects,
+        latestProjectId,
+        projectLastActivityAt,
+      ),
+    [activeSpaceProjects, latestProjectId, projectLastActivityAt],
   );
   // Deliberately unscoped: the persisted id is only cleared once the project is gone from
   // the app entirely, not merely absent from the Space you happen to be in.
@@ -575,13 +584,13 @@ function ChatRouteLayout() {
   );
 
   // Chat column shell. The content-seam rail is the resize hit-area for the seam —
-  // the visible divider + depth shadow live on the chat card's inner edge (see
+  // the visible straight divider + depth shadow live on the route surface (see
   // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
   // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
-    <div className="chat-content-card-backing relative flex h-svh min-h-0 min-w-0 flex-1">
+    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
           <SidebarRail placement="content-seam" />

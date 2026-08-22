@@ -240,6 +240,28 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("environment panel defaults", () => {
+  it("starts optional text sections disabled without overriding explicit preferences", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    expect(defaults).toMatchObject({
+      showEnvironmentMarkers: false,
+      showEnvironmentInstructions: false,
+      showEnvironmentNotepad: false,
+    });
+
+    const enabled = AppSettingsSchema.makeUnsafe({
+      showEnvironmentMarkers: true,
+      showEnvironmentInstructions: true,
+      showEnvironmentNotepad: true,
+    });
+    expect(enabled).toMatchObject({
+      showEnvironmentMarkers: true,
+      showEnvironmentInstructions: true,
+      showEnvironmentNotepad: true,
+    });
+  });
+});
+
 describe("resolveAppModelSelection", () => {
   it("preserves saved custom model slugs instead of falling back to the default", () => {
     expect(
@@ -783,10 +805,10 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok/custom-fast"),
     ).toHaveLength(1);
-    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build-0.1")).toBe(
-      true,
-    );
-    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build")).toBe(true);
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-4.6")).toBe(true);
+    expect(
+      modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build"),
+    ).toHaveLength(1);
     expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
@@ -858,6 +880,8 @@ describe("AppSettingsSchema", () => {
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
+      desktopAppIcon: "default",
+      useCustomTitleBar: true,
       enableAppSnap: false,
       appSnapShortcut: { kind: "both-option-keys" },
       appSnapPlaySound: true,
@@ -866,6 +890,7 @@ describe("AppSettingsSchema", () => {
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
       showStudioSection: true,
+      showAutomationRunThreads: true,
       timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
       customCodexModels: [],
       customClaudeModels: [],
@@ -876,6 +901,19 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
     });
+  });
+
+  it("preserves the selected desktop app icon", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ desktopAppIcon: "icon" })).desktopAppIcon).toBe("icon");
+  });
+
+  it("preserves the custom title bar preference", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ useCustomTitleBar: false })).useCustomTitleBar).toBe(false);
+    expect(decode(JSON.stringify({})).useCustomTitleBar).toBe(true);
   });
 
   it("migrates the former AppSnap feature flag", () => {

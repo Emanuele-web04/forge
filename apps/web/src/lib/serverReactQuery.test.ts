@@ -7,6 +7,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import {
+  hasReconciledServerProviderStatuses,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
@@ -41,6 +42,17 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("distinguishes hydrated config from a live provider snapshot", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
+    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+  });
+
   it("applies a missed live snapshot after the config projection hydrates", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;
@@ -109,7 +121,11 @@ describe("server provider status reconciliation", () => {
     const refresh = refreshServerConfigAfterTransportOpen(queryClient, {
       loadConfig: () => configProjection,
     });
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
     await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+
     resolveConfig(makeServerConfig([unavailableStatus]));
     await refresh;
 
@@ -134,6 +150,7 @@ describe("server provider status reconciliation", () => {
       loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
     });
 
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
     ]);
@@ -194,12 +211,10 @@ describe("serverAllProviderUsageQueryOptions", () => {
     expect(options.enabled).toBe(false);
   });
 
-  it("keys provider-scoped usage separately from the all-provider batch", () => {
-    const scoped = serverAllProviderUsageQueryOptions({ provider: "claudeAgent" });
-    const all = serverAllProviderUsageQueryOptions();
+  it("shares one batch query key across every usage surface", () => {
+    const options = serverAllProviderUsageQueryOptions();
 
-    expect(scoped.queryKey).toEqual(serverQueryKeys.allProviderUsage("claudeAgent"));
-    expect(all.queryKey).toEqual(serverQueryKeys.allProviderUsage(null));
+    expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
   });
 });
 

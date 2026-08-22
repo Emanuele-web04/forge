@@ -40,4 +40,22 @@ describe("imageMime", () => {
     expect(inferAttachmentExtension({ mimeType: "application/pdf" })).toBe(".pdf");
     expect(inferAttachmentExtension({ mimeType: "text/plain" })).toBe(".txt");
   });
+
+  it("preserves the final extension from multi-dot attachment filenames", () => {
+    expect(
+      inferAttachmentExtension({
+        mimeType: "application/octet-stream",
+        fileName: "archive.tar.gz",
+      }),
+    ).toBe(".gz");
+  });
+
+  it("does not treat a dotfile name as an attachment extension", () => {
+    expect(
+      inferAttachmentExtension({
+        mimeType: "application/octet-stream",
+        fileName: ".env",
+      }),
+    ).toBe(".bin");
+  });
 });

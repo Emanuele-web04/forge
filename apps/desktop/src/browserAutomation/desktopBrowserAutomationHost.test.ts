@@ -288,6 +288,14 @@ const createWebContents = () => {
 
 const createManager = () => {
   const webContents = createWebContents();
+  const getVisibleAutomationRuntime = vi.fn(
+    (_input: { threadId: ThreadId; tabId: string }) =>
+      ({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        webContents,
+      }) satisfies BrowserAutomationVisibleRuntime,
+  );
   const state = {
     threadId: THREAD_ID,
     version: 1,
@@ -335,13 +343,9 @@ const createManager = () => {
           }
         : null,
     ),
-    getVisibleAutomationRuntime: vi.fn(
-      () =>
-        ({
-          threadId: THREAD_ID,
-          tabId: TAB_ID,
-          webContents,
-        }) satisfies BrowserAutomationVisibleRuntime,
+    getVisibleAutomationRuntime,
+    getAutomationRuntime: vi.fn((input: { threadId: ThreadId; tabId: string }) =>
+      Promise.resolve(getVisibleAutomationRuntime(input)),
     ),
     closeAutomationTab: vi.fn(() => ({ ...state, activeTabId: null, tabs: [] })),
   };
@@ -519,7 +523,6 @@ describe("DesktopBrowserAutomationHost", () => {
     const openPanel = vi.fn(async () => undefined);
     const host = new DesktopBrowserAutomationHost(manager, {
       requestOpenPanel: openPanel,
-      visibleRuntimeTimeoutMs: 100,
     });
     const request = {
       sessionId: "session-1",
@@ -700,7 +703,6 @@ describe("DesktopBrowserAutomationHost", () => {
     const { manager, raw, webContents } = createManager();
     const host = new DesktopBrowserAutomationHost(manager, {
       requestOpenPanel: async () => undefined,
-      visibleRuntimeTimeoutMs: 100,
     });
     let sequence = 0;
     const call = (
@@ -903,7 +905,6 @@ describe("DesktopBrowserAutomationHost", () => {
     const openPanel = vi.fn(async () => undefined);
     const host = new DesktopBrowserAutomationHost(manager, {
       requestOpenPanel: openPanel,
-      visibleRuntimeTimeoutMs: 10,
     });
 
     await expect(
@@ -1148,7 +1149,7 @@ describe("DesktopBrowserAutomationHost", () => {
     expect(state.activeTabId).toBe(OPENED_TAB_ID);
   });
 
-  it("rejects a hidden no-URL open before mutating state when no WebView is attached", async () => {
+  it("reports an unavailable hidden runtime without creating a new tab", async () => {
     const { manager, raw } = createManager();
     raw.getVisibleAutomationRuntime.mockImplementation(() => {
       throw new Error("guest not attached");
@@ -1170,7 +1171,10 @@ describe("DesktopBrowserAutomationHost", () => {
       },
     });
     expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
-    expect(raw.selectAutomationTab).not.toHaveBeenCalled();
+    expect(raw.selectAutomationTab).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+    });
     await expect(
       host.executeTool({
         sessionId: "session-hidden-unattached",
@@ -1946,7 +1950,6 @@ describe("DesktopBrowserAutomationHost", () => {
     });
     const host = new DesktopBrowserAutomationHost(manager, {
       requestOpenPanel: async () => undefined,
-      visibleRuntimeTimeoutMs: 100,
     });
 
     await expect(
@@ -2105,12 +2108,13 @@ describe("DesktopBrowserAutomationHost", () => {
     ).resolves.toMatchObject({ activeTabId: TAB_ID });
   });
 
-  it("stops polling for the visible runtime as soon as the request is aborted", async () => {
+  it("cancels a pending background runtime acquisition", async () => {
     const { manager, raw } = createManager();
-    raw.getVisibleAutomationRuntime.mockImplementation(() => {
-      throw new Error("guest not attached yet");
-    });
-    const host = new DesktopBrowserAutomationHost(manager, { visibleRuntimeTimeoutMs: 5_000 });
+    const runtime = raw.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: TAB_ID });
+    raw.getVisibleAutomationRuntime.mockClear();
+    const acquisition = deferred<typeof runtime>();
+    raw.getAutomationRuntime.mockReturnValue(acquisition.promise);
+    const host = new DesktopBrowserAutomationHost(manager);
     const controller = new AbortController();
     const operation = host.executeTool({
       sessionId: "session-runtime-abort",
@@ -2122,35 +2126,32 @@ describe("DesktopBrowserAutomationHost", () => {
     });
 
     await vi.waitFor(() => {
-      expect(raw.getVisibleAutomationRuntime).toHaveBeenCalled();
+      expect(raw.getAutomationRuntime).toHaveBeenCalledOnce();
     });
     controller.abort();
     await expect(operation).rejects.toMatchObject({ browserError: { code: "BrowserCancelled" } });
-    const attemptsAfterAbort = raw.getVisibleAutomationRuntime.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(raw.getVisibleAutomationRuntime).toHaveBeenCalledTimes(attemptsAfterAbort);
+    acquisition.resolve(runtime);
   });
 
-  it("cancels a pending visible-panel reveal without stranding the browser locks", async () => {
+  it("does not block background execution on a pending panel reveal", async () => {
     const { manager } = createManager();
     const panelReveal = deferred<void>();
     const requestOpenPanel = vi.fn(() => panelReveal.promise);
     const host = new DesktopBrowserAutomationHost(manager, { requestOpenPanel });
-    const controller = new AbortController();
     const operation = host.executeTool({
       sessionId: "session-panel-abort",
       provider: "codex",
       threadId: THREAD_ID,
       name: "browser_snapshot",
       arguments: { includeImage: false },
-      signal: controller.signal,
     });
 
     await vi.waitFor(() => {
       expect(requestOpenPanel).toHaveBeenCalledWith(THREAD_ID);
     });
-    controller.abort();
-    await expect(operation).rejects.toMatchObject({ browserError: { code: "BrowserCancelled" } });
+    await expect(operation).resolves.toMatchObject({
+      structuredContent: { tabId: TAB_ID },
+    });
     await expect(
       host.executeTool({
         sessionId: "session-panel-abort",

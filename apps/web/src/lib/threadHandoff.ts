@@ -10,6 +10,8 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
   type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettingsView,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -17,6 +19,7 @@ import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
+import { findProviderStatus, isProviderUsable } from "./providerAvailability";
 import { randomUUID } from "./utils";
 
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
@@ -39,10 +42,33 @@ function isImportableThreadActivity(
   return IMPORTABLE_THREAD_ACTIVITY_KINDS.has(activity.kind);
 }
 
-export function resolveAvailableHandoffTargetProviders(
-  sourceProvider: ProviderKind,
-): ReadonlyArray<ProviderKind> {
-  return DEFAULT_PROVIDER_ORDER.filter((provider) => provider !== sourceProvider);
+export function isEligibleHandoffTargetProvider(input: {
+  readonly sourceProvider: ProviderKind;
+  readonly targetProvider: ProviderKind;
+  readonly targetProviderEnabled: boolean | null | undefined;
+  readonly targetProviderStatus: ServerProviderStatus | null | undefined;
+}): boolean {
+  return (
+    input.targetProvider !== input.sourceProvider &&
+    input.targetProviderEnabled === true &&
+    input.targetProviderStatus?.provider === input.targetProvider &&
+    isProviderUsable(input.targetProviderStatus)
+  );
+}
+
+export function resolveAvailableHandoffTargetProviders(input: {
+  readonly sourceProvider: ProviderKind;
+  readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
+  readonly providerStatuses: readonly ServerProviderStatus[];
+}): ReadonlyArray<ProviderKind> {
+  return DEFAULT_PROVIDER_ORDER.filter((targetProvider) =>
+    isEligibleHandoffTargetProvider({
+      sourceProvider: input.sourceProvider,
+      targetProvider,
+      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
+      targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
+    }),
+  );
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
@@ -60,8 +86,15 @@ export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string
 
 export function buildThreadHandoffImportedMessages(
   thread: Pick<Thread, "messages">,
+  // Forking from a message footer carries only the transcript up to that turn, so
+  // the new thread starts exactly where the user clicked. Omitted = whole thread.
+  options?: { readonly throughMessageId?: MessageId | null },
 ): ReadonlyArray<ThreadHandoffImportedMessage> {
-  return thread.messages.filter(isImportableThreadMessage).map((message) => {
+  const importable = thread.messages.filter(isImportableThreadMessage);
+  const cutoffId = options?.throughMessageId ?? null;
+  const cutoffIndex = cutoffId ? importable.findIndex((message) => message.id === cutoffId) : -1;
+  const scopedMessages = cutoffIndex >= 0 ? importable.slice(0, cutoffIndex + 1) : importable;
+  return scopedMessages.map((message) => {
     const importedMessageId = MessageId.makeUnsafe(randomUUID());
     let importedText = message.text;
     if (message.role === "user") {
