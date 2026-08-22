@@ -64,10 +64,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
 import { useDeviceStateStore } from "./deviceStateStore";
-import {
-  authorizationHeaderFromSessionBearer,
-  readSessionBearer,
-} from "./sessionBearer";
+import { authorizationHeaderFromSessionBearer, readSessionBearer } from "./sessionBearer";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -281,10 +278,7 @@ export function makeNegotiateHttpUrl(explicitUrl: string | null): string {
 }
 
 /** When cookies failed to stick, pair pages store a bearer and WS upgrades need wsToken. */
-export async function attachWebSocketAuthToken(
-  url: string,
-  signal?: AbortSignal,
-): Promise<string> {
+export async function attachWebSocketAuthToken(url: string, signal?: AbortSignal): Promise<string> {
   if (!readSessionBearer()) return url;
   const response = await fetch("/api/auth/ws-token", {
     method: "POST",
@@ -292,7 +286,7 @@ export async function attachWebSocketAuthToken(
     headers: {
       ...authorizationHeaderFromSessionBearer(),
     },
-    signal,
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
     throw new Error(`Failed to issue WebSocket auth token (${response.status}).`);

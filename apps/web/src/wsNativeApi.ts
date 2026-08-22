@@ -55,10 +55,7 @@ import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
-import {
-  authorizationHeaderFromSessionBearer,
-  clearSessionBearer,
-} from "./sessionBearer";
+import { authorizationHeaderFromSessionBearer, clearSessionBearer } from "./sessionBearer";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 

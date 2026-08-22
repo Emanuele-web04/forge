@@ -404,12 +404,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   Thread,
-  | "interactionMode"
-  | "lastKnownPr"
-  | "latestTurn"
-  | "lastVisitedAt"
-  | "session"
-  | "updatedAt"
+  "interactionMode" | "lastKnownPr" | "latestTurn" | "lastVisitedAt" | "session" | "updatedAt"
 > & {
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
@@ -626,15 +621,12 @@ export function hasFailedThread(
  */
 export function isThreadReadyForReview(
   thread: Pick<
-    SidebarThreadSummary,
-    | "hasActionableProposedPlan"
-    | "hasLiveTailWork"
-    | "hasPendingApprovals"
-    | "hasPendingUserInput"
-    | "lastKnownPr"
-    | "latestTurn"
-    | "session"
-  >,
+    ThreadStatusInput,
+    "hasActionableProposedPlan" | "hasLiveTailWork" | "lastKnownPr" | "latestTurn" | "session"
+  > & {
+    readonly hasPendingApprovals?: boolean;
+    readonly hasPendingUserInput?: boolean;
+  },
 ): boolean {
   return (
     thread.lastKnownPr?.state === "open" &&
@@ -679,10 +671,7 @@ export function resolveThreadStatusPillForPullRequest(input: {
   return resolveThreadStatusPill({
     thread: {
       ...input.thread,
-      lastKnownPr: resolveThreadPullRequestForStatus(
-        input.thread,
-        input.effectivePullRequest,
-      ),
+      lastKnownPr: resolveThreadPullRequestForStatus(input.thread, input.effectivePullRequest),
     },
     hasPendingApprovals: input.hasPendingApprovals,
     hasPendingUserInput: input.hasPendingUserInput,

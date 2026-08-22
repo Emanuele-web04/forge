@@ -62,12 +62,12 @@ describe("ProviderSessionReaperLive", () => {
   it("stops stale runtimes without deleting their resume state", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-stale");
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-    const stopRuntimeSession = vi.fn<
-      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
-    >(() => Effect.void);
-    const hasLiveRuntimeTasks = vi.fn<
-      NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>
-    >(() => Effect.succeed(false));
+    const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
+      () => Effect.void,
+    );
+    const hasLiveRuntimeTasks = vi.fn<NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>>(
+      () => Effect.succeed(false),
+    );
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),
@@ -133,12 +133,12 @@ describe("ProviderSessionReaperLive", () => {
   it("keeps stale runtimes alive while provider-native tasks are running", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-background-task");
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-    const stopRuntimeSession = vi.fn<
-      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
-    >(() => Effect.void);
-    const hasLiveRuntimeTasks = vi.fn<
-      NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>
-    >(() => Effect.succeed(true));
+    const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
+      () => Effect.void,
+    );
+    const hasLiveRuntimeTasks = vi.fn<NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>>(
+      () => Effect.succeed(true),
+    );
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),
@@ -206,9 +206,9 @@ describe("ProviderSessionReaperLive", () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-active");
     const turnId = TurnId.makeUnsafe("turn-reaper-active");
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-    const stopRuntimeSession = vi.fn<
-      NonNullable<ProviderServiceShape["stopRuntimeSession"]>
-    >(() => Effect.void);
+    const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
+      () => Effect.void,
+    );
     const directory: ProviderSessionDirectoryShape = {
       upsert: () => Effect.void,
       getProvider: () => unsupported(),

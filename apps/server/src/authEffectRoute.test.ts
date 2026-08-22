@@ -73,7 +73,8 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         expiresAt,
         sessionToken: "bearer-token",
       }),
-    peekBootstrapCredential: () => Effect.succeed({ role: "owner" as const, subject: "owner-bootstrap" }),
+    peekBootstrapCredential: () =>
+      Effect.succeed({ role: "owner" as const, subject: "owner-bootstrap" }),
     issuePairingCredential: () =>
       mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),

@@ -81,14 +81,19 @@ function makeThread(input: {
   } satisfies SidebarThreadSummary;
 }
 
-function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] {
+function completedTurn(completedAt: string): NonNullable<SidebarThreadSummary["latestTurn"]> {
   return {
-    turnId: `turn-${completedAt}`,
+    turnId: `turn-${completedAt}` as unknown as SidebarThreadSummary["latestTurn"] extends {
+      turnId: infer T;
+    }
+      ? T
+      : never,
     state: "completed",
     requestedAt: completedAt,
     startedAt: completedAt,
     completedAt,
-  } as SidebarThreadSummary["latestTurn"];
+    assistantMessageId: null,
+  };
 }
 
 describe("isActivityThread", () => {
@@ -525,20 +530,12 @@ describe("buildActivityViewModel", () => {
       });
     expect(
       isActivityAttentionSignalAcknowledged(
-        sessionFailure(
-          "ack-session-error",
-          "2026-08-01T09:00:00.000Z",
-          "2026-08-01T09:05:00.000Z",
-        ),
+        sessionFailure("ack-session-error", "2026-08-01T09:00:00.000Z", "2026-08-01T09:05:00.000Z"),
       ),
     ).toBe(true);
     expect(
       isActivityAttentionSignalAcknowledged(
-        sessionFailure(
-          "new-session-error",
-          "2026-08-01T09:10:00.000Z",
-          "2026-08-01T09:05:00.000Z",
-        ),
+        sessionFailure("new-session-error", "2026-08-01T09:10:00.000Z", "2026-08-01T09:05:00.000Z"),
       ),
     ).toBe(false);
   });

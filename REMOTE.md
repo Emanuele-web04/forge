@@ -12,18 +12,18 @@ need plaintext remote access. Synara rejects unsafe remote binds by default.
 
 The server CLI accepts these flags and equivalent environment variables:
 
-| CLI flag                     | Environment variable              | Purpose                                                |
-| ---------------------------- | --------------------------------- | ------------------------------------------------------ |
-| `--mode <web\|desktop>`      | `SYNARA_MODE`                     | Runtime mode.                                          |
-| `--port <number>`            | `SYNARA_PORT`                     | HTTP/WebSocket port.                                   |
-| `--host <address>`           | `SYNARA_HOST`                     | Bind address. Keep this loopback for Tailscale Serve.  |
+| CLI flag                      | Environment variable              | Purpose                                                |
+| ----------------------------- | --------------------------------- | ------------------------------------------------------ |
+| `--mode <web\|desktop>`       | `SYNARA_MODE`                     | Runtime mode.                                          |
+| `--port <number>`             | `SYNARA_PORT`                     | HTTP/WebSocket port.                                   |
+| `--host <address>`            | `SYNARA_HOST`                     | Bind address. Keep this loopback for Tailscale Serve.  |
 | `--public-url <https-origin>` | `SYNARA_PUBLIC_URL`               | HTTPS origin presented by the reverse proxy.           |
-| `--home-dir <path>`          | `SYNARA_HOME`                     | Base directory.                                        |
-| `--dev-url <url>`            | `VITE_DEV_SERVER_URL`             | Development web URL redirect/proxy target.             |
-| `--no-browser`               | `SYNARA_NO_BROWSER`               | Disable automatic browser launch.                      |
-| `--auth-token <token>`       | `SYNARA_AUTH_TOKEN`               | Bootstrap authentication secret.                       |
-| `--allow-insecure-remote`    | `SYNARA_ALLOW_INSECURE_REMOTE`    | Explicitly allow an unencrypted non-loopback listener. |
-| Desktop only                 | `SYNARA_KEEP_RUNNING_AFTER_CLOSE` | Set to `1` to keep the packaged backend running.       |
+| `--home-dir <path>`           | `SYNARA_HOME`                     | Base directory.                                        |
+| `--dev-url <url>`             | `VITE_DEV_SERVER_URL`             | Development web URL redirect/proxy target.             |
+| `--no-browser`                | `SYNARA_NO_BROWSER`               | Disable automatic browser launch.                      |
+| `--auth-token <token>`        | `SYNARA_AUTH_TOKEN`               | Bootstrap authentication secret.                       |
+| `--allow-insecure-remote`     | `SYNARA_ALLOW_INSECURE_REMOTE`    | Explicitly allow an unencrypted non-loopback listener. |
+| Desktop only                  | `SYNARA_KEEP_RUNNING_AFTER_CLOSE` | Set to `1` to keep the packaged backend running.       |
 
 Run the server with `--help` for the current full option list.
 

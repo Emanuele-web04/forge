@@ -58,8 +58,7 @@ export async function bootstrapRemoteAuthGate(
     dependencies?.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "/");
   const fetchFn = dependencies?.fetch ?? globalThis.fetch;
   const renderFn = dependencies?.render ?? renderRemotePairingRequired;
-  const authHeaders =
-    dependencies?.authorizationHeaders ?? authorizationHeaderFromSessionBearer();
+  const authHeaders = dependencies?.authorizationHeaders ?? authorizationHeaderFromSessionBearer();
 
   if (isDesktop || isPairingPath(currentPathname)) {
     return "ok";

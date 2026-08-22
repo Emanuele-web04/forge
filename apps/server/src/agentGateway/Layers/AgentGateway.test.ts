@@ -4962,10 +4962,7 @@ describe("AgentGateway", () => {
       ],
     };
     const { gatewayLayer, makeHarness } = makeHarnessLayer(
-      [
-      ...baseThreads.filter((thread) => thread.id !== "thread-child"),
-        child,
-      ],
+      [...baseThreads.filter((thread) => thread.id !== "thread-child"), child],
       [],
       { threadDetails: new Map([[child.id, detail]]) },
     );

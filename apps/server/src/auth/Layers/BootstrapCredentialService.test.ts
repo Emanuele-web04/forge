@@ -90,8 +90,7 @@ describe("BootstrapCredentialServiceLive", () => {
         ttl: OWNER_STARTUP_PAIRING_TTL,
       });
       const now = yield* DateTime.now;
-      const remainingMs =
-        DateTime.toEpochMillis(issued.expiresAt) - DateTime.toEpochMillis(now);
+      const remainingMs = DateTime.toEpochMillis(issued.expiresAt) - DateTime.toEpochMillis(now);
 
       expect(remainingMs).toBeGreaterThan(Duration.toMillis(Duration.hours(23)));
       expect(remainingMs).toBeLessThanOrEqual(Duration.toMillis(Duration.hours(24)));

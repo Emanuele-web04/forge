@@ -465,7 +465,7 @@ const readEffectBinary = (
 function resolvePairingCredential(input: {
   readonly pathname: string;
   readonly searchParams: URLSearchParams;
-  readonly pathCredential?: string;
+  readonly pathCredential?: string | undefined;
 }): string {
   const fromQuery = input.searchParams.get("token")?.trim() ?? "";
   if (fromQuery.length > 0) return fromQuery;
@@ -504,7 +504,9 @@ const pairRequestEffect = Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const indexPath = path.resolve(config.staticDir, "index.html");
-    const data = yield* fileSystem.readFile(indexPath).pipe(Effect.catch(() => Effect.succeed(null)));
+    const data = yield* fileSystem
+      .readFile(indexPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!data) {
       return HttpServerResponse.text("Web UI is unavailable.", { status: 503 });
     }

@@ -166,7 +166,9 @@ describe("SidebarActivityView", () => {
     await expect.element(page.getByText("Ready for Review", { exact: true })).toBeVisible();
     expect(document.querySelector('[role="img"][aria-label="Failed"]')).toBeNull();
     expect(document.querySelector('[role="img"][aria-label="Ready for Review"]')).toBeNull();
-    const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-testid^='activity-thread-']"));
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-testid^='activity-thread-']"),
+    );
     expect(rows.map((row) => row.dataset.testid)).toEqual([
       `activity-thread-${failed.id}`,
       `activity-thread-${reviewReady.id}`,
@@ -221,9 +223,7 @@ describe("SidebarActivityView", () => {
     await mounted.rerender(
       renderActivity({
         threads: [legacy],
-        prByThreadId: new Map([
-          [legacy.id, { ...persistedPr, number: 44, isDraft: false }],
-        ]),
+        prByThreadId: new Map([[legacy.id, { ...persistedPr, number: 44, isDraft: false }]]),
         resolveThreadStatus: resolveStatus,
       }),
     );

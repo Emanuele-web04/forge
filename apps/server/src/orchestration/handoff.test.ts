@@ -6,10 +6,7 @@
 import { MessageId, type OrchestrationMessage } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  buildHandoffDurableStateUpdate,
-  buildPriorTranscriptBootstrapText,
-} from "./handoff.ts";
+import { buildHandoffDurableStateUpdate, buildPriorTranscriptBootstrapText } from "./handoff.ts";
 
 const message = (
   index: number,

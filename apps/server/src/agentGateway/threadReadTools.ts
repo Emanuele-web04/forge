@@ -97,8 +97,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
             Option.match({
-              onNone: () =>
-                Effect.fail(new ToolInputError(`Thread "${caller.id}" was not found.`)),
+              onNone: () => Effect.fail(new ToolInputError(`Thread "${caller.id}" was not found.`)),
               onSome: Effect.succeed,
             }),
           ),

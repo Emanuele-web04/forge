@@ -55,13 +55,10 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         if (thread?.session?.activeTurnId != null) continue;
 
         if (!providerService.stopRuntimeSession || !providerService.hasLiveRuntimeTasks) {
-          yield* Effect.logWarning(
-            "provider session reaper cannot safely stop stale runtime",
-            {
-              threadId: binding.threadId,
-              provider: binding.provider,
-            },
-          );
+          yield* Effect.logWarning("provider session reaper cannot safely stop stale runtime", {
+            threadId: binding.threadId,
+            provider: binding.provider,
+          });
           continue;
         }
 

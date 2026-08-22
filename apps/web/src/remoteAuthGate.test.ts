@@ -54,7 +54,7 @@ describe("bootstrapRemoteAuthGate", () => {
       bootstrapRemoteAuthGate({
         isElectron: false,
         pathname: "/",
-        fetch: fetch as typeof globalThis.fetch,
+        fetch: fetch as unknown as typeof globalThis.fetch,
         render,
       }),
     ).resolves.toBe("blocked");
@@ -75,7 +75,7 @@ describe("bootstrapRemoteAuthGate", () => {
       bootstrapRemoteAuthGate({
         isElectron: false,
         pathname: "/",
-        fetch: fetch as typeof globalThis.fetch,
+        fetch: fetch as unknown as typeof globalThis.fetch,
         render,
       }),
     ).resolves.toBe("ok");

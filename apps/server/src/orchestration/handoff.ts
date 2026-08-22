@@ -115,8 +115,7 @@ export function listPriorTranscriptMessages(
 }
 
 function buildImportedMessagesBootstrapText(input: {
-  thread: DurableTaskStateSource &
-    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
+  thread: DurableTaskStateSource & Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
   importedMessages: ReadonlyArray<OrchestrationMessage>;
   intro: string;
   maxChars: number;
@@ -221,8 +220,7 @@ export function buildHandoffBootstrapText(
 }
 
 export function buildPriorTranscriptBootstrapText(
-  thread: DurableTaskStateSource &
-    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
+  thread: DurableTaskStateSource & Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
   currentMessageId: string | undefined,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
@@ -238,8 +236,7 @@ export function buildPriorTranscriptBootstrapText(
 }
 
 export function buildForkBootstrapText(
-  thread: DurableTaskStateSource &
-    Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
+  thread: DurableTaskStateSource & Pick<OrchestrationThread, "title" | "branch" | "worktreePath">,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const importedMessages = listImportedForkMessages(thread);

@@ -15,22 +15,22 @@ const CHECKPOINT_FILE_LIMIT = 20;
 const BOOTSTRAP_PIN_LIMIT = 20;
 
 export interface DurableTaskStateSource {
-  readonly goal?: string;
-  readonly goalStartedAt?: string | null;
-  readonly goalPausedAt?: string | null;
-  readonly notes?: string;
-  readonly pinnedMessages?: ThreadPinnedMessages;
+  readonly goal?: string | undefined;
+  readonly goalStartedAt?: string | null | undefined;
+  readonly goalPausedAt?: string | null | undefined;
+  readonly notes?: string | undefined;
+  readonly pinnedMessages?: ThreadPinnedMessages | undefined;
   readonly messages: ReadonlyArray<OrchestrationMessage>;
-  readonly settledAt?: string | null;
-  readonly lastKnownPr?: OrchestrationThreadPullRequest | null;
-  readonly parentThreadId?: ThreadId | null;
-  readonly sourceThreadId?: ThreadId | null;
-  readonly sourceTurnId?: TurnId | null;
-  readonly creationSource?: ThreadCreationSource | null;
-  readonly gatewayOperationId?: string | null;
-  readonly gatewayOperationIndex?: number | null;
-  readonly handoff?: ThreadHandoff | null;
-  readonly checkpoints?: ReadonlyArray<OrchestrationCheckpointSummary>;
+  readonly settledAt?: string | null | undefined;
+  readonly lastKnownPr?: OrchestrationThreadPullRequest | null | undefined;
+  readonly parentThreadId?: ThreadId | null | undefined;
+  readonly sourceThreadId?: ThreadId | null | undefined;
+  readonly sourceTurnId?: TurnId | null | undefined;
+  readonly creationSource?: ThreadCreationSource | null | undefined;
+  readonly gatewayOperationId?: string | null | undefined;
+  readonly gatewayOperationIndex?: number | null | undefined;
+  readonly handoff?: ThreadHandoff | null | undefined;
+  readonly checkpoints?: ReadonlyArray<OrchestrationCheckpointSummary> | undefined;
 }
 
 function truncate(value: string, maxChars: number): { text: string; truncated: boolean } {
@@ -55,9 +55,7 @@ function messageById(
   return index >= 0 && message ? { message, index } : null;
 }
 
-export function summarizeDurableTaskState(
-  thread: DurableTaskStateSource,
-): SynaraDurableTaskState {
+export function summarizeDurableTaskState(thread: DurableTaskStateSource): SynaraDurableTaskState {
   const notes = thread.notes?.trim() || null;
   const pins = (thread.pinnedMessages ?? []).map((pin) => {
     const source = messageById(thread.messages, pin.messageId);
@@ -65,7 +63,7 @@ export function summarizeDurableTaskState(
     return {
       messageId: pin.messageId,
       label: pin.label ?? null,
-      done: pin.done,
+      done: pin.done ?? false,
       pinnedAt: pin.pinnedAt,
       message:
         source && messageText
@@ -108,9 +106,7 @@ export function summarizeDurableTaskState(
             status: latestCheckpoint.status,
             completedAt: latestCheckpoint.completedAt,
             fileCount: latestCheckpoint.files.length,
-            files: latestCheckpoint.files
-              .slice(0, CHECKPOINT_FILE_LIMIT)
-              .map((file) => file.path),
+            files: latestCheckpoint.files.slice(0, CHECKPOINT_FILE_LIMIT).map((file) => file.path),
             filesTruncated: latestCheckpoint.files.length > CHECKPOINT_FILE_LIMIT,
           }
         : null,
