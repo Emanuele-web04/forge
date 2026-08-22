@@ -1,5 +1,4 @@
-// FILE: KanbanProjectBoardView.browser.tsx
-// Purpose: Real-chromium render of the v2 attention-first board over seeded state.
+// Real-chromium render of the v2 attention-first board over seeded state.
 import "../../index.css";
 
 import { page } from "vitest/browser";
@@ -8,11 +7,7 @@ import { render } from "vitest-browser-react";
 
 vi.mock("~/appSettings", () => ({
   useAppSettings: () => ({
-    settings: {
-      defaultProvider: "codex",
-      sidebarProjectSortOrder: "manual",
-      kanbanProviderStartOptions: [],
-    },
+    settings: { defaultProvider: "codex", sidebarProjectSortOrder: "manual" },
     setSetting: vi.fn(),
   }),
   getProviderStartOptions: () => [],
@@ -34,13 +29,8 @@ import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import type { KanbanCard, KanbanProjectBoard } from "./kanban.logic";
 
 const NOW_MS = Date.parse("2026-08-21T12:00:00.000Z");
-const NOW_ISO = new Date(NOW_MS).toISOString();
 
-function makeCard(
-  id: string,
-  column: KanbanCard["column"],
-  overrides?: Partial<KanbanCard>,
-): KanbanCard {
+function makeCard(id: string, column: KanbanCard["column"], overrides?: Partial<KanbanCard>) {
   return {
     cardId: `thread:${id}`,
     threadId: id as ThreadId,
@@ -56,29 +46,26 @@ function makeCard(
     draftPrompt: "",
     draftHasAttachments: false,
     sortTimestamp: NOW_MS,
-    timestamp: NOW_ISO,
-    activeWorkStartedAt: column === "inProgress" ? NOW_ISO : null,
+    timestamp: new Date(NOW_MS).toISOString(),
+    activeWorkStartedAt: column === "inProgress" ? new Date(NOW_MS).toISOString() : null,
     isOptimisticDispatch: false,
-    ...(overrides ?? {}),
-  };
+    ...overrides,
+  } satisfies KanbanCard;
 }
 
-const board: KanbanProjectBoard = {
+const board = {
   projectId: "project-1" as KanbanProjectBoard["projectId"],
   projectName: "Demo",
-  projectKind: "project",
+  projectKind: "project" as const,
   draft: [makeCard("draft-1", "draft")],
   inProgress: [makeCard("live-1", "inProgress")],
   awaitingYou: [
-    makeCard("awaiting-1", "awaitingYou", {
-      attention: ["awaiting-approval"],
-      needsReview: true,
-    }),
+    makeCard("awaiting-1", "awaitingYou", { attention: ["awaiting-approval"], needsReview: true }),
   ],
   done: [makeCard("done-1", "done")],
   totalCount: 4,
   hiddenCount: 0,
-};
+} satisfies KanbanProjectBoard;
 
 describe("KanbanProjectBoardView v2 (browser)", () => {
   it("renders the four-column attention-first layout with pills and filter", async () => {
@@ -117,15 +104,9 @@ describe("KanbanProjectBoardView v2 (browser)", () => {
       />,
     );
 
-    await expect
-      .element(page.getByRole("heading", { name: KANBAN_COLUMN_V2_LABELS.draft }))
-      .toBeVisible();
-    await expect
-      .element(page.getByRole("heading", { name: KANBAN_COLUMN_V2_LABELS.inProgress }))
-      .toBeVisible();
-    await expect
-      .element(page.getByRole("heading", { name: KANBAN_COLUMN_V2_LABELS.done }))
-      .toBeVisible();
+    for (const label of ["Draft", "In Progress"] as const) {
+      await expect.element(page.getByRole("heading", { name: label })).toBeVisible();
+    }
     expect(document.body.textContent).not.toContain(KANBAN_COLUMN_V2_LABELS.awaitingYou);
     await unmount();
   });

@@ -1,13 +1,7 @@
-// FILE: kanban.ts
-// Purpose: Shared kanban domain vocabulary and v2 column derivation (Draft / In
-//          Progress / Awaiting you / Done) consumed by both the web v2 board and
-//          the server-side read-board tool. One derivation, two surfaces (D2).
-// Layer: Shared domain logic — structural inputs only, no web/server imports.
-//
-// No wall-clock calls in this module: staleness consults an injected `now`
-// (epoch ms) so tests run against a frozen clock. Live-work rules mirror the
-// classic web derivation (`deriveKanbanColumn` in apps/web Kanban.logic) and the
-// pending-request dead-session rule (`canSessionAnswerPendingRequests`).
+// Shared kanban vocabulary and v2 column derivation (Draft / In Progress /
+// Awaiting you / Done), one derivation serving both the web board and the
+// server read tool. Staleness consults an injected epoch-ms `now`; no
+// wall-clock calls here.
 
 import type { OrchestrationSessionStatus } from "@synara/contracts";
 
@@ -37,11 +31,8 @@ export const KANBAN_ATTENTION_LABELS: Record<KanbanAttentionFlag, string> = {
 };
 
 /**
- * Structural minimal view a thread must expose for the v2 derivation. Deliberately
- * not `SidebarThreadSummary` (web) or `OrchestrationThreadShell` (server) so the
- * same derivation serves both surfaces; each side projects its own thread shape
- * into this input at the adapter boundary. `session.status` is the
- * `OrchestrationSessionStatus` label in practice (both surfaces feed it).
+ * Structural view a thread must expose for the derivation — deliberately not
+ * either surface's native type, so both project into it at their adapter.
  */
 export interface KanbanThreadDerivationInput {
   latestTurn: {
@@ -56,24 +47,12 @@ export interface KanbanThreadDerivationInput {
     lastError?: string | null;
   } | null;
   /**
-   * Thread-level activity timestamp advanced on every appended message (e.g. a
-   * streamed assistant reply). The authoritative heartbeat is the later of this
-   * and `session.updatedAt` — the session row only moves on lifecycle
-   * transitions, so a busy-but-quiet turn must never read as stale (mirrors
-   * `projectedLifecycleAgeMs` in providerRuntimeReconciliation.ts).
-   *
-   * Web consumers feed the durable thread's last-message stamp here when their
-   * summary projection freezes `updatedAt` on streaming deltas (see the web
-   * adapter in kanban.logic.ts); the server consumes the durable row directly.
+   * Thread-level activity stamps; the heartbeat is the latest of these and
+   * `session.updatedAt`, so a busy-but-quiet turn never reads as stale even
+   * when a summary projection freezes `updatedAt` on streaming deltas.
    */
   threadUpdatedAt?: string | null;
-  /**
-   * Epoch-ms stamp of the thread's last durable activity (messages appended).
-   * A strictly fresher liveness input than `threadUpdatedAt` for surfaces whose
-   * summary projection does not advance during streaming: the heartbeat is the
-   * max of `session.updatedAt`, `threadUpdatedAt`, and this. Safely ignored when
-   * the caller already carries a live thread stamp.
-   */
+  /** Epoch-ms durable last-activity stamp (fresher still; optional). */
   lastActivityTimestampMs?: number | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
@@ -102,12 +81,9 @@ const SESSION_ANSWER_UNANSWERABLE: ReadonlySet<OrchestrationSessionStatus> = new
 ]);
 
 /**
- * Pending approval / user-input requests are only actionable while the session
- * that raised them can still receive the answer. Once the session is stopped or
- * errored the request is dead — status surfaces must not present the thread as
- * awaiting action forever after a provider crash. A thread with no session yet
- * keeps the request actionable: the flag can arrive ahead of the session
- * snapshot. Mirrors `canSessionAnswerPendingRequests` (apps/web session-logic).
+ * Pending requests die with their session: once it is stopped or errored the
+ * request can never be answered, so the card must stop reading as awaiting
+ * action. No session yet keeps the request actionable (flag may arrive first).
  */
 function canSessionAnswerPendingRequests(session: KanbanThreadDerivationInput["session"]): boolean {
   if (!session) {
@@ -116,12 +92,7 @@ function canSessionAnswerPendingRequests(session: KanbanThreadDerivationInput["s
   return !SESSION_ANSWER_UNANSWERABLE.has(session.status);
 }
 
-/**
- * Whether the latest turn is settled (its flow reached a terminal outcome). Mirrors
- * `isLatestTurnSettled` in apps/web session-logic: a requested-but-not-started turn is
- * not settled; an interrupted/error turn is settled even without a completedAt stamp;
- * a completed-and-stamped turn stays live while its session still reports running.
- */
+/** Settled = terminal outcome: interrupted/error, or completed with a non-running session. */
 export function isKanbanTurnSettled(
   t: Pick<KanbanThreadDerivationInput, "latestTurn" | "session">,
 ): boolean {
@@ -144,11 +115,7 @@ export function isKanbanTurnSettled(
   return true;
 }
 
-/**
- * Whether the latest turn is live right now. Mirrors `hasLiveLatestTurn`: a null or
- * not-yet-started turn is never live (those cases are handled by the explicit running
- * / starting / running-no-turn branches in `hasKanbanLiveWork`).
- */
+/** Live latest turn; null/unstarted turns are handled by hasKanbanLiveWork branches. */
 export function hasKanbanLiveLatestTurn(
   t: Pick<KanbanThreadDerivationInput, "latestTurn" | "session">,
 ): boolean {
@@ -158,15 +125,7 @@ export function hasKanbanLiveLatestTurn(
   return !isKanbanTurnSettled(t);
 }
 
-/**
- * Whether the thread currently has live work. Mirrors the classic web derivation
- * (`deriveKanbanColumn`, apps/web Kanban.logic) with the shared session status label:
- *   - actionable pending requests (answerable by a living session) or a live-tail signal
- *   - a requested turn that has not produced startedAt yet (state "running")
- *   - a live latest turn under a running session
- *   - a starting session (the orchestrator's pre-init status)
- *   - a running session with no settled turn yet
- */
+/** Whether the thread currently has live work (pending requests, live tail, or live turn/session). */
 export function hasKanbanLiveWork(t: KanbanThreadDerivationInput): boolean {
   const canAnswerPending = canSessionAnswerPendingRequests(t.session);
   if ((t.hasPendingApprovals === true || t.hasPendingUserInput === true) && canAnswerPending) {
@@ -189,15 +148,7 @@ export function hasKanbanLiveWork(t: KanbanThreadDerivationInput): boolean {
   return false;
 }
 
-/**
- * Parses the effective heartbeat timestamp (epoch ms) for a thread: the later of
- * the session lifecycle stamp, the thread activity stamp (messages appended),
- * and — when provided — the durable last-activity stamp (epoch ms). Returns null
- * when nothing parses. Mirrors `projectedLifecycleAgeMs` in the server
- * reconciler, extended with `lastActivityTimestampMs` so surfaces with a frozen
- * summary projection can feed a fresher liveness input without touching their
- * hot-path dedupe.
- */
+/** Effective heartbeat (epoch ms): the latest of the three activity stamps, null if none parses. */
 export function kanbanHeartbeatTimestampMs(
   t: Pick<KanbanThreadDerivationInput, "session" | "threadUpdatedAt" | "lastActivityTimestampMs">,
 ): number | null {
@@ -239,12 +190,9 @@ function isWarnStuck(t: HeartbeatInput, opts: { now: number }): boolean {
 }
 
 /**
- * While the human is the binding constraint, the thread reads as Awaiting you:
- * actionable pending approval/input (only if a living session can answer — a dead
- * session falls through to its underlying live/done state), a failed agent (error
- * turn / error session / last error), or a stuck session (live-work claim with a
- * heartbeat stale past the hard threshold). Awaiting-you wins precedence over
- * In Progress (D1/D12).
+ * Why the human is the binding constraint: failed > pending approval/input >
+ * stuck (live work with a heartbeat past the hard threshold). A dead session's
+ * pending flags fall through to the underlying live/done state.
  */
 export function deriveKanbanAwaitingYouReason(
   t: KanbanThreadDerivationInput,
@@ -275,13 +223,8 @@ export function deriveKanbanAwaitingYouReason(
 }
 
 /**
- * Classifies a thread into the v2 column vocabulary (Draft / In Progress / Awaiting
- * you / Done). Classic rules for non-attention cases:
- *   - actionable pending + live tail → inProgress
- *   - live latest turn / starting session / running session → inProgress
- *   - no latestTurn ever → draft
- *   - everything else (settled) → done
- * Awaiting-you wins over In Progress when the human is the binding constraint.
+ * Column classification: awaitingYou wins over live work; then inProgress,
+ * draft (never ran a turn), done (settled).
  */
 export function deriveKanbanColumnV2(
   t: KanbanThreadDerivationInput,
@@ -303,11 +246,8 @@ export function deriveKanbanColumnV2(
 }
 
 /**
- * The attention-flag set for a card, consumed by the web pill (S1-P6) and the read
- * tool's `attention` field (S2-P1). Awaiting-you reasons map to their pill flags;
- * a warn-stale heartbeat surfaces a "stuck" pill while the card is still In
- * Progress (the hard threshold hoists it to Awaiting you). `needsReview` is fed by
- * the caller from its PR source of truth (open `lastKnownPr` on first paint).
+ * Card attention flags: the awaiting-you reason as a pill, plus "stuck" on a
+ * warn-stale heartbeat while still In Progress, plus needs-review per caller.
  */
 export function deriveKanbanAttention(
   t: KanbanThreadDerivationInput,

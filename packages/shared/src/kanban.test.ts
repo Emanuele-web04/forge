@@ -31,42 +31,46 @@ const ATTENTION_FLAGS = [
 
 // Frozen clock: anything far in the future is a "fresh heartbeat" anchor.
 const NOW = Date.parse("2026-03-09T12:00:00.000Z");
+const FRESH_NOW = { now: NOW };
+// Canonical stale anchors: one tick past the warn/hard thresholds.
+const HARD_STALE_MS = NOW - KANBAN_STUCK_HARD_MS - 60_000;
+const WARN_STALE_MS = NOW - KANBAN_STUCK_WARN_MS - 60_000;
+const STALE_ISO = new Date(HARD_STALE_MS).toISOString();
 
-function makeInput(
+type Turn = NonNullable<KanbanThreadDerivationInput["latestTurn"]>;
+type Session = NonNullable<KanbanThreadDerivationInput["session"]>;
+
+const makeInput = (
   overrides: Partial<KanbanThreadDerivationInput> = {},
-): KanbanThreadDerivationInput {
-  return {
-    latestTurn: null,
-    // A thread that never ran has no session yet (mirrors the web fixture), so
-    // callers that want a session pass one explicitly.
-    session: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasLiveTailWork: false,
-    ...overrides,
-  };
-}
+): KanbanThreadDerivationInput => ({
+  latestTurn: null,
+  // A thread that never ran has no session yet (mirrors the web fixture), so
+  // callers that want a session pass one explicitly.
+  session: null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasLiveTailWork: false,
+  ...overrides,
+});
 
-function makeTurn(
-  overrides: Partial<NonNullable<KanbanThreadDerivationInput["latestTurn"]>> = {},
-): NonNullable<KanbanThreadDerivationInput["latestTurn"]> {
-  return {
-    state: "completed",
-    startedAt: "2026-03-09T10:00:00.000Z",
-    completedAt: "2026-03-09T10:05:00.000Z",
-    ...overrides,
-  };
-}
+const makeTurn = (overrides: Partial<Turn> = {}): Turn => ({
+  state: "completed",
+  startedAt: "2026-03-09T10:00:00.000Z",
+  completedAt: "2026-03-09T10:05:00.000Z",
+  ...overrides,
+});
 
-function makeSession(
-  overrides: Partial<NonNullable<KanbanThreadDerivationInput["session"]>> = {},
-): NonNullable<KanbanThreadDerivationInput["session"]> {
-  return {
-    status: "idle",
-    updatedAt: new Date(NOW).toISOString(),
-    ...overrides,
-  };
-}
+const makeSession = (overrides: Partial<Session> = {}): Session => ({
+  status: "idle",
+  updatedAt: new Date(NOW).toISOString(),
+  ...overrides,
+});
+
+const LIVE_TURN = { state: "running", completedAt: null } as const;
+// Running session whose heartbeat aged past the hard threshold.
+const RUNNING_SESSION = () => makeSession({ status: "running", updatedAt: STALE_ISO });
+const liveInput = (overrides: Partial<KanbanThreadDerivationInput> = {}) =>
+  makeInput({ latestTurn: makeTurn(LIVE_TURN), session: RUNNING_SESSION(), ...overrides });
 
 describe("kanban v2 vocabulary", () => {
   it("labels every v2 column key and nothing else, with awaiting-you distinct", () => {
@@ -91,37 +95,21 @@ describe("kanban v2 vocabulary", () => {
 });
 
 describe("isKanbanTurnSettled", () => {
-  it("treats a requested-but-not-started turn as live", () => {
+  it("treats stamped, interrupted, and error turns as settled under a non-running session", () => {
+    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn() }))).toBe(true);
+    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn({ state: "interrupted" }) }))).toBe(
+      true,
+    );
+    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn({ state: "error" }) }))).toBe(true);
+  });
+
+  it("keeps requested-but-unstarted turns and running-session turns live", () => {
     expect(
       isKanbanTurnSettled(
         makeInput({ latestTurn: makeTurn({ startedAt: null, completedAt: null }) }),
       ),
     ).toBe(false);
-  });
-
-  it("treats a completed-and-stamped turn as settled under a non-running session", () => {
-    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn() }))).toBe(true);
-  });
-
-  it("keeps a completed turn live while the session still runs", () => {
-    expect(
-      isKanbanTurnSettled(
-        makeInput({
-          latestTurn: makeTurn(),
-          session: makeSession({
-            status: "running",
-            updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-          }),
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats interrupted/error turns as settled even without a completedAt stamp", () => {
-    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn({ state: "interrupted" }) }))).toBe(
-      true,
-    );
-    expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn({ state: "error" }) }))).toBe(true);
+    expect(isKanbanTurnSettled(liveInput())).toBe(false);
   });
 });
 
@@ -145,34 +133,14 @@ describe("hasKanbanLiveWork", () => {
     ).toBe(false);
   });
 
-  it("treats a live latest turn as live work", () => {
-    expect(
-      hasKanbanLiveWork({
-        latestTurn: makeTurn({ state: "running", completedAt: null }),
-        session: makeSession({
-          status: "running",
-          updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-        }),
-      }),
-    ).toBe(true);
-  });
-
-  it("treats connecting/starting sessions as live work", () => {
+  it("treats running/connecting sessions and unsettled turns as live work", () => {
+    expect(hasKanbanLiveWork(liveInput())).toBe(true);
     expect(hasKanbanLiveWork(makeInput({ session: makeSession({ status: "starting" }) }))).toBe(
       true,
     );
-  });
-
-  it("treats a running session without a settled turn as live work", () => {
     expect(
       hasKanbanLiveWork(
-        makeInput({
-          latestTurn: makeTurn({ completedAt: null }),
-          session: makeSession({
-            status: "running",
-            updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-          }),
-        }),
+        makeInput({ latestTurn: makeTurn({ completedAt: null }), session: RUNNING_SESSION() }),
       ),
     ).toBe(true);
   });
@@ -182,42 +150,20 @@ describe("hasKanbanLiveWork", () => {
   });
 });
 
-describe("deriveKanbanColumnV2 (no `now`: base matrix)", () => {
-  it("puts live turn work in progress", () => {
-    expect(
-      deriveKanbanColumnV2(
-        makeInput({
-          latestTurn: makeTurn({ state: "running", completedAt: null }),
-          session: makeSession({
-            status: "running",
-            updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-          }),
-        }),
-      ),
-    ).toBe("inProgress");
-  });
-
-  it("puts a session running with no turn in progress", () => {
+describe("deriveKanbanColumnV2 (base matrix)", () => {
+  it("puts live turn work, bare running sessions, and live tail work in progress", () => {
+    expect(deriveKanbanColumnV2(liveInput())).toBe("inProgress");
     expect(deriveKanbanColumnV2(makeInput({ session: makeSession({ status: "running" }) }))).toBe(
       "inProgress",
     );
-  });
-
-  it("puts live-tail work in progress", () => {
     expect(deriveKanbanColumnV2(makeInput({ hasLiveTailWork: true }))).toBe("inProgress");
   });
 
-  it("treats a never-ran thread as draft", () => {
+  it("puts never-ran threads in draft and settled threads in done regardless of outcome", () => {
     expect(deriveKanbanColumnV2(makeInput({ session: makeSession({ status: "ready" }) }))).toBe(
       "draft",
     );
-  });
-
-  it("puts settled threads in done", () => {
     expect(deriveKanbanColumnV2(makeInput({ latestTurn: makeTurn() }))).toBe("done");
-  });
-
-  it("puts settled interrupted/error threads in done", () => {
     expect(
       deriveKanbanColumnV2(makeInput({ latestTurn: makeTurn({ state: "interrupted" }) })),
     ).toBe("done");
@@ -227,7 +173,7 @@ describe("deriveKanbanColumnV2 (no `now`: base matrix)", () => {
   });
 
   it("falls dead-session pending requests through to their underlying state", () => {
-    // pending approval on a dead session with a settled turn → done; with no turn → draft
+    // Pending approval on a dead session with a settled turn → done; no turn → draft.
     expect(
       deriveKanbanColumnV2(
         makeInput({
@@ -239,10 +185,7 @@ describe("deriveKanbanColumnV2 (no `now`: base matrix)", () => {
     ).toBe("done");
     expect(
       deriveKanbanColumnV2(
-        makeInput({
-          hasPendingUserInput: true,
-          session: makeSession({ status: "error" }),
-        }),
+        makeInput({ hasPendingUserInput: true, session: makeSession({ status: "error" }) }),
       ),
     ).toBe("draft");
     // A live (or unknown) session keeps the request actionable.
@@ -251,9 +194,7 @@ describe("deriveKanbanColumnV2 (no `now`: base matrix)", () => {
         makeInput({ hasPendingUserInput: true, session: makeSession({ status: "running" }) }),
       ),
     ).toBe("inProgress");
-    expect(deriveKanbanColumnV2(makeInput({ hasPendingUserInput: true, session: null }))).toBe(
-      "inProgress",
-    );
+    expect(deriveKanbanColumnV2(makeInput({ hasPendingUserInput: true }))).toBe("inProgress");
   });
 
   it("treats actionable pending requests as in progress regardless of turn state", () => {
@@ -262,223 +203,133 @@ describe("deriveKanbanColumnV2 (no `now`: base matrix)", () => {
 });
 
 describe("deriveKanbanAwaitingYouReason + deriveKanbanColumnV2 with frozen clock", () => {
-  const freshNow = { now: NOW };
+  it("hoists actionable pending requests to awaitingYou, including blocked running turns (D12)", () => {
+    const pendingApproval = makeInput({ hasPendingApprovals: true });
+    expect(deriveKanbanAwaitingYouReason(pendingApproval, FRESH_NOW)).toBe("pending-approval");
+    expect(deriveKanbanColumnV2(pendingApproval, FRESH_NOW)).toBe("awaitingYou");
 
-  it("flags actionable pending approvals as pending-approval (awaitingYou)", () => {
-    const input = makeInput({ hasPendingApprovals: true });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("pending-approval");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
+    const pendingInput = makeInput({ hasPendingUserInput: true, session: RUNNING_SESSION() });
+    expect(deriveKanbanAwaitingYouReason(pendingInput, FRESH_NOW)).toBe("pending-input");
+    expect(deriveKanbanColumnV2(pendingInput, FRESH_NOW)).toBe("awaitingYou");
+
+    const blockedTurn = liveInput({ hasPendingApprovals: true });
+    expect(deriveKanbanAwaitingYouReason(blockedTurn, FRESH_NOW)).toBe("pending-approval");
+    expect(deriveKanbanColumnV2(blockedTurn, FRESH_NOW)).toBe("awaitingYou");
   });
 
-  it("flags actionable pending user input as pending-input (awaitingYou)", () => {
-    const input = makeInput({
-      hasPendingUserInput: true,
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("pending-input");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
-  });
-
-  it("hoists a running turn blocked on the human to awaitingYou (D12)", () => {
-    const input = makeInput({
-      hasPendingApprovals: true,
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("pending-approval");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
-  });
-
-  it("flags a failed agent as failed (awaitingYou)", () => {
+  it("flags errored sessions and error turns as failed", () => {
     const errorTurn = makeInput({
-      latestTurn: makeTurn({ state: "error", completedAt: "2026-03-09T10:05:00.000Z" }),
+      latestTurn: makeTurn({ state: "error" }),
       session: makeSession({ status: "error", lastError: "boom" }),
     });
-    expect(deriveKanbanAwaitingYouReason(errorTurn, freshNow)).toBe("failed");
-    expect(deriveKanbanColumnV2(errorTurn, freshNow)).toBe("awaitingYou");
-
-    const lastErrorOnly = makeInput({
-      latestTurn: makeTurn(),
-      session: makeSession({ status: "ready", lastError: "boom" }),
-    });
-    expect(deriveKanbanAwaitingYouReason(lastErrorOnly, freshNow)).toBe("failed");
+    expect(deriveKanbanAwaitingYouReason(errorTurn, FRESH_NOW)).toBe("failed");
+    expect(deriveKanbanColumnV2(errorTurn, FRESH_NOW)).toBe("awaitingYou");
+    expect(
+      deriveKanbanAwaitingYouReason(
+        makeInput({
+          latestTurn: makeTurn(),
+          session: makeSession({ status: "ready", lastError: "boom" }),
+        }),
+        FRESH_NOW,
+      ),
+    ).toBe("failed");
   });
 
-  it("flags a live thread with a stale heartbeat past the hard threshold as stuck (awaitingYou)", () => {
-    const stale = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: stale }),
+  it("trips stuck past the hard threshold; warn-stale and fresh heartbeats stay in progress", () => {
+    expect(deriveKanbanAwaitingYouReason(liveInput(), FRESH_NOW)).toBe("stuck");
+    expect(deriveKanbanColumnV2(liveInput(), FRESH_NOW)).toBe("awaitingYou");
+
+    // Warn-stale still earns a "stuck"-colored pill without leaving In Progress.
+    const warnStale = liveInput({
+      session: makeSession({ status: "running", updatedAt: new Date(WARN_STALE_MS).toISOString() }),
     });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("stuck");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
+    expect(deriveKanbanAwaitingYouReason(warnStale, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(warnStale, FRESH_NOW)).toBe("inProgress");
+    expect(deriveKanbanAttention(warnStale, FRESH_NOW)).toContain("stuck");
+
+    const fresh = liveInput({ session: makeSession({ status: "running" }) });
+    expect(deriveKanbanAwaitingYouReason(fresh, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(fresh, FRESH_NOW)).toBe("inProgress");
   });
 
-  it("keeps a fresh heartbeat in progress (not stuck, not awaiting)", () => {
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: new Date(NOW).toISOString() }),
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("inProgress");
-  });
-
-  it("falls pending + dead-session requests through (no awaitingYou)", () => {
-    const deadPending = makeInput({
-      hasPendingUserInput: true,
-      latestTurn: makeTurn(),
-      session: makeSession({ status: "stopped" }),
-    });
-    expect(deriveKanbanAwaitingYouReason(deadPending, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(deadPending, freshNow)).toBe("done");
-  });
-
-  it("does not flag a settled thread as stuck even with a stale heartbeat", () => {
-    const stale = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "completed" }),
-      session: makeSession({ status: "ready", updatedAt: stale }),
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("done");
-  });
-
-  it("flags a warn-stale live thread as still in progress (hard not reached)", () => {
-    const warnStale = new Date(NOW - KANBAN_STUCK_WARN_MS - 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: warnStale }),
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("inProgress");
-    // the warn-stale heartbeat still earns a "stuck"-colored pill
-    expect(deriveKanbanAttention(input, freshNow)).toContain("stuck");
-  });
-
-  it("keeps a busy-but-quiet turn fresh via the thread heartbeat (C1)", () => {
+  it("keeps a busy-but-quiet turn fresh via the thread heartbeat, then stuck once it ages out (C1)", () => {
     // The session row only moves on lifecycle transitions, but the thread stamp
     // advances per appended message — the later of the two is the heartbeat.
-    const staleSession = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
-    const busyThread = new Date(NOW - 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: staleSession }),
-      threadUpdatedAt: busyThread,
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("inProgress");
-    expect(deriveKanbanAttention(input, freshNow)).toEqual([]);
-  });
-
-  it("falls the busy-quiet turn back to stuck when the thread heartbeat also ages out (C1)", () => {
-    const stale = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: stale }),
-      threadUpdatedAt: stale,
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("stuck");
+    const busyThread = liveInput({ threadUpdatedAt: new Date(NOW - 60_000).toISOString() });
+    expect(deriveKanbanAwaitingYouReason(busyThread, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(busyThread, FRESH_NOW)).toBe("inProgress");
+    expect(deriveKanbanAttention(busyThread, FRESH_NOW)).toEqual([]);
+    expect(
+      deriveKanbanAwaitingYouReason(liveInput({ threadUpdatedAt: STALE_ISO }), FRESH_NOW),
+    ).toBe("stuck");
   });
 
   it("never produces a negative heartbeat age at or before the heartbeat (C1)", () => {
     // A heartbeat stamped after the injected `now` (clock skew) must floor at 0,
     // not report a negative stale age.
-    const futureHeartbeat = new Date(NOW + 60_000).toISOString();
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: futureHeartbeat }),
+    const skewed = liveInput({
+      session: makeSession({ status: "running", updatedAt: new Date(NOW + 60_000).toISOString() }),
     });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("inProgress");
-    expect(deriveKanbanAttention(input, freshNow)).toEqual([]);
+    expect(deriveKanbanAwaitingYouReason(skewed, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(skewed, FRESH_NOW)).toBe("inProgress");
+    expect(deriveKanbanAttention(skewed, FRESH_NOW)).toEqual([]);
   });
 
-  it("keeps a busy-but-quiet streaming turn fresh via the durable last-activity stamp (F1)", () => {
-    // `SidebarThreadSummary.updatedAt` freezes on the streaming hot path, and the
-    // session row only moves on lifecycle transitions — but the durable per-thread
-    // last-activity stamp advances per appended message. A fresh stamp must keep
-    // the turn In Progress with no stuck pill despite the frozen summary.
-    const staleSession = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
-    const freshActivity = NOW - 30_000;
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({ status: "running", updatedAt: staleSession }),
-      threadUpdatedAt: null,
-      lastActivityTimestampMs: freshActivity,
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("inProgress");
-    expect(deriveKanbanAttention(input, freshNow)).toEqual([]);
+  it("keeps streaming turns fresh via the durable last-activity stamp until boundaries trip (F1)", () => {
+    // `SidebarThreadSummary.updatedAt` freezes on the streaming hot path and the
+    // session row only moves on lifecycle transitions — but the durable
+    // per-thread last-activity stamp advances per appended message. A fresh
+    // stamp must keep the turn In Progress despite the frozen summary.
+    const fresh = liveInput({ threadUpdatedAt: null, lastActivityTimestampMs: NOW - 30_000 });
+    expect(deriveKanbanAwaitingYouReason(fresh, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(fresh, FRESH_NOW)).toBe("inProgress");
+    expect(deriveKanbanAttention(fresh, FRESH_NOW)).toEqual([]);
+
+    const warned = liveInput({ lastActivityTimestampMs: WARN_STALE_MS });
+    expect(deriveKanbanAttention(warned, FRESH_NOW)).toContain("stuck");
+
+    const hardened = liveInput({ lastActivityTimestampMs: HARD_STALE_MS });
+    expect(deriveKanbanAwaitingYouReason(hardened, FRESH_NOW)).toBe("stuck");
+    expect(deriveKanbanColumnV2(hardened, FRESH_NOW)).toBe("awaitingYou");
   });
 
-  it("trips the warn boundary when the durable last-activity stamp ages past 20 min (F1)", () => {
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-      lastActivityTimestampMs: NOW - KANBAN_STUCK_WARN_MS - 60_000,
-    });
-    expect(deriveKanbanAttention(input, freshNow)).toContain("stuck");
+  it("flags the exact 20 min and 40 min boundaries (C4)", () => {
+    const warnExact = liveInput({ lastActivityTimestampMs: NOW - KANBAN_STUCK_WARN_MS });
+    expect(deriveKanbanAttention(warnExact, FRESH_NOW)).toContain("stuck");
+    expect(deriveKanbanAwaitingYouReason(warnExact, FRESH_NOW)).toBeNull();
+
+    const hardExact = liveInput({ lastActivityTimestampMs: NOW - KANBAN_STUCK_HARD_MS });
+    expect(deriveKanbanAwaitingYouReason(hardExact, FRESH_NOW)).toBe("stuck");
+    expect(deriveKanbanColumnV2(hardExact, FRESH_NOW)).toBe("awaitingYou");
   });
 
-  it("trips the hard boundary and hoists to awaitingYou past 40 min (F1)", () => {
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-      lastActivityTimestampMs: NOW - KANBAN_STUCK_HARD_MS - 60_000,
+  it("never lets staleness override settled or dead-session threads", () => {
+    // Falls pending + dead-session requests through (no awaitingYou).
+    const deadPending = makeInput({
+      hasPendingUserInput: true,
+      latestTurn: makeTurn(),
+      session: makeSession({ status: "stopped" }),
     });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("stuck");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
-  });
+    expect(deriveKanbanAwaitingYouReason(deadPending, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(deadPending, FRESH_NOW)).toBe("done");
 
-  it("flags the warn boundary exactly at 20:00.000 (C4)", () => {
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-      lastActivityTimestampMs: NOW - KANBAN_STUCK_WARN_MS,
+    // A settled thread with a stale heartbeat stays done.
+    const settled = makeInput({
+      latestTurn: makeTurn(),
+      session: makeSession({ status: "ready", updatedAt: STALE_ISO }),
     });
-    expect(deriveKanbanAttention(input, freshNow)).toContain("stuck");
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBeNull();
-  });
-
-  it("flags the hard boundary exactly at 40:00.000 (C4)", () => {
-    const input = makeInput({
-      latestTurn: makeTurn({ state: "running", completedAt: null }),
-      session: makeSession({
-        status: "running",
-        updatedAt: new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString(),
-      }),
-      lastActivityTimestampMs: NOW - KANBAN_STUCK_HARD_MS,
-    });
-    expect(deriveKanbanAwaitingYouReason(input, freshNow)).toBe("stuck");
-    expect(deriveKanbanColumnV2(input, freshNow)).toBe("awaitingYou");
+    expect(deriveKanbanAwaitingYouReason(settled, FRESH_NOW)).toBeNull();
+    expect(deriveKanbanColumnV2(settled, FRESH_NOW)).toBe("done");
   });
 });
 
 describe("deriveKanbanAttention", () => {
-  it("produces no flags for a plain settled thread", () => {
-    expect(deriveKanbanAttention(makeInput({ latestTurn: makeTurn() }), { now: NOW })).toEqual([]);
-  });
-
-  it("maps awaiting-you reasons to their pill flags", () => {
-    expect(deriveKanbanAttention(makeInput({ hasPendingApprovals: true }), { now: NOW })).toEqual([
+  it("maps awaiting-you reasons and caller PR views to pills, staying quiet otherwise", () => {
+    expect(deriveKanbanAttention(makeInput({ latestTurn: makeTurn() }), FRESH_NOW)).toEqual([]);
+    expect(deriveKanbanAttention(makeInput({ hasPendingApprovals: true }), FRESH_NOW)).toEqual([
       "awaiting-approval",
     ]);
-    expect(deriveKanbanAttention(makeInput({ hasPendingUserInput: true }), { now: NOW })).toEqual([
+    expect(deriveKanbanAttention(makeInput({ hasPendingUserInput: true }), FRESH_NOW)).toEqual([
       "awaiting-input",
     ]);
     expect(
@@ -487,28 +338,19 @@ describe("deriveKanbanAttention", () => {
           latestTurn: makeTurn({ state: "error" }),
           session: makeSession({ status: "error" }),
         }),
-        { now: NOW },
+        FRESH_NOW,
       ),
     ).toEqual(["failed"]);
-    const stale = new Date(NOW - KANBAN_STUCK_HARD_MS - 60_000).toISOString();
+    expect(deriveKanbanAttention(liveInput(), FRESH_NOW)).toEqual(["stuck"]);
     expect(
-      deriveKanbanAttention(
-        makeInput({
-          latestTurn: makeTurn({ state: "running", completedAt: null }),
-          session: makeSession({ status: "running", updatedAt: stale }),
-        }),
-        { now: NOW },
-      ),
-    ).toEqual(["stuck"]);
-  });
-
-  it("adds needs-review from the caller's PR view", () => {
-    expect(
-      deriveKanbanAttention(makeInput({ latestTurn: makeTurn() }), { now: NOW, needsReview: true }),
+      deriveKanbanAttention(makeInput({ latestTurn: makeTurn() }), {
+        ...FRESH_NOW,
+        needsReview: true,
+      }),
     ).toEqual(["needs-review"]);
     expect(
       deriveKanbanAttention(makeInput({ hasPendingApprovals: true }), {
-        now: NOW,
+        ...FRESH_NOW,
         needsReview: true,
       }),
     ).toEqual(["awaiting-approval", "needs-review"]);
