@@ -3663,10 +3663,14 @@ const make = Effect.gen(function* () {
     if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
       // A stop that cannot finish must still settle the projection: the session
       // row below is the only thing that releases the turn in the UI.
+      // User-facing session stop (and archive, which shares this path) must
+      // kill the runtime without deleting the durable resume cursor.
+      // Destructive stopSession stays reserved for thread deletion.
+      const stopProviderRuntime = providerService.stopRuntimeSession ?? providerService.stopSession;
       const stopped = yield* runBoundedProviderCall({
         label: "The provider session stop",
         timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
-        call: providerService.stopSession({ threadId: providerThread.id }),
+        call: stopProviderRuntime({ threadId: providerThread.id }),
       });
       if (stopped._tag !== "ok") {
         yield* appendProviderFailureActivity({
