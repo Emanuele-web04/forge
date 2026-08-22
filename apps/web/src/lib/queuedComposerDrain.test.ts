@@ -1,0 +1,299 @@
+import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { QueuedComposerTurn } from "../composerDraftStore";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import { useStore } from "../store";
+import { initialState } from "../storeState";
+import { makeActivity, makeState, makeThread } from "../storeTestFixtures";
+import type { Thread, ThreadSession } from "../types";
+import {
+  armQueuedComposerSteerGate,
+  claimQueuedComposerAutoDispatch,
+  releaseQueuedComposerAutoDispatch,
+  resetQueuedComposerDrainForTests,
+  shouldAutoDispatchQueuedComposerTurn,
+  startQueuedComposerDrainWatcher,
+  type QueuedComposerAutoDispatchGates,
+} from "./queuedComposerDrain";
+
+const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
+
+const OPEN_GATES: QueuedComposerAutoDispatchGates = {
+  hasQueueableLiveTurn: false,
+  phase: "ready",
+  isSendBusy: false,
+  isConnecting: false,
+  steerGate: null,
+  hasPendingApproval: false,
+  hasPendingProgress: false,
+  pendingUserInputCount: 0,
+  queuedTurnCount: 1,
+};
+
+function makeQueuedChatTurn(id: string): QueuedComposerTurn {
+  return {
+    id,
+    kind: "chat",
+    createdAt: "2026-03-13T12:00:00.000Z",
+    previewText: `queued ${id}`,
+    prompt: `queued ${id}`,
+    images: [],
+    files: [],
+    assistantSelections: [],
+    browserAnnotations: [],
+    terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    skills: [],
+    mentions: [],
+    selectedProvider: "codex",
+    selectedModel: "gpt-5",
+    selectedPromptEffort: null,
+    modelSelection: {
+      provider: "codex",
+      model: "gpt-5",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    envMode: "local",
+  };
+}
+
+function makeSession(status: ThreadSession["status"], activeTurnId?: TurnId): ThreadSession {
+  return {
+    provider: "codex",
+    status,
+    orchestrationStatus: status === "running" ? "running" : "ready",
+    createdAt: "2026-02-13T00:00:00.000Z",
+    updatedAt: "2026-02-13T00:00:00.000Z",
+    ...(activeTurnId ? { activeTurnId } : {}),
+  };
+}
+
+function seedThread(thread: Thread): void {
+  useStore.setState(makeState(thread));
+}
+
+async function flushDrain(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("shouldAutoDispatchQueuedComposerTurn", () => {
+  it("allows drain when the thread is idle with a queued turn", () => {
+    expect(shouldAutoDispatchQueuedComposerTurn(OPEN_GATES)).toBe(true);
+  });
+
+  it("blocks drain while a live turn still has an active turn id", () => {
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        hasQueueableLiveTurn: true,
+        phase: "running",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks drain while disconnected, connecting, or send-busy", () => {
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, phase: "disconnected" })).toBe(
+      false,
+    );
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        phase: "connecting",
+        isConnecting: true,
+      }),
+    ).toBe(false);
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, isSendBusy: true })).toBe(false);
+  });
+
+  it("blocks drain while a steer gate, approval, or user input is outstanding", () => {
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        steerGate: {
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: "turn-original",
+        },
+      }),
+    ).toBe(false);
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, hasPendingApproval: true })).toBe(
+      false,
+    );
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, hasPendingProgress: true })).toBe(
+      false,
+    );
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, pendingUserInputCount: 1 })).toBe(
+      false,
+    );
+  });
+
+  it("blocks drain when the queue is empty", () => {
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, queuedTurnCount: 0 })).toBe(false);
+  });
+});
+
+describe("queued composer drain watcher", () => {
+  const dispatch = vi.fn(async () => true);
+
+  beforeEach(() => {
+    resetQueuedComposerDrainForTests();
+    resetComposerDraftStore();
+    useStore.setState(initialState);
+    dispatch.mockReset();
+    dispatch.mockResolvedValue(true);
+    startQueuedComposerDrainWatcher({ dispatch });
+  });
+
+  afterEach(() => {
+    resetQueuedComposerDrainForTests();
+    resetComposerDraftStore();
+    useStore.setState(initialState);
+  });
+
+  it("drains a backgrounded thread when its live turn settles and ChatView is unmounted", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+      }),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-1"));
+
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: THREAD_ID,
+        dispatchMode: "queue",
+        queuedTurn: expect.objectContaining({ id: "queued-1" }),
+      }),
+    );
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("does not drain a claimed thread, then drains after ChatView unmounts", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-open"));
+
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toHaveLength(
+      1,
+    );
+
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("does not drain while a live turn still has an active turn id", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-live"));
+
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not drain while an approval is pending", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        hasPendingApprovals: true,
+        activities: [
+          makeActivity({
+            id: "approval-requested",
+            kind: "approval.requested",
+            summary: "Command approval requested",
+            tone: "approval",
+            payload: {
+              requestId: "req-drain-approval",
+              lifecycleGeneration: "generation-drain",
+              requestKind: "command",
+            },
+          }),
+        ],
+        pendingInteractions: [
+          {
+            interactionKind: "approval",
+            requestId: ApprovalRequestId.makeUnsafe("req-drain-approval"),
+            threadId: THREAD_ID,
+            turnId: null,
+            lifecycleGeneration: "generation-drain",
+            status: "pending",
+            decision: null,
+            responseCommandId: null,
+            responseRequestedAt: null,
+            createdAt: "2026-02-13T00:00:01.000Z",
+            resolvedAt: null,
+          },
+        ],
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-approval"));
+
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not drain while a steer gate is armed", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    armQueuedComposerSteerGate(THREAD_ID, {
+      sawInterruptGap: false,
+      gapStartedAt: null,
+      armedActiveTurnId: "turn-original",
+    });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-steer"));
+
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
