@@ -1601,6 +1601,92 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ),
       );
 
+    // `git diff --no-index` exits 1 both when it found differences (the expected
+    // outcome for an untracked file vs /dev/null) and when it could not read the
+    // path (e.g. the file vanished between `ls-files` and the diff). Only the former
+    // may be treated as success: it produces a numstat record and no stderr.
+    const readUntrackedNumstats = (cwd: string, operationPrefix: string) =>
+      runGitStdout(`${operationPrefix}.untrackedFiles`, cwd, [
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ]).pipe(
+        Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)),
+        Effect.flatMap((untrackedFiles) =>
+          Effect.forEach(
+            untrackedFiles,
+            (filePath) => {
+              const operation = `${operationPrefix}.untrackedNumstat`;
+              const args = ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", filePath];
+              return executeGit(operation, cwd, args, {
+                allowNonZeroExit: true,
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+              }).pipe(
+                Effect.flatMap((result) => {
+                  const stderr = result.stderr.trim();
+                  if (
+                    result.code === 0 ||
+                    (result.code === 1 && stderr.length === 0 && result.stdout.length > 0)
+                  ) {
+                    return Effect.succeed(result.stdout);
+                  }
+                  return Effect.fail(
+                    createGitCommandError(
+                      operation,
+                      cwd,
+                      args,
+                      stderr.length > 0
+                        ? stderr
+                        : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                    ),
+                  );
+                }),
+              );
+            },
+            { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
+          ),
+        ),
+      );
+
+    const resolveBranchMergeBase = (cwd: string) =>
+      Effect.gen(function* () {
+        const details = yield* statusDetails(cwd);
+        const baseBranch =
+          details.upstreamRef ??
+          (details.branch
+            ? yield* resolveBaseBranchForNoUpstream(cwd, details.branch).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              )
+            : null);
+        if (!baseBranch) {
+          return yield* createGitCommandError(
+            "GitCore.readBranchPatch.base",
+            cwd,
+            ["merge-base", "<base>", "HEAD"],
+            "Cannot resolve a base branch for the current branch diff.",
+          );
+        }
+
+        const mergeBase = yield* executeGit(
+          "GitCore.readBranchPatch.mergeBase",
+          cwd,
+          ["merge-base", baseBranch, "HEAD"],
+          {
+            fallbackErrorMessage: "Cannot resolve the merge base for the current branch diff.",
+          },
+        ).pipe(Effect.map((result) => result.stdout.trim()));
+        if (mergeBase.length === 0) {
+          return yield* createGitCommandError(
+            "GitCore.readBranchPatch.mergeBase",
+            cwd,
+            ["merge-base", baseBranch, "HEAD"],
+            "Cannot resolve the merge base for the current branch diff.",
+          );
+        }
+        return mergeBase;
+      });
+
     const readUnstagedPatch: GitCoreShape["readUnstagedPatch"] = (cwd) =>
       Effect.gen(function* () {
         const trackedPatch = yield* executeGit(
@@ -1660,39 +1746,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const readBranchPatch: GitCoreShape["readBranchPatch"] = (cwd) =>
       Effect.gen(function* () {
-        const details = yield* statusDetails(cwd);
-        const baseBranch =
-          details.upstreamRef ??
-          (details.branch
-            ? yield* resolveBaseBranchForNoUpstream(cwd, details.branch).pipe(
-                Effect.catch(() => Effect.succeed(null)),
-              )
-            : null);
-        if (!baseBranch) {
-          return yield* createGitCommandError(
-            "GitCore.readBranchPatch.base",
-            cwd,
-            ["merge-base", "<base>", "HEAD"],
-            "Cannot resolve a base branch for the current branch diff.",
-          );
-        }
-
-        const mergeBase = yield* executeGit(
-          "GitCore.readBranchPatch.mergeBase",
-          cwd,
-          ["merge-base", baseBranch, "HEAD"],
-          {
-            fallbackErrorMessage: "Cannot resolve the merge base for the current branch diff.",
-          },
-        ).pipe(Effect.map((result) => result.stdout.trim()));
-        if (mergeBase.length === 0) {
-          return yield* createGitCommandError(
-            "GitCore.readBranchPatch.mergeBase",
-            cwd,
-            ["merge-base", baseBranch, "HEAD"],
-            "Cannot resolve the merge base for the current branch diff.",
-          );
-        }
+        const mergeBase = yield* resolveBranchMergeBase(cwd);
 
         const trackedPatch = yield* executeGit(
           "GitCore.readBranchPatch.trackedPatch",
@@ -1707,6 +1761,58 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         return {
           patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
+        };
+      });
+
+    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope) =>
+      Effect.gen(function* () {
+        let trackedArgs: ReadonlyArray<string>;
+        let includeUntracked = false;
+        switch (scope) {
+          case "staged":
+            trackedArgs = ["diff", "--cached", "--numstat", "-z", "--no-ext-diff"];
+            break;
+          case "unstaged":
+            trackedArgs = ["diff", "--numstat", "-z", "--no-ext-diff"];
+            includeUntracked = true;
+            break;
+          case "branch": {
+            const mergeBase = yield* resolveBranchMergeBase(cwd);
+            trackedArgs = ["diff", "--numstat", "-z", "--minimal", "--no-ext-diff", mergeBase];
+            includeUntracked = true;
+            break;
+          }
+          case "workingTree":
+          default: {
+            const headExists = yield* executeGit(
+              "GitCore.readDiffStats.headExists",
+              cwd,
+              ["rev-parse", "--verify", "HEAD"],
+              { allowNonZeroExit: true },
+            ).pipe(Effect.map((result) => result.code === 0));
+            trackedArgs = [
+              "diff",
+              "--numstat",
+              "-z",
+              "--no-ext-diff",
+              headExists ? "HEAD" : EMPTY_TREE_OBJECT_ID,
+            ];
+            includeUntracked = true;
+          }
+        }
+
+        const tracked = yield* executeGit("GitCore.readDiffStats.tracked", cwd, trackedArgs, {
+          timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+          maxOutputBytes: 10_000_000,
+        }).pipe(Effect.map((result) => result.stdout));
+        const untracked = includeUntracked
+          ? yield* readUntrackedNumstats(cwd, "GitCore.readDiffStats")
+          : [];
+        const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
+        return {
+          additions: totals.insertions,
+          deletions: totals.deletions,
+          fileCount: totals.files.length,
         };
       });
 
@@ -3313,6 +3419,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readUnstagedPatch,
       readStagedPatch,
       readBranchPatch,
+      readDiffStats,
       prepareCommitContext,
       commit,
       pushCurrentBranch,

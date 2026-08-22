@@ -2,6 +2,7 @@ import { afterEach, assert, describe, it, vi } from "vitest";
 
 import {
   getNavigatorPlatform,
+  isLinuxPlatform,
   isMacNavigatorPlatform,
   isMacPlatform,
   isWindowsPlatform,
@@ -28,6 +29,18 @@ describe("isWindowsPlatform", () => {
 
   it("does not match darwin", () => {
     assert.isFalse(isWindowsPlatform("darwin"));
+  });
+});
+
+describe("isLinuxPlatform", () => {
+  it("matches Linux platform identifiers", () => {
+    assert.isTrue(isLinuxPlatform("Linux x86_64"));
+    assert.isTrue(isLinuxPlatform("linux"));
+  });
+
+  it("does not match macOS or Windows", () => {
+    assert.isFalse(isLinuxPlatform("MacIntel"));
+    assert.isFalse(isLinuxPlatform("Win32"));
   });
 });
 

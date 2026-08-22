@@ -3,8 +3,6 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -46,6 +44,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import {
+  readOpenCodeAuthFileUtf8,
+  resolveOpenCodeCompatibleAuthPaths,
+} from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -490,26 +492,20 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-function resolveOpenCodeDataDirectory(
-  homeDirectory: string,
-  dataDirectoryName = "opencode",
-): string {
-  if (process.platform === "win32") {
-    const appDataDirectory =
-      trimToNull(process.env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming");
-    return join(appDataDirectory, dataDirectoryName);
-  }
-
-  const xdgDataHome =
-    trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
-  return join(xdgDataHome, dataDirectoryName);
-}
-
 export function resolveOpenCodeAuthFilePath(
   pathInfo: Pick<OpenCodePathInfo, "home">,
   cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
 ): string {
-  return join(resolveOpenCodeDataDirectory(pathInfo.home, cliSpec.dataDirectoryName), "auth.json");
+  const [preferredPath] = resolveOpenCodeCompatibleAuthPaths({
+    homeDir: pathInfo.home,
+    env: process.env,
+    platform: process.platform,
+    dataDirectoryName: cliSpec.dataDirectoryName,
+  });
+  if (!preferredPath) {
+    throw new Error("OpenCode auth path resolution produced no candidates");
+  }
+  return preferredPath;
 }
 
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
@@ -1516,7 +1512,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         loadOpenCodePaths(client).pipe(
           Effect.flatMap((pathInfo) =>
             Effect.tryPromise({
-              try: () => readFile(resolveOpenCodeAuthFilePath(pathInfo, cliSpec), "utf8"),
+              try: () =>
+                readOpenCodeAuthFileUtf8({
+                  homeDir: pathInfo.home,
+                  env: process.env,
+                  platform: process.platform,
+                  dataDirectoryName: cliSpec.dataDirectoryName,
+                }),
               catch: (cause) =>
                 new OpenCodeRuntimeError({
                   operation: "readOpenCodeCredentialProviderIDs",

@@ -1,92 +1,143 @@
-# Synara
+<div align="center">
+  <img src="./assets/prod/logo.svg" width="112" alt="Synara logo">
+  <h1>Synara</h1>
+  <p><strong>A focused workspace for coding agents.</strong><br>
+  Projects, provider sessions, execution surfaces, and review tools in one local-first desktop application.</p>
+  <p>
+    <a href="https://github.com/Emanuele-web04/synara/releases/latest">Download</a>
+    &nbsp;·&nbsp;
+    <a href="https://www.trysynara.com/">Website</a>
+    &nbsp;·&nbsp;
+    <a href="https://www.trysynara.com/docs">Documentation</a>
+    &nbsp;·&nbsp;
+    <a href="./docs/external-mcp.md">MCP integration</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/Emanuele-web04/synara/issues/new/choose">Report an issue</a>
+  </p>
+</div>
 
-Synara is a free, open-source, local-first desktop workspace and control plane for coding agents.
+<details>
+  <summary><strong>Table of contents</strong></summary>
 
-It brings provider sessions, tasks, terminals, browser work, diffs, Git worktrees, handoffs,
-automations, and pull-request delivery into one application. Synara uses the agent subscriptions
-and accounts you already have, keeps your workspace data on your machine, and does not require a
-separate Synara cloud.
+| Workspace layer      | Responsibility                                                |
+| -------------------- | ------------------------------------------------------------- |
+| **Project**          | Repository context, settings, and related work.               |
+| **Thread**           | Task-specific conversation, state, files, and history.        |
+| **Provider session** | The authenticated coding-agent runtime executing the task.    |
+| **Workspace tools**  | Changes, terminal, browser, files, editor, previews, and Git. |
 
-![Synara workspace with agent task, terminal, and project navigation](assets/prod/synara-hero.jpeg)
+> [!NOTE]
+> Synara is early-stage software. APIs and interface details remain under active development.
 
-## What it does
+## Capabilities
 
-- **Multi-provider workspace** — Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok Build, Kilo Code, Pi, and Factory Droid from one app, with the subscriptions you already use.
-- **Parallel agents** — run tasks in isolated Git worktrees with their own branches so concurrent agents stay out of each other's way. Watch native subagents and workflows with live phases and pause/stop controls.
-- **One working surface** — keep split chats, real terminals, browser previews and verification, files, diffs, and Git tools beside the conversation.
-- **Handoffs and orchestration** — hand a task to a different provider so the new model continues with the same context and environment, or schedule recurring agent runs with automations.
-- **Agent Gateway and External MCP** — let a supported provider session inside the app create and steer other Synara tasks, or pair local MCP clients such as Codex and Claude Code with a scoped, revocable integration.
-- **Plan and Debug modes** — the agent can propose before executing and pause to ask questions, or run any provider through an evidence-first debug loop without changing runtime permissions.
-- **Persistent thread goals** — attach an explicit multi-turn objective with pause/resume, achievement history, and bounded autonomous continuation.
-- **Review and delivery** — inspect diffs, run browser verification, commit, push, open pull requests, and use the pull-request workspace to review, comment, and merge without leaving the app.
-- **Local-first by design** — chats, projects, and history stay on your machine. Coding-agent traffic goes directly to the provider you pick rather than through a Synara model service.
+### 1. Projects, threads, and context
 
-## Providers
+Organize work around projects and threads. Projects define the workspace; threads preserve the task-specific conversation, state, files, and history.
 
-Synara connects to the coding-agent runtimes installed and authenticated on your machine. The
-provider still owns its account, models, tools, permissions, and service; Synara owns the durable
-task, working environment, transcript, and review surfaces around that session.
+- Project-aware navigation and conversations
+- Provider and model selection per task
+- Thread history, status, recaps, notes, and side chats
+- Search and quick access across active work
 
-| Provider                                                                | What Synara connects to                                      |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [Claude Code](https://www.trysynara.com/docs/providers/claude-code)     | Your installed Claude Code runtime and authenticated account |
-| [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                   |
-| [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers   |
-| [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                  |
-| [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI             |
-| [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                |
-| [Kilo Code](https://www.trysynara.com/docs/providers/kilo-code)         | Your Kilo Code runtime and configured credentials            |
-| [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it             |
-| [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime               |
+### 2. Integrated workspace tools
 
-## Install
+The tools surrounding an agent session remain available from the same task surface, keeping execution and review connected.
 
-Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/synara/releases),
-or download it from [trysynara.com](https://www.trysynara.com/).
+| Surface            | Purpose                                                  |
+| ------------------ | -------------------------------------------------------- |
+| **Changes**        | Inspect diffs, changed files, and review state.          |
+| **Terminal**       | Run commands in the project environment.                 |
+| **Browser**        | Keep local previews and browser work next to the thread. |
+| **Files / Editor** | Browse, inspect, and edit project files in context.      |
+| **Git**            | Work with branches, commits, pushes, and pull requests.  |
 
-Synara does not include a model subscription. Install and authenticate at least one supported
-provider — such as Claude Code, Codex, OpenCode, or Cursor — before starting your first task.
-Provider authentication, API keys, model access, and usage limits remain with the provider.
+### 3. Split views and previews
 
-You can also run Synara locally from source while the project is still early:
+Keep an active conversation alongside the surface it is changing. Split views, browser previews, and device previews make the result part of the working context.
 
-```sh
+<p align="center">
+  <img src="./assets/prod/readme-split-view-dark.png" width="900" alt="Synara split view with an agent thread and iOS simulator preview">
+</p>
+
+### 4. Provider-native integrations
+
+Synara connects to coding-agent runtimes that are installed and authenticated locally. The current development build includes the following integrations:
+
+| Runtime         | Local integration                           |
+| --------------- | ------------------------------------------- |
+| **Codex**       | Codex CLI / app-server                      |
+| **Claude**      | Claude Code                                 |
+| **Cursor**      | Cursor agent runtime                        |
+| **Antigravity** | Antigravity CLI                             |
+| **Grok**        | Grok Build                                  |
+| **Droid**       | Factory Droid                               |
+| **Kilo**        | Kilo Code or a configured Kilo server       |
+| **OpenCode**    | OpenCode and its configured model providers |
+| **Pi**          | Pi and its configured model providers       |
+
+### 5. Isolated parallel work
+
+Managed worktrees provide a boundary for parallel changes. Handoffs preserve project context when a task needs to continue with another provider or toolchain.
+
+- Run work in a local checkout or an isolated managed worktree
+- Keep parallel threads from modifying the same checkout unintentionally
+- Hand off a task without losing its project context
+- Review the resulting diff before it leaves the workspace
+
+### 6. Automations and external MCP
+
+Automations support recurring agent runs and keep their outcomes attached to projects and threads. External MCP integrations provide scoped, user-approved access for other local clients.
+
+See [External MCP integrations](./docs/external-mcp.md) for setup, pairing, project access, and permission boundaries.
+
+### 7. Appearance and workspace preferences
+
+Configure the shell to match the way you work with light and dark themes, typography controls, density preferences, and workspace settings.
+
+<p align="center">
+  <img src="./assets/prod/readme-appearance-dark.png" width="900" alt="Synara Appearance settings with theme, typography, and density controls">
+</p>
+
+### Additional capabilities
+
+| Workflow          | Included surfaces                                               |
+| ----------------- | --------------------------------------------------------------- |
+| **Workspace**     | Local projects, chats, history, and multiple provider runtimes. |
+| **Execution**     | Terminals, browser previews, files, and editor.                 |
+| **Delivery**      | Diffs, Git actions, managed worktrees, and pull requests.       |
+| **Orchestration** | Provider handoffs, automations, and scoped external MCP.        |
+| **Development**   | Desktop shell plus focused server and web modes.                |
+
+## Installation
+
+### Desktop application
+
+Download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or visit [trysynara.com](https://www.trysynara.com/).
+
+Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
+
+### Provider setup
+
+Synara uses the provider installations and subscriptions already configured on the local machine. Install and authenticate the runtime you intend to use before starting a session. For Codex sessions, follow the [Codex CLI setup](https://github.com/openai/codex).
+
+### Run from source
+
+The development checkout uses [Bun 1.3.12](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
+
+```console
+git clone https://github.com/Emanuele-web04/synara.git
+cd synara
 bun install
 bun run dev
 ```
 
-## Documentation
-
-The full product documentation lives at [trysynara.com/docs](https://www.trysynara.com/docs).
-A few focused guides are also kept in this repository:
-
-- [Quickstart](docs/quickstart.md) — from installation to your first reviewed change in about five minutes.
-- [Core concepts](docs/core-concepts.md) — projects, tasks, environments, provider sessions, and Git ownership.
-- [Providers](docs/providers.md) — what Synara manages and what stays provider-owned.
-- [External MCP integrations](docs/external-mcp.md) — pair another local app with a scoped Synara task surface.
-
-## Privacy
-
-Synara runs as the workspace layer on your machine. There is no Synara cloud holding your
-repositories, chats, or project history.
-
-The provider you choose still receives the prompts, file snippets, diffs, terminal output, or tool
-results needed for a session, but that traffic goes to the provider you picked rather than through a
-separate Synara-hosted workspace.
-
-## Status
-
-Synara is still very early. Expect bugs, rough edges, and fast-moving internals.
-
-Focused issues and PRs are welcome, especially bug fixes, reliability fixes, and small maintenance
-improvements.
-
 ## Contributing
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+Bug fixes, reliability improvements, performance work, documentation, and maintenance changes are welcome.
 
-Need support? [Open a GitHub issue](https://github.com/Emanuele-web04/synara/issues).
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a reproducible problem, [open an issue](https://github.com/Emanuele-web04/synara/issues/new/choose) with the Synara version, operating system, runtime, and relevant logs.
 
-## Origins
+## License
 
-Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.
+Synara is licensed under the [MIT License](./LICENSE).

@@ -38,6 +38,7 @@ import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -945,12 +946,46 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
+// While a message streams, its open code block grows on every reveal commit (~25/s) and
+// each commit re-tokenizes the whole block — quadratic in block length and the single
+// largest renderer cost of a code-heavy turn. Highlight at most this often while
+// streaming; the prefix already on screen stays put and the trailing value always lands,
+// so the block converges to exactly the settled highlight.
+// Each highlight costs roughly linearly in block length, so the cadence also stretches
+// with size: small blocks stay at the base interval, a block at
+// `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
+// `STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS`, keeping per-second tokenization work bounded.
+const STREAMING_CODE_HIGHLIGHT_INTERVAL_MS = 160;
+const STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS = 1_000;
+const STREAMING_CODE_HIGHLIGHT_BASE_CHARS = 8_000;
+const STREAMING_CODE_HIGHLIGHT_SLOW_CHARS = 80_000;
+
+export function streamingCodeHighlightIntervalMs(codeLength: number): number {
+  if (codeLength <= STREAMING_CODE_HIGHLIGHT_BASE_CHARS) {
+    return STREAMING_CODE_HIGHLIGHT_INTERVAL_MS;
+  }
+  const progress = Math.min(
+    1,
+    (codeLength - STREAMING_CODE_HIGHLIGHT_BASE_CHARS) /
+      (STREAMING_CODE_HIGHLIGHT_SLOW_CHARS - STREAMING_CODE_HIGHLIGHT_BASE_CHARS),
+  );
+  return Math.round(
+    STREAMING_CODE_HIGHLIGHT_INTERVAL_MS +
+      progress * (STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS - STREAMING_CODE_HIGHLIGHT_INTERVAL_MS),
+  );
+}
+
 function SuspenseShikiCodeBlock({
   language,
-  code,
+  code: liveCode,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
+  const code = useThrottledStreamingValue(
+    liveCode,
+    isStreaming,
+    streamingCodeHighlightIntervalMs(liveCode.length),
+  );
   const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
   return (
     <LoadedShikiCodeBlock

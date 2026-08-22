@@ -173,7 +173,7 @@ const makeWithDatabase = (
           return runValues(sql, params);
         },
         executeUnprepared(sql, params, rowTransform) {
-          const effect = runStatement(db.prepare(sql), params ?? [], false);
+          const effect = run(sql, params ?? []);
           return rowTransform ? Effect.map(effect, rowTransform) : effect;
         },
         executeStream(_sql, _params) {

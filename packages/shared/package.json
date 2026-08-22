@@ -64,6 +64,10 @@
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
     },
+    "./desktopTitleBar": {
+      "types": "./src/desktopTitleBar.ts",
+      "import": "./src/desktopTitleBar.ts"
+    },
     "./desktopIdentity": {
       "types": "./src/desktopIdentity.ts",
       "import": "./src/desktopIdentity.ts"

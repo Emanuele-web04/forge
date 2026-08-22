@@ -1524,6 +1524,7 @@ describe("ClaudeAdapterLive", () => {
       if (deltaEvent?.type === "content.delta") {
         assert.equal(deltaEvent.payload.delta, "Hi");
         assert.equal(String(deltaEvent.turnId), String(turn.turnId));
+        assert.deepEqual(deltaEvent.raw?.payload, {});
       }
 
       const toolStarted = runtimeEvents.find((event) => event.type === "item.started");

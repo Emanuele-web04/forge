@@ -30,6 +30,7 @@ import {
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
+  normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
   normalizePiModelOptions,
@@ -910,6 +911,34 @@ describe("claudeSelectionRequiresRestart", () => {
         selection("claude-sonnet-5", { effort: "high", fastMode: true }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("normalizeCursorModelOptions", () => {
+  it("sends the selected Cursor Grok effort even when it is the model default", () => {
+    expect(
+      normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "high", fastMode: true }),
+    ).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(normalizeCursorModelOptions("grok-4.6", { fastMode: true })).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+  });
+
+  it("keeps a non-default Cursor Grok effort when fast mode is enabled", () => {
+    expect(
+      normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "low", fastMode: true }),
+    ).toEqual({
+      reasoningEffort: "low",
+      fastMode: true,
+    });
   });
 });
 

@@ -1727,18 +1727,33 @@ async function dispatchModelCycleShortcutWhenReady(
 function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
-): void {
+): KeyboardEvent {
   const useMetaForMod = isMacNavigatorPlatform();
-  target.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: input.key,
-      shiftKey: input.shiftKey ?? false,
-      altKey: input.altKey ?? false,
-      metaKey: useMetaForMod,
-      ctrlKey: !useMetaForMod,
-      bubbles: true,
-      cancelable: true,
-    }),
+  const event = new KeyboardEvent("keydown", {
+    key: input.key,
+    shiftKey: input.shiftKey ?? false,
+    altKey: input.altKey ?? false,
+    metaKey: useMetaForMod,
+    ctrlKey: !useMetaForMod,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+// Re-dispatches until the shortcut handler consumes the event: the resolved
+// keybindings land asynchronously after `serverGetConfig`, so a single dispatch
+// can race the config apply.
+async function dispatchConfiguredShortcutWhenReady(
+  target: EventTarget,
+  input: { key: string; shiftKey?: boolean; altKey?: boolean },
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchConfiguredShortcut(target, input).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
   );
 }
 
@@ -4376,17 +4391,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      // The empty landing runs minimal chrome with no scripts control, so drafts
+      // reach scripts through their keybindings; drive the same runProjectScript
+      // path the way a user would.
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "script.lint.run",
+              shortcut: {
+                key: "l",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Lint",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Lint button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      await dispatchConfiguredShortcutWhenReady(window, {
+        key: "l",
+        shiftKey: true,
+        altKey: true,
+      });
 
       await vi.waitFor(
         () => {
@@ -4454,17 +4488,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      // Same keybinding-driven path as the local-draft script test above: the
+      // empty landing exposes no scripts control.
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "script.test.run",
+              shortcut: {
+                key: "t",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Test",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Test button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      await dispatchConfiguredShortcutWhenReady(window, {
+        key: "t",
+        shiftKey: true,
+        altKey: true,
+      });
 
       await vi.waitFor(
         () => {

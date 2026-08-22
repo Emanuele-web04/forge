@@ -111,6 +111,11 @@ import {
   settleDeferredDesktopQuitAfterUpdaterFailure,
 } from "./desktopQuitIntent";
 import {
+  makeRunningChatsQuitGuard,
+  quitConfirmationPresentationForPlatform,
+  shouldPromptForRunningChatsBeforeQuit,
+} from "./runningChatsQuitGuard";
+import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -227,6 +232,12 @@ import {
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
+  readCustomTitleBarPreference,
+  resolveDesktopCustomTitleBarState,
+  resolveDesktopTitleBarFrameOptions,
+  writeCustomTitleBarPreference,
+} from "./desktopCustomTitleBar";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -279,6 +290,7 @@ const BASE_DIR =
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
+const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -333,6 +345,8 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+/** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
+let customTitleBarActive = false;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -356,6 +370,7 @@ let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
+const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -966,6 +981,10 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+      // Let V8 persist compiled bytecode for renderer bundles served over this scheme
+      // (Chromium only code-caches http(s) by default), so cold launches skip
+      // recompiling the multi-MB app bundle.
+      codeCache: true,
     },
   },
   {
@@ -3862,6 +3881,21 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   }
 }
 
+function hideDesktopWindowForImmediateQuit(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      window.setSkipTaskbar(true);
+    }
+    window.hide();
+  } catch (error: unknown) {
+    writeDesktopLogHeader(`hide window for quit failed message=${formatErrorMessage(error)}`);
+  }
+}
+
 // Keeps Electron alive long enough for backend finalizers to reap provider child processes.
 async function shutdownDesktopRuntime(reason: string): Promise<void> {
   if (desktopShutdownPromise) {
@@ -3869,6 +3903,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
+  hideDesktopWindowForImmediateQuit();
   writeDesktopLogHeader(`${reason} shutdown start`);
   const shutdown = runAfterDesktopShutdown(
     stopBackendAndWaitForExit(),
@@ -3897,6 +3932,51 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     }
     throw error;
   }
+}
+
+function isMainRendererAvailable(): boolean {
+  return Boolean(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed() &&
+    !mainWindow.webContents.isCrashed(),
+  );
+}
+
+async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
+  if (
+    !shouldPromptForRunningChatsBeforeQuit(reason) ||
+    runningChatsQuitGuard.hasAllowedQuit() ||
+    isQuitting ||
+    desktopShutdownPromise !== null ||
+    desktopShutdownComplete
+  ) {
+    requestGracefulAppQuit(reason);
+    return;
+  }
+
+  const window = mainWindow;
+  const presentation = quitConfirmationPresentationForPlatform();
+  const allowed = await runningChatsQuitGuard.askRenderer({
+    send: (request) => {
+      if (!isMainRendererAvailable() || !window) {
+        throw new Error("Renderer unavailable.");
+      }
+      if (window.isMinimized()) {
+        window.restore();
+      }
+      window.show();
+      window.focus();
+      window.webContents.send(IPC.quitConfirmationRequest, request);
+    },
+    isRendererAvailable: isMainRendererAvailable,
+    presentation,
+  });
+  if (!allowed) {
+    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    return;
+  }
+  requestGracefulAppQuit(reason);
 }
 
 function requestGracefulAppQuit(reason: string): void {
@@ -3986,6 +4066,11 @@ function registerIpcHandlers(): void {
 
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
     return showDesktopConfirmDialog(message, owner);
+  });
+
+  ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
+  ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
+    runningChatsQuitGuard.receiveResponse(payload);
   });
 
   ipcMain.removeHandler(IPC.setTheme);
@@ -4180,6 +4265,28 @@ function registerIpcHandlers(): void {
     return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
   });
 
+  ipcMain.removeHandler(IPC.customTitleBarGetState);
+  ipcMain.handle(IPC.customTitleBarGetState, async () => getDesktopCustomTitleBarState());
+
+  ipcMain.removeHandler(IPC.customTitleBarSetPreference);
+  ipcMain.handle(IPC.customTitleBarSetPreference, async (_event, rawEnabled: unknown) => {
+    if (typeof rawEnabled !== "boolean") {
+      return getDesktopCustomTitleBarState();
+    }
+    const state = getDesktopCustomTitleBarState();
+    if (!state.supported) {
+      return state;
+    }
+    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, rawEnabled);
+    return getDesktopCustomTitleBarState();
+  });
+
+  ipcMain.removeHandler(IPC.customTitleBarRelaunch);
+  ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
+    app.relaunch();
+    requestGracefulAppQuit("custom-title-bar-relaunch");
+  });
+
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
@@ -4294,23 +4401,34 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
-// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
-// so the toolbar can occupy the top edge instead of sitting below a native title bar.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows and
+// Linux can use a frameless shell with renderer-owned minimize/maximize/close controls
+// (see Settings → Appearance → Use custom title bar). `frame` is fixed at construction.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
-  if (process.platform === "win32") {
-    return { frame: false };
+  if (process.platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+      // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
+      // so the native lights and the renderer's leading toggle/arrow controls always share
+      // the same vertical center. Tune the height/radius there, never the raw px here.
+      trafficLightPosition: getMacTrafficLightPosition(),
+    };
   }
-  if (process.platform !== "darwin") {
-    return {};
-  }
-  return {
-    titleBarStyle: "hiddenInset",
-    // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
-    // so the native lights and the renderer's leading toggle/arrow controls always share
-    // the same vertical center. Tune the height/radius there, never the raw px here.
-    trafficLightPosition: getMacTrafficLightPosition(),
-  };
+  const preference = readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH);
+  const frameOptions = resolveDesktopTitleBarFrameOptions({
+    platform: process.platform,
+    preference,
+  });
+  customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
+  return frameOptions;
+}
+
+function getDesktopCustomTitleBarState() {
+  return resolveDesktopCustomTitleBarState({
+    platform: process.platform,
+    preference: readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH),
+    active: customTitleBarActive,
+  });
 }
 
 function createWindow(): BrowserWindow {
@@ -4459,7 +4577,17 @@ function createWindow(): BrowserWindow {
       })
     ) {
       event.preventDefault();
-      requestGracefulAppQuit("window-close");
+      void confirmRunningChatsThenQuit("window-close");
+      return;
+    }
+
+    if (
+      process.platform === "linux" &&
+      !desktopShutdownComplete &&
+      !isUpdaterQuitAndInstallInFlight
+    ) {
+      event.preventDefault();
+      void confirmRunningChatsThenQuit("window-close");
     }
   });
 
@@ -4479,6 +4607,7 @@ function createWindow(): BrowserWindow {
   }
 
   window.on("closed", () => {
+    runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -4504,6 +4633,7 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    runningChatsQuitGuard.cancelPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -4545,6 +4675,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   });
   window.webContents.on("responsive", () => {
     writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.webContents.on("did-start-loading", () => {
+    runningChatsQuitGuard.cancelPending();
   });
 
   window.on("closed", clearReloadTimer);
@@ -4798,7 +4932,7 @@ app.on("before-quit", (event) => {
   }
 
   event.preventDefault();
-  requestGracefulAppQuit("before-quit");
+  void confirmRunningChatsThenQuit("before-quit");
 });
 
 if (hasSingleInstanceLock) {

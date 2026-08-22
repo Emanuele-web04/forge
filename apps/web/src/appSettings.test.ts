@@ -909,6 +909,7 @@ describe("AppSettingsSchema", () => {
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
       desktopAppIcon: "default",
+      useCustomTitleBar: true,
       enableAppSnap: false,
       appSnapShortcut: { kind: "both-option-keys" },
       appSnapPlaySound: true,
@@ -935,6 +936,13 @@ describe("AppSettingsSchema", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 
     expect(decode(JSON.stringify({ desktopAppIcon: "icon" })).desktopAppIcon).toBe("icon");
+  });
+
+  it("preserves the custom title bar preference", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ useCustomTitleBar: false })).useCustomTitleBar).toBe(false);
+    expect(decode(JSON.stringify({})).useCustomTitleBar).toBe(true);
   });
 
   it("migrates the former AppSnap feature flag", () => {

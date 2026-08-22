@@ -37,19 +37,23 @@ interface CursorAuth {
   plan?: string;
 }
 
-function stateDbPaths(ctx: ProviderUsageContext): string[] {
+export function cursorStateDbPaths(
+  ctx: Pick<ProviderUsageContext, "homeDir" | "env" | "platform">,
+): string[] {
   const segments = ["Cursor", "User", "globalStorage", "state.vscdb"];
   if (ctx.platform === "darwin") {
     return [nodePath.join(ctx.homeDir, "Library", "Application Support", ...segments)];
   }
-  if (ctx.platform === "win32" && ctx.env.APPDATA) {
-    return [nodePath.join(ctx.env.APPDATA, ...segments)];
+  if (ctx.platform === "win32") {
+    const roaming = ctx.env.APPDATA?.trim() || nodePath.join(ctx.homeDir, "AppData", "Roaming");
+    return [nodePath.join(roaming, ...segments)];
   }
-  return [nodePath.join(ctx.homeDir, ".config", ...segments)];
+  const configHome = ctx.env.XDG_CONFIG_HOME?.trim() || nodePath.join(ctx.homeDir, ".config");
+  return [nodePath.join(configHome, ...segments)];
 }
 
 async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth | null> {
-  for (const dbPath of stateDbPaths(ctx)) {
+  for (const dbPath of cursorStateDbPaths(ctx)) {
     const values = await readItemTableValues({ dbPath, keys: [ACCESS_TOKEN_KEY, PLAN_KEY] });
     const accessToken = asString(values[ACCESS_TOKEN_KEY]);
     if (accessToken) {

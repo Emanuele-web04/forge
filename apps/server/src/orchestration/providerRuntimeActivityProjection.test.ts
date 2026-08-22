@@ -354,6 +354,44 @@ describe("provider runtime activity projection", () => {
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
   });
 
+  it("keeps the fast JSON fingerprint byte-identical to the legacy JSON-like serializer", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "tool.progress",
+        eventId: "tool-progress-fingerprint",
+        turnId: TURN_ID,
+        payload: {
+          toolUseId: "tool-fingerprint",
+          toolName: "mcp__github__fetch_pr",
+          summary: "Fetching PR",
+          elapsedSeconds: 2.4,
+        },
+      }),
+    );
+    const legacyFingerprint = JSON.stringify(
+      {
+        kind: activity!.kind,
+        summary: activity!.summary,
+        payload: activity!.payload,
+        turnId: activity!.turnId,
+      },
+      (() => {
+        const seen = new WeakSet<object>();
+        return (_key: string, entry: unknown) => {
+          if (typeof entry === "bigint") return entry.toString();
+          if (typeof entry === "function" || typeof entry === "symbol") return undefined;
+          if (entry && typeof entry === "object") {
+            if (seen.has(entry)) return "[Circular]";
+            seen.add(entry);
+          }
+          return entry;
+        };
+      })(),
+    );
+
+    expect(providerActivityUpdateFingerprint(activity!)).toBe(legacyFingerprint);
+  });
+
   it.each(["antigravity", "codex"] as const)(
     "projects %s tool lifecycle events through the same canonical activities",
     (provider) => {

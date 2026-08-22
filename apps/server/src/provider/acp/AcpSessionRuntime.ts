@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { parseWindowsWslUncPath, prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -171,6 +171,20 @@ export interface AcpSpawnInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * ACP agents launched inside WSL must receive a Linux cwd in protocol payloads,
+ * even though the Windows parent identifies the same workspace by its WSL UNC path.
+ */
+export function resolveAcpSessionCwd(
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") {
+    return cwd;
+  }
+  return parseWindowsWslUncPath(cwd)?.linuxPath ?? cwd;
 }
 
 export interface AcpFreshSessionRetryPolicy {
@@ -1114,6 +1128,7 @@ const makeAcpSessionRuntime = (
       }
 
       const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+      const sessionCwd = resolveAcpSessionCwd(options.cwd);
 
       let sessionId: string;
       let sessionSetupResult:
@@ -1125,7 +1140,7 @@ const makeAcpSessionRuntime = (
       if (options.resumeSessionId) {
         const resumePayload = {
           sessionId: options.resumeSessionId,
-          cwd: options.cwd,
+          cwd: sessionCwd,
           mcpServers,
           ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.ResumeSessionRequest;
@@ -1152,7 +1167,7 @@ const makeAcpSessionRuntime = (
           : (() => {
               const loadPayload = {
                 sessionId: options.resumeSessionId,
-                cwd: options.cwd,
+                cwd: sessionCwd,
                 mcpServers,
                 ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
               } satisfies Acp.LoadSessionRequest;
@@ -1173,7 +1188,7 @@ const makeAcpSessionRuntime = (
         // agent output emitted while the request is in flight is buffered.
         acceptingSessionUpdates = true;
         const createPayload = {
-          cwd: options.cwd,
+          cwd: sessionCwd,
           mcpServers,
           ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.NewSessionRequest;

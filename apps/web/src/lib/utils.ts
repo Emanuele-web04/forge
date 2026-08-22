@@ -16,6 +16,10 @@ export function isWindowsPlatform(platform: string): boolean {
   return /^win(dows)?/i.test(platform);
 }
 
+export function isLinuxPlatform(platform: string): boolean {
+  return /linux/i.test(platform);
+}
+
 /** The host platform string, safe to read where `navigator` may be absent (SSR, node tests). */
 export function getNavigatorPlatform(): string {
   return typeof navigator === "undefined" ? "" : navigator.platform;

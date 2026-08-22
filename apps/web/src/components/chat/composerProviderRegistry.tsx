@@ -12,13 +12,12 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import {
-  getDefaultContextWindow,
   getDefaultEffort,
-  hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
+  normalizeCursorModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveLabeledOptionValue,
@@ -156,34 +155,7 @@ function getProviderStateFromCapabilities(
     case "cursor": {
       const providerOptions = modelOptions?.cursor;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      const defaultReasoningEffort = getDefaultEffort(caps);
-      const reasoningEffort =
-        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
-          ? rawEffort
-          : undefined;
-      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
-      const defaultContextWindow = getDefaultContextWindow(caps);
-      const contextWindow =
-        rawContextWindow &&
-        hasContextWindowOption(caps, rawContextWindow) &&
-        rawContextWindow !== defaultContextWindow
-          ? rawContextWindow
-          : undefined;
-      // Cursor advertises many models with fast=true as the ACP default. The
-      // composer lightning bolt is off unless fastMode is explicitly true, so
-      // dispatch false whenever the model supports the toggle.
-      const fastMode = caps.supportsFastMode ? providerOptions?.fastMode === true : undefined;
-      const thinking =
-        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
-          ? providerOptions.thinking
-          : undefined;
-      const nextOptions = {
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastMode !== undefined ? { fastMode } : {}),
-        ...(thinking !== undefined ? { thinking } : {}),
-        ...(contextWindow ? { contextWindow } : {}),
-      };
-      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      normalizedOptions = normalizeCursorModelOptions(model, providerOptions, caps);
       break;
     }
     case "antigravity": {

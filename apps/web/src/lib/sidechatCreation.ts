@@ -56,8 +56,8 @@ export interface SidechatCreationFlight {
 }
 
 function scheduleSidechatFlightCleanup(
-  inFlightBySourceThreadId: Map<ThreadId, SidechatCreationFlight>,
-  sourceThreadId: ThreadId,
+  inFlightByKey: Map<string, SidechatCreationFlight>,
+  flightKey: string,
   flight: SidechatCreationFlight,
 ): void {
   const observedTail = flight.promptTail;
@@ -66,26 +66,26 @@ function scheduleSidechatFlightCleanup(
       if (
         flight.creationSettled &&
         flight.promptTail === observedTail &&
-        inFlightBySourceThreadId.get(sourceThreadId) === flight
+        inFlightByKey.get(flightKey) === flight
       ) {
-        inFlightBySourceThreadId.delete(sourceThreadId);
+        inFlightByKey.delete(flightKey);
       }
     },
     () => {
       if (
         flight.creationSettled &&
         flight.promptTail === observedTail &&
-        inFlightBySourceThreadId.get(sourceThreadId) === flight
+        inFlightByKey.get(flightKey) === flight
       ) {
-        inFlightBySourceThreadId.delete(sourceThreadId);
+        inFlightByKey.delete(flightKey);
       }
     },
   );
 }
 
 export function createOrJoinSidechat(input: {
-  inFlightBySourceThreadId: Map<ThreadId, SidechatCreationFlight>;
-  sourceThreadId: ThreadId;
+  inFlightByKey: Map<string, SidechatCreationFlight>;
+  flightKey: string;
   initialPrompt?: string | undefined;
   startCreation: (initialPrompt?: string) => Promise<SidechatCreationResult>;
   sendQueuedPrompt: (threadId: ThreadId, prompt: string) => Promise<void>;
@@ -93,7 +93,7 @@ export function createOrJoinSidechat(input: {
   onQueuedPromptError: (error: unknown) => void;
 }): Promise<true> {
   const prompt = input.initialPrompt?.trim() ?? "";
-  const existing = input.inFlightBySourceThreadId.get(input.sourceThreadId);
+  const existing = input.inFlightByKey.get(input.flightKey);
   if (existing) {
     if (prompt.length === 0) {
       return existing.completion;
@@ -111,7 +111,7 @@ export function createOrJoinSidechat(input: {
       }
     });
     if (existing.creationSettled) {
-      scheduleSidechatFlightCleanup(input.inFlightBySourceThreadId, input.sourceThreadId, existing);
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, existing);
     }
     return existing.promptTail.then(() => true as const);
   }
@@ -128,15 +128,15 @@ export function createOrJoinSidechat(input: {
     promptTail: Promise.resolve(),
     creationSettled: false,
   };
-  input.inFlightBySourceThreadId.set(input.sourceThreadId, flight);
+  input.inFlightByKey.set(input.flightKey, flight);
   void flight.completion.then(
     () => {
       flight.creationSettled = true;
-      scheduleSidechatFlightCleanup(input.inFlightBySourceThreadId, input.sourceThreadId, flight);
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, flight);
     },
     () => {
       flight.creationSettled = true;
-      scheduleSidechatFlightCleanup(input.inFlightBySourceThreadId, input.sourceThreadId, flight);
+      scheduleSidechatFlightCleanup(input.inFlightByKey, input.flightKey, flight);
     },
   );
   return flight.completion;

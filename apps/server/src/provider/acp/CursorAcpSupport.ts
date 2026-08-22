@@ -1068,6 +1068,18 @@ function resolveCursorChoiceParameterValue(input: {
   return sawParameterizedChoice ? undefined : input.requestedValue;
 }
 
+function cursorBooleanParameterExposed(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+  baseModel: string,
+  parameterKey: string,
+): boolean {
+  return choices.some(
+    (choice) =>
+      cursorChoiceMatchesBase(choice, baseModel) &&
+      parseCursorModelParameters(choice.slug).has(parameterKey),
+  );
+}
+
 function cursorModelOptionValueSupported(input: {
   readonly configOptions: ReadonlyArray<Acp.SessionConfigOption>;
   readonly choices: ReadonlyArray<CursorAcpModelChoice>;
@@ -1081,11 +1093,13 @@ function cursorModelOptionValueSupported(input: {
     return toConfigValue(option, input.value) !== undefined;
   }
   if (typeof input.value === "boolean") {
-    if (
-      input.value === false &&
-      (input.parameterKey === "fast" || input.parameterKey === "thinking")
-    ) {
-      return true;
+    if (input.parameterKey === "fast" || input.parameterKey === "thinking") {
+      // Off is always pass-through-safe. On is also valid when ACP advertises
+      // the parameter at all (often as false); parameterized slugs can flip it.
+      return (
+        input.value === false ||
+        cursorBooleanParameterExposed(input.choices, input.baseModel, input.parameterKey)
+      );
     }
     return (
       resolveCursorChoiceParameterValue({
@@ -1198,14 +1212,15 @@ function collectCursorAcpConfigUpdates(
     updates.push({ configId: option.id, value: configValue });
   };
 
-  pushUpdate(["effort", "reasoning", "thought level"], options?.reasoningEffort);
-  pushUpdate(["context", "context size", "context window"], options?.contextWindow);
   // Cursor's persisted/current preference can be true even when Synara has no
   // fast-mode override. The composer treats the lightning bolt as off unless
   // fastMode is explicitly true, so make that default authoritative whenever
-  // the selected model exposes a dedicated ACP option.
+  // the selected model exposes a dedicated ACP option. Apply effort last:
+  // Cursor's fast variants default to a lower reasoning level (Grok fast → low).
   pushUpdate(["fast", "fast mode"], options?.fastMode ?? false);
   pushUpdate(["thinking"], options?.thinking);
+  pushUpdate(["context", "context size", "context window"], options?.contextWindow);
+  pushUpdate(["effort", "reasoning", "thought level"], options?.reasoningEffort);
   return updates;
 }
 
@@ -1242,6 +1257,28 @@ function mergeCursorModelOptions(
     ...(override ?? {}),
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function defaultCursorReasoningEffortForBaseModel(baseModel: string): string | undefined {
+  const lower = stripCursorParameterizedSuffix(baseModel).toLowerCase();
+  if (lower.includes("gpt") || lower.includes("codex")) {
+    return "medium";
+  }
+  if (lower.includes("claude") || lower.includes("grok")) {
+    return "high";
+  }
+  return undefined;
+}
+
+function withCursorDefaultReasoningEffort(
+  baseModel: string,
+  options: CursorModelOptions | undefined,
+): CursorModelOptions | undefined {
+  if (!options || options.reasoningEffort || options.fastMode === undefined) {
+    return options;
+  }
+  const defaultEffort = defaultCursorReasoningEffortForBaseModel(baseModel);
+  return defaultEffort ? { ...options, reasoningEffort: defaultEffort } : options;
 }
 
 function withCursorFastModeDefault(
@@ -1395,9 +1432,19 @@ function resolveCursorAcpModelSelection(
     return { _tag: "Resolved", value: resolvedModel };
   }
 
-  const relaxedMatch =
-    findCursorModelChoiceIgnoringFast(choices, resolvedModel) ??
-    findCursorModelChoiceWithSupportedParameters(choices, resolvedModel);
+  const relaxedIgnoringFast = findCursorModelChoiceIgnoringFast(choices, resolvedModel);
+  if (relaxedIgnoringFast) {
+    const hasFastConfig = findCursorFastConfigOption(configOptions) !== undefined;
+    const requestedFast = parseCursorModelParameters(resolvedModel).get("fast");
+    const advertisedFast = parseCursorModelParameters(relaxedIgnoringFast).get("fast");
+    // Without a dedicated fast config option, substituting the advertised slug
+    // would keep whatever fast= Cursor baked in. Only reuse it when we can
+    // still apply the requested value via session/set_config_option.
+    if (hasFastConfig || requestedFast === advertisedFast) {
+      return { _tag: "Resolved", value: relaxedIgnoringFast };
+    }
+  }
+  const relaxedMatch = findCursorModelChoiceWithSupportedParameters(choices, resolvedModel);
   if (relaxedMatch) {
     return { _tag: "Resolved", value: relaxedMatch };
   }
@@ -1450,6 +1497,32 @@ function makeCursorRejectedModelNotice(
   };
 }
 
+function resolveCursorMergedSessionOptions(input: {
+  readonly configOptions: ReadonlyArray<Acp.SessionConfigOption>;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly model: string | null | undefined;
+  readonly options: CursorModelOptions | null | undefined;
+}): CursorModelOptions | undefined {
+  const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    configOptions: input.configOptions,
+    choices: input.choices,
+    baseModel: input.baseModel,
+    options: mergeCursorModelOptions(
+      cursorModelOptionsFromModelParameters(input.model),
+      input.options,
+    ),
+  });
+  return withCursorDefaultReasoningEffort(
+    input.baseModel,
+    withCursorFastModeDefault(
+      input.choices,
+      input.baseModel,
+      mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
+    ),
+  );
+}
+
 export function applyCursorAcpModelSelection<E>(input: {
   readonly runtime: CursorAcpModelSelectionRuntime;
   readonly model: string | null | undefined;
@@ -1464,20 +1537,13 @@ export function applyCursorAcpModelSelection<E>(input: {
     const initialConfigOptions = yield* input.runtime.getConfigOptions;
     const choices = flattenCursorAcpModelChoices(initialConfigOptions);
     const baseModel = resolveCursorAcpBaseModelId(input.model);
-    const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    const mergedOptions = resolveCursorMergedSessionOptions({
       configOptions: initialConfigOptions,
       choices,
       baseModel,
-      options: mergeCursorModelOptions(
-        cursorModelOptionsFromModelParameters(input.model),
-        input.options,
-      ),
+      model: input.model,
+      options: input.options,
     });
-    const mergedOptions = withCursorFastModeDefault(
-      choices,
-      baseModel,
-      mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
-    );
     const selection = resolveCursorAcpModelSelection(
       initialConfigOptions,
       input.model,
@@ -1486,13 +1552,16 @@ export function applyCursorAcpModelSelection<E>(input: {
     if (selection._tag === "Fallback" || selection._tag === "Unavailable") {
       yield* notify(makeCursorUnavailableModelNotice(selection));
     }
+    let shouldApplyRequestedOptions = selection._tag === "None";
     if (selection._tag === "Resolved" || selection._tag === "Fallback") {
       const modelValue = selection.value;
-      yield* input.runtime.setModel(modelValue).pipe(
-        Effect.asVoid,
+      const modelApplied = yield* input.runtime.setModel(modelValue).pipe(
+        Effect.as(true),
         Effect.catch((cause) =>
           isCursorModelRejection(cause)
-            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause))
+            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause)).pipe(
+                Effect.as(false),
+              )
             : Effect.fail(
                 input.mapError({
                   cause,
@@ -1501,12 +1570,29 @@ export function applyCursorAcpModelSelection<E>(input: {
               ),
         ),
       );
+      shouldApplyRequestedOptions = selection._tag === "Resolved" && modelApplied;
     }
 
-    const configUpdates = collectCursorAcpConfigUpdates(
-      yield* input.runtime.getConfigOptions,
-      mergedOptions,
-    );
+    // A fallback keeps a different model than the one whose options were
+    // requested. Applying the requested fast/effort values to that model can
+    // silently mutate an unrelated session configuration.
+    if (!shouldApplyRequestedOptions) {
+      return;
+    }
+
+    // Re-read after setModel: Auto/default often has no fast/effort options,
+    // so the first pass would drop fast=true and then write fast=false once
+    // GPT/Grok's dedicated toggles appear.
+    const appliedConfigOptions = yield* input.runtime.getConfigOptions;
+    const appliedChoices = flattenCursorAcpModelChoices(appliedConfigOptions);
+    const appliedOptions = resolveCursorMergedSessionOptions({
+      configOptions: appliedConfigOptions,
+      choices: appliedChoices,
+      baseModel,
+      model: input.model,
+      options: input.options,
+    });
+    const configUpdates = collectCursorAcpConfigUpdates(appliedConfigOptions, appliedOptions);
     for (const update of configUpdates) {
       yield* input.runtime.setConfigOption(update.configId, update.value).pipe(
         Effect.mapError((cause) =>

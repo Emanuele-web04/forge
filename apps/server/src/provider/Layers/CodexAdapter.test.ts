@@ -614,10 +614,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       if (events[0]?.type === "content.delta") {
         assert.equal(events[0].payload.streamKind, "reasoning_text");
         assert.equal(events[0].payload.contentIndex, 2);
+        assert.deepEqual(events[0].raw?.payload, {});
       }
       if (events[1]?.type === "content.delta") {
         assert.equal(events[1].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[1].payload.summaryIndex, 1);
+        assert.deepEqual(events[1].raw?.payload, {});
       }
     }),
   );
@@ -1403,6 +1405,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[2].itemId, "rs_reasoning_1");
         assert.equal(events[2].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[2].payload.summaryIndex, 0);
+        assert.deepEqual(events[2].raw?.payload, {});
       }
 
       assert.equal(events[3]?.type, "task.completed");
