@@ -318,6 +318,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("f"),
+    command: "chat.find",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("u", { shiftKey: true }),
     command: "settings.usage",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -673,6 +678,43 @@ describe("Activity shortcut", () => {
         platform: "Linux",
         context: { terminalFocus: true },
       }),
+    );
+  });
+});
+
+describe("in-thread find shortcuts", () => {
+  it("opens chat.find with Cmd/Ctrl+F outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.find",
+    );
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: false },
+      }),
+      "chat.find",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("falls back to chat.find when runtime config is missing it", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter((binding) => binding.command !== "chat.find");
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.find",
     );
   });
 });
@@ -1081,6 +1123,8 @@ describe("shortcutLabelForCommand", () => {
       shortcutLabelForCommand(DEFAULT_BINDINGS, "composer.focus.toggle", "MacIntel"),
       "⌘L",
     );
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.find", "MacIntel"), "⌘F");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.find", "Win32"), "Ctrl+F");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.terminal", "MacIntel"),
       "⌘1",

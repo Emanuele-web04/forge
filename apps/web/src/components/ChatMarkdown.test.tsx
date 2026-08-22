@@ -174,6 +174,22 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("|---|");
   });
 
+  it("wraps in-thread find matches and marks the active range", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderToStaticMarkup(
+      <ChatMarkdown
+        text="Error in src/app.ts and another error here."
+        cwd={undefined}
+        isStreaming={false}
+        findQuery="error"
+        findActiveRange={{ startOffset: 32, endOffset: 37 }}
+      />,
+    );
+    expect(markup).toContain('data-chat-find-match="true"');
+    expect(markup).toContain('data-chat-find-match="active"');
+    expect(markup).toContain("chat-find-match-active");
+  });
+
   it("renders exact thread marker ranges without changing markdown structure", async () => {
     const marker: ThreadMarker = {
       id: ThreadMarkerId.makeUnsafe("marker-1"),

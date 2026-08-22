@@ -1559,6 +1559,8 @@ export default function ChatView({
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
+  const [threadFindOpen, setThreadFindOpen] = useState(false);
+  const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
@@ -1577,6 +1579,7 @@ export default function ChatView({
       setComposerCommandPicker(null);
       setIsModelPickerOpen(false);
       setIsTraitsPickerOpen(false);
+      setThreadFindOpen(false);
     }, 0);
     return () => window.clearTimeout(settle);
   }, [threadId]);
@@ -6397,6 +6400,15 @@ export default function ChatView({
         return;
       }
 
+      if (command === "chat.find") {
+        if (isCenteredEmptyLanding) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setThreadFindOpen(true);
+        setThreadFindFocusNonce((current) => current + 1);
+        return;
+      }
+
       if (command === "modelPicker.toggle") {
         if (!composerPickerShortcutActive) return;
         event.preventDefault();
@@ -6631,6 +6643,7 @@ export default function ChatView({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    isCenteredEmptyLanding,
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
@@ -12161,6 +12174,9 @@ export default function ChatView({
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
+                    threadFindOpen={threadFindOpen}
+                    threadFindFocusNonce={threadFindFocusNonce}
+                    onCloseThreadFind={() => setThreadFindOpen(false)}
                     pinnedMessageIds={pinnedMessageIds}
                     canPinMessage={canPinMessage}
                     onTogglePinMessage={handleTogglePinMessageGuarded}

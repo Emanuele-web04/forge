@@ -23,12 +23,15 @@ import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
+import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
 import { composerOverlayAffordanceBottomPx } from "./composerOverlay";
 import { MessageTrail } from "./MessageTrail";
 import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
+import { ThreadFindBar } from "./ThreadFindBar";
+import { type ThreadFindHighlight, type ThreadFindMatch } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 
@@ -105,6 +108,9 @@ interface ChatTranscriptPaneProps {
     typeof MessagesTimeline
   >["worktreeSetupPendingAction"];
   onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
+  threadFindOpen?: boolean;
+  threadFindFocusNonce?: number;
+  onCloseThreadFind?: () => void;
 }
 
 export function ChatTranscriptPane({
@@ -174,6 +180,9 @@ export function ChatTranscriptPane({
   worktreeSetup,
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
+  threadFindOpen: threadFindOpenProp,
+  threadFindFocusNonce: threadFindFocusNonceProp,
+  onCloseThreadFind,
 }: ChatTranscriptPaneProps) {
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
@@ -194,8 +203,17 @@ export function ChatTranscriptPane({
   // highlights can't linger.
   const trailItems = deriveMessageTrailItems(timelineEntries);
   const [activeTrailStore] = useState(() => createActiveTrailStore());
+  const threadFindOpen = threadFindOpenProp ?? false;
+  const threadFindFocusNonce = threadFindFocusNonceProp ?? 0;
+  const [findHighlight, setFindHighlight] = useState<ThreadFindHighlight | null>(null);
+  const handleFindJump = (match: ThreadFindMatch) => {
+    timelineControllerRef?.current?.scrollToMessage(match.messageId, {
+      ...(match.segmentIndex === undefined ? {} : { segmentIndex: match.segmentIndex }),
+    });
+  };
   useEffect(() => {
     activeTrailStore.set(null);
+    setFindHighlight(null);
   }, [activeThreadId, activeTrailStore]);
   const handleTrailSelect = (messageId: MessageId) => {
     timelineControllerRef?.current?.scrollToMessage(messageId);
@@ -281,6 +299,7 @@ export function ChatTranscriptPane({
             contentInsetBottomPx={contentInsetBottomPx}
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+            findHighlight={findHighlight}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />
@@ -323,6 +342,25 @@ export function ChatTranscriptPane({
             >
               <ArrowDownIcon className="size-3.5" />
             </button>
+          </div>
+        ) : null}
+
+        {!agentActivityDetail && onCloseThreadFind ? (
+          <div className="pointer-events-none absolute right-2 top-2 z-20 flex justify-end">
+            <DisclosureRegion
+              open={threadFindOpen}
+              className={threadFindOpen ? "pointer-events-auto" : "pointer-events-none"}
+            >
+              <ThreadFindBar
+                key={activeThreadId}
+                open={threadFindOpen}
+                focusNonce={threadFindFocusNonce}
+                timelineEntries={timelineEntries}
+                onClose={onCloseThreadFind}
+                onJump={handleFindJump}
+                onHighlightChange={setFindHighlight}
+              />
+            </DisclosureRegion>
           </div>
         ) : null}
 
