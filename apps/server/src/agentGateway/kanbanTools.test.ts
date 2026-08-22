@@ -37,17 +37,21 @@ const otherContext: ToolContext = {
 };
 
 function makeProjectShell(
-  projectId: string,
-  title: string,
+  projectId = "project-a",
+  title = "Project A",
   workspaceRoot = `/repos/${title}`,
   kind: "project" | "chat" = "project",
 ) {
   return { id: ProjectId.makeUnsafe(projectId), title, kind, workspaceRoot } as const;
 }
 
+type ProjectShellRow = ReturnType<typeof makeProjectShell>;
+
+const projectA = [makeProjectShell()];
+
 function makeThreadShell(
   threadId: string,
-  projectId: string,
+  projectId = "project-a",
   overrides: Partial<OrchestrationThreadShell> = {},
 ): OrchestrationThreadShell {
   return {
@@ -85,16 +89,11 @@ function makeThreadShell(
   };
 }
 
+/** Completed-turn shell with an idle live session row (a settled card). */
 function makeSessionShell(
   threadId: string,
-  projectId: string,
-  overrides: {
-    latestTurn?: OrchestrationThreadShell["latestTurn"];
-    session?: OrchestrationThreadShell["session"];
-    hasPendingApprovals?: boolean;
-    hasPendingUserInput?: boolean;
-    updatedAt?: string;
-  } = {},
+  projectId = "project-a",
+  overrides: Partial<OrchestrationThreadShell> = {},
 ): OrchestrationThreadShell {
   return makeThreadShell(threadId, projectId, {
     latestTurn: {
@@ -118,27 +117,37 @@ function makeSessionShell(
   });
 }
 
+/** Settled card whose turn is running against a live session row. */
+const makeRunningShell = (threadId: string): OrchestrationThreadShell =>
+  makeSessionShell(threadId, "project-a", {
+    latestTurn: {
+      ...makeSessionShell(threadId).latestTurn!,
+      state: "running",
+      completedAt: null,
+    },
+    session: {
+      threadId: ThreadId.makeUnsafe(threadId),
+      status: "running",
+      providerName: "codex",
+      runtimeMode: "approval-required",
+      activeTurnId: TurnId.makeUnsafe(`turn-${threadId}`),
+      lastError: null,
+      updatedAt: NOW_ISO,
+    },
+  });
+
 function makeSnapshot(
   threads: ReadonlyArray<OrchestrationThreadShell>,
-  projects: ReadonlyArray<{
-    id: ReturnType<typeof ProjectId.makeUnsafe>;
-    title: string;
-    kind: string;
-    workspaceRoot: string;
-  }>,
+  projects: ReadonlyArray<ProjectShellRow>,
 ): ProjectionSnapshotQueryShape {
   return {
-    getShellSnapshot: () =>
-      Effect.succeed({
-        projects: [...projects],
-        threads: [...threads],
-      }),
+    getShellSnapshot: () => Effect.succeed({ projects: [...projects], threads: [...threads] }),
   } as unknown as ProjectionSnapshotQueryShape;
 }
 
 function makeTools(input: {
   threads: ReadonlyArray<OrchestrationThreadShell>;
-  projects: ReturnType<typeof makeProjectShell>[];
+  projects?: ReadonlyArray<ProjectShellRow>;
   runCreateThreads?: (args: unknown) => unknown;
   startTurn?: (args: unknown) => unknown;
   interruptTurn?: (args: unknown) => unknown;
@@ -148,7 +157,7 @@ function makeTools(input: {
   const interrupted: Array<{ threadId: string }> = [];
   const created: Array<unknown> = [];
   const tools = makeAgentGatewayKanbanTools({
-    snapshotQuery: makeSnapshot(input.threads, input.projects),
+    snapshotQuery: makeSnapshot(input.threads, input.projects ?? projectA),
     workspacePaths: WORKSPACE_PATHS,
     now: () => NOW_MS,
     helpers: {
@@ -156,7 +165,7 @@ function makeTools(input: {
         const found = input.threads.find((thread) => String(thread.id) === threadId);
         if (found) return Effect.succeed(found);
         if (threadId === "thread-caller" || threadId === "thread-other") {
-          return Effect.succeed(makeThreadShell(threadId, "project-a"));
+          return Effect.succeed(makeThreadShell(threadId));
         }
         return Effect.fail(new Error(`missing thread ${threadId}`));
       },
@@ -192,86 +201,90 @@ const toolById = (tools: ReadonlyArray<ToolEntry>, name: string): ToolEntry => {
 const runHandler = (tool: ToolEntry, args: Record<string, unknown>, ctx = context) =>
   Effect.runPromise(tool.handler(args, ctx));
 
-const jsonText = (result: McpToolCallResult): Record<string, unknown> => {
+/** Loose view of every kanban payload shape; per-test field reads stay self-documenting. */
+type JsonPayload = Record<string, any>;
+
+const jsonText = (result: McpToolCallResult): JsonPayload => {
   const content = result.content[0];
+  // Surface the raw isError flag alongside the parsed text so callers can
+  // assert error-ness and payload fields against one view.
   if (result.isError) {
-    return { __errorText: content?.type === "text" ? content.text : "" };
+    return { isError: true, __errorText: content?.type === "text" ? content.text : "" };
   }
-  return JSON.parse(content?.type === "text" ? content.text : "{}") as Record<string, unknown>;
+  return {
+    isError: false,
+    ...(JSON.parse(content?.type === "text" ? content.text : "{}") as JsonPayload),
+  };
 };
+
+type BoardPayload = {
+  projects: Array<{
+    projectId: string;
+    columns: Array<{ key: string; cards: Array<Record<string, any>> }>;
+  }>;
+  truncated?: boolean;
+  truncatedReason?: string;
+  asOf?: string;
+  callerThreadId?: string;
+};
+
+/** Run the board read and index every project's cards by column key. */
+async function boardByColumn(tools: ReadonlyArray<ToolEntry>, args: Record<string, unknown> = {}) {
+  const payload = jsonText(
+    await runHandler(toolById(tools, "synara_read_kanban_board"), args),
+  ) as BoardPayload & {
+    projects: Array<{
+      columns: Array<{ key: string; cards: Array<{ threadId: string }> }>;
+    }>;
+  };
+  return {
+    payload,
+    columnsOf: (index = 0) =>
+      Object.fromEntries(
+        payload.projects[index]!.columns.map((column) => [column.key, column.cards]),
+      ),
+  };
+}
 
 describe("synara_read_kanban_board", () => {
   it("derives v2 columns + attention flags and skips non-project containers", async () => {
-    const draft = makeThreadShell("thread-draft", "project-a");
-    const running = makeSessionShell("thread-running", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-running", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-running"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-running"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
-    const waiting = makeSessionShell("thread-waiting", "project-a", {
-      hasPendingApprovals: true,
-    });
-    const done = makeSessionShell("thread-done", "project-a");
-    const chatThread = makeThreadShell("thread-chat", "chat-container");
     const { tools } = makeTools({
-      threads: [draft, running, waiting, done, chatThread],
+      threads: [
+        makeThreadShell("thread-draft"),
+        makeRunningShell("thread-running"),
+        makeSessionShell("thread-waiting", "project-a", { hasPendingApprovals: true }),
+        makeSessionShell("thread-done"),
+        makeThreadShell("thread-chat", "chat-container"),
+      ],
       projects: [
-        makeProjectShell("project-a", "Project A"),
+        makeProjectShell(),
         makeProjectShell("chat-container", "Chats", WORKSPACE_PATHS.chatWorkspaceRoot, "chat"),
       ],
     });
-    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
-    const payload = jsonText(result) as {
-      projects: Array<{
-        projectId: string;
-        columns: Array<{
-          key: string;
-          cards: Array<{ threadId: string; column: string; attention: string[] }>;
-        }>;
-      }>;
-    };
 
+    const { payload, columnsOf } = await boardByColumn(tools);
     expect(payload.projects).toHaveLength(1);
-    const project = payload.projects[0];
-    expect(project).toBeTruthy();
-    if (!project) return;
-    expect(project.projectId).toBe("project-a");
-    const byColumn = Object.fromEntries(
-      project.columns.map((column) => [column.key, column.cards]),
-    ) as Record<string, Array<{ threadId: string; column: string; attention: string[] }>>;
-    const draftCards = byColumn.draft ?? [];
-    const waitingCards = byColumn.awaitingYou ?? [];
-    const doneCards = byColumn.done ?? [];
-    const inProgressCards = byColumn.inProgress ?? [];
-    expect(draftCards.map((card) => card.threadId)).toEqual(["thread-draft"]);
-    expect(inProgressCards.map((card) => card.threadId)).toEqual(["thread-running"]);
-    expect(waitingCards.map((card) => card.threadId)).toEqual(["thread-waiting"]);
-    expect(doneCards.map((card) => card.threadId)).toEqual(["thread-done"]);
-    const waitingCard = waitingCards[0];
-    expect(waitingCard).toBeTruthy();
-    expect(waitingCard!.attention).toContain("awaiting-approval");
+    expect(payload.projects[0]!.projectId).toBe("project-a");
+    const byColumn = columnsOf();
+    expect(
+      ["draft", "inProgress", "awaitingYou", "done"].map((key) =>
+        (byColumn[key] ?? []).map((card) => card.threadId),
+      ),
+    ).toEqual([["thread-draft"], ["thread-running"], ["thread-waiting"], ["thread-done"]]);
+    const waitingCard = byColumn.awaitingYou![0]!;
+    expect(waitingCard.attention).toContain("awaiting-approval");
+    // The chat container's thread must not surface on the ordinary-project board.
+    expect(Object.values(byColumn).flatMap((cards) => cards.map((c) => c.threadId))).not.toContain(
+      "thread-chat",
+    );
   });
 
   it("returns an empty board for an unknown projectId and hides archived threads", async () => {
-    const archived = makeThreadShell("thread-archived", "project-a", {
+    const archivedRunning = makeSessionShell("thread-archived", "project-a", {
       latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-thread-archived"),
+        ...makeSessionShell("thread-archived").latestTurn!,
         state: "running",
-        requestedAt: NOW_ISO,
-        startedAt: NOW_ISO,
         completedAt: null,
-        assistantMessageId: null,
       },
       session: {
         threadId: ThreadId.makeUnsafe("thread-archived"),
@@ -284,281 +297,164 @@ describe("synara_read_kanban_board", () => {
       },
       archivedAt: NOW_ISO,
     });
-    const live = makeSessionShell("thread-live", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-live", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-live"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-live"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
     const { tools } = makeTools({
-      threads: [archived, live],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [archivedRunning, makeRunningShell("thread-live")],
     });
 
-    const empty = await runHandler(toolById(tools, "synara_read_kanban_board"), {
-      projectId: "project-nope",
-    });
-    const emptyPayload = jsonText(empty) as {
-      projects: unknown[];
-      asOf?: string;
-      callerThreadId?: string;
-    };
-    expect(emptyPayload.projects).toEqual([]);
-    expect(emptyPayload.asOf).toBe(NOW_ISO);
-    expect(emptyPayload.callerThreadId).toBe("thread-caller");
+    const empty = await boardByColumn(tools, { projectId: "project-nope" });
+    expect(empty.payload.projects).toEqual([]);
+    expect(empty.payload.asOf).toBe(NOW_ISO);
+    expect(empty.payload.callerThreadId).toBe("thread-caller");
 
-    const full = await runHandler(toolById(tools, "synara_read_kanban_board"), {
-      projectId: "project-a",
-    });
-    const fullPayload = jsonText(full) as {
-      projects: Array<{
-        columns: Array<{ cards: Array<{ threadId: string }> }>;
-      }>;
-    };
-    const project = fullPayload.projects[0];
-    expect(project).toBeTruthy();
-    const cardIds =
-      project?.columns.flatMap((column) => column.cards.map((card) => card.threadId)) ?? [];
+    const full = await boardByColumn(tools, { projectId: "project-a" });
+    const cardIds = full.payload.projects.flatMap((project) =>
+      project.columns.flatMap((column) => column.cards.map((card) => card.threadId)),
+    );
     expect(cardIds).toContain("thread-live");
     expect(cardIds).not.toContain("thread-archived");
   });
 
   it("filters to one project and exposes card metadata", async () => {
-    const running = makeSessionShell("thread-a", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-a", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-a"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-a"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
-    const other = makeThreadShell("thread-b", "project-b");
     const { tools } = makeTools({
-      threads: [running, other],
-      projects: [
-        makeProjectShell("project-a", "Project A"),
-        makeProjectShell("project-b", "Project B"),
-      ],
+      threads: [makeRunningShell("thread-a"), makeThreadShell("thread-b", "project-b")],
+      projects: [makeProjectShell(), makeProjectShell("project-b", "Project B")],
     });
 
-    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {
-      projectId: "project-a",
-    });
-    const payload = jsonText(result) as {
-      projects: Array<{
-        projectId: string;
-        columns: Array<{
-          cards: Array<{
-            threadId: string;
-            branch: string | null;
-            model: string;
-            summary: unknown;
-          }>;
-        }>;
-      }>;
-    };
+    const { payload, columnsOf } = await boardByColumn(tools, { projectId: "project-a" });
     expect(payload.projects).toHaveLength(1);
-    const project = payload.projects[0];
-    expect(project).toBeTruthy();
-    if (!project) return;
-    const inProgress = project.columns.find((column) => (column.cards.length ?? 0) > 0);
-    expect(inProgress).toBeTruthy();
-    const card = inProgress?.cards[0] ?? null;
-    expect(card).toBeTruthy();
-    expect(card?.threadId).toBe("thread-a");
-    expect(card?.model).toBe("gpt-5.6-sol");
-    expect(card?.summary).toBeTruthy();
+    const populatedColumns = payload.projects[0]!.columns.filter(
+      (column) => column.cards.length > 0,
+    );
+    expect(populatedColumns).toHaveLength(1);
+    const card = columnsOf().inProgress![0]!;
+    expect(card.threadId).toBe("thread-a");
+    expect(card.model).toBe("gpt-5.6-sol");
+    expect(card.summary).toBeTruthy();
   });
 
-  it("caps the board at MAX_CARDS_PER_BOARD and reports truncated", async () => {
-    // 501 threads (one over the cap) across two projects.
-    const threads: OrchestrationThreadShell[] = [];
-    for (let index = 0; index < 501; index += 1) {
-      threads.push(makeThreadShell(`thread-${index}`, "project-a"));
-    }
-    const { tools } = makeTools({
-      threads,
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
+  it("caps the board at MAX_CARDS_PER_BOARD and reports truncated with a fallback hint", async () => {
+    const threads = Array.from({ length: 501 }, (_, index) => makeThreadShell(`thread-${index}`));
+    const { tools } = makeTools({ threads });
 
-    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
-    const payload = jsonText(result) as {
-      truncated: boolean;
-      truncatedReason?: string;
-      projects: Array<{ columns: Array<{ cards: unknown[] }> }>;
-    };
+    const { payload } = await boardByColumn(tools);
     expect(payload.truncated).toBe(true);
     expect(payload.truncatedReason).toContain("synara_read_kanban_card");
-    const totalCards = payload.projects[0]!.columns.reduce(
-      (sum, column) => sum + column.cards.length,
+    const totalCards = payload.projects.reduce(
+      (sum, project) =>
+        sum + project.columns.reduce((columnSum, column) => columnSum + column.cards.length, 0),
       0,
     );
     expect(totalCards).toBe(500);
   });
 
-  it("omits projects past the board cap instead of emitting empty columns", async () => {
-    const threads: OrchestrationThreadShell[] = [];
-    for (let index = 0; index < 500; index += 1) {
-      threads.push(makeThreadShell(`thread-a-${index}`, "project-a"));
-    }
-    threads.push(makeThreadShell("thread-b-0", "project-b"));
+  it("omits projects past the board cap instead of emitting empty ghost columns", async () => {
     const { tools } = makeTools({
-      threads,
-      projects: [makeProjectShell("project-a", "Project A"), makeProjectShell("project-b", "B")],
+      threads: [
+        ...Array.from({ length: 500 }, (_, index) => makeThreadShell(`thread-a-${index}`)),
+        makeThreadShell("thread-b-0", "project-b"),
+      ],
+      projects: [makeProjectShell(), makeProjectShell("project-b", "B")],
     });
 
-    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
-    const payload = jsonText(result) as {
-      truncated: boolean;
-      projects: Array<{ projectId: string }>;
-    };
+    const { payload } = await boardByColumn(tools);
     expect(payload.truncated).toBe(true);
     expect(payload.projects.map((project) => project.projectId)).toEqual(["project-a"]);
   });
 
   it("does not report truncated under the cap", async () => {
-    const { tools } = makeTools({
-      threads: [makeThreadShell("thread-draft", "project-a")],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-    const result = await runHandler(toolById(tools, "synara_read_kanban_board"), {});
-    const payload = jsonText(result) as { truncated: boolean };
+    const { tools } = makeTools({ threads: [makeThreadShell("thread-draft")] });
+    const { payload } = await boardByColumn(tools);
     expect(payload.truncated).toBe(false);
   });
 });
 
 describe("synara_read_kanban_card", () => {
   it("returns the single card with column and attention flags", async () => {
-    const waiting = makeSessionShell("thread-waiting", "project-a", {
-      hasPendingApprovals: true,
-    });
     const { tools } = makeTools({
-      threads: [waiting],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeSessionShell("thread-waiting", "project-a", { hasPendingApprovals: true })],
     });
 
-    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
-      threadId: "thread-waiting",
-    });
-    const payload = jsonText(result) as {
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_read_kanban_card"), {
+        threadId: "thread-waiting",
+      }),
+    ) as {
       card: { threadId: string; column: string; attention: string[]; model: string };
       asOf: string;
       callerThreadId: string;
     };
-    expect(payload.card.threadId).toBe("thread-waiting");
-    expect(payload.card.column).toBe("awaitingYou");
-    expect(payload.card.attention).toContain("awaiting-approval");
-    expect(payload.card.model).toBe("gpt-5.6-sol");
-    expect(payload.asOf).toBe(NOW_ISO);
-    expect(payload.callerThreadId).toBe("thread-caller");
+    expect(result.card.threadId).toBe("thread-waiting");
+    expect(result.card.column).toBe("awaitingYou");
+    expect(result.card.attention).toContain("awaiting-approval");
+    expect(result.card.model).toBe("gpt-5.6-sol");
+    expect(result.asOf).toBe(NOW_ISO);
+    expect(result.callerThreadId).toBe("thread-caller");
   });
 
-  it("rejects a missing thread with an error result", async () => {
-    const { tools } = makeTools({
-      threads: [],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-
-    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
-      threadId: "thread-missing",
-    });
-    expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("thread-missing");
-  });
-
-  it("rejects an archived thread", async () => {
-    const archived = makeThreadShell("thread-archived", "project-a", {
-      archivedAt: NOW_ISO,
-    });
-    const { tools } = makeTools({
-      threads: [archived],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-
-    const result = await runHandler(toolById(tools, "synara_read_kanban_card"), {
+  it.each([
+    { label: "missing", threadId: "thread-missing", errorPart: "thread-missing" },
+    {
+      label: "archived",
       threadId: "thread-archived",
+      errorPart: "archived",
+      archived: true as const,
+    },
+  ])("rejects a $label thread with an error result", async ({ threadId, errorPart, archived }) => {
+    const { tools } = makeTools({
+      threads: [makeThreadShell("thread-archived", "project-a", { archivedAt: NOW_ISO })].filter(
+        () => archived,
+      ),
     });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_read_kanban_card"), { threadId }),
+    );
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("archived");
+    expect(result.__errorText).toContain(errorPart);
   });
 });
 
 describe("synara_create_kanban_task", () => {
+  const createOk = (threadIds: string[]) =>
+    Effect.succeed(
+      mcpOk({
+        operationId: "op-1",
+        requestedCount: threadIds.length,
+        createdCount: threadIds.length,
+        threadIds,
+        threads: threadIds.map((threadId) => ({ index: 0, threadId, title: "created" })),
+      }),
+    );
+
   it("forwards the spec to runCreateThreads and returns threadId + card", async () => {
-    const createdThread = makeSessionShell("thread-created", "project-a");
     const { tools, created } = makeTools({
-      threads: [createdThread],
-      projects: [makeProjectShell("project-a", "Project A")],
-      runCreateThreads: () =>
-        Effect.succeed(
-          mcpOk({
-            operationId: "op-1",
-            requestedCount: 1,
-            createdCount: 1,
-            threadIds: ["thread-created"],
-            threads: [{ index: 0, threadId: "thread-created", title: "created" }],
-          }),
-        ),
+      threads: [makeSessionShell("thread-created")],
+      runCreateThreads: () => createOk(["thread-created"]),
     });
 
-    const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
-      title: "Fix bug",
-      requestId: "req-1",
-    });
-    const payload = jsonText(result) as {
-      threadId: string;
-      title: string;
-      card: { column: string };
-    };
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_task"), {
+        title: "Fix bug",
+        requestId: "req-1",
+      }),
+    ) as { threadId: string; title: string; card: { column: string } };
     expect(created).toHaveLength(1);
     const spec = (
       created[0] as {
         threads: Array<{ title: string; prompt: string; target: { provider: string } }>;
       }
-    ).threads[0];
-    expect(spec).toBeTruthy();
-    expect(spec!.title).toBe("Fix bug");
-    expect(spec!.prompt).toBe("Fix bug");
-    expect(spec!.target.provider).toBe("claudeAgent");
-    expect(payload.threadId).toBe("thread-created");
-    expect(payload.card.column).toBe("done");
+    ).threads[0]!;
+    expect(spec.title).toBe("Fix bug");
+    expect(spec.prompt).toBe("Fix bug");
+    expect(spec.target.provider).toBe("claudeAgent");
+    expect(result.threadId).toBe("thread-created");
+    expect(result.card.column).toBe("done");
   });
 
   it("uses description as the first-turn prompt and forwards projectId", async () => {
-    const createdThread = makeSessionShell("thread-created", "project-a");
     const { tools, created } = makeTools({
-      threads: [createdThread],
-      projects: [makeProjectShell("project-a", "Project A")],
-      runCreateThreads: () =>
-        Effect.succeed(
-          mcpOk({
-            operationId: "op-2",
-            requestedCount: 1,
-            createdCount: 1,
-            threadIds: ["thread-created"],
-            threads: [{ index: 0, threadId: "thread-created", title: "created" }],
-          }),
-        ),
+      threads: [makeSessionShell("thread-created")],
+      runCreateThreads: () => createOk(["thread-created"]),
     });
 
     const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
@@ -569,20 +465,15 @@ describe("synara_create_kanban_task", () => {
     });
     expect(result.isError).toBeFalsy();
     expect(created).toHaveLength(1);
-    const spec = (
-      created[0] as {
-        threads: Array<{ title: string; prompt: string; projectId: string }>;
-      }
-    ).threads[0];
-    expect(spec).toBeTruthy();
-    expect(spec!.prompt).toBe("Investigate the flaky test first.");
-    expect(spec!.projectId).toBe("project-a");
+    const spec = (created[0] as { threads: Array<{ prompt: string; projectId: string }> })
+      .threads[0]!;
+    expect(spec.prompt).toBe("Investigate the flaky test first.");
+    expect(spec.projectId).toBe("project-a");
   });
 
   it("returns the failed creation result untouched as isError", async () => {
     const { tools } = makeTools({
       threads: [],
-      projects: [makeProjectShell("project-a", "Project A")],
       runCreateThreads: () =>
         Effect.succeed({
           isError: true,
@@ -595,12 +486,10 @@ describe("synara_create_kanban_task", () => {
       requestId: "req-3",
     });
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("creation failed");
+    expect((jsonText(result) as { __errorText?: string }).__errorText).toContain("creation failed");
   });
 
   it("rejects concurrent writes past the per-caller in-flight cap", async () => {
-    const createdThread = makeSessionShell("thread-created", "project-a");
     // Block runCreateThreads until every slot-holder is released, so the
     // in-flight count stays at the cap while the over-cap call arrives.
     let release: () => void = () => undefined;
@@ -608,26 +497,23 @@ describe("synara_create_kanban_task", () => {
       release = resolve;
     });
     const { tools } = makeTools({
-      threads: [createdThread],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeSessionShell("thread-created")],
       runCreateThreads: () => Effect.promise(() => held.then(() => mcpOk({}))),
     });
     const tool = toolById(tools, "synara_create_kanban_task");
     const args = { title: "Fix bug" };
 
     // Fire 4 held calls (filling the cap) plus a 5th that must be rejected.
-    const heldResults = [
-      runHandler(tool, { ...args, requestId: "req-a" }),
-      runHandler(tool, { ...args, requestId: "req-b" }),
-      runHandler(tool, { ...args, requestId: "req-c" }),
-      runHandler(tool, { ...args, requestId: "req-d" }),
-    ];
+    const heldResults = ["a", "b", "c", "d"].map((suffix) =>
+      runHandler(tool, { ...args, requestId: `req-${suffix}` }),
+    );
     // Yield so the held calls enter runCreateThreads and hold their slots.
     await Promise.resolve();
     const overCap = await runHandler(tool, { ...args, requestId: "req-e" });
     expect(overCap.isError).toBe(true);
-    const overCapPayload = jsonText(overCap) as { __errorText?: string };
-    expect(overCapPayload.__errorText).toContain("Too many concurrent kanban write calls");
+    expect((jsonText(overCap) as { __errorText?: string }).__errorText).toContain(
+      "Too many concurrent kanban write calls",
+    );
 
     // Release the held calls so they settle and the process can exit.
     release();
@@ -636,22 +522,25 @@ describe("synara_create_kanban_task", () => {
 });
 
 describe("synara_move_kanban_card", () => {
-  it("starts a turn with an explicit message on a draft card", async () => {
-    const draft = makeThreadShell("thread-draft", "project-a");
-    const { tools, started } = makeTools({
-      threads: [draft],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
+  const move = async (
+    tools: ReadonlyArray<ToolEntry>,
+    threadId: string,
+    target: string,
+    extra: Record<string, unknown> = {},
+    ctx: ToolContext = context,
+  ) =>
+    jsonText(
+      await runHandler(
+        toolById(tools, "synara_move_kanban_card"),
+        { threadId, target, ...extra },
+        ctx,
+      ),
+    );
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-draft",
-      target: "inProgress",
-      message: "Start this work",
-    });
-    const payload = jsonText(result) as {
-      turnStarted: boolean;
-      card: { column: string };
-    };
+  it("starts a turn with an explicit message on a draft card", async () => {
+    const { tools, started } = makeTools({ threads: [makeThreadShell("thread-draft")] });
+
+    const result = await move(tools, "thread-draft", "inProgress", { message: "Start this work" });
     expect(started).toEqual([
       {
         threadId: "thread-draft",
@@ -661,209 +550,99 @@ describe("synara_move_kanban_card", () => {
         interactionMode: "default",
       },
     ]);
-    expect(payload.turnStarted).toBe(true);
-    expect(payload.card.column).toBe("inProgress");
+    expect(result.turnStarted).toBe(true);
+    expect(result.card.column).toBe("inProgress");
   });
 
   it("interrupts a live turn for target done", async () => {
-    const running = makeSessionShell("thread-live", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-live", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-live"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-live"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
-    const { tools, interrupted } = makeTools({
-      threads: [running],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
+    const { tools, interrupted } = makeTools({ threads: [makeRunningShell("thread-live")] });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-live",
-      target: "done",
-    });
-    const payload = jsonText(result) as {
-      interruptRequested: boolean;
-      eventSequence: number;
-    };
+    const result = await move(tools, "thread-live", "done");
     expect(interrupted).toEqual([{ threadId: "thread-live" }]);
-    expect(payload.interruptRequested).toBe(true);
-    expect(payload.eventSequence).toBe(7);
+    expect(result.interruptRequested).toBe(true);
+    expect(result.eventSequence).toBe(7);
   });
 
   it("is a no-op for a card already inProgress", async () => {
-    const running = makeSessionShell("thread-live", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-live", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-live"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-live"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
-    const { tools, started } = makeTools({
-      threads: [running],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
+    const { tools, started } = makeTools({ threads: [makeRunningShell("thread-live")] });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-live",
-      target: "inProgress",
-    });
-    const payload = jsonText(result) as {
-      alreadyInProgress: boolean;
-    };
-    expect(payload.alreadyInProgress).toBe(true);
+    const result = await move(tools, "thread-live", "inProgress");
+    expect(result.alreadyInProgress).toBe(true);
     expect(started).toHaveLength(0);
   });
 
   it("is a no-op for an already-done card", async () => {
-    const done = makeSessionShell("thread-done", "project-a");
-    const { tools, interrupted } = makeTools({
-      threads: [done],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
+    const { tools, interrupted } = makeTools({ threads: [makeSessionShell("thread-done")] });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-done",
-      target: "done",
-    });
-    const payload = jsonText(result) as {
-      alreadyDone: boolean;
-    };
-    expect(payload.alreadyDone).toBe(true);
+    const result = await move(tools, "thread-done", "done");
+    expect(result.alreadyDone).toBe(true);
     expect(interrupted).toHaveLength(0);
   });
 
-  it("rejects a missing thread with an error result", async () => {
-    const { tools } = makeTools({
-      threads: [],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-missing",
-      target: "done",
-    });
-    expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("thread-missing");
-  });
-
-  it("rejects an unknown target", async () => {
-    const draft = makeThreadShell("thread-draft", "project-a");
-    const { tools, started } = makeTools({
-      threads: [draft],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-draft",
-      target: "awaitingYou",
-    });
-    expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain('must be "inProgress" or "done"');
-    expect(started).toHaveLength(0);
-  });
-
-  it("rejects restarting a settled thread without a message", async () => {
-    const done = makeSessionShell("thread-done", "project-a");
-    const { tools, started } = makeTools({
-      threads: [done],
-      projects: [makeProjectShell("project-a", "Project A")],
-    });
-
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
+  it.each([
+    {
+      label: "settled-without-message",
       threadId: "thread-done",
       target: "inProgress",
-    });
-    expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain('"message" is required to restart a settled thread');
-    expect(started).toHaveLength(0);
-  });
-
-  it("returns an error result when the start dispatch fails", async () => {
-    const draft = makeThreadShell("thread-draft", "project-a");
-    const { tools } = makeTools({
-      threads: [draft],
-      projects: [makeProjectShell("project-a", "Project A")],
-      startTurn: () => Effect.fail(new Error("start exploded")),
-    });
-
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
+      expected: '"message" is required to restart a settled thread',
+    },
+    // startTurn dispatch itself fails: the tool must convert it to a tool error.
+    {
+      label: "dispatch-fail",
       threadId: "thread-draft",
       target: "inProgress",
       message: "Start this work",
+      failStartTurn: true as const,
+      expected: "start exploded",
+    },
+  ])("rejects $label", async ({ threadId, target, message, failStartTurn, expected }) => {
+    const { tools, started } = makeTools({
+      threads:
+        threadId === "thread-done"
+          ? [makeSessionShell("thread-done")]
+          : [makeThreadShell("thread-draft")],
+      ...(failStartTurn ? { startTurn: () => Effect.fail(new Error("start exploded")) } : {}),
     });
+
+    const result = await move(tools, threadId, target, message ? { message } : {});
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("start exploded");
+    expect(result.__errorText).toContain(expected);
+    if (!failStartTurn) expect(started).toHaveLength(0);
   });
 
   it("returns alreadyDone for a settled thread with target done and no live turn", async () => {
-    const settled = makeSessionShell("thread-waiting", "project-a", {
-      hasPendingApprovals: true,
-    });
     const { tools, interrupted } = makeTools({
-      threads: [settled],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeSessionShell("thread-waiting", "project-a", { hasPendingApprovals: true })],
     });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-waiting",
-      target: "done",
-    });
-    const payload = jsonText(result) as {
-      alreadyDone: boolean;
-      card: { column: string };
-    };
-    expect(payload.alreadyDone).toBe(true);
-    expect(payload.card.column).toBe("awaitingYou");
+    const result = await move(tools, "thread-waiting", "done");
+    expect(result.alreadyDone).toBe(true);
+    expect(result.card.column).toBe("awaitingYou");
     expect(interrupted).toHaveLength(0);
   });
 
   it("rejects a cross-thread drive without authority", async () => {
-    const draft = makeThreadShell("thread-draft", "project-a");
     const { tools, started } = makeTools({
-      threads: [draft],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeThreadShell("thread-draft")],
       assertCallerMayDriveThread: (() =>
         Effect.fail(
           new Error("assertCallerMayDriveThread failed"),
         ) as unknown) as () => Effect.Effect<void>,
     });
-    const fenceTool = toolById(tools, "synara_move_kanban_card");
     const fencedContext: ToolContext = {
       ...otherContext,
       assertCallerTurnActive: () => Effect.void,
     };
 
-    const result = await runHandler(
-      fenceTool,
-      { threadId: "thread-draft", target: "inProgress", message: "nope" },
+    const result = await move(
+      tools,
+      "thread-draft",
+      "inProgress",
+      { message: "nope" },
       fencedContext,
     );
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("assertCallerMayDriveThread failed");
+    expect(result.__errorText).toContain("assertCallerMayDriveThread failed");
     expect(started).toHaveLength(0);
   });
 
@@ -871,55 +650,25 @@ describe("synara_move_kanban_card", () => {
     { target: "inProgress", extraArgs: { message: "hi" } },
     { target: "done", extraArgs: {} },
   ] as const)("rejects an archived thread for target $target", async ({ target, extraArgs }) => {
-    const archived = makeThreadShell("thread-archived", "project-a", {
-      archivedAt: NOW_ISO,
-    });
     const { tools, started, interrupted } = makeTools({
-      threads: [archived],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeThreadShell("thread-archived", "project-a", { archivedAt: NOW_ISO })],
     });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-archived",
-      target,
-      ...extraArgs,
-    });
+    const result = await move(tools, "thread-archived", target, extraArgs);
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("archived");
+    expect(result.__errorText).toContain("archived");
     expect(started).toHaveLength(0);
     expect(interrupted).toHaveLength(0);
   });
 
   it("returns an error result when the interrupt dispatch fails", async () => {
-    const running = makeSessionShell("thread-live", "project-a", {
-      latestTurn: {
-        ...makeSessionShell("thread-live", "project-a").latestTurn!,
-        state: "running",
-        completedAt: null,
-      },
-      session: {
-        threadId: ThreadId.makeUnsafe("thread-live"),
-        status: "running",
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: TurnId.makeUnsafe("turn-thread-live"),
-        lastError: null,
-        updatedAt: NOW_ISO,
-      },
-    });
     const { tools } = makeTools({
-      threads: [running],
-      projects: [makeProjectShell("project-a", "Project A")],
+      threads: [makeRunningShell("thread-live")],
       interruptTurn: () => Effect.fail(new Error("provider exploded")),
     });
 
-    const result = await runHandler(toolById(tools, "synara_move_kanban_card"), {
-      threadId: "thread-live",
-      target: "done",
-    });
+    const result = await move(tools, "thread-live", "done");
     expect(result.isError).toBe(true);
-    const payload = jsonText(result) as { __errorText?: string };
-    expect(payload.__errorText).toContain("provider exploded");
+    expect(result.__errorText).toContain("provider exploded");
   });
 });

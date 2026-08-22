@@ -15,6 +15,44 @@ import type { ToolEntry } from "./toolRuntime.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
 
+const WORKSPACE_PATHS = { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" };
+
+/** Minimal ordinary-project row for the board snapshot fixtures. */
+const projectRow = (projectId: string) => ({
+  id: ProjectId.makeUnsafe(projectId),
+  title: "Project A",
+  kind: "project" as const,
+  workspaceRoot: "/repos/Project A",
+});
+
+/**
+ * Wire a kanban tool against the transport harness with the standard test
+ * helpers; `helpers` overrides only what a scenario needs to observe.
+ */
+function makeKanbanTool(
+  name: string,
+  threads: ReadonlyArray<OrchestrationThreadShell>,
+  helpers: Partial<Parameters<typeof makeAgentGatewayKanbanTools>[0]["helpers"]> = {},
+): ToolEntry {
+  return makeAgentGatewayKanbanTools({
+    snapshotQuery: {
+      getShellSnapshot: () =>
+        Effect.succeed({ projects: [projectRow("project-a")], threads: [...threads] }),
+    } as unknown as ProjectionSnapshotQueryShape,
+    workspacePaths: WORKSPACE_PATHS,
+    now: () => Date.parse(NOW),
+    helpers: {
+      requireThreadShell: (threadId) =>
+        Effect.succeed(threads.find((thread) => String(thread.id) === threadId) ?? threads[0]!),
+      assertCallerMayDriveThread: () => Effect.void,
+      runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
+      startTurn: (() => Effect.succeed({})) as never,
+      interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
+      ...helpers,
+    },
+  }).find((entry) => entry.definition.name === name)!;
+}
+
 function makeThread(threadId: string): OrchestrationThreadShell {
   return {
     id: ThreadId.makeUnsafe(threadId),
@@ -195,31 +233,7 @@ describe("agent gateway kanban tools", () => {
       const draft = { ...makeThread("thread-draft"), projectId: ProjectId.makeUnsafe("project-a") };
       const transport = makeTransport({
         threads: [draft],
-        tool: makeAgentGatewayKanbanTools({
-          snapshotQuery: {
-            getShellSnapshot: () =>
-              Effect.succeed({
-                projects: [
-                  {
-                    id: ProjectId.makeUnsafe("project-a"),
-                    title: "Project A",
-                    kind: "project" as const,
-                    workspaceRoot: "/repos/Project A",
-                  },
-                ],
-                threads: [draft],
-              }),
-          } as unknown as ProjectionSnapshotQueryShape,
-          workspacePaths: { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" },
-          now: () => Date.parse(NOW),
-          helpers: {
-            requireThreadShell: (threadId) => Effect.succeed(draft),
-            assertCallerMayDriveThread: () => Effect.void,
-            runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
-            startTurn: (() => Effect.succeed({})) as never,
-            interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
-          },
-        }).find((entry) => entry.definition.name === "synara_read_kanban_board")!,
+        tool: makeKanbanTool("synara_read_kanban_board", [draft]),
       });
 
       const response = yield* post(transport, "token-1", {
@@ -253,35 +267,16 @@ describe("agent gateway kanban tools", () => {
       let startRequests: Array<{ threadId: string; message: string }> = [];
       const transport = makeTransport({
         threads: [caller, target],
-        tool: makeAgentGatewayKanbanTools({
-          snapshotQuery: {
-            getShellSnapshot: () =>
-              Effect.succeed({
-                projects: [
-                  {
-                    id: ProjectId.makeUnsafe("project-a"),
-                    title: "Project A",
-                    kind: "project" as const,
-                    workspaceRoot: "/repos/Project A",
-                  },
-                ],
-                threads: [caller, target],
-              }),
-          } as unknown as ProjectionSnapshotQueryShape,
-          workspacePaths: { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" },
-          now: () => Date.parse(NOW),
-          helpers: {
-            requireThreadShell: (threadId) =>
-              Effect.succeed(threadId === "thread-target" ? target : caller),
-            assertCallerMayDriveThread: () => Effect.void,
-            runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
-            startTurn: ((input: { threadId: string; message: string }) => {
-              startRequests = [...startRequests, input];
-              return Effect.succeed({ sequence: 42 });
-            }) as never,
-            interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
-          },
-        }).find((entry) => entry.definition.name === "synara_move_kanban_card")!,
+        tool: makeKanbanTool("synara_move_kanban_card", [caller, target], {
+          requireThreadShell: (threadId) =>
+            Effect.succeed(
+              [caller, target].find((thread) => String(thread.id) === threadId) ?? caller,
+            ),
+          startTurn: ((input: { threadId: string; message: string }) => {
+            startRequests = [...startRequests, input];
+            return Effect.succeed({ sequence: 42 });
+          }) as never,
+        }),
       });
 
       const response = yield* post(transport, "token-1", {

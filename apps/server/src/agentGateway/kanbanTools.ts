@@ -33,31 +33,28 @@ import { summarizeThreadShell } from "./threadSummary.ts";
 
 /**
  * Server-side adapter from a durable `OrchestrationThreadShell` into the shared
- * `KanbanThreadDerivationInput`. Mirrors the web adapter in
- * `apps/web/src/components/kanban/kanban.logic.ts` so the read tool's columns and
- * attention flags match the v2 board for the same thread (column parity).
- *
- * The server reads the durable shell directly, so there is no frozen-summary
- * caveat (see the web adapter's streaming freeze note); the shell `updatedAt`
- * advances on every appended message.
+ * `KanbanThreadDerivationInput`, mirroring the web adapter so columns and flags
+ * match the v2 board for the same thread (column parity). The durable shell's
+ * `updatedAt` advances on every appended message (no frozen-summary caveat).
  */
 function toKanbanThreadDerivationInput(
   thread: OrchestrationThreadShell,
 ): KanbanThreadDerivationInput {
   const updatedAtMs = Date.parse(thread.updatedAt ?? "");
+  const { latestTurn, session } = thread;
   return {
-    latestTurn: thread.latestTurn
+    latestTurn: latestTurn
       ? {
-          state: thread.latestTurn.state,
-          startedAt: thread.latestTurn.startedAt,
-          completedAt: thread.latestTurn.completedAt,
+          state: latestTurn.state,
+          startedAt: latestTurn.startedAt,
+          completedAt: latestTurn.completedAt,
         }
       : null,
-    session: thread.session
+    session: session
       ? {
-          status: thread.session.status,
-          updatedAt: thread.session.updatedAt,
-          lastError: thread.session.lastError ?? null,
+          status: session.status,
+          updatedAt: session.updatedAt,
+          lastError: session.lastError ?? null,
         }
       : null,
     threadUpdatedAt: thread.updatedAt ?? null,
@@ -101,11 +98,6 @@ const MAX_CARDS_PER_BOARD = 500;
 function deriveCard(thread: OrchestrationThreadShell, now: number): ReadKanbanCard {
   const pr = thread.lastKnownPr ?? null;
   const input = toKanbanThreadDerivationInput(thread);
-  const column = deriveKanbanColumnV2(input, { now });
-  const attention = deriveKanbanAttention(input, {
-    now,
-    needsReview: pr !== null && pr.state === "open",
-  });
   return {
     threadId: thread.id,
     title: thread.title,
@@ -113,19 +105,13 @@ function deriveCard(thread: OrchestrationThreadShell, now: number): ReadKanbanCa
     model: thread.modelSelection.model,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
-    lastKnownPr: pr
-      ? {
-          number: pr.number,
-          title: pr.title,
-          url: pr.url,
-          baseBranch: pr.baseBranch,
-          headBranch: pr.headBranch,
-          state: pr.state,
-        }
-      : null,
+    lastKnownPr: pr,
     summary: summarizeThreadShell(thread, thread.id),
-    attention,
-    column,
+    attention: deriveKanbanAttention(input, {
+      now,
+      needsReview: pr !== null && pr.state === "open",
+    }),
+    column: deriveKanbanColumnV2(input, { now }),
   };
 }
 
@@ -297,11 +283,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             done: [],
           };
           for (const thread of snapshot.threads) {
-            if (thread.projectId !== project.id) continue;
-            if ((thread.archivedAt ?? null) !== null) continue;
-            // Stop materializing once the board-wide cap is reached: the
-            // response stays bounded and the `truncated` flag tells the
-            // caller the board is incomplete (scoped reads are the fallback).
+            if (thread.projectId !== project.id || (thread.archivedAt ?? null) !== null) continue;
             if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
               truncated = true;
               break;
@@ -538,21 +520,21 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             const at = now();
             const cardView = deriveCard(card, at);
             const currentColumn = cardView.column;
+            const cardPayload = (column: string) => ({
+              threadId,
+              column,
+              attention: cardView.attention,
+            });
             if (target === "inProgress") {
               if (currentColumn === "inProgress" || currentColumn === "awaitingYou") {
-                // Already working (or human-attention-blocked): no new dispatch.
-                // Return the current attention flags so a caller that targeted an
-                // awaiting-you card can see the human-attention reason it stayed put.
+                // No new dispatch; attention flags show a targeting caller why an
+                // awaiting-you card stayed put.
                 return mcpToolResultJson({
                   threadId,
                   target,
                   alreadyInProgress: true,
                   awaitingYou: currentColumn === "awaitingYou",
-                  card: {
-                    threadId,
-                    column: currentColumn,
-                    attention: cardView.attention,
-                  },
+                  card: cardPayload(currentColumn),
                 });
               }
               const requiredMessage = message ?? (card.latestTurn ? null : "Continue this task.");
@@ -574,29 +556,19 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 threadId,
                 target,
                 turnStarted: true,
-                card: {
-                  threadId,
-                  column: "inProgress",
-                  attention: cardView.attention,
-                },
+                card: cardPayload("inProgress"),
               });
             }
             // target === "done"
-            if (currentColumn !== "inProgress" && currentColumn !== "awaitingYou") {
+            const alreadyDone =
+              !threadHasActiveTurn(card) ||
+              (currentColumn !== "inProgress" && currentColumn !== "awaitingYou");
+            if (alreadyDone) {
               return mcpToolResultJson({
                 threadId,
                 target,
                 alreadyDone: true,
-                card: { threadId, column: currentColumn, attention: cardView.attention },
-              });
-            }
-            const hadLiveTurn = threadHasActiveTurn(card);
-            if (!hadLiveTurn) {
-              return mcpToolResultJson({
-                threadId,
-                target,
-                alreadyDone: true,
-                card: { threadId, column: currentColumn, attention: cardView.attention },
+                card: cardPayload(currentColumn),
               });
             }
             const dispatched = yield* interruptTurn({ threadId }).pipe(
@@ -607,11 +579,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               target,
               interruptRequested: true,
               eventSequence: dispatched.sequence,
-              card: {
-                threadId,
-                column: currentColumn,
-                attention: cardView.attention,
-              },
+              card: cardPayload(currentColumn),
             });
           }),
         ).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),

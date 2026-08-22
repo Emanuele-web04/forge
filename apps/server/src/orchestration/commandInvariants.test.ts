@@ -26,132 +26,52 @@ import {
 
 const now = new Date().toISOString();
 
+type ProjectShell = OrchestrationReadModel["projects"][number];
+type ThreadShell = OrchestrationReadModel["threads"][number];
+
+const project = (id: string): ProjectShell => ({
+  id: ProjectId.makeUnsafe(id),
+  title: `Project ${id.slice(-1).toUpperCase()}`,
+  workspaceRoot: `/tmp/${id}`,
+  defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+  scripts: [],
+  createdAt: now,
+  updatedAt: now,
+  deletedAt: null,
+});
+
+const thread = (id: string, extra: Partial<ThreadShell> = {}): ThreadShell => ({
+  id: ThreadId.makeUnsafe(id),
+  projectId: ProjectId.makeUnsafe("project-a"),
+  title: `Thread ${id}`,
+  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+  runtimeMode: "full-access" as const,
+  branch: null,
+  worktreePath: null,
+  createdAt: now,
+  updatedAt: now,
+  latestTurn: null,
+  handoff: null,
+  messages: [],
+  session: null,
+  activities: [],
+  proposedPlans: [],
+  checkpoints: [],
+  deletedAt: null,
+  ...extra,
+});
+
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 2,
   updatedAt: now,
   spaces: [],
-  projects: [
-    {
-      id: ProjectId.makeUnsafe("project-a"),
-      title: "Project A",
-      workspaceRoot: "/tmp/project-a",
-      defaultModelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      scripts: [],
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-    },
-    {
-      id: ProjectId.makeUnsafe("project-b"),
-      title: "Project B",
-      workspaceRoot: "/tmp/project-b",
-      defaultModelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      scripts: [],
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-    },
-  ],
+  projects: [project("project-a"), project("project-b")],
   threads: [
-    {
-      id: ThreadId.makeUnsafe("thread-1"),
-      projectId: ProjectId.makeUnsafe("project-a"),
-      title: "Thread A",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "full-access",
-      branch: null,
-      worktreePath: null,
-      createdAt: now,
-      updatedAt: now,
-      latestTurn: null,
-      handoff: null,
-      messages: [],
-      session: null,
-      activities: [],
-      proposedPlans: [],
-      checkpoints: [],
-      deletedAt: null,
-    },
-    {
-      id: ThreadId.makeUnsafe("thread-2"),
-      projectId: ProjectId.makeUnsafe("project-b"),
-      title: "Thread B",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "full-access",
-      branch: null,
-      worktreePath: null,
-      createdAt: now,
-      updatedAt: now,
-      latestTurn: null,
-      handoff: null,
-      messages: [],
-      session: null,
-      activities: [],
-      proposedPlans: [],
-      checkpoints: [],
-      deletedAt: null,
-    },
-    {
-      id: ThreadId.makeUnsafe("thread-archived"),
-      projectId: ProjectId.makeUnsafe("project-a"),
-      title: "Archived Thread",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "full-access",
-      branch: null,
-      worktreePath: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: now,
-      latestTurn: null,
-      handoff: null,
-      messages: [],
-      session: null,
-      activities: [],
-      proposedPlans: [],
-      checkpoints: [],
-      deletedAt: null,
-    },
-    {
-      id: ThreadId.makeUnsafe("thread-deleted"),
-      projectId: ProjectId.makeUnsafe("project-a"),
-      title: "Deleted Thread",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "full-access",
-      branch: null,
-      worktreePath: null,
-      createdAt: now,
-      updatedAt: now,
-      latestTurn: null,
-      handoff: null,
-      messages: [],
-      session: null,
-      activities: [],
-      proposedPlans: [],
-      checkpoints: [],
-      deletedAt: now,
-    },
+    thread("thread-1"),
+    { ...thread("thread-2"), projectId: ProjectId.makeUnsafe("project-b") },
+    thread("thread-archived", { archivedAt: now }),
+    thread("thread-deleted", { deletedAt: now }),
   ],
 };
 
@@ -169,6 +89,8 @@ const messageSendCommand: OrchestrationCommand = {
   runtimeMode: "approval-required",
   createdAt: now,
 };
+
+const run = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => Effect.runPromise(effect);
 
 describe("commandInvariants", () => {
   it("finds threads by id and project", () => {
@@ -211,17 +133,17 @@ describe("commandInvariants", () => {
   });
 
   it("requires existing thread", async () => {
-    const thread = await Effect.runPromise(
+    const threadResult = await run(
       requireThread({
         readModel,
         command: messageSendCommand,
         threadId: ThreadId.makeUnsafe("thread-1"),
       }),
     );
-    expect(thread.id).toBe(ThreadId.makeUnsafe("thread-1"));
+    expect(threadResult.id).toBe(ThreadId.makeUnsafe("thread-1"));
 
     await expect(
-      Effect.runPromise(
+      run(
         requireThread({
           readModel,
           command: messageSendCommand,
@@ -231,7 +153,7 @@ describe("commandInvariants", () => {
     ).rejects.toThrow("does not exist");
 
     await expect(
-      Effect.runPromise(
+      run(
         requireThread({
           readModel,
           command: messageSendCommand,
@@ -242,49 +164,34 @@ describe("commandInvariants", () => {
   });
 
   it("requires missing thread for create flows", async () => {
-    await Effect.runPromise(
+    const createCommand = (commandId: string, threadId: string, title: string) =>
+      ({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe(commandId),
+        threadId: ThreadId.makeUnsafe(threadId),
+        projectId: ProjectId.makeUnsafe("project-a"),
+        title,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }) as OrchestrationCommand;
+
+    await run(
       requireThreadAbsent({
         readModel,
-        command: {
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("cmd-2"),
-          threadId: ThreadId.makeUnsafe("thread-3"),
-          projectId: ProjectId.makeUnsafe("project-a"),
-          title: "new",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        },
+        command: createCommand("cmd-2", "thread-3", "new"),
         threadId: ThreadId.makeUnsafe("thread-3"),
       }),
     );
 
     await expect(
-      Effect.runPromise(
+      run(
         requireThreadAbsent({
           readModel,
-          command: {
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("cmd-3"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            projectId: ProjectId.makeUnsafe("project-a"),
-            title: "dup",
-            modelSelection: {
-              provider: "codex",
-              model: "gpt-5-codex",
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          },
+          command: createCommand("cmd-3", "thread-1", "dup"),
           threadId: ThreadId.makeUnsafe("thread-1"),
         }),
       ),
@@ -292,7 +199,7 @@ describe("commandInvariants", () => {
   });
 
   it("requires non-negative integers", async () => {
-    await Effect.runPromise(
+    await run(
       requireNonNegativeInteger({
         commandType: "thread.checkpoint.revert",
         field: "turnCount",
@@ -301,7 +208,7 @@ describe("commandInvariants", () => {
     );
 
     await expect(
-      Effect.runPromise(
+      run(
         requireNonNegativeInteger({
           commandType: "thread.checkpoint.revert",
           field: "turnCount",
@@ -311,62 +218,38 @@ describe("commandInvariants", () => {
     ).rejects.toThrow("greater than or equal to 0");
   });
 
-  it("requires thread to be archived for unarchive command", async () => {
-    const archiveCommand: OrchestrationCommand = {
+  it.each([
+    {
+      label: "requires thread to be archived for unarchive command",
       type: "thread.unarchive",
-      commandId: CommandId.makeUnsafe("cmd-unarchive"),
-      threadId: ThreadId.makeUnsafe("thread-archived"),
-    };
-
-    // Should succeed for archived thread
-    const thread = await Effect.runPromise(
-      requireThreadArchived({
-        readModel,
-        command: archiveCommand,
-        threadId: ThreadId.makeUnsafe("thread-archived"),
-      }),
-    );
-    expect(thread.id).toBe(ThreadId.makeUnsafe("thread-archived"));
-
-    // Should fail for non-archived thread
-    await expect(
-      Effect.runPromise(
-        requireThreadArchived({
-          readModel,
-          command: archiveCommand,
-          threadId: ThreadId.makeUnsafe("thread-1"),
-        }),
-      ),
-    ).rejects.toThrow("is not archived");
-  });
-
-  it("requires thread to not be archived for archive command", async () => {
-    const archiveCommand: OrchestrationCommand = {
+      invariant: requireThreadArchived,
+      okThreadId: "thread-archived",
+      failThreadId: "thread-1",
+      failError: "is not archived",
+    },
+    {
+      label: "requires thread to not be archived for archive command",
       type: "thread.archive",
-      commandId: CommandId.makeUnsafe("cmd-archive"),
-      threadId: ThreadId.makeUnsafe("thread-1"),
-    };
+      invariant: requireThreadNotArchived,
+      okThreadId: "thread-1",
+      failThreadId: "thread-archived",
+      failError: "is already archived",
+    },
+  ])("$label", async ({ type, invariant, okThreadId, failThreadId, failError }) => {
+    const command: OrchestrationCommand = {
+      type,
+      commandId: CommandId.makeUnsafe(`cmd-${type}`),
+      threadId: ThreadId.makeUnsafe(okThreadId),
+    } as OrchestrationCommand;
 
-    // Should succeed for non-archived thread
-    const thread = await Effect.runPromise(
-      requireThreadNotArchived({
-        readModel,
-        command: archiveCommand,
-        threadId: ThreadId.makeUnsafe("thread-1"),
-      }),
+    const okThread = await run(
+      invariant({ readModel, command, threadId: ThreadId.makeUnsafe(okThreadId) }),
     );
-    expect(thread.id).toBe(ThreadId.makeUnsafe("thread-1"));
+    expect(okThread.id).toBe(ThreadId.makeUnsafe(okThreadId));
 
-    // Should fail for already archived thread
     await expect(
-      Effect.runPromise(
-        requireThreadNotArchived({
-          readModel,
-          command: archiveCommand,
-          threadId: ThreadId.makeUnsafe("thread-archived"),
-        }),
-      ),
-    ).rejects.toThrow("is already archived");
+      run(invariant({ readModel, command, threadId: ThreadId.makeUnsafe(failThreadId) })),
+    ).rejects.toThrow(failError);
   });
 
   it("requires project to have no remaining threads before delete", async () => {
@@ -377,7 +260,7 @@ describe("commandInvariants", () => {
     };
 
     await expect(
-      Effect.runPromise(
+      run(
         requireProjectHasNoThreads({
           readModel,
           command: deleteCommand,
@@ -387,7 +270,7 @@ describe("commandInvariants", () => {
     ).rejects.toThrow("still has 2 threads");
 
     await expect(
-      Effect.runPromise(
+      run(
         requireProjectHasNoThreads({
           readModel,
           command: deleteCommand,

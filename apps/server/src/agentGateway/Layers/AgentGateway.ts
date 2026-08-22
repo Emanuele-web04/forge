@@ -725,9 +725,8 @@ export const makeAgentGateway = Effect.gen(function* () {
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
     helpers: {
-      // Move-card bases its "already done" fast-path on a fresh snapshot by
-      // re-reading and live-checking the target shell at dispatch time, so the
-      // plain shell loader is correct here for every column.
+      // Move-card re-reads and live-checks the target shell itself, so the
+      // plain loader is correct for every column.
       requireThreadShell,
       assertCallerMayDriveThread,
       runCreateThreads,

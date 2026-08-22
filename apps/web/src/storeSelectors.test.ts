@@ -62,45 +62,38 @@ function makeActivity(id: string, kind: string) {
 }
 
 describe("createThreadShellsSelector", () => {
-  it("returns shells in threadIds order", () => {
+  it("orders by threadIds, ignores streaming messages, and rebuilds when shells change", () => {
     const selectShells = createThreadShellsSelector();
-    const state = makeState({
-      threadIds: [threadIdB, threadIdA],
-      threadShellById: { [threadIdA]: shellA, [threadIdB]: shellB },
-    });
+    expect(
+      selectShells(
+        makeState({
+          threadIds: [threadIdB, threadIdA],
+          threadShellById: { [threadIdA]: shellA, [threadIdB]: shellB },
+        }),
+      ).map((shell) => shell.id),
+    ).toEqual([threadIdB, threadIdA]);
 
-    expect(selectShells(state).map((shell) => shell.id)).toEqual([threadIdB, threadIdA]);
-  });
-
-  it("stays reference-stable when unrelated state changes (e.g. streaming messages)", () => {
-    const selectShells = createThreadShellsSelector();
+    // The slices are shared by identity across both states so the derivation
+    // cache (keyed on slice identity) can prove streaming changes don't churn.
     const threadIds = [threadIdA];
     const threadShellById = { [threadIdA]: shellA };
-
     const before = selectShells(makeState({ threadIds, threadShellById }));
-    const after = selectShells(
-      makeState({
-        threadIds,
-        threadShellById,
-        messageIdsByThreadId: { [threadIdA]: [messageId] },
-      }),
-    );
+    expect(
+      selectShells(
+        makeState({
+          threadIds,
+          threadShellById,
+          messageIdsByThreadId: { [threadIdA]: [messageId] },
+        }),
+      ),
+    ).toBe(before);
 
-    expect(after).toBe(before);
-  });
-
-  it("returns a new array when shells change", () => {
-    const selectShells = createThreadShellsSelector();
-    const threadIds = [threadIdA];
-
-    const before = selectShells(makeState({ threadIds, threadShellById: { [threadIdA]: shellA } }));
     const after = selectShells(
       makeState({
         threadIds,
         threadShellById: { [threadIdA]: { ...shellA, title: "renamed" } },
       }),
     );
-
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
   });
@@ -109,6 +102,11 @@ describe("createThreadShellsSelector", () => {
 describe("createAccountRateLimitThreadsSelector", () => {
   const rateLimitActivity = makeActivity("activity-rate", "account.rate-limits.updated");
   const toolActivity = makeActivity("activity-tool", "provider.tool-call");
+  const onlyRateLimit = {
+    threadIds: [threadIdA],
+    activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
+    activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
+  } as const;
 
   it("collects only account rate-limit activities", () => {
     const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
@@ -129,72 +127,40 @@ describe("createAccountRateLimitThreadsSelector", () => {
     expect(result[0]?.activities).toEqual([rateLimitActivity]);
   });
 
-  it("stays reference-stable when message slices change (streaming deltas)", () => {
+  it("stays reference-stable through streaming deltas and non-rate-limit appends", () => {
     const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
-    const threadIds = [threadIdA];
-    const activityIdsByThreadId = { [threadIdA]: [rateLimitActivity.id] };
-    const activityByThreadId = { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } };
+    const before = selectRateLimitThreads(makeState(onlyRateLimit));
 
-    const before = selectRateLimitThreads(
-      makeState({ threadIds, activityIdsByThreadId, activityByThreadId }),
-    );
-    const after = selectRateLimitThreads(
-      makeState({
-        threadIds,
-        activityIdsByThreadId,
-        activityByThreadId,
-        messageIdsByThreadId: { [threadIdA]: [messageId] },
-      }),
-    );
-
-    expect(after).toBe(before);
-  });
-
-  it("stays reference-stable when a non-rate-limit activity is appended", () => {
-    const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
-    const threadIds = [threadIdA];
-
-    const before = selectRateLimitThreads(
-      makeState({
-        threadIds,
-        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
-        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
-      }),
-    );
-    const after = selectRateLimitThreads(
-      makeState({
-        threadIds,
-        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id, toolActivity.id] },
-        activityByThreadId: {
-          [threadIdA]: {
-            [rateLimitActivity.id]: rateLimitActivity,
-            [toolActivity.id]: toolActivity,
+    expect(
+      selectRateLimitThreads(
+        makeState({ ...onlyRateLimit, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
+      ),
+    ).toBe(before);
+    expect(
+      selectRateLimitThreads(
+        makeState({
+          ...onlyRateLimit,
+          activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id, toolActivity.id] },
+          activityByThreadId: {
+            [threadIdA]: {
+              [rateLimitActivity.id]: rateLimitActivity,
+              [toolActivity.id]: toolActivity,
+            },
           },
-        },
-      }),
-    );
-
-    expect(after).toBe(before);
+        }),
+      ),
+    ).toBe(before);
   });
 
-  it("returns a new result when a rate-limit activity is appended", () => {
+  it("returns a new result when a rate-limit activity is appended, else the empty constant", () => {
     const selectRateLimitThreads = createAccountRateLimitThreadsSelector();
-    const threadIds = [threadIdA];
     const laterRateLimitActivity = makeActivity("activity-rate-2", "account.rate-limited");
+    const before = selectRateLimitThreads(makeState(onlyRateLimit));
 
-    const before = selectRateLimitThreads(
-      makeState({
-        threadIds,
-        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id] },
-        activityByThreadId: { [threadIdA]: { [rateLimitActivity.id]: rateLimitActivity } },
-      }),
-    );
     const after = selectRateLimitThreads(
       makeState({
-        threadIds,
-        activityIdsByThreadId: {
-          [threadIdA]: [rateLimitActivity.id, laterRateLimitActivity.id],
-        },
+        ...onlyRateLimit,
+        activityIdsByThreadId: { [threadIdA]: [rateLimitActivity.id, laterRateLimitActivity.id] },
         activityByThreadId: {
           [threadIdA]: {
             [rateLimitActivity.id]: rateLimitActivity,
@@ -203,7 +169,6 @@ describe("createAccountRateLimitThreadsSelector", () => {
         },
       }),
     );
-
     expect(after).not.toBe(before);
     expect(after[0]?.activities).toEqual([rateLimitActivity, laterRateLimitActivity]);
   });
@@ -253,25 +218,17 @@ describe("sidebar thread visibility", () => {
     expect(isSidebarThreadVisible(normalSummary, options)).toBe(true);
   });
 
-  it("filters run threads out of the display and tree selectors", () => {
+  it("filters run threads out of the display and tree selectors only when the option is set", () => {
     const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
     const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
 
     expect(selectDisplay(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
     expect(selectTree(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
-  });
-
-  it("keeps run threads in the selectors when the option is unset", () => {
-    const selectDisplay = createSidebarDisplayThreadsSelector();
-    expect(selectDisplay(state).map((thread) => thread.id)).toEqual([
+    expect(createSidebarDisplayThreadsSelector()(state).map((thread) => thread.id)).toEqual([
       threadIdA,
       threadIdB,
       threadIdC,
     ]);
-  });
-
-  it("stays reference-stable while the underlying summaries do not change", () => {
-    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
     expect(selectDisplay(state)).toBe(selectDisplay(state));
   });
 });
@@ -332,27 +289,25 @@ describe("createAllThreadsSelector", () => {
 });
 
 describe("createAllThreadsMessagelessSelector", () => {
-  it("is vacuously true with no threads", () => {
+  it("is true until any thread has a message", () => {
     const selectMessageless = createAllThreadsMessagelessSelector();
     expect(selectMessageless(makeState({}))).toBe(true);
-  });
-
-  it("is true when every thread has no message ids", () => {
-    const selectMessageless = createAllThreadsMessagelessSelector();
-    const state = makeState({
-      threadIds: [threadIdA, threadIdB],
-      messageIdsByThreadId: { [threadIdA]: [] },
-    });
-    expect(selectMessageless(state)).toBe(true);
-  });
-
-  it("is false once any thread has a message", () => {
-    const selectMessageless = createAllThreadsMessagelessSelector();
-    const state = makeState({
-      threadIds: [threadIdA, threadIdB],
-      messageIdsByThreadId: { [threadIdB]: [messageId] },
-    });
-    expect(selectMessageless(state)).toBe(false);
+    expect(
+      selectMessageless(
+        makeState({
+          threadIds: [threadIdA, threadIdB],
+          messageIdsByThreadId: { [threadIdA]: [] },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      selectMessageless(
+        makeState({
+          threadIds: [threadIdA, threadIdB],
+          messageIdsByThreadId: { [threadIdB]: [messageId] },
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -402,28 +357,23 @@ describe("thread shell route selectors", () => {
 
   it("updates workspace metadata when a Studio working directory changes", () => {
     const selectWorkspaceMetadata = createThreadWorkspaceMetadataSelector(threadIdA);
+    const shellWithWorkingDirectory = (workingDirectory: string) => ({
+      [threadIdA]: {
+        ...shellA,
+        envMode: "local" as const,
+        workingDirectory,
+      },
+    });
     const before = selectWorkspaceMetadata(
       makeState({
         threadIds: [threadIdA],
-        threadShellById: {
-          [threadIdA]: {
-            ...shellA,
-            envMode: "local",
-            workingDirectory: "/repo/one",
-          },
-        },
+        threadShellById: shellWithWorkingDirectory("/repo/one"),
       }),
     );
     const after = selectWorkspaceMetadata(
       makeState({
         threadIds: [threadIdA],
-        threadShellById: {
-          [threadIdA]: {
-            ...shellA,
-            envMode: "local",
-            workingDirectory: "/repo/two",
-          },
-        },
+        threadShellById: shellWithWorkingDirectory("/repo/two"),
       }),
     );
 
@@ -439,9 +389,9 @@ describe("thread shell route selectors", () => {
 describe("createProjectLastActivityAtSelector", () => {
   const otherProjectId = "project-2" as ProjectId;
 
-  it("keeps the newest user message per project", () => {
+  it("keeps the newest user message per project, falling back to thread creation time", () => {
     const selectActivity = createProjectLastActivityAtSelector();
-    const activity = selectActivity(
+    const mixed = selectActivity(
       makeState({
         threadIds: [threadIdA, threadIdB],
         sidebarThreadSummaryById: {
@@ -454,21 +404,16 @@ describe("createProjectLastActivityAtSelector", () => {
         },
       }),
     );
+    expect(mixed.get(projectId)).toBe("2026-03-01T00:00:00.000Z");
 
-    expect(activity.get(projectId)).toBe("2026-03-01T00:00:00.000Z");
-  });
-
-  it("falls back to the thread creation time when nothing was written yet", () => {
-    const selectActivity = createProjectLastActivityAtSelector();
-    const activity = selectActivity(
+    const fallback = selectActivity(
       makeState({
         threadIds: [threadIdA],
         sidebarThreadSummaryById: { [threadIdA]: summaryA },
       }),
     );
-
-    expect(activity.get(projectId)).toBe("2026-01-01T00:00:00.000Z");
-    expect(activity.has(otherProjectId)).toBe(false);
+    expect(fallback.get(projectId)).toBe("2026-01-01T00:00:00.000Z");
+    expect(fallback.has(otherProjectId)).toBe(false);
   });
 
   it("keeps a stable identity when the summaries change without moving activity", () => {
@@ -491,63 +436,53 @@ describe("createProjectLastActivityAtSelector", () => {
 });
 
 describe("createLastActivityTimestampSelector", () => {
-  it("excludes threads whose shell has no updatedAt (sparse map, C1)", () => {
+  const stamped = "2026-03-09T11:00:00.000Z";
+  const withStamp = {
+    threadIds: [threadIdA] as readonly ThreadId[],
+    threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped } },
+  };
+
+  it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
     const selectTimestamps = createLastActivityTimestampSelector();
     const state = makeState({
       threadIds: [threadIdA, threadIdB],
       threadShellById: {
         // Shell A has a durable stamp; shell B is present but stale/pruned.
-        [threadIdA]: { ...shellA, updatedAt: "2026-03-09T11:00:00.000Z" },
+        [threadIdA]: { ...shellA, updatedAt: stamped },
         [threadIdB]: { ...shellB },
       },
     });
     const result = selectTimestamps(state);
     expect(Object.keys(result)).toEqual([threadIdA]);
-    expect(result[threadIdA]).toBe(Date.parse("2026-03-09T11:00:00.000Z"));
+    expect(result[threadIdA]).toBe(Date.parse(stamped));
     // Absent shells must not be conflated with an explicit null.
     expect(threadIdB in result).toBe(false);
+    expect(
+      selectTimestamps(
+        makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
+      ),
+    ).toEqual({});
   });
 
-  it("returns the empty constant when no thread has a durable stamp", () => {
+  it("keeps the previous result while neither streaming nor meta-only shell churn moves a stamp (F1)", () => {
     const selectTimestamps = createLastActivityTimestampSelector();
-    const state = makeState({
-      threadIds: [threadIdA],
-      threadShellById: { [threadIdA]: { ...shellA } },
-    });
-    expect(selectTimestamps(state)).toEqual({});
-  });
+    const before = selectTimestamps(makeState(withStamp));
 
-  it("keeps the previous result reference while stamps do not move", () => {
-    const selectTimestamps = createLastActivityTimestampSelector();
-    const threadIds = [threadIdA] as readonly ThreadId[];
-    const threadShellById = {
-      [threadIdA]: { ...shellA, updatedAt: "2026-03-09T11:00:00.000Z" },
-    };
-    const before = selectTimestamps(makeState({ threadIds, threadShellById }));
-    const after = selectTimestamps(
-      makeState({ threadIds, threadShellById, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
-    );
-    expect(after).toBe(before);
-  });
+    expect(
+      selectTimestamps(
+        makeState({ ...withStamp, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
+      ),
+    ).toBe(before);
 
-  it("keeps the previous result reference when a shell ref changes but the stamp does not", () => {
-    const selectTimestamps = createLastActivityTimestampSelector();
-    const threadIds = [threadIdA] as readonly ThreadId[];
-    const stamp = "2026-03-09T11:00:00.000Z";
-    const before = selectTimestamps(
-      makeState({ threadIds, threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamp } } }),
-    );
     // A meta-only shell update (new object, same durable stamp) must not churn
     // the result — the fast path returns the previous object by reference (F1).
     const after = selectTimestamps(
       makeState({
-        threadIds,
-        threadShellById: {
-          [threadIdA]: { ...shellA, updatedAt: stamp, title: "renamed" },
-        },
+        ...withStamp,
+        threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped, title: "renamed" } },
       }),
     );
     expect(after).toBe(before);
-    expect(after[threadIdA]).toBe(Date.parse(stamp));
+    expect(after[threadIdA]).toBe(Date.parse(stamped));
   });
 });
