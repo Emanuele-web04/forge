@@ -13,7 +13,7 @@ import {
   type OrchestrationShellStreamEvent,
   type ThreadMarker,
 } from "@synara/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
@@ -961,7 +961,7 @@ describe("store projection", () => {
             dispatchOrigin: "automation",
             turnId: null,
             createdAt: "2026-02-27T00:00:00.000Z",
-            streaming: false,
+            streaming: true,
             source: "native",
           },
         ],
@@ -998,6 +998,7 @@ describe("store projection", () => {
   });
 
   it("stops preserving a live assistant intro once the read model settles the same turn", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const threadId = ThreadId.makeUnsafe("thread-hot-path-settled");
     const turnId = TurnId.makeUnsafe("turn-hot-path-settled");
     const assistantId = MessageId.makeUnsafe("assistant-hot-path-settled");
@@ -1100,10 +1101,14 @@ describe("store projection", () => {
       }),
     );
 
-    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("completed");
-    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.completedAt).toBe(completedAt);
-    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
-    expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
+    try {
+      expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("completed");
+      expect(next.threadTurnStateById?.[threadId]?.latestTurn?.completedAt).toBe(completedAt);
+      expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
+      expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("adopts a settled session when the snapshot's terminal turn supersedes the preserved one", () => {

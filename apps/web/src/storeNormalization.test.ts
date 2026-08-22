@@ -1,16 +1,18 @@
 // FILE: storeNormalization.test.ts
 // Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
 
-import { describe, expect, it } from "vitest";
+import { MessageId, TurnId } from "@synara/contracts";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createThreadActivityAccumulator,
   dedupeActivitiesById,
   dedupeActivitiesByIdAfterAppend,
+  mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
-import { makeActivity } from "./storeTestFixtures";
+import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
 type ThreadActivity = Thread["activities"][number];
@@ -234,5 +236,143 @@ describe("dedupeActivitiesByIdAfterAppend", () => {
     expect(dedupeActivitiesByIdAfterAppend(next, undefined, undefined)).toEqual(
       dedupeActivitiesById(next),
     );
+  });
+});
+
+describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
+  it("takes snapshot text when a completed local message is longer than the server twin", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-completed-duplicate");
+    const turnId = TurnId.makeUnsafe("turn-completed-duplicate");
+    const serverText = "Final reply text from the server.";
+    const localText = `${serverText}${serverText}`;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const previousThread = makeThread({
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: "2026-02-27T00:00:05.000Z",
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: localText,
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            completedAt: "2026-02-27T00:00:05.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      });
+
+      const incoming = makeReadModelThread({
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: "2026-02-27T00:00:05.000Z",
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: serverText,
+            turnId,
+            streaming: false,
+            source: "native",
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:05.000Z",
+            attachments: [],
+          },
+        ],
+      });
+
+      const merged = mergeReadModelThreadDetailWithLiveHotPath(incoming, previousThread);
+
+      expect(merged.messages.find((message) => message.id === assistantId)?.text).toBe(serverText);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("prefers longer local assistant text while the live message is still streaming", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-still-streaming");
+    const turnId = TurnId.makeUnsafe("turn-still-streaming");
+    const localText = "I'll start by scanning the repo. Then I'll summarize.";
+    const snapshotText = "I'll start by scanning the repo.";
+    const previousThread = makeThread({
+      session: {
+        provider: "codex",
+        status: "running",
+        orchestrationStatus: "running",
+        activeTurnId: turnId,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: assistantId,
+      },
+      messages: [
+        {
+          id: assistantId,
+          role: "assistant",
+          text: localText,
+          turnId,
+          createdAt: "2026-02-27T00:00:01.000Z",
+          streaming: true,
+          source: "native",
+        },
+      ],
+    });
+
+    const incoming = makeReadModelThread({
+      session: {
+        threadId: previousThread.id,
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: turnId,
+        lastError: null,
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: assistantId,
+      },
+      messages: [
+        {
+          id: assistantId,
+          role: "assistant",
+          text: snapshotText,
+          turnId,
+          streaming: false,
+          source: "native",
+          createdAt: "2026-02-27T00:00:01.000Z",
+          updatedAt: "2026-02-27T00:00:02.000Z",
+          attachments: [],
+        },
+      ],
+    });
+
+    const merged = mergeReadModelThreadDetailWithLiveHotPath(incoming, previousThread);
+
+    expect(merged.messages.find((message) => message.id === assistantId)?.text).toBe(localText);
+    expect(merged.messages.find((message) => message.id === assistantId)?.streaming).toBe(true);
   });
 });

@@ -586,6 +586,20 @@ function applyTurnDiffSummaryToThread(
   };
 }
 
+const STREAM_TEXT_AFFIX_LENGTH = 48;
+
+function describeStreamText(text: string): {
+  length: number;
+  prefix: string;
+  suffix: string;
+} {
+  return {
+    length: text.length,
+    prefix: text.slice(0, STREAM_TEXT_AFFIX_LENGTH),
+    suffix: text.slice(-STREAM_TEXT_AFFIX_LENGTH),
+  };
+}
+
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
@@ -604,7 +618,16 @@ function mergeStreamingMessage(
   } else if (existingMessage.text.startsWith(incomingMessage.text)) {
     nextText = existingMessage.text;
   } else {
-    nextText = `${existingMessage.text}${incomingMessage.text}`;
+    // Completions carry the server's full accumulated text. If mid-stream drift
+    // broke the prefix invariant, concatenating would duplicate the bubble.
+    if (import.meta.env.DEV) {
+      console.warn("[transcript] completion text diverged from local stream", {
+        messageId: existingMessage.id,
+        existing: describeStreamText(existingMessage.text),
+        incoming: describeStreamText(incomingMessage.text),
+      });
+    }
+    nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
   const nextSkills =

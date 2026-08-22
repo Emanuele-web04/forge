@@ -14,7 +14,7 @@ import {
   ThreadMarkerId,
   TurnId,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
@@ -520,56 +520,64 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.runtimeMode).toBe("full-access");
   });
 
-  it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
+  it("replaces streamed assistant text when a non-streaming completion diverges from the local prefix", () => {
     const assistantId = MessageId.makeUnsafe("assistant-message");
     const turnId = TurnId.makeUnsafe("turn-1");
-    const initialState = makeState(
-      makeThread({
-        messages: [
-          {
-            id: assistantId,
-            role: "assistant",
-            text: "Hello",
+    const localText = "The reply begins here and then drifts.";
+    const serverText = "The reply begins here, then continues to the end.";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const initialState = makeState(
+        makeThread({
+          messages: [
+            {
+              id: assistantId,
+              role: "assistant",
+              text: localText,
+              turnId,
+              createdAt: "2026-02-27T00:01:05.000Z",
+              streaming: true,
+              source: "native",
+            },
+          ],
+          latestTurn: {
             turnId,
-            createdAt: "2026-02-27T00:01:05.000Z",
-            streaming: true,
-            source: "native",
+            state: "running",
+            requestedAt: "2026-02-27T00:01:00.000Z",
+            startedAt: "2026-02-27T00:01:05.000Z",
+            completedAt: null,
+            assistantMessageId: assistantId,
           },
-        ],
-        latestTurn: {
+        }),
+      );
+
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.message-sent", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantId,
+          role: "assistant",
+          text: serverText,
           turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
+          streaming: false,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:06.000Z",
+          attachments: [],
+          source: "native",
+        }),
+      ]);
+
+      expect(threadsOf(next)[0]?.messages).toMatchObject([
+        {
+          id: assistantId,
+          text: serverText,
+          streaming: false,
+          completedAt: "2026-02-27T00:01:06.000Z",
         },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: assistantId,
-        role: "assistant",
-        text: " world",
-        turnId,
-        streaming: false,
-        createdAt: "2026-02-27T00:01:05.000Z",
-        updatedAt: "2026-02-27T00:01:06.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.messages).toMatchObject([
-      {
-        id: assistantId,
-        text: "Hello world",
-        streaming: false,
-        completedAt: "2026-02-27T00:01:06.000Z",
-      },
-    ]);
+      ]);
+      expect(threadsOf(next)[0]?.messages[0]?.text).not.toBe(`${localText}${serverText}`);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
