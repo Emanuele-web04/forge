@@ -2,9 +2,32 @@ import { describe, expect, it } from "vitest";
 
 import {
   isValidGitHubRepositoryNameWithOwner,
+  parseGitHubRepositoryInput,
   parseGitHubRepositoryNameWithOwnerFromPullRequestUrl,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
 } from "./githubRepository";
+
+describe("parseGitHubRepositoryInput", () => {
+  it.each([
+    ["openai/codex", "openai/codex"],
+    [" https://github.com/openai/codex ", "openai/codex"],
+    ["https://github.com/OpenAI/Codex.git/", "OpenAI/Codex"],
+  ])("parses %s", (input, expected) => {
+    expect(parseGitHubRepositoryInput(input)).toBe(expected);
+  });
+
+  it.each([
+    "",
+    "https://example.com/openai/codex",
+    "https://user:token@github.com/openai/codex",
+    "https://github.com/openai/codex/issues",
+    "https://github.com/openai/codex?tab=readme",
+    "git@github.com:openai/codex.git",
+    "--upload-pack=malicious",
+  ])("rejects %s", (input) => {
+    expect(parseGitHubRepositoryInput(input)).toBeNull();
+  });
+});
 
 describe("isValidGitHubRepositoryNameWithOwner", () => {
   it.each(["openai/codex", "OpenAI/Codex.js", "owner-1/repo_name", "owner/.github"])(

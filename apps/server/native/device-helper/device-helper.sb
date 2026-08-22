@@ -1,0 +1,148 @@
+;; Seatbelt profile for synara-device-helper.
+;;
+;; The helper dlopens Apple's private CoreSimulator, SimulatorKit and
+;; AccessibilityPlatformTranslation frameworks, drives a booted simulator over
+;; XPC, and injects HID events that ultimately come from a model. That is a
+;; large private-API surface running with the user's full privileges, and it
+;; needs almost none of them: it does not read the user's documents and it does
+;; not talk to the network. This profile removes both.
+;;
+;; Deny-by-default with an explicit allow-list. Rules were derived by running
+;; the real helper against a real booted device and bisecting until the whole
+;; tool surface still worked (attach, live H.264 stream, tap, describe-ui,
+;; screenshot), not from documentation: CoreSimulator's file and XPC surface is
+;; undocumented.
+;;
+;; ── What this profile does and does not confine ───────────────────────────
+;;
+;; CONFINED (validated end to end):
+;;   * IP networking. `(deny network-bind network-outbound (remote ip))` is
+;;     verified: curl reaches nothing and a direct connect to an address returns
+;;     EPERM. This is "no IP socket", not "cannot reach the network at all":
+;;     mach-lookup is unscoped (below), so a reach through a network-proxying
+;;     XPC service is not excluded until that is scoped.
+;;   * file writes: CoreSimulator device state, its logs, and scratch. Not the
+;;     rest of $HOME, so a compromised helper cannot drop a LaunchAgent, edit a
+;;     shell profile, or touch the user's files.
+;;   * file *content* reads of user data, denied under $HOME, /Users (other
+;;     users' homes) and /Volumes (external and network mounts), outside
+;;     CoreSimulator and the helper's own directory. Extended attributes are
+;;     denied alongside content, since a resource fork can carry file bytes.
+;;   * process-exec: the helper itself plus the Xcode and system tools
+;;     CoreSimulator shells out to.
+;;
+;; NOT confined, deliberately:
+;;   * Unix domain sockets. The helper streams encoded frames to the server over
+;;     a Unix socket, so these must work. This is why the profile does NOT use
+;;     `(deny network*)`: that operation covers AF_UNIX as well as AF_INET, and
+;;     denying it makes bind() fail with EPERM and kills the video path. The
+;;     narrower `(remote ip)` form denies IP while leaving AF_UNIX alone, which
+;;     is what is used here. Anything that can write to the socket directory can
+;;     already be reached through the file rules, so this grants no new reach.
+;;   * mach-lookup, mach-register, ipc-posix-shm, iokit-open,
+;;     iokit-get-properties. Each could in principle be narrowed to a
+;;     `(global-name ...)` / `(ipc-posix-name ...)` / `(iokit-user-client-class
+;;     ...)` allow-list, but the names CoreSimulator, IOSurface and VideoToolbox
+;;     actually use can only be enumerated from Seatbelt's denial log, which
+;;     this environment cannot read (`log stream` on the Sandbox subsystem
+;;     returns nothing here). A guessed allow-list fails closed as an opaque
+;;     hang, so a rule that looks scoped but silently denies is worse than an
+;;     honest open one. Scoping this set is the main remaining work.
+;;     The privileged operations in these families are still denied by
+;;     `(deny default)`: mach-priv-task-port (cross-process memory) and
+;;     iokit-set-properties (driver writes) are never granted.
+;;   * file *metadata* reads (stat and traversal). Only content and xattrs are
+;;     denied under $HOME, never metadata. Denying metadata as well breaks the
+;;     encode path, which stats paths it never opens. The helper can learn that
+;;     a file exists and how big it is, but not what is in it.
+;;
+;; A missing rule usually does NOT fail loudly: CoreSimulator turns a denial
+;; into a hang or an opaque error. `helperSandbox.ts` names this profile in the
+;; timeout message for that reason, and `SYNARA_DEVICE_HELPER_NO_SANDBOX=1`
+;; skips the wrapper entirely so a user on an unusual setup still has a working
+;; pane. Re-validate with `bun run test:device` after any change here, and after
+;; an Xcode or macOS bump.
+
+(version 1)
+(deny default)
+
+;; ── Process ───────────────────────────────────────────────────────────────
+;; CoreSimulator spawns helper tools out of the Xcode bundle, and the helper
+;; resolves the developer dir itself when DEVELOPER_DIR is unset.
+(allow process-fork)
+(allow process-exec
+  ;; The helper itself: sandbox-exec applies the profile and THEN execs the
+  ;; binary, so without this the profile denies the program it is wrapping.
+  (subpath (param "HELPER_BUNDLE"))
+  (subpath "/usr/bin")
+  (subpath "/usr/libexec")
+  ;; Resolved from DEVELOPER_DIR or `xcode-select -p` at spawn time, never
+  ;; hard-coded to /Applications/Xcode.app: an Xcode beta, a versioned second
+  ;; Xcode, or an Xcode outside /Applications are all normal, and denying the
+  ;; active one surfaces as a hang rather than a path error. Resolution matches
+  ;; IosSimulatorBackend.xcodeSelectPath() exactly, or we would exec one Xcode
+  ;; and deny reading another. CommandLineTools has no enclosing .app and is
+  ;; covered by /Library/Developer.
+  (subpath (param "XCODE_APP"))
+  (subpath "/Library/Developer"))
+
+;; Only itself. A bare `(allow signal)` would let the helper SIGKILL the Synara
+;; server, the user's shell, or anything else they own.
+(allow signal (target self))
+(allow sysctl-read)
+
+;; ── Mach / IPC / IOKit ─────────────────────────────────────────────────────
+;; Unscoped: see the "NOT confined" note above for why narrowing is blocked on a
+;; denial log this environment cannot read. Only these operations are opened;
+;; mach-priv-task-port and iokit-set-properties stay denied by `(deny default)`.
+(allow mach-lookup)
+(allow mach-register)
+(allow ipc-posix-shm)
+;; IOSurface and VideoToolbox on the frame path: open a user client and read
+;; properties. iokit-set-properties stays denied.
+(allow iokit-open)
+(allow iokit-get-properties)
+
+;; ── Filesystem: reads ─────────────────────────────────────────────────────
+;; Broad, because the helper maps system frameworks, the dyld shared cache and
+;; the Xcode toolchain it dlopens. Every region holding user data is then carved
+;; back out. Content and xattrs only, never metadata (see the header).
+(allow file-read*)
+(deny file-read-data file-read-xattr
+  (subpath (param "USER_HOME"))
+  ;; $HOME is normally under /Users but not always (network accounts), so deny
+  ;; both, plus external and network mounts.
+  (subpath "/Users")
+  (subpath "/Volumes"))
+;; Last-match-wins, so these re-allows must follow the deny above.
+(allow file-read-data file-read-xattr
+  (subpath (param "HELPER_BUNDLE"))
+  (subpath (param "CORESIM_HOME"))
+  (subpath (param "CORESIM_LOGS"))
+  ;; process-exec lets the helper LAUNCH the toolchain; launching is not
+  ;; reading. The helper dlopens frameworks and mmaps files out of the bundle,
+  ;; which needs file-read-data. Xcode under /Applications is already covered by
+  ;; the blanket file-read*, but a beta or a second copy can sit under /Users or
+  ;; /Volumes, which are denied above, so re-allow it explicitly.
+  (subpath (param "XCODE_APP"))
+  ;; The frame socket lives here; connect() reads the socket node.
+  (subpath (param "DARWIN_TMP")))
+
+;; ── Filesystem: writes ────────────────────────────────────────────────────
+;; The device containers CoreSimulator mutates, plus scratch. DARWIN_TMP also
+;; holds the frame socket the helper binds, and IOSurface/VideoToolbox scratch.
+(allow file-write*
+  (subpath (param "CORESIM_HOME"))
+  (subpath (param "CORESIM_LOGS"))
+  (subpath (param "DARWIN_TMP"))
+  (subpath "/private/var/tmp"))
+(allow file-write-data (literal "/dev/null"))
+
+;; ── Network ───────────────────────────────────────────────────────────────
+;; IP is denied; AF_UNIX is not. `(deny network*)` would cover both and break
+;; the frame socket (verified: bind() returns EPERM), so the denial is written
+;; against `(remote ip)` instead. The helper talks to its parent over inherited
+;; stdio, to CoreSimulator over XPC, and streams frames over a Unix socket in
+;; DARWIN_TMP. It never needs an IP socket.
+(allow network-bind network-outbound)
+(deny network-bind network-outbound (remote ip))

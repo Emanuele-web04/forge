@@ -18,7 +18,10 @@ import {
   serveExternalMcpStdio,
   writeExternalMcpClientCredential,
 } from "./bridge.ts";
-import { computeExternalMcpRuntimeProof } from "./runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+} from "./runtimeProof.ts";
 
 const temporaryDirectories: string[] = [];
 const RUNTIME_SECRET = "bridge-test-runtime-secret-000000001";
@@ -52,8 +55,8 @@ function writeRuntime(baseDir: string, kind: "userdata" | "dev", port: number) {
 
 function runtimeChallenge(url: string | URL | Request, init?: RequestInit): Response | null {
   if (!String(url).endsWith("/api/mcp/external/runtime-challenge")) return null;
-  const input = JSON.parse(String(init?.body)) as { nonce: string };
-  return Response.json({ proof: computeExternalMcpRuntimeProof(RUNTIME_SECRET, input.nonce) });
+  const nonce = new Headers(init?.headers).get(EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER)!;
+  return Response.json({ proof: computeExternalMcpRuntimeProof(RUNTIME_SECRET, nonce) });
 }
 
 afterEach(() => {

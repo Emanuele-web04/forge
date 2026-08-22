@@ -52,7 +52,7 @@ function makeControllerInput(
   navigate: ReturnType<typeof vi.fn>;
   clearSelection: ReturnType<typeof vi.fn>;
   openChatThreadPage: ReturnType<typeof vi.fn>;
-  openSidechatSplit: ReturnType<typeof vi.fn>;
+  openSidechatDock: ReturnType<typeof vi.fn>;
   openTerminalThreadPage: ReturnType<typeof vi.fn>;
   prewarmThreadDetailForIntent: ReturnType<typeof vi.fn>;
   rememberLastThreadRouteNow: ReturnType<typeof vi.fn>;
@@ -65,7 +65,7 @@ function makeControllerInput(
     clearSelection: vi.fn(),
     navigate: vi.fn(),
     openChatThreadPage: vi.fn(),
-    openSidechatSplit: vi.fn(() => "split-sidechat"),
+    openSidechatDock: vi.fn(),
     openTerminalThreadPage: vi.fn(),
     prewarmThreadDetailForIntent: vi.fn(),
     rememberLastThreadRouteNow: vi.fn(),
@@ -87,7 +87,7 @@ function makeControllerInput(
     navigate: ReturnType<typeof vi.fn>;
     clearSelection: ReturnType<typeof vi.fn>;
     openChatThreadPage: ReturnType<typeof vi.fn>;
-    openSidechatSplit: ReturnType<typeof vi.fn>;
+    openSidechatDock: ReturnType<typeof vi.fn>;
     openTerminalThreadPage: ReturnType<typeof vi.fn>;
     prewarmThreadDetailForIntent: ReturnType<typeof vi.fn>;
     rememberLastThreadRouteNow: ReturnType<typeof vi.fn>;
@@ -275,7 +275,7 @@ describe("activateThreadFromSidebarIntent", () => {
     expect(getFirstNavigateArgs(input).params).toEqual({ threadId: THREAD_C });
   });
 
-  it("opens sidechat rows beside their source thread when no persisted split exists", () => {
+  it("opens sidechat rows in their source thread's dock", () => {
     const input = makeControllerInput({
       routeThreadId: THREAD_A,
       sidebarThreadSummaryById: {
@@ -286,23 +286,22 @@ describe("activateThreadFromSidebarIntent", () => {
 
     activateThreadFromSidebarIntent(input, THREAD_B);
 
-    expect(input.openSidechatSplit).toHaveBeenCalledWith({
+    expect(input.openSidechatDock).toHaveBeenCalledWith({
       sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
       sidechatThreadId: THREAD_B,
     });
-    expect(input.openChatThreadPage).not.toHaveBeenCalled();
+    expect(input.openChatThreadPage).toHaveBeenCalledWith(THREAD_A);
     expect(input.rememberLastThreadRouteNow).toHaveBeenCalledWith({
-      threadId: THREAD_B,
-      splitViewId: "split-sidechat",
+      threadId: THREAD_A,
     });
+    expect(getFirstNavigateArgs(input).params).toEqual({ threadId: THREAD_A });
     expect(getFirstNavigateArgs(input).search({ keep: true })).toEqual({
       keep: true,
-      splitViewId: "split-sidechat",
+      splitViewId: undefined,
     });
   });
 
-  it("opens the active single sidechat as a split when clicked again", () => {
+  it("reopens the active sidechat in the same dock destination when clicked again", () => {
     const input = makeControllerInput({
       routeThreadId: THREAD_B,
       sidebarThreadSummaryById: {
@@ -313,11 +312,68 @@ describe("activateThreadFromSidebarIntent", () => {
 
     activateThreadFromSidebarIntent(input, THREAD_B);
 
-    expect(input.openSidechatSplit).toHaveBeenCalledWith({
+    expect(input.openSidechatDock).toHaveBeenCalledWith({
       sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
       sidechatThreadId: THREAD_B,
     });
     expect(input.navigate).toHaveBeenCalledOnce();
+  });
+
+  it("uses the dock even when the sidechat belonged to a persisted split", () => {
+    const splitView = makeSplitViewFixture({
+      id: "legacy-sidechat-split",
+      sourceThreadId: THREAD_A,
+      firstThreadId: THREAD_A,
+      secondThreadId: THREAD_B,
+      focusOn: "first",
+    });
+    const input = makeControllerInput({
+      activeSplitView: splitView,
+      routeSplitViewId: splitView.id,
+      sidebarThreadSummaryById: {
+        [THREAD_A]: { id: THREAD_A, projectId: PROJECT_ID, sidechatSourceThreadId: null },
+        [THREAD_B]: { id: THREAD_B, projectId: PROJECT_ID, sidechatSourceThreadId: THREAD_A },
+      },
+      splitViewsById: { [splitView.id]: splitView },
+    });
+
+    activateThreadFromSidebarIntent(input, THREAD_B);
+
+    expect(input.openSidechatDock).toHaveBeenCalledWith({
+      sourceThreadId: THREAD_A,
+      sidechatThreadId: THREAD_B,
+    });
+    expect(input.setSplitFocusedPane).not.toHaveBeenCalled();
+    expect(getFirstNavigateArgs(input).search({ splitViewId: splitView.id })).toEqual({
+      splitViewId: undefined,
+    });
+  });
+
+  it("does not restore a legacy sidechat split when opening its source thread", () => {
+    const splitView = makeSplitViewFixture({
+      id: "legacy-sidechat-split",
+      sourceThreadId: THREAD_A,
+      firstThreadId: THREAD_A,
+      secondThreadId: THREAD_B,
+      focusOn: "first",
+    });
+    const input = makeControllerInput({
+      activeSplitView: splitView,
+      routeThreadId: THREAD_A,
+      routeSplitViewId: splitView.id,
+      sidebarThreadSummaryById: {
+        [THREAD_A]: { id: THREAD_A, projectId: PROJECT_ID, sidechatSourceThreadId: null },
+        [THREAD_B]: { id: THREAD_B, projectId: PROJECT_ID, sidechatSourceThreadId: THREAD_A },
+      },
+      splitViewsById: { [splitView.id]: splitView },
+    });
+
+    activateThreadFromSidebarIntent(input, THREAD_A);
+
+    expect(input.openChatThreadPage).toHaveBeenCalledWith(THREAD_A);
+    expect(input.setSplitFocusedPane).not.toHaveBeenCalled();
+    expect(getFirstNavigateArgs(input).search({ splitViewId: splitView.id })).toEqual({
+      splitViewId: undefined,
+    });
   });
 });

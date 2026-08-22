@@ -48,6 +48,28 @@ it.effect("defaults automation runtime mode to approval-required", () =>
     assert.isNull(parsed.proposalState);
     assert.strictEqual(parsed.notificationPolicy, "all");
     assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.isUndefined(parsed.stopAfterConsecutiveFailures);
+    assert.isUndefined(parsed.stopOnError);
+  }),
+);
+
+it.effect("rejects debug interaction mode for automations", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decode(AutomationCreateInput, {
+        name: "Debug recurring failures",
+        projectId: "project-1",
+        prompt: "Investigate the latest failure.",
+        schedule: { type: "manual" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: "debug",
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 
@@ -72,7 +94,6 @@ it.effect("decodes legacy automation definitions without completion policies", (
       mode: "heartbeat",
       targetThreadId: "thread-1",
       maxIterations: null,
-      stopOnError: true,
       minimumIntervalSeconds: 60,
       maxRuntimeSeconds: 3600,
       retryPolicy: { type: "none" },
@@ -90,6 +111,10 @@ it.effect("decodes legacy automation definitions without completion policies", (
     assert.isNull(parsed.proposalState);
     assert.strictEqual(parsed.notificationPolicy, "all");
     assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.strictEqual(parsed.stopAfterConsecutiveFailures, 3);
+    assert.strictEqual(parsed.consecutiveFailureCount, 0);
+    assert.isNull(parsed.disabledReason);
+    assert.isNull(parsed.disabledAt);
   }),
 );
 

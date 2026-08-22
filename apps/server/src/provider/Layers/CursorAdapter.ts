@@ -60,6 +60,7 @@ import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
@@ -80,6 +81,7 @@ import {
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import type * as AcpErrors from "../acp/AcpErrors.ts";
+import { forkViaAcpRuntime } from "../acp/acpFork.ts";
 import {
   type AcpSessionRuntimeShape,
   type AcpSessionStartupTimeouts,
@@ -138,6 +140,9 @@ export const takeCursorSynaraHarnessPolicyTextPart = (
   });
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+// Forking a dead source session must first resume it, which may replay
+// history, so the fork exchange gets a wider budget than plain requests.
+const CURSOR_ACP_FORK_TIMEOUT_MS = 30_000;
 // `cursor-agent` authenticates against the macOS Keychain: 1-12s is normal and it
 // hangs forever when a Keychain prompt cannot be shown, so authenticate gets the
 // widest budget while the aggregate cap keeps a stuck startup from hanging a thread.
@@ -1691,6 +1696,115 @@ export function makeCursorAdapter(
       );
     };
 
+    const cursorForkTimeoutError = (method: string): ProviderAdapterRequestError =>
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method,
+        detail: `Cursor ACP did not respond to ${method} within ${CURSOR_ACP_FORK_TIMEOUT_MS / 1000}s.`,
+      });
+
+    const forkThread: NonNullable<CursorAdapterShape["forkThread"]> = (input) =>
+      Effect.gen(function* () {
+        const sourceCwd = resolveCursorSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
+        const targetCwd = resolveCursorSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
+        if (!sourceCwd || !targetCwd) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "A source and target cwd are required to fork a Cursor session.",
+          });
+        }
+
+        const forkRuntime = (runtime: AcpSessionRuntimeShape) =>
+          forkViaAcpRuntime({
+            provider: PROVIDER,
+            runtime,
+            targetCwd,
+            unsupportedIssue:
+              "This Cursor ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
+            requestTimeoutMs: CURSOR_ACP_FORK_TIMEOUT_MS,
+            timeoutError: cursorForkTimeoutError,
+          });
+
+        const activeSource = sessions.get(input.sourceThreadId);
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
+        if (activeSource?.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Cursor session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
+        const forked = activeSource
+          ? yield* forkRuntime(activeSource.acp)
+          : yield* Effect.gen(function* () {
+              const sourceSessionId = parseCursorResume(input.sourceResumeCursor)?.sessionId;
+              if (!sourceSessionId) {
+                return yield* new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: "forkThread",
+                  issue: "The source Cursor session has no resumable native cursor.",
+                });
+              }
+              const providerCursorOptions = input.providerOptions?.cursor;
+              const runtime = yield* makeCursorAcpRuntime({
+                cursorSettings: {
+                  ...(cursorSettings.binaryPath !== undefined
+                    ? { binaryPath: cursorSettings.binaryPath }
+                    : {}),
+                  ...(cursorSettings.apiEndpoint !== undefined
+                    ? { apiEndpoint: cursorSettings.apiEndpoint }
+                    : {}),
+                  ...(providerCursorOptions?.binaryPath !== undefined
+                    ? { binaryPath: providerCursorOptions.binaryPath }
+                    : {}),
+                  ...(providerCursorOptions?.apiEndpoint !== undefined
+                    ? { apiEndpoint: providerCursorOptions.apiEndpoint }
+                    : {}),
+                },
+                childProcessSpawner,
+                cwd: sourceCwd,
+                resumeSessionId: sourceSessionId,
+                clientInfo: { name: "Synara Fork", version: "0.0.0" },
+                startupTimeouts: CURSOR_ACP_STARTUP_TIMEOUTS,
+              });
+              yield* runtime.start().pipe(
+                Effect.timeoutOption(CURSOR_ACP_FORK_TIMEOUT_MS),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.fail(cursorForkTimeoutError("session/resume")),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+              return yield* forkRuntime(runtime);
+            }).pipe(Effect.scoped);
+
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
+        return {
+          threadId: input.threadId,
+          resumeCursor: {
+            schemaVersion: CURSOR_RESUME_VERSION,
+            sessionId: forked.sessionId,
+          },
+        };
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterRequestError ||
+          cause instanceof ProviderAdapterProcessError ||
+          cause instanceof ProviderAdapterSessionClosedError ||
+          cause instanceof ProviderAdapterSessionNotFoundError ||
+          cause instanceof ProviderAdapterValidationError
+            ? cause
+            : mapAcpToAdapterError(PROVIDER, input.sourceThreadId, "session/fork", cause),
+        ),
+      );
+
     const stopAll: CursorAdapterShape["stopAll"] = () =>
       Effect.forEach(sessions.values(), stopSessionInternal, { discard: true });
 
@@ -1714,6 +1828,7 @@ export function makeCursorAdapter(
       interruptTurn,
       readThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,

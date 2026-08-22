@@ -10,6 +10,7 @@ import * as nodePath from "node:path";
 import {
   type DroidModelOptions,
   type ProviderListModelsResult,
+  type ProviderInteractionMode,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -206,7 +207,7 @@ export function applyDroidAcpModelSelection<E>(input: {
 /** Applies Droid's native read-only spec mode before a Plan-mode prompt is dispatched. */
 export function applyDroidAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: ProviderInteractionMode;
   readonly runtimeMode?: "approval-required" | "full-access";
   readonly mapError: (context: DroidAcpModeSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {

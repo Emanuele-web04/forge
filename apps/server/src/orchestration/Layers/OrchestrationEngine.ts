@@ -25,7 +25,11 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../../config.ts";
-import { toPersistenceSqlError, type PersistenceSqlError } from "../../persistence/Errors.ts";
+import {
+  toPersistenceSqlError,
+  type OrchestrationEventStoreError,
+  type PersistenceSqlError,
+} from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import {
   OrchestrationCommandReceiptRepository,
@@ -69,6 +73,7 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { REQUIRED_SNAPSHOT_PROJECTORS } from "./ProjectionSnapshotQuery.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -76,6 +81,8 @@ import {
 
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
+/** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
+const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
 type CommandExecutionState = "queued" | "in-flight" | "abandoned";
@@ -182,6 +189,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const deferredProjectionRetryAttempts = yield* Ref.make(0);
   const deferredProjectionLastFailure = yield* Ref.make<string | null>(null);
   const deferredProjectionScope = yield* Scope.make("sequential");
+  // Full projection repair is multi-minute on large state DBs. Coalesce concurrent
+  // callers onto one rebuild and skip thrash when a repair just completed.
+  type ProjectionRepairError = OrchestrationDispatchError | OrchestrationEventStoreError;
+  const projectionRepairInFlight = yield* Ref.make<Deferred.Deferred<
+    OrchestrationReadModel,
+    ProjectionRepairError
+  > | null>(null);
+  const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
   // Committed events are durable before they reach this boundary. Once
   // publication starts, a dispatch deadline must not interrupt it and leave
@@ -367,11 +382,75 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Ref.get(deferredProjectionRetryAttempts),
         Ref.get(deferredProjectionLastFailure),
       ]);
+      // Lag is measured directly from the cursor table so a projector that
+      // stalled without tripping the deferred dirty flag (or whose cursor row
+      // was deleted by an interrupted repair) is still visible here. Only the
+      // snapshot-fence cursors are lag-scored: the live path advances each
+      // per-projector cursor only when its predicate matches (checkpoints
+      // rejects every live event), so individual cursors legitimately trail
+      // the journal between bootstraps and scoring them would report a healthy
+      // system as permanently degraded. Missing rows follow that same fence
+      // scope: predicate-specific cursors are legitimately absent until their
+      // first matching event, while a missing required fence cursor makes the
+      // snapshot sequence incomplete. A read
+      // failure must not masquerade as health: the probe still answers (a
+      // failing /health body is worse than a degraded one), but reports
+      // state "unknown" so a database outage is distinguishable from both a
+      // healthy system and a diagnosed lag.
+      const lag = yield* Effect.gen(function* () {
+        const highWaterSequence = yield* eventStore.getHighWaterSequence();
+        const stateRows = yield* sql<{
+          readonly projector: string;
+          readonly lastAppliedSequence: number;
+        }>`
+          SELECT projector, last_applied_sequence AS "lastAppliedSequence"
+          FROM projection_state
+        `;
+        const sequenceByProjector = new Map(
+          stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+        );
+        const lagByProjector: Record<string, number> = {};
+        const missingProjectors: string[] = [];
+        for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
+          const sequence = sequenceByProjector.get(projector);
+          if (sequence === undefined) {
+            continue;
+          }
+          const projectorLag = highWaterSequence - sequence;
+          if (projectorLag > 0) {
+            lagByProjector[projector] = projectorLag;
+          }
+        }
+        if (stateRows.length > 0) {
+          for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
+            if (!sequenceByProjector.has(projector)) {
+              missingProjectors.push(projector);
+            }
+          }
+        }
+        return { probeFailed: false, highWaterSequence, lagByProjector, missingProjectors };
+      }).pipe(
+        Effect.catch(() =>
+          Effect.succeed({
+            probeFailed: true,
+            highWaterSequence: 0,
+            lagByProjector: {} as Record<string, number>,
+            missingProjectors: [] as string[],
+          }),
+        ),
+      );
+      const degraded =
+        dirty || lag.missingProjectors.length > 0 || Object.keys(lag.lagByProjector).length > 0;
       return {
-        state: dirty ? "degraded" : "healthy",
+        // A failed probe with the dirty flag set is still a known degradation;
+        // "unknown" is reserved for a failed probe with no other evidence.
+        state: degraded ? "degraded" : lag.probeFailed ? "unknown" : "healthy",
         inFlight,
         retryAttempts,
         lastFailure,
+        highWaterSequence: lag.highWaterSequence,
+        lagByProjector: lag.lagByProjector,
+        missingProjectors: lag.missingProjectors,
       };
     });
 
@@ -460,6 +539,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":
       case "thread.message.assistant.complete":
+      case "thread.approval.respond":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
       default:
         return Effect.succeed(commandReadModel);
@@ -1097,6 +1177,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       Number.MAX_SAFE_INTEGER,
       throughSequenceInclusive,
     );
+  const readThreadEvents: OrchestrationEngineShape["readThreadEvents"] = (
+    threadId,
+    fromSequenceExclusive,
+    eventTypes,
+  ) =>
+    eventStore.readThreadEventsFromSequence(
+      threadId,
+      fromSequenceExclusive,
+      undefined,
+      undefined,
+      eventTypes,
+    );
+  const readThreadEventsThrough: OrchestrationEngineShape["readThreadEventsThrough"] = (
+    threadId,
+    fromSequenceExclusive,
+    throughSequenceInclusive,
+    eventTypes,
+  ) =>
+    eventStore.readThreadEventsFromSequence(
+      threadId,
+      fromSequenceExclusive,
+      Number.MAX_SAFE_INTEGER,
+      throughSequenceInclusive,
+      eventTypes,
+    );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
     eventPubSub,
@@ -1201,7 +1306,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
   // Used by the settings screen to rebuild local indexes without deleting chats.
-  const repairState: OrchestrationEngineShape["repairState"] = () =>
+  // Also invoked by empty-route / desktop recovery paths — those can stampede.
+  const runProjectionRepair: OrchestrationEngineShape["repairState"] = () =>
     maintenanceLock.withPermits(1)(
       Effect.gen(function* () {
         yield* Effect.log("repairing orchestration projection state");
@@ -1329,6 +1435,58 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }),
     );
 
+  const repairState: OrchestrationEngineShape["repairState"] = () =>
+    Effect.gen(function* () {
+      const nowMs = Date.now();
+      const lastSuccessMs = yield* Ref.get(lastSuccessfulProjectionRepairAtMs);
+      if (lastSuccessMs > 0 && nowMs - lastSuccessMs < PROJECTION_REPAIR_COOLDOWN_MS) {
+        yield* Effect.log(
+          "skipping orchestration projection repair (recent successful rebuild)",
+        ).pipe(
+          Effect.annotateLogs({
+            cooldownMs: PROJECTION_REPAIR_COOLDOWN_MS,
+            ageMs: nowMs - lastSuccessMs,
+          }),
+        );
+        return yield* maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
+      }
+
+      const joinDeferred = yield* Deferred.make<OrchestrationReadModel, ProjectionRepairError>();
+      const claim = yield* Ref.modify(
+        projectionRepairInFlight,
+        (
+          current,
+        ): readonly [
+          {
+            readonly kind: "join" | "start";
+            readonly deferred: Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError>;
+          },
+          Deferred.Deferred<OrchestrationReadModel, ProjectionRepairError> | null,
+        ] => {
+          if (current !== null) {
+            return [{ kind: "join", deferred: current }, current];
+          }
+          return [{ kind: "start", deferred: joinDeferred }, joinDeferred];
+        },
+      );
+
+      if (claim.kind === "join") {
+        yield* Effect.log("joining in-flight orchestration projection repair");
+        return yield* Deferred.await(claim.deferred);
+      }
+
+      return yield* Effect.gen(function* () {
+        const exit = yield* Effect.exit(runProjectionRepair());
+        if (exit._tag === "Success") {
+          yield* Ref.set(lastSuccessfulProjectionRepairAtMs, Date.now());
+          yield* Deferred.succeed(claim.deferred, exit.value).pipe(Effect.orDie);
+          return exit.value;
+        }
+        yield* Deferred.failCause(claim.deferred, exit.cause).pipe(Effect.orDie);
+        return yield* Effect.failCause(exit.cause);
+      }).pipe(Effect.ensuring(Ref.set(projectionRepairInFlight, null)));
+    });
+
   return {
     quiesce,
     drain,
@@ -1338,6 +1496,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     refreshCommandReadModel,
     readEvents,
     readEventsThrough,
+    readThreadEvents,
+    readThreadEventsThrough,
     getEventHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

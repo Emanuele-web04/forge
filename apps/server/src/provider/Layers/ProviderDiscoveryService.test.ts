@@ -272,4 +272,27 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
     expect(adapterCalls).toBe(1);
   });
+
+  it("omits malformed model descriptors while preserving valid entries", async () => {
+    const result = await runListModels({
+      adapter: {
+        listModels: () =>
+          Effect.succeed({
+            models: [
+              { slug: "valid-model", name: "Valid Model" },
+              { slug: "invalid-model", name: " " },
+            ],
+            source: "cursor.cli",
+            cached: false,
+          } as ProviderListModelsResult),
+      },
+      enabled: true,
+    });
+
+    expect(result).toEqual({
+      models: [{ slug: "valid-model", name: "Valid Model" }],
+      source: "cursor.cli",
+      cached: false,
+    });
+  });
 });

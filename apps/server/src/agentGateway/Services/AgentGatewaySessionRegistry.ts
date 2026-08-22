@@ -6,7 +6,8 @@ export type AgentGatewayCapability =
   | "thread:write"
   | "automation:write"
   | "diagnostics:read"
-  | "browser:control";
+  | "browser:control"
+  | "device:control";
 
 export interface AgentGatewaySessionIdentity {
   readonly sessionKey: string;

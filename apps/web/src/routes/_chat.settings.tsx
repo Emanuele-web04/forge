@@ -13,6 +13,7 @@ import {
   type AppSettings,
   type FollowUpBehavior,
   DEFAULT_UI_DENSITY,
+  DEFAULT_CHAT_WIDTH,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
@@ -27,6 +28,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
+import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
   ArchivedSettingsPanel,
   WorktreesSettingsPanel,
@@ -52,12 +54,12 @@ import {
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
 import {
-  SettingsCard,
   SettingsRow,
   SettingsSection,
   SettingsSectionShell,
 } from "../components/settings/SettingsPanelPrimitives";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { ThemeModePicker } from "../components/settings/ThemeModePicker";
 import { ThemePackEditor } from "../components/ThemePackEditor";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
@@ -79,19 +81,30 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { toastManager } from "../components/ui/toast";
 import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
+import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
-import { DeviceLaptopIcon, MoonIcon, RotateCcwIcon, SunIcon } from "../lib/icons";
-import { cn, isMacPlatform } from "../lib/utils";
+import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
+import { isElectron } from "../env";
+import { RotateCcwIcon } from "../lib/icons";
+import {
+  cn,
+  getNavigatorPlatform,
+  isLinuxPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { sameProviderOrder } from "../providerOrdering";
 import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
   SETTINGS_TARGETS,
+  settingRowAnchorId,
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 
@@ -119,26 +132,27 @@ const UI_DENSITY_OPTIONS = [
   description: string;
 }>;
 
-const THEME_OPTIONS = [
+const CHAT_WIDTH_OPTIONS = [
   {
-    value: "light",
-    label: "Light",
-    description: "Always use the light theme.",
-    icon: <SunIcon />,
+    value: "standard",
+    label: "Standard",
+    description: "Keeps the chat column at the default reading width (46rem).",
   },
   {
-    value: "dark",
-    label: "Dark",
-    description: "Always use the dark theme.",
-    icon: <MoonIcon />,
+    value: "wide",
+    label: "Wide",
+    description: "Gives tables and wide content more room (72rem).",
   },
   {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-    icon: <DeviceLaptopIcon />,
+    value: "full",
+    label: "Full",
+    description: "Lets the chat column use the full window width.",
   },
-] as const;
+] as const satisfies ReadonlyArray<{
+  value: ChatWidthMode;
+  label: string;
+  description: string;
+}>;
 
 const PROVIDER_SELECT_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
@@ -199,9 +213,66 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
-  const shouldShowFontSmoothing = isMacPlatform(
-    typeof navigator === "undefined" ? "" : navigator.platform,
-  );
+  const platform = getNavigatorPlatform();
+  const shouldShowFontSmoothing = isMacPlatform(platform);
+  const supportsCustomTitleBarSetting =
+    isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
+  const customTitleBarState = useDesktopCustomTitleBarState();
+  const customTitleBarRestartRequired =
+    customTitleBarState.supported && settings.useCustomTitleBar !== customTitleBarState.active;
+  const customTitleBarPreferenceDirty =
+    supportsCustomTitleBarSetting &&
+    (settings.useCustomTitleBar !== defaults.useCustomTitleBar ||
+      (customTitleBarState.supported &&
+        customTitleBarState.preference !== defaults.useCustomTitleBar));
+
+  function showCustomTitleBarRestartToast(): void {
+    toastManager.add({
+      type: "warning",
+      title: "Restart to apply title bar",
+      description: "The window frame updates the next time Synara launches.",
+      actionProps: {
+        "aria-label": "Restart Synara",
+        children: "Restart",
+        onClick: () => {
+          void window.desktopBridge?.customTitleBar?.relaunch();
+        },
+      },
+    });
+  }
+
+  async function persistCustomTitleBarPreference(
+    enabled: boolean,
+  ): Promise<{ readonly restartRequired: boolean } | null> {
+    try {
+      const bridge = window.desktopBridge?.customTitleBar;
+      if (!bridge) throw new Error("Desktop title bar bridge is unavailable.");
+      const state = await bridge.setPreference(enabled);
+      if (!state.supported || state.preference !== enabled) {
+        throw new Error("Desktop title bar preference was not persisted.");
+      }
+      return state;
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not update title bar",
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  async function applyCustomTitleBarPreference(enabled: boolean): Promise<void> {
+    const previous = settings.useCustomTitleBar;
+    updateSettings({ useCustomTitleBar: enabled });
+    const state = await persistCustomTitleBarPreference(enabled);
+    if (state === null) {
+      updateSettings({ useCustomTitleBar: previous });
+      return;
+    }
+    if (state.restartRequired) showCustomTitleBarRestartToast();
+  }
+
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
     const query = settings.terminalFontFamily.trim().toLowerCase();
     if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
@@ -239,7 +310,13 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
+      ? ["Automation runs"]
+      : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
+    ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
+    ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
+    ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -268,6 +345,9 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
+      ? ["Pull request diff colors"]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -304,6 +384,12 @@ function SettingsRouteView() {
       ),
     );
     if (!confirmed) return;
+
+    if (customTitleBarPreferenceDirty) {
+      const state = await persistCustomTitleBarPreference(defaults.useCustomTitleBar);
+      if (state === null) return;
+      if (state.restartRequired) showCustomTitleBarRestartToast();
+    }
 
     setTheme("system");
     resetAllThemes();
@@ -526,6 +612,15 @@ function SettingsRouteView() {
           resetLabel: "studio section",
           ariaLabel: "Show the Studio section in the sidebar",
         })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showAutomationRunThreads",
+          title: "Automation runs",
+          description:
+            "Show the thread each standalone automation run creates. Runs stay listed on the automation's page either way; threads owned by dedicated or heartbeat automations always stay visible.",
+          resetLabel: "automation runs",
+          ariaLabel: "Show automation run threads in the sidebar",
+        })}
       </SettingsSection>
 
       <div id={SETTINGS_TARGETS.environmentPanel} className="space-y-6">
@@ -625,29 +720,21 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <SettingsSectionShell title="Theme">
-        <SettingsCard>
-          <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-            control={
-              <SettingsSegmentedControl
-                value={theme}
-                onValueChange={(value) => {
-                  if (value !== "system" && value !== "light" && value !== "dark") return;
-                  setTheme(value);
-                }}
-                ariaLabel="Theme preference"
-                options={THEME_OPTIONS}
-              />
-            }
-          />
-        </SettingsCard>
+      <SettingsSectionShell
+        title="Theme"
+        action={
+          theme !== "system" ? (
+            <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+          ) : null
+        }
+      >
+        {/* The mode picker is the one settings control that sits directly on the page
+            instead of inside a card — the mockups are the whole UI, so boxing them in
+            a card reads as chrome around chrome. The anchor keeps search deep-links
+            (`?target=setting-theme`) working without the SettingsRow. */}
+        <div id={settingRowAnchorId("Theme")} className="scroll-mt-24 pb-1.5">
+          <ThemeModePicker value={theme} onValueChange={setTheme} ariaLabel="Theme preference" />
+        </div>
 
         <div className="space-y-3">
           {(resolvedTheme === "dark"
@@ -663,6 +750,79 @@ function SettingsRouteView() {
           ))}
         </div>
       </SettingsSectionShell>
+
+      {isElectron ? (
+        <SettingsSection title="App">
+          <SettingsRow
+            title="App icon"
+            description="Choose the icon Synara uses in the dock or taskbar."
+            resetAction={
+              settings.desktopAppIcon !== defaults.desktopAppIcon ? (
+                <SettingResetButton
+                  label="app icon"
+                  onClick={() => updateSettings({ desktopAppIcon: defaults.desktopAppIcon })}
+                />
+              ) : null
+            }
+            control={
+              <AppIconPicker
+                platform={platform}
+                value={settings.desktopAppIcon}
+                onValueChange={async (desktopAppIcon) => {
+                  if (desktopAppIcon !== settings.desktopAppIcon) {
+                    updateSettings({ desktopAppIcon });
+                  }
+                  await window.desktopBridge?.setAppIcon(desktopAppIcon);
+                }}
+              />
+            }
+          />
+          {supportsCustomTitleBarSetting ? (
+            <SettingsRow
+              title="Use custom title bar"
+              description={
+                customTitleBarRestartRequired
+                  ? "Restart Synara to apply. Some Linux window managers work better with the system title bar."
+                  : "Replace the system title bar with Synara's frameless chrome and window controls. Restart required to apply."
+              }
+              status={customTitleBarRestartRequired ? "Restart required" : undefined}
+              resetAction={
+                settings.useCustomTitleBar !== defaults.useCustomTitleBar ? (
+                  <SettingResetButton
+                    label="custom title bar"
+                    onClick={() => {
+                      void applyCustomTitleBarPreference(defaults.useCustomTitleBar);
+                    }}
+                  />
+                ) : null
+              }
+              control={
+                <div className="flex items-center gap-2">
+                  {customTitleBarRestartRequired ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => {
+                        void window.desktopBridge?.customTitleBar?.relaunch();
+                      }}
+                    >
+                      Restart
+                    </Button>
+                  ) : null}
+                  <Switch
+                    checked={settings.useCustomTitleBar}
+                    onCheckedChange={(checked) => {
+                      void applyCustomTitleBarPreference(Boolean(checked));
+                    }}
+                    aria-label="Use custom title bar"
+                  />
+                </div>
+              }
+            />
+          ) : null}
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection title="Typography and spacing">
         <SettingsRow
@@ -708,6 +868,36 @@ function SettingsRouteView() {
               }}
               ariaLabel="UI density"
               options={UI_DENSITY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Chat width"
+          description="Control how wide the chat column grows. Wide and Full give tables and wide content more room."
+          resetAction={
+            settings.chatWidth !== defaults.chatWidth ? (
+              <SettingResetButton
+                label="chat width"
+                onClick={() =>
+                  updateSettings({
+                    chatWidth: DEFAULT_CHAT_WIDTH,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.chatWidth}
+              onValueChange={(value) => {
+                if (!isChatWidthMode(value)) {
+                  return;
+                }
+                updateSettings({ chatWidth: value });
+              }}
+              ariaLabel="Chat width"
+              options={CHAT_WIDTH_OPTIONS}
             />
           }
         />
@@ -954,6 +1144,14 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        {renderBooleanSettingRow({
+          settingKey: "showPullRequestDiffColors",
+          title: "Pull request diff colors",
+          description: "Show additions in green and deletions in red in pull request summaries.",
+          resetLabel: "pull request diff colors",
+          ariaLabel: "Show pull request diff colors",
+        })}
+
         {renderBooleanSettingRow({
           settingKey: "diffWordWrap",
           title: "Diff line wrapping",

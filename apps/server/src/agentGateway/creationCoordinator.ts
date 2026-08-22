@@ -16,6 +16,7 @@ import {
   type SynaraCreateThreadsResult,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
@@ -457,7 +458,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       if (deprecatedBranchName) {
         return yield* Effect.fail(
           new ToolInputError(
-            '"branchName" is no longer supported for managed worktrees. Synara creates a detached HEAD; create a branch inside the new thread when the work is ready.',
+            '"branchName" is no longer supported for managed worktrees. Synara creates a managed temporary branch and renames it after the first prompt; create additional branches inside the new thread if needed.',
           ),
         );
       }
@@ -620,7 +621,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             projectScripts: project.scripts,
             worktreeRef,
             copyChangesFrom,
-            newBranch: null,
+            // Deterministic like the planned path: an exact-plan retry must
+            // resolve to the same branch, and recovery reclaims it by name.
+            // The 8-hex-digit token keeps it a temporary synara/* branch.
+            newBranch:
+              environment === "worktree"
+                ? `${WORKTREE_BRANCH_PREFIX}/${stableGatewayDigest({ operationId, index, resource: "worktree-branch" }, 8)}`
+                : null,
             plannedWorktreePath,
             ownershipPreflightPassed: true,
             ids: makeAgentCreationIds(operationId, index),
@@ -717,10 +724,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           Effect.flatMap(() =>
                             worktree.branch === null
                               ? Effect.void
-                              : git.deleteBranch({
+                              : // The branch is this operation's own deterministic
+                                // synara/* name and its worktree was just force-removed.
+                                // A non-forced delete would fail whenever the pinned
+                                // ref is not merged into the root HEAD (e.g. PR heads),
+                                // stranding the name and blocking exact-plan retries.
+                                git.deleteBranch({
                                   cwd: worktree.cwd,
                                   branch: worktree.branch,
-                                  force: false,
+                                  force: true,
                                 }),
                           ),
                         )
@@ -991,6 +1003,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           cwd: entry.workspaceRoot,
                           ref: entry.worktreeRef!,
                           path: entry.plannedWorktreePath,
+                          ...(entry.newBranch ? { newBranch: entry.newBranch } : {}),
                           ...(entry.copyChangesFrom
                             ? { copyChangesFrom: entry.copyChangesFrom }
                             : {}),

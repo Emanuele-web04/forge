@@ -684,6 +684,53 @@ describe("planProviderRuntimeReconciliation", () => {
     expect(plans).toEqual([]);
   });
 
+  it("does not settle while the runtime journal has uningested rows", () => {
+    // Persisted-but-uningested rows starve the projection: its staleness is
+    // manufactured, and a completed turn's terminal events may be sitting in
+    // the queue. Settling here "recovers" a turn that finished normally.
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell()],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      runtimeJournalLagging: true,
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("still settles an abandoned thread despite a lagging runtime journal", () => {
+    const abandonedAt = "2026-07-23T19:00:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: abandonedAt,
+          session: {
+            ...threadShell().session!,
+            updatedAt: abandonedAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      runtimeJournalLagging: true,
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+      maxTurnAgeMs: 30 * 60_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        threadId: THREAD_ID,
+        projectedTurnId: OLD_TURN_ID,
+      }),
+    ]);
+  });
+
   it("still settles an abandoned thread despite an unhealthy pump, recording pump evidence", () => {
     const abandonedAt = "2026-07-23T19:00:00.000Z";
     const plans = planProviderRuntimeReconciliation({

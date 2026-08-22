@@ -24,9 +24,12 @@ export function resolveWsHttpUrl(rawPath: string): string {
     const wsUrl = new URL(wsCandidate);
     const protocol =
       wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    const httpUrl = new URL(rawPath, `${protocol}//${wsUrl.host}`);
+    const serverUrl = new URL(`${protocol}//${wsUrl.host}`);
+    const httpUrl = new URL(rawPath, serverUrl);
     const legacyToken = wsUrl.searchParams.get("token");
-    if (legacyToken && !httpUrl.searchParams.has("token")) {
+    const targetsServerOrigin =
+      httpUrl.protocol === serverUrl.protocol && httpUrl.host === serverUrl.host;
+    if (legacyToken && targetsServerOrigin && !httpUrl.searchParams.has("token")) {
       httpUrl.searchParams.set("token", legacyToken);
     }
     return httpUrl.toString();

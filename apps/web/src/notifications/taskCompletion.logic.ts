@@ -20,6 +20,7 @@ export interface CompletedThreadCandidate {
   threadId: Thread["id"];
   projectId: Thread["projectId"];
   title: string;
+  turnId: NonNullable<Thread["latestTurn"]>["turnId"];
   completedAt: string;
   assistantSummary: string | null;
 }
@@ -66,6 +67,13 @@ export function shouldShowThreadNotificationToast(input: {
   visibleThreadIds: ReadonlySet<Thread["id"]>;
 }): boolean {
   return !input.visibleThreadIds.has(input.threadId);
+}
+
+export function shouldAttemptSystemTaskNotification(input: {
+  enabled: boolean;
+  isWindowForeground: boolean;
+}): boolean {
+  return input.enabled && !input.isWindowForeground;
 }
 
 // Treat sidebar "working" states as the only notification-worthy starting point.
@@ -523,8 +531,15 @@ export function collectCompletedThreadCandidates(
       continue;
     }
 
-    const completedAt = thread.latestTurn?.completedAt;
-    if (!completedAt) {
+    const latestTurn = thread.latestTurn;
+    const completedAt = latestTurn?.completedAt;
+    if (!latestTurn || !completedAt) {
+      continue;
+    }
+    // Interrupted/error settlements are not completions: the stop was either
+    // user-initiated or already surfaced through the error state, and "Finished
+    // working." copy would be wrong for both.
+    if (latestTurn.state !== "completed") {
       continue;
     }
     if (!isCompletionNotificationSettled(thread)) {
@@ -547,12 +562,24 @@ export function collectCompletedThreadCandidates(
       threadId: thread.id,
       projectId: thread.projectId,
       title: thread.title,
+      turnId: latestTurn.turnId,
       completedAt,
       assistantSummary: summarizeLatestAssistantMessage(thread),
     });
   }
 
   return candidates;
+}
+
+// Identity of one settled completion. The snapshot diff above can re-emit the
+// same completion when the session status wobbles out of and back into a settled
+// state (e.g. a follow-up turn spinning up while latestTurn still points at the
+// finished one); callers dedupe on this key so each completion notifies once.
+// completedAt is deliberately excluded: the same turn's completedAt is rewritten
+// by later events (assistant message, session settle, checkpoint diff) with
+// slightly different timestamps, and a turn only ever completes once.
+export function completedThreadNotificationKey(candidate: CompletedThreadCandidate): string {
+  return `${candidate.threadId}:${candidate.turnId}`;
 }
 function resolveTerminalNotificationState(
   threadState: TerminalNotificationThreadState | undefined,

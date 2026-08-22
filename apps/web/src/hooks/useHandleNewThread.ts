@@ -1,8 +1,15 @@
 import { type ProjectId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition } from "react";
 import { useAppSettings } from "../appSettings";
+import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import {
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
@@ -41,7 +48,12 @@ export interface NewThreadNavigationOptions {
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverCwd = serverConfigQuery.data?.cwd ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const navigate = useNavigate();
   const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -58,6 +70,35 @@ export function useHandleNewThread() {
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
     const entryPoint = options?.entryPoint ?? "chat";
+    if (entryPoint === "chat") {
+      const draftStore = useComposerDraftStore.getState();
+      const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
+      const draftComposer = draftThread
+        ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
+        : null;
+      const project = useStore.getState().projects.find((candidate) => candidate.id === projectId);
+
+      prefetchModelsForNewThread(queryClient, {
+        settings,
+        serverSettings: serverSettings ?? null,
+        hiddenProviders: settings.hiddenProviders,
+        providerOverride: options?.provider ?? null,
+        draftActiveProvider: draftComposer?.activeProvider ?? null,
+        stickyActiveProvider: draftStore.stickyActiveProvider,
+        projectDefaultProvider: project?.defaultModelSelection?.provider ?? null,
+        projectCwd: project?.cwd ?? null,
+        draftWorktreePath: draftThread?.worktreePath ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        hasExplicitWorktreePath: options?.worktreePath !== undefined,
+        fresh: options?.fresh === true,
+        envMode: options?.envMode ?? null,
+        serverCwd,
+        providerStatuses,
+        statusesReconciled: providerStatusesReconciled,
+        providerOrder: settings.providerOrder,
+        includeDroid: true,
+      });
+    }
     const wantsTemporaryThread = options?.temporary === true;
     const applyProviderOverride = (threadId: ThreadId) => {
       if (!options?.provider) {

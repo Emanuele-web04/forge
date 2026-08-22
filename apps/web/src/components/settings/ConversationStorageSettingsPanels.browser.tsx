@@ -119,4 +119,34 @@ describe("ConversationStorageSettingsPanels", () => {
     expect(text).toContain("Unknown project");
     expect(text).toContain("Orphan archived");
   });
+
+  it("lists each archived subtree once and exposes a child archived without its parent", async () => {
+    harness.threadShells = [
+      thread({ id: "active-parent", title: "Active parent" }),
+      thread({
+        id: "recoverable-child",
+        title: "Recoverable archived child",
+        parentThreadId: "active-parent",
+        archivedAt: "2026-01-02T00:00:00.000Z",
+      }),
+      thread({
+        id: "archived-parent",
+        title: "Archived parent",
+        archivedAt: "2026-01-03T00:00:00.000Z",
+      }),
+      thread({
+        id: "represented-child",
+        title: "Represented archived child",
+        parentThreadId: "archived-parent",
+        archivedAt: "2026-01-03T00:00:00.000Z",
+      }),
+    ];
+
+    await render(<ArchivedSettingsPanel active />);
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Recoverable archived child");
+    expect(text).toContain("Archived parent");
+    expect(text).not.toContain("Represented archived child");
+  });
 });

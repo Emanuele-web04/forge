@@ -75,9 +75,234 @@ class FakeWebContents extends EventEmitter {
   canGoForward = () => false;
   close = vi.fn();
   loadURL = vi.fn(() => Promise.resolve());
+  setZoomFactor = vi.fn();
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {
+    const nativeWebContents = new FakeWebContents(101);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const nativeManager = new DesktopBrowserManager();
+    nativeManager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    nativeManager.open({ threadId: THREAD_ID });
+    nativeManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 0, width: 480, height: 340 },
+      pageZoomFactor: 0.375,
+    });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.375);
+
+    nativeManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 0, width: 640, height: 340 },
+      pageZoomFactor: 0.5,
+    });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.5);
+
+    nativeManager.hide({ threadId: THREAD_ID });
+    expect(nativeWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+    nativeManager.dispose();
+
+    const rendererWebContents = Object.assign(new FakeWebContents(102), {
+      getType: () => "webview",
+      hostWebContents: { id: 41 },
+      session: browserSession,
+      debugger: { isAttached: () => false, detach: vi.fn() },
+    });
+    fromId.mockReturnValue(rendererWebContents);
+    const rendererManager = new DesktopBrowserManager();
+    const state = rendererManager.open({ threadId: THREAD_ID });
+    const tabId = state.activeTabId!;
+    rendererManager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 102 }, 41);
+    rendererManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 0, y: 0, width: 480, height: 340 },
+      pageZoomFactor: 0.375,
+    });
+    expect(rendererWebContents.setZoomFactor).toHaveBeenLastCalledWith(0.375);
+
+    rendererManager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    });
+    expect(rendererWebContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+    rendererManager.dispose();
+  });
+
+  it("demotes a native runtime to renderer when the floating surface claims the tab", () => {
+    const nativeWebContents = new FakeWebContents(201);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 800, height: 600 },
+    });
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 40, y: 80, width: 320, height: 220 },
+    });
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+    expect(nativeView.setVisible).toHaveBeenCalledWith(false);
+    const next = manager.getState({ threadId: THREAD_ID });
+    expect(next.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe("renderer");
+
+    const guest = Object.assign(new FakeWebContents(202), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
+      41,
+    );
+    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(
+      manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })
+        .webContents,
+    ).toBe(guest);
+    manager.dispose();
+  });
+
+  it("adopts a renderer guest even when attach races ahead of bounds promotion", () => {
+    const nativeWebContents = new FakeWebContents(211);
+    const nativeView = {
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(nativeView);
+
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 800, height: 600 },
+    });
+
+    const guest = Object.assign(new FakeWebContents(212), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    const attached = manager.attachWebview(
+      { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 212 },
+      41,
+    );
+    expect(attached.tabs.find((tab) => tab.id === opened.activeTabId)?.runtimeSurface).toBe(
+      "renderer",
+    );
+    expect(nativeWebContents.close).toHaveBeenCalled();
+    expect(
+      manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })
+        .webContents,
+    ).toBe(guest);
+    manager.dispose();
+  });
+
+  it("creates a native background runtime after the renderer guest detaches", async () => {
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(213), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 213 }, 41);
+    manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
+    manager.detachWebview({ threadId: THREAD_ID, tabId, webContentsId: 213 });
+
+    const backgroundWebContents = new FakeWebContents(214);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: backgroundWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+    });
+    const runtime = await manager.getAutomationRuntime(
+      { threadId: THREAD_ID, tabId },
+      { restore: false },
+    );
+    expect(runtime.webContents).toBe(backgroundWebContents);
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("native");
+    manager.dispose();
+  });
+
+  it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
+    const manager = new DesktopBrowserManager();
+    const hostWindow = {
+      webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    };
+    manager.setWindow(hostWindow as never);
+    const state = manager.open({ threadId: THREAD_ID });
+    const tabId = state.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(203), {
+      getType: () => "webview",
+      hostWebContents: hostWindow.webContents,
+      session: browserSession,
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: 203 }, 41);
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "renderer",
+      bounds: { x: 40, y: 80, width: 320, height: 220 },
+    });
+
+    manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
+    const runtime = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
+
+    expect(runtime.webContents).toBe(guest);
+    expect(guest.close).not.toHaveBeenCalled();
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("renderer");
+    manager.dispose();
+  });
+
   it("refuses a detached native fallback and returns an adopted renderer webview", () => {
     const manager = new DesktopBrowserManager();
     const state = manager.open({ threadId: THREAD_ID });
@@ -211,9 +436,11 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       guest,
     );
 
+    // Overlay occlusion used to send bounds:null; the adopted <webview> must
+    // stay the visible automation surface so resize/drag does not drop CDP.
     manager.setPanelBounds({ threadId: THREAD_ID, surface: "renderer", bounds: null });
-    expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /not currently visible/i,
+    expect(manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId }).webContents).toBe(
+      guest,
     );
   });
 
@@ -1022,6 +1249,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       webContents: nativeWebContents,
       setBounds: vi.fn(),
       setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
@@ -1092,6 +1320,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           webContents,
           setBounds: vi.fn(),
           setVisible: vi.fn(),
+          setBorderRadius: vi.fn(),
         });
       }
 

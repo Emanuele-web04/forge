@@ -34,19 +34,23 @@ export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): Tool
 
 function acpRequestErrorDetail(error: AcpErrors.AcpRequestError): string {
   const message = error.message.trim();
+  const data =
+    typeof error.data === "object" && error.data !== null
+      ? (error.data as Record<string, unknown>)
+      : undefined;
+  const rawDataDetail = data?.detail ?? data?.details;
   const dataDetail =
     typeof error.data === "string"
       ? error.data.trim()
-      : typeof error.data === "object" && error.data !== null
-        ? (() => {
-            const data = error.data as Record<string, unknown>;
-            const detail = data.detail ?? data.details;
-            return typeof detail === "string" ? detail.trim() : "";
-          })()
+      : typeof rawDataDetail === "string"
+        ? rawDataDetail.trim()
         : "";
 
   if (dataDetail && /^(?:internal error(?:: agent error)?|agent error)$/iu.test(message)) {
     return dataDetail;
+  }
+  if (dataDetail && typeof data?.code === "string" && data.code.startsWith("FS_")) {
+    return message ? `${message} ${dataDetail}` : dataDetail;
   }
   return message || dataDetail || "ACP request failed.";
 }

@@ -80,7 +80,7 @@ import {
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -102,7 +102,8 @@ const PI_THINKING_OPTIONS: ReadonlyArray<{
   { value: "low", label: "Low", description: "Faster reasoning" },
   { value: "medium", label: "Medium", description: "Balanced reasoning", isDefault: true },
   { value: "high", label: "High", description: "Deeper reasoning" },
-  { value: "xhigh", label: "Extra High", description: "Maximum reasoning" },
+  { value: "xhigh", label: "Extra High", description: "Extra-high reasoning" },
+  { value: "max", label: "Max", description: "Maximum reasoning" },
 ];
 const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "off",
@@ -496,7 +497,8 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "xhigh"
+    value === "xhigh" ||
+    value === "max"
   );
 }
 
@@ -1322,21 +1324,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
     const runtimeEventIngress = yield* makeBoundedCallbackIngress<
-      ProviderRuntimeEvent,
+      SizedProviderRuntimeEvent,
       never,
       never
     >(
-      (event) =>
-        (nativeEventLogger && event.raw
-          ? nativeEventLogger.write(event.raw, event.threadId).pipe(Effect.ignore)
+      (item) =>
+        (nativeEventLogger && item.event.raw
+          ? nativeEventLogger.write(item.event.raw, item.event.threadId).pipe(Effect.ignore)
           : Effect.void
-        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, event)), Effect.asVoid),
+        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, item.event)), Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 

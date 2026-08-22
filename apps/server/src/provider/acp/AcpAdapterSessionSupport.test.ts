@@ -42,7 +42,7 @@ describe("ACP adapter session support", () => {
     ).toBe("architecture");
     expect(
       resolveRequestedAcpSessionModeId({
-        interactionMode: "default",
+        interactionMode: "debug",
         runtimeMode: "approval-required",
         modeState,
         aliases,
@@ -50,7 +50,7 @@ describe("ACP adapter session support", () => {
     ).toBe("ask");
     expect(
       resolveRequestedAcpSessionModeId({
-        interactionMode: "default",
+        interactionMode: "debug",
         runtimeMode: "full-access",
         modeState,
         aliases,

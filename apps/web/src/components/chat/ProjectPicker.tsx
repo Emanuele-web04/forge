@@ -15,6 +15,7 @@ import {
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
+import { useAppSettings } from "../../appSettings";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
@@ -26,13 +27,14 @@ import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { FolderClosed } from "../FolderClosed";
 import { SpaceIcon } from "../SpaceIcon";
-import { PickerTriggerButton } from "./PickerTriggerButton";
 import { PickerPanelShell } from "./PickerPanelShell";
+import { PickerTriggerButton } from "./PickerTriggerButton";
 import {
   Combobox,
   ComboboxEmpty,
   ComboboxGroup,
   ComboboxGroupLabel,
+  ComboboxInput,
   ComboboxItem,
   ComboboxList,
   ComboboxPopup,
@@ -164,7 +166,14 @@ export const ProjectPicker = memo(function ProjectPicker({
   const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
+  const { settings } = useAppSettings();
+  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
+  const sidebarThreads = useStore(
+    useMemo(
+      () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
+      [hideAutomationRunThreads],
+    ),
+  );
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -527,9 +536,6 @@ export const ProjectPicker = memo(function ProjectPicker({
         key={folder.cwd}
         index={index}
         value={folder.cwd}
-        onClick={() => {
-          handleSelectActiveFolder(folder);
-        }}
         className={cn(
           selected &&
             "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
@@ -552,6 +558,25 @@ export const ProjectPicker = memo(function ProjectPicker({
     );
   };
 
+  const handleValueChange = useCallback(
+    (selectedValue: string | null) => {
+      if (!selectedValue) return;
+      const activeFolder = activeFolderOptions.find((entry) => entry.cwd === selectedValue);
+      if (activeFolder) {
+        handleSelectActiveFolder(activeFolder);
+        return;
+      }
+      const localFolder = localFolderOptions.find((entry) => entry.absolutePath === selectedValue);
+      if (localFolder) {
+        if (onSelectWorkspaceRoot) {
+          onSelectWorkspaceRoot(localFolder.absolutePath);
+        }
+        setOpen(false);
+      }
+    },
+    [activeFolderOptions, handleSelectActiveFolder, localFolderOptions, onSelectWorkspaceRoot],
+  );
+
   return (
     <Combobox
       items={selectableDirectoryPaths}
@@ -559,6 +584,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       autoHighlight
       onOpenChange={handleOpenChange}
       open={open}
+      onValueChange={handleValueChange}
     >
       {renderTrigger ? (
         <ComboboxTrigger render={renderTrigger} />
@@ -619,9 +645,17 @@ export const ProjectPicker = memo(function ProjectPicker({
       )}
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder={searchPlaceholder}
-          query={query}
-          onQueryChange={setQuery}
+          searchInput={
+            <ComboboxInput
+              className="rounded-md border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
+              inputClassName="ring-0"
+              placeholder={searchPlaceholder}
+              showTrigger={false}
+              size="sm"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          }
           footer={
             <>
               <button
@@ -693,10 +727,6 @@ export const ProjectPicker = memo(function ProjectPicker({
                     key={absolutePath}
                     index={filteredActiveFolderOptions.length + index}
                     value={absolutePath}
-                    onClick={() => {
-                      onSelectWorkspaceRoot?.(absolutePath);
-                      setOpen(false);
-                    }}
                     className={cn(
                       absolutePath === selectedWorkspaceRoot &&
                         "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",

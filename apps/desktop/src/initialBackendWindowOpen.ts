@@ -20,14 +20,16 @@ export interface InitialBackendWindowOpenOptions {
 }
 
 export function openInitialBackendWindow(options: InitialBackendWindowOpenOptions): void {
-  if (options.isDevelopment || options.baseUrl.length === 0 || options.hasExistingWindow()) {
+  if (options.isDevelopment || options.baseUrl.length === 0) {
     return;
   }
 
-  // The packaged renderer is served from local files, so surface the window
-  // while the backend finishes startup instead of leaving macOS menu-bar-only.
-  options.createWindow();
-  options.writeLog("bootstrap main window created");
+  if (!options.hasExistingWindow()) {
+    // The packaged renderer is served from local files, so surface the window
+    // while the backend finishes startup instead of leaving macOS menu-bar-only.
+    options.createWindow();
+    options.writeLog("bootstrap main window created");
+  }
 
   if (options.getReadinessInFlight() !== null) {
     return;
@@ -45,7 +47,7 @@ export function openInitialBackendWindow(options: InitialBackendWindowOpenOption
       options.writeLog(
         `bootstrap backend readiness warning message=${options.formatErrorMessage(error)}`,
       );
-      options.warn("[desktop] backend readiness check timed out during packaged bootstrap", error);
+      options.warn("[desktop] backend readiness observation ended before startup completed", error);
     })
     .finally(() => {
       if (options.getReadinessInFlight() === nextOpen) {

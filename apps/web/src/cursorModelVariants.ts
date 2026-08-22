@@ -79,8 +79,11 @@ function defaultEffortForGroup(
   if (baseSlug.includes("gpt") || baseSlug.includes("codex")) {
     return efforts.includes("medium") ? "medium" : efforts[0];
   }
-  if (baseSlug.includes("claude")) {
-    return efforts.includes("high") ? "high" : efforts[0];
+  // Claude and Grok (and most other Cursor chat models) default to high.
+  // Collapsed CLI lists are ordered low → high, so taking efforts[0] would
+  // make Grok look like a low-default model in the picker.
+  if (efforts.includes("high")) {
+    return "high";
   }
   return efforts[0];
 }

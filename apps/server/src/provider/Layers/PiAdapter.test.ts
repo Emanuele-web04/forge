@@ -451,13 +451,16 @@ describe("getPiSupportedThinkingOptions", () => {
     expect(getPiSupportedThinkingOptions(makePiModel({ reasoning: false }))).toEqual([]);
   });
 
-  it("advertises xhigh only when the concrete Pi model supports it", () => {
-    const withoutXHigh = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
+  it("advertises xhigh and max only when the concrete Pi model supports them", () => {
+    const withoutExtended = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
     const withXHigh = getPiSupportedThinkingOptions(
       makePiModel({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } }),
     );
+    const withMax = getPiSupportedThinkingOptions(
+      makePiModel({ reasoning: true, thinkingLevelMap: { max: "max" } }),
+    );
 
-    expect(withoutXHigh.map((option) => option.value)).toEqual([
+    expect(withoutExtended.map((option) => option.value)).toEqual([
       "off",
       "minimal",
       "low",
@@ -471,6 +474,14 @@ describe("getPiSupportedThinkingOptions", () => {
       "medium",
       "high",
       "xhigh",
+    ]);
+    expect(withMax.map((option) => option.value)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "max",
     ]);
   });
 
@@ -489,6 +500,25 @@ describe("getPiSupportedThinkingOptions", () => {
     );
 
     expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high"]);
+  });
+
+  it("preserves kimi-k3 style ladders that expose low, high, and max", () => {
+    const options = getPiSupportedThinkingOptions(
+      makePiModel({
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      }),
+    );
+
+    expect(options.map((option) => option.value)).toEqual(["low", "high", "max"]);
   });
 });
 

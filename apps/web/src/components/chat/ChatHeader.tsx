@@ -38,6 +38,7 @@ import {
   SurfaceChipIcon,
   SurfaceTabChip,
 } from "./chatHeaderControls";
+import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
@@ -84,6 +85,10 @@ interface ChatHeaderProps {
   className?: string;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
+  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
+  // scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar
+  // cluster plus the Environment and right-panel toggles.
+  minimalChrome?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -170,7 +175,9 @@ function EditorChatHistoryMenu(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const historyThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
@@ -255,7 +262,9 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const currentChatTab: EditorRailChatTab = {
     id: props.activeThreadId,
@@ -502,6 +511,7 @@ export function ChatHeader({
   className,
   hideSidebarControls: hideSidebarControlsProp,
   hideHandoffControls: hideHandoffControlsProp,
+  minimalChrome: minimalChromeProp,
   isGitRepo,
   openInTarget,
   activeProjectScripts,
@@ -542,6 +552,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const minimalChrome = minimalChromeProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
@@ -624,14 +635,11 @@ export function ChatHeader({
             }
           >
             {!togglesRightDock && showDiffTotals ? (
-              <span className="inline-flex items-center gap-1">
-                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
-                  +{diffAdditions}
-                </span>
-                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
-                  -{diffDeletions}
-                </span>
-              </span>
+              <DiffStat
+                className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal"
+                insertions={diffAdditions}
+                deletions={diffDeletions}
+              />
             ) : null}
             <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
           </Toggle>
@@ -664,7 +672,11 @@ export function ChatHeader({
       >
         {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
         <div
-          className={cn("flex min-w-0 flex-1 items-center gap-2", editorChatControls && "h-full")}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2",
+            editorChatControls && "h-full",
+            minimalChrome && "hidden",
+          )}
         >
           <div
             className={cn(
@@ -782,10 +794,10 @@ export function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!hideHandoffControls && !environment ? (
+        {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {!hideHandoffControls ? (
+        {!minimalChrome && !hideHandoffControls ? (
           <Menu modal={false}>
             <Tooltip>
               <TooltipTrigger
@@ -819,7 +831,7 @@ export function ChatHeader({
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
-        {activeProjectScripts ? (
+        {!minimalChrome && activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             keybindings={keybindings}
@@ -829,6 +841,15 @@ export function ChatHeader({
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
             onDeleteScript={onDeleteProjectScript}
+          />
+        ) : null}
+
+        {!minimalChrome && environment && activeProjectName && showGitActions ? (
+          <GitActionsControl
+            gitCwd={gitCwd}
+            activeThreadId={activeThreadId}
+            hideQuickActionLabel={compact}
+            visibleWhen="pull-available"
           />
         ) : null}
 
@@ -867,8 +888,9 @@ export function ChatHeader({
           </Tooltip>
         ) : null}
 
-        {/* Environment: one button consolidating Open-in-editor and git actions into the
-            Environment panel. The right-side panel control stays beside it, acting as the
+        {/* Environment: one button consolidating Open-in-editor and most git actions into
+            the Environment panel. Pull still appears in this action cluster when the
+            branch is behind. The right-side panel control stays beside it, acting as the
             multi-pane dock toggle on single chats and the legacy diff toggle in split hosts.
             Falls back to the legacy controls when no environment is resolved. */}
         {environment ? (
@@ -880,7 +902,7 @@ export function ChatHeader({
           <>
             {/* Open in editor: dedicated split-button with an editor switcher; the project
                 action control now lives beside Hand off as its own project command surface. */}
-            {activeProjectName ? (
+            {!minimalChrome && activeProjectName ? (
               <OpenInPicker
                 keybindings={keybindings}
                 availableEditors={availableEditors}
@@ -888,7 +910,7 @@ export function ChatHeader({
               />
             ) : null}
 
-            {activeProjectName && showGitActions ? (
+            {!minimalChrome && activeProjectName && showGitActions ? (
               <GitActionsControl
                 gitCwd={gitCwd}
                 activeThreadId={activeThreadId}

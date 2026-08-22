@@ -54,7 +54,7 @@ function readClaudeAuthStatusJsonMarker(result: CommandResult): {
       auth: extractAuthBoolean(JSON.parse(trimmed)),
     };
   } catch {
-    return { attemptedJsonParse: false, auth: undefined };
+    return { attemptedJsonParse: true, auth: undefined };
   }
 }
 

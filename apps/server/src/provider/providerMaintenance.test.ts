@@ -39,6 +39,33 @@ const OPENCODE_DEFINITION = {
   },
 } as const satisfies PackageManagedProviderMaintenanceDefinition;
 
+const CLAUDE_DEFINITION = {
+  provider: "claudeAgent",
+  binaryName: "claude",
+  npmPackageName: "@anthropic-ai/claude-code",
+  homebrew: {
+    name: "claude-code",
+    kind: "cask",
+    variants: [
+      {
+        name: "claude-code@latest",
+        kind: "cask",
+        isCommandPath: (commandPath: string) =>
+          commandPath.toLowerCase().includes("/caskroom/claude-code@latest/"),
+      },
+    ],
+  },
+  nativeUpdate: {
+    executable: "claude",
+    args: () => ["update"],
+    lockKey: "claude-native",
+    strategy: "matching-path",
+    latestVersionSource: null,
+    isCommandPath: (commandPath: string) =>
+      commandPath.toLowerCase().includes("/.local/share/claude/"),
+  },
+} as const satisfies PackageManagedProviderMaintenanceDefinition;
+
 /** The trailing name of a probed path, whichever separator the host joined it with. */
 function fileNameOf(probedPath: string): string {
   return probedPath.slice(Math.max(probedPath.lastIndexOf("/"), probedPath.lastIndexOf("\\")) + 1);
@@ -118,6 +145,40 @@ describe("providerMaintenance", () => {
       lockKey: "homebrew",
     });
     assert.strictEqual(capabilities.packageName, null);
+  });
+
+  it("keeps native provider update truth with the provider when explicitly configured", () => {
+    const capabilities = resolvePackageManagedProviderMaintenance(CLAUDE_DEFINITION, {
+      binaryPath: "claude",
+      realCommandPath: "/Users/test/.local/share/claude/versions/2.1.100/claude",
+    });
+
+    assert.deepStrictEqual(capabilities.update, {
+      command: "claude update",
+      executable: "claude",
+      args: ["update"],
+      lockKey: "claude-native",
+    });
+    assert.strictEqual(capabilities.latestVersionSource, null);
+  });
+
+  it("resolves alternate Homebrew casks from the installed command path", () => {
+    const capabilities = resolvePackageManagedProviderMaintenance(CLAUDE_DEFINITION, {
+      binaryPath: "/opt/homebrew/bin/claude",
+      realCommandPath: "/opt/homebrew/Caskroom/claude-code@latest/2.1.100/claude",
+    });
+
+    assert.deepStrictEqual(capabilities.update, {
+      command: "brew upgrade --cask claude-code@latest",
+      executable: "brew",
+      args: ["upgrade", "--cask", "claude-code@latest"],
+      lockKey: "homebrew",
+    });
+    assert.deepStrictEqual(capabilities.latestVersionSource, {
+      kind: "homebrew",
+      name: "claude-code@latest",
+      homebrewKind: "cask",
+    });
   });
 
   it("uses provider-native update commands with detected install method", () => {
@@ -228,7 +289,7 @@ describe("providerMaintenance", () => {
       assert.ok(batIndex < cmdIndex);
     });
 
-    it("never touches the filesystem for a binary path that already names a location", async () => {
+    it("does not search PATH when a binary path already names a location", async () => {
       const { probed } = await runWithVirtualFileSystem(new Set(), {
         binaryPath: "/opt/homebrew/bin/codex",
         platform: "darwin",
@@ -236,6 +297,31 @@ describe("providerMaintenance", () => {
       });
 
       assert.deepStrictEqual(probed, []);
+    });
+
+    it("resolves explicit Homebrew symlinks before selecting a cask variant", async () => {
+      const layer = FileSystem.layerNoop({
+        realPath: () => Effect.succeed("/opt/homebrew/Caskroom/claude-code@latest/2.1.100/claude"),
+      });
+
+      const capabilities = await Effect.runPromise(
+        resolveProviderMaintenanceCapabilitiesEffect(CLAUDE_DEFINITION, {
+          binaryPath: "/opt/homebrew/bin/claude",
+          platform: "darwin",
+        }).pipe(Effect.provide(layer)),
+      );
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "brew upgrade --cask claude-code@latest",
+        executable: "brew",
+        args: ["upgrade", "--cask", "claude-code@latest"],
+        lockKey: "homebrew",
+      });
+      assert.deepStrictEqual(capabilities.latestVersionSource, {
+        kind: "homebrew",
+        name: "claude-code@latest",
+        homebrewKind: "cask",
+      });
     });
 
     it("probes nothing when the supplied environment carries no PATH", async () => {

@@ -164,6 +164,49 @@ describe("AcpRuntimeModel", () => {
     }
   });
 
+  it("preserves Grok prompt-policy denial text on failed shell tools", () => {
+    const pending = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-denied",
+        title: "Terminal",
+        kind: "execute",
+        status: "pending",
+        rawInput: { command: "git pull" },
+      },
+    } satisfies Acp.SessionNotification);
+    const failed = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-denied",
+        status: "failed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "denied by prompt policy (tool not pre-approved)",
+            },
+          },
+        ],
+      },
+    } satisfies Acp.SessionNotification);
+
+    const pendingEvent = pending.events[0];
+    const failedEvent = failed.events[0];
+    expect(pendingEvent?._tag).toBe("ToolCallUpdated");
+    expect(failedEvent?._tag).toBe("ToolCallUpdated");
+    if (pendingEvent?._tag === "ToolCallUpdated" && failedEvent?._tag === "ToolCallUpdated") {
+      expect(mergeToolCallState(pendingEvent.toolCall, failedEvent.toolCall)).toMatchObject({
+        status: "failed",
+        command: "git pull",
+        detail: "denied by prompt policy (tool not pre-approved)",
+      });
+    }
+  });
+
   it("derives useful tool details when Cursor sends empty rawInput placeholders", () => {
     const searchCompleted = parseSessionUpdateEvent({
       sessionId: "session-1",

@@ -9,6 +9,11 @@ import {
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
+import {
+  sanitizeUnmappedProviderData,
+  sanitizeUnmappedProviderDetail,
+} from "../provider/unmappedProviderEvents.ts";
+
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
@@ -104,7 +109,33 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
-function stringifyJsonLike(value: unknown): string {
+function isPlainJsonTree(value: unknown, seen: Set<object>): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isPlainJsonTree(entry, seen));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  return Object.values(value).every((entry) => isPlainJsonTree(entry, seen));
+}
+
+function stringifyJsonLikeFallback(value: unknown): string {
   const seen = new WeakSet<object>();
   return (
     JSON.stringify(value, (_key, entry) => {
@@ -123,6 +154,21 @@ function stringifyJsonLike(value: unknown): string {
       return entry;
     }) ?? "null"
   );
+}
+
+function serializeJsonLike(value: unknown): {
+  readonly text: string;
+  readonly plain: boolean;
+} {
+  const plain = isPlainJsonTree(value, new Set<object>());
+  return {
+    text: plain ? (JSON.stringify(value) ?? "null") : stringifyJsonLikeFallback(value),
+    plain,
+  };
+}
+
+function stringifyJsonLike(value: unknown): string {
+  return serializeJsonLike(value).text;
 }
 
 function truncateJsonString(value: string, limit: number): string {
@@ -245,9 +291,10 @@ function truncateJsonValue(
 }
 
 function boundActivityData(value: unknown): unknown {
-  const serialized = stringifyJsonLike(value);
+  const serialization = serializeJsonLike(value);
+  const serialized = serialization.text;
   if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
-    return JSON.parse(serialized);
+    return serialization.plain ? value : JSON.parse(serialized);
   }
 
   const withTruncationMetadata = (bounded: unknown): Record<string, unknown> => {
@@ -464,15 +511,14 @@ function sessionApprovalAvailable(
 
 export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
+  sessionSequence?: number,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  const maybeSequence = (() => {
-    const sequence = (event as ProviderRuntimeEvent & { sessionSequence?: number }).sessionSequence;
-    // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
-    // counter has to be dropped: carrying it invalidates the whole command.
-    return typeof sequence === "number" && Number.isInteger(sequence) && sequence >= 0
-      ? { sequence }
+  // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
+  // counter has to be dropped: carrying it invalidates the whole command.
+  const maybeSequence =
+    typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
+      ? { sequence: sessionSequence }
       : {};
-  })();
   // Codex and Antigravity only render completed reasoning items with a readable summary.
   // Empty starts/completions are private/encrypted reasoning boundaries, not
   // transcript rows. Waiting for the authoritative completion also avoids
@@ -1111,6 +1157,32 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             ...normalizedPayload,
             status,
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "event.unmapped": {
+      const payload = runtimePayloadRecord(event);
+      const nativeType = asString(payload?.nativeType);
+      if (!nativeType) {
+        return [];
+      }
+      const detail = asString(payload?.detail);
+      const rawData = payload?.data;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.event.unmapped",
+          summary: nativeType,
+          payload: toActivityPayload({
+            nativeEventType: nativeType,
+            ...(detail ? { detail: sanitizeUnmappedProviderDetail(detail) } : {}),
+            ...(rawData !== undefined ? { data: sanitizeUnmappedProviderData(rawData) } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

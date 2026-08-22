@@ -64,6 +64,10 @@
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
     },
+    "./desktopTitleBar": {
+      "types": "./src/desktopTitleBar.ts",
+      "import": "./src/desktopTitleBar.ts"
+    },
     "./desktopIdentity": {
       "types": "./src/desktopIdentity.ts",
       "import": "./src/desktopIdentity.ts"
@@ -120,13 +124,25 @@
       "types": "./src/threadEnvironment.ts",
       "import": "./src/threadEnvironment.ts"
     },
+    "./threadDetailEvents": {
+      "types": "./src/threadDetailEvents.ts",
+      "import": "./src/threadDetailEvents.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
     },
+    "./pendingInteractions": {
+      "types": "./src/pendingInteractions.ts",
+      "import": "./src/pendingInteractions.ts"
+    },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
       "import": "./src/projectContainers.ts"
+    },
+    "./projectDirectoryName": {
+      "types": "./src/projectDirectoryName.ts",
+      "import": "./src/projectDirectoryName.ts"
     },
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
@@ -259,6 +275,18 @@
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"
+    },
+    "./deviceFrame": {
+      "types": "./src/deviceFrame.ts",
+      "import": "./src/deviceFrame.ts"
+    },
+    "./deviceHelperCache": {
+      "types": "./src/deviceHelperCache.ts",
+      "import": "./src/deviceHelperCache.ts"
+    },
+    "./searchQuery": {
+      "types": "./src/searchQuery.ts",
+      "import": "./src/searchQuery.ts"
     }
   },
   "scripts": {

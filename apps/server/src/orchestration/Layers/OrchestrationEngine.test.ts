@@ -56,7 +56,10 @@ const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 
 const makeThreadEventReadMethods = (
   events: ReadonlyArray<OrchestrationEvent>,
-): Pick<OrchestrationEventStoreShape, "getThreadHighWaterSequence" | "readThreadEvents"> => ({
+): Pick<
+  OrchestrationEventStoreShape,
+  "getThreadHighWaterSequence" | "readThreadEvents" | "readThreadEventsFromSequence"
+> => ({
   getThreadHighWaterSequence: (threadId) =>
     Effect.succeed(
       events
@@ -76,6 +79,25 @@ const makeThreadEventReadMethods = (
         )
         .toSorted((left, right) => right.sequence - left.sequence)
         .slice(0, input.limit),
+    ),
+  readThreadEventsFromSequence: (
+    threadId,
+    sequenceExclusive,
+    limit = 1_000,
+    throughSequenceInclusive = Number.MAX_SAFE_INTEGER,
+    eventTypes,
+  ) =>
+    Stream.fromIterable(
+      events
+        .filter(
+          (event) =>
+            event.aggregateKind === "thread" &&
+            event.aggregateId === threadId &&
+            event.sequence > sequenceExclusive &&
+            event.sequence <= throughSequenceInclusive &&
+            (eventTypes === undefined || eventTypes.includes(event.type)),
+        )
+        .slice(0, limit),
     ),
 });
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -1160,6 +1182,30 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
+        projectId: asProjectId("project-health-fresh"),
+        title: "Fresh projection health",
+        workspaceRoot: "/tmp/project-health-fresh",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
+      state: "healthy",
+      missingProjectors: [],
+    });
+
+    await system.dispose();
+  });
+
   it("retries deferred projection catch-up while idle until it recovers", async () => {
     let bootstrapCalls = 0;
     let deferredCalls = 0;
@@ -1271,11 +1317,12 @@ describe("OrchestrationEngine", () => {
     expect(deferredCalls).toBeGreaterThanOrEqual(1);
     expect(bootstrapCalls).toBe(4);
     await vi.waitFor(async () => {
-      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toEqual({
+      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toMatchObject({
         state: "healthy",
         inFlight: false,
         retryAttempts: 0,
         lastFailure: null,
+        missingProjectors: [],
       });
     });
 
@@ -1323,6 +1370,62 @@ describe("OrchestrationEngine", () => {
       "did not reach captured event fence 1",
     );
     await expect(runtime.runPromise(engine.getReadModel())).resolves.toEqual(beforeRepair);
+
+    await runtime.dispose();
+  });
+
+  it("coalesces concurrent projection repairs and skips an immediate repeat", async () => {
+    let bootstrapCalls = 0;
+    let repairBootstrapCalls = 0;
+    let resolveBootstrapStarted: (() => void) | undefined;
+    let releaseBootstrap: (() => void) | undefined;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      resolveBootstrapStarted = resolve;
+    });
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const blockingProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.sync(() => (bootstrapCalls += 1)).pipe(
+        Effect.flatMap((call) => {
+          if (call === 1) {
+            return Effect.void;
+          }
+          repairBootstrapCalls += 1;
+          resolveBootstrapStarted?.();
+          return Effect.promise(() => bootstrapGate);
+        }),
+      ),
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectDeferredEvent: () => Effect.void,
+    };
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, blockingProjectionPipeline)),
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+
+    const firstRepair = runtime.runPromise(engine.repairState());
+    await bootstrapStarted;
+    const secondRepair = runtime.runPromise(engine.repairState());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBootstrap?.();
+
+    const [firstSnapshot, secondSnapshot] = await Promise.all([firstRepair, secondRepair]);
+    expect(secondSnapshot).toEqual(firstSnapshot);
+    expect(repairBootstrapCalls).toBe(1);
+
+    await runtime.runPromise(engine.repairState());
+    expect(repairBootstrapCalls).toBe(1);
 
     await runtime.dispose();
   });

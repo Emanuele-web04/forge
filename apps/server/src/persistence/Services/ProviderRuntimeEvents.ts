@@ -59,6 +59,10 @@ export interface ProviderRuntimeEventRepositoryShape {
   readonly getConsumerCursor: (
     consumerName: string,
   ) => Effect.Effect<number, ProviderRuntimeEventRepositoryError>;
+  readonly hasPendingEventsForThreads: (input: {
+    readonly consumerName: string;
+    readonly threadIds: ReadonlyArray<string>;
+  }) => Effect.Effect<boolean, ProviderRuntimeEventRepositoryError>;
   readonly advanceConsumerCursor: (input: {
     readonly consumerName: string;
     readonly eventSequence: number;

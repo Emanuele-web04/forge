@@ -146,6 +146,24 @@ describe("resolveAllowedLocalPreviewFile", () => {
     }
   });
 
+  it("allows PDFs inside the configured private scratch root without a cwd", async () => {
+    const privateTempRoot = makeTempDir("synara-private-scratch-");
+    const scratchRoot = path.join(privateTempRoot, "synara-codex-workspaces");
+    const threadDir = path.join(scratchRoot, "private-thread");
+    const pdfPath = path.join(threadDir, "private-scratch.pdf");
+    mkdirSync(threadDir, { recursive: true });
+    writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
+
+    const result = await resolveAllowedLocalPreviewFile({
+      requestedPath: pdfPath,
+      cwd: null,
+      scratchWorkspacesRoot: scratchRoot,
+    });
+
+    assert.equal(result?.path, realpathSync(pdfPath));
+    assert.equal(result?.fileName, "private-scratch.pdf");
+  });
+
   it("rejects PDFs outside the workspace even under the temp-dir image roots", async () => {
     // Temp/generated-image roots exist for agent-produced images in chat
     // markdown; documents must only ever be served from the workspace.

@@ -1,145 +1,171 @@
 # Architecture
 
-Synara runs as a **Node.js WebSocket server** that wraps `codex app-server` (JSON-RPC over stdio) and serves a React web app.
+Synara is a local-first orchestration application with three main runtime surfaces:
 
-```
-┌─────────────────────────────────┐
-│  Browser (React + Vite)         │
-│  wsTransport (state machine)    │
-│  Typed push decode at boundary  │
-└──────────┬──────────────────────┘
-           │ ws://localhost:3773
-┌──────────▼──────────────────────┐
-│  apps/server (Node.js)          │
-│  WebSocket + HTTP static server │
-│  ServerPushBus (ordered pushes) │
-│  ServerReadiness (startup gate) │
-│  OrchestrationEngine            │
-│  ProviderService                │
-│  CheckpointReactor              │
-│  RuntimeReceiptBus              │
-└──────────┬──────────────────────┘
-           │ JSON-RPC over stdio
-┌──────────▼──────────────────────┐
-│  codex app-server               │
-└─────────────────────────────────┘
-```
+- the React web client in `apps/web`;
+- the server/runtime in `apps/server`;
+- the Electron desktop shell in `apps/desktop`.
 
-## Components
+The server owns durable orchestration, provider sessions, Git/worktree state, terminals, automation, device/browser integrations, and the typed HTTP/WebSocket RPC surface. Provider-native protocols stay behind adapter boundaries; the web app consumes Synara contracts rather than talking to coding-agent CLIs directly.
 
-- **Browser app**: The React app renders session state, owns the client-side WebSocket transport, and treats typed push events as the boundary between server runtime details and UI state.
+```text
+┌──────────────────────────────────────────────┐
+│ apps/web                                     │
+│ React UI · wsTransport · client stores       │
+│ shell/thread subscriptions · editor/dock UI  │
+└───────────────────┬──────────────────────────┘
+                    │ typed HTTP/WebSocket RPC
+┌───────────────────▼──────────────────────────┐
+│ apps/server                                  │
+│ wsRpc / HTTP routes                          │
+│ OrchestrationEngine + projections            │
+│ ProviderService + ProviderAdapterRegistry    │
+│ Git · terminals · automation · workspace     │
+│ browser/device/external-MCP integrations     │
+└──────────────┬───────────────────────┬───────┘
+               │                       │
+       provider-native protocols       │ SQLite / filesystem / Git
+               │                       │
+┌──────────────▼────────────────┐      │
+│ Codex / Claude / Cursor / ... │      │
+│ provider adapters and CLIs    │      │
+└───────────────────────────────┘      │
+                                      ▼
+                              durable local state
 
-- **Server**: `apps/server` is the main coordinator. It serves the web app, accepts WebSocket requests, waits for startup readiness before welcoming clients, and sends all outbound pushes through a single ordered push path.
-
-- **Provider runtime**: `codex app-server` does the actual provider/session work. The server talks to it over JSON-RPC on stdio and translates those runtime events into the app's orchestration model.
-
-- **Background workers**: Long-running async flows such as runtime ingestion, command reaction, and checkpoint processing run as queue-backed workers. This keeps work ordered, reduces timing races, and gives tests a deterministic way to wait for the system to go idle.
-
-- **Runtime signals**: The server emits lightweight typed receipts when important async milestones finish, such as checkpoint capture, diff finalization, or a turn becoming fully quiescent. Tests and orchestration code wait on these signals instead of polling internal state.
-
-## Event Lifecycle
-
-### Startup and client connect
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant Transport as WsTransport
-    participant Server as wsServer
-    participant Layers as serverLayers
-    participant Ready as ServerReadiness
-    participant Push as ServerPushBus
-
-    Browser->>Transport: Load app and open WebSocket
-    Transport->>Server: Connect
-    Server->>Layers: Start runtime services
-    Server->>Ready: Wait for startup barriers
-    Ready-->>Server: Ready
-    Server->>Push: Publish server.welcome
-    Push-->>Transport: Ordered welcome push
-    Transport-->>Browser: Hydrate initial state
+┌──────────────────────────────────────────────┐
+│ apps/desktop                                 │
+│ Electron shell · backend supervision         │
+│ native window/OS integrations                │
+│ loads the same web client                    │
+└──────────────────────────────────────────────┘
 ```
 
-1. The browser boots [`WsTransport`][1] and registers typed listeners in [`wsNativeApi`][2].
-2. The server accepts the connection in [`wsServer`][3] and brings up the runtime graph defined in [`serverLayers`][7].
-3. [`ServerReadiness`][4] waits until the key startup barriers are complete.
-4. Once the server is ready, [`wsServer`][3] sends `server.welcome` from the contracts in [`ws.ts`][6] through [`ServerPushBus`][5].
-5. The browser receives that ordered push through [`WsTransport`][1], and [`wsNativeApi`][2] uses it to seed local client state.
+## Runtime boundaries
 
-The connect itself is a single negotiated handshake, and the socket is compressed. See [transport.md](./transport.md) for the negotiation contract, `permessage-deflate`, static asset delivery, and cursor-based thread resume.
+### Web client
 
-### User turn flow
+`apps/web` renders the application and owns browser-side transport/state coordination.
 
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant Transport as WsTransport
-    participant Server as wsServer
-    participant Provider as ProviderService
-    participant Codex as codex app-server
-    participant Ingest as ProviderRuntimeIngestion
-    participant Engine as OrchestrationEngine
-    participant Push as ServerPushBus
+Important boundaries include:
 
-    Browser->>Transport: Send user action
-    Transport->>Server: Typed WebSocket request
-    Server->>Provider: Route request
-    Provider->>Codex: JSON-RPC over stdio
-    Codex-->>Ingest: Provider runtime events
-    Ingest->>Engine: Normalize into orchestration events
-    Engine-->>Server: Domain events
-    Server->>Push: Publish orchestration.domainEvent
-    Push-->>Browser: Typed push
+- `wsTransport.ts` — connection state, negotiation, reconnect, and request transport;
+- `wsNativeApi.ts` / `nativeApi.ts` — typed client API exposed to the rest of the UI;
+- `routes/__root.tsx` — application-level event/subscription routing and shell/thread projection ownership;
+- Zustand/React Query stores that cache or project server-authoritative state;
+- client-owned persisted UI state such as unsent composer drafts, sticky local model choices, and right-dock layout, which is not reconstructible from server snapshots.
+
+The client does not own provider session truth or durable orchestration state. When the socket reconnects, snapshots and resumable streams rebuild server-derived client projections, while browser-persisted drafts/layout remain a separate client-owned state class.
+
+### Server and RPC surface
+
+`apps/server/src/wsRpc.ts` is the main typed feature-RPC boundary. It merges the shared contract groups, applies request/stream admission, authentication/session context, and exposes orchestration plus server services on one feature socket.
+
+The HTTP/WebSocket layer also owns:
+
+- protocol negotiation and compatibility fencing;
+- trusted-origin/authentication policy;
+- static asset delivery;
+- bounded stream/backpressure behavior;
+- device frame transport and other specialized routes.
+
+`serverLayers.ts` assembles the long-lived service graph used by the server runtime.
+
+### Orchestration
+
+The orchestration layer is provider-independent and durable.
+
+A typical state-changing request follows this shape:
+
+```text
+client request
+    ↓
+OrchestrationEngine command
+    ↓
+durable event / projection update
+    ↓
+ProviderCommandReactor (when provider work is required)
+    ↓
+ProviderService
+    ↓
+ProviderAdapter
 ```
 
-1. A user action in the browser becomes a typed request through [`WsTransport`][1] and the browser API layer in [`nativeApi`][12].
-2. [`wsServer`][3] decodes that request using the shared WebSocket contracts in [`ws.ts`][6] and routes it to the right service.
-3. [`ProviderService`][8] starts or resumes a session and talks to `codex app-server` over JSON-RPC on stdio.
-4. Provider-native events are pulled back into the server by [`ProviderRuntimeIngestion`][9], which converts them into orchestration events.
-5. [`OrchestrationEngine`][10] persists those events, updates the read model, and exposes them as domain events.
-6. [`wsServer`][3] pushes those updates to the browser through [`ServerPushBus`][5] on channels defined in [`orchestration.ts`][11].
+Provider output travels back in the opposite direction:
 
-### Async completion flow
-
-```mermaid
-sequenceDiagram
-    participant Server as wsServer
-    participant Worker as Queue-backed workers
-    participant Cmd as ProviderCommandReactor
-    participant Checkpoint as CheckpointReactor
-    participant Receipt as RuntimeReceiptBus
-    participant Push as ServerPushBus
-    participant Browser
-
-    Server->>Worker: Enqueue follow-up work
-    Worker->>Cmd: Process provider commands
-    Worker->>Checkpoint: Process checkpoint tasks
-    Checkpoint->>Receipt: Publish completion receipt
-    Cmd-->>Server: Produce orchestration changes
-    Checkpoint-->>Server: Produce orchestration changes
-    Server->>Push: Publish resulting state updates
-    Push-->>Browser: User-visible push
+```text
+provider-native event
+    ↓
+ProviderAdapter canonical ProviderRuntimeEvent
+    ↓
+ProviderRuntimeIngestion
+    ↓
+orchestration command/event
+    ↓
+projection stream
+    ↓
+web client
 ```
 
-1. Some work continues after the initial request returns, especially in [`ProviderRuntimeIngestion`][9], [`ProviderCommandReactor`][13], and [`CheckpointReactor`][14].
-2. These flows run as queue-backed workers using [`DrainableWorker`][16], which helps keep side effects ordered and test synchronization deterministic.
-3. When a milestone completes, the server emits a typed receipt on [`RuntimeReceiptBus`][15], such as checkpoint completion or turn quiescence.
-4. Tests and orchestration code wait on those receipts instead of polling git state, projections, or timers.
-5. Any user-visible state changes produced by that async work still go back through [`wsServer`][3] and [`ServerPushBus`][5].
+Key files:
 
-[1]: ../apps/web/src/wsTransport.ts
-[2]: ../apps/web/src/wsNativeApi.ts
-[3]: ../apps/server/src/wsServer.ts
-[4]: ../apps/server/src/wsServer/readiness.ts
-[5]: ../apps/server/src/wsServer/pushBus.ts
-[6]: ../packages/contracts/src/ws.ts
-[7]: ../apps/server/src/serverLayers.ts
-[8]: ../apps/server/src/provider/Layers/ProviderService.ts
-[9]: ../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
-[10]: ../apps/server/src/orchestration/Layers/OrchestrationEngine.ts
-[11]: ../packages/contracts/src/orchestration.ts
-[12]: ../apps/web/src/nativeApi.ts
-[13]: ../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
-[14]: ../apps/server/src/orchestration/Layers/CheckpointReactor.ts
-[15]: ../apps/server/src/orchestration/Layers/RuntimeReceiptBus.ts
-[16]: ../packages/shared/src/DrainableWorker.ts
+- `orchestration/Layers/OrchestrationEngine.ts` — command admission, durable event processing, read-model lifecycle;
+- `orchestration/Layers/ProviderCommandReactor.ts` — turns durable provider intents into adapter operations;
+- `orchestration/Layers/ProviderRuntimeIngestion.ts` — converts canonical runtime events back into durable orchestration state;
+- `orchestration/Services/ProjectionSnapshotQuery.ts` — authoritative projection reads used by RPC/subscription recovery.
+
+## Provider layer
+
+`ProviderService` is the session-aware routing layer. It resolves the thread/provider relationship and delegates native work through `ProviderAdapterRegistry`.
+
+Each concrete adapter implements the shared contract in `provider/Services/ProviderAdapter.ts` and translates one provider's native protocol into canonical runtime events. `ProviderAdapterRegistryLive` is the source of truth for the currently registered first-class provider set; [provider-architecture.md](./provider-architecture.md) documents the provider boundary and integration patterns but should not be treated as a stronger inventory authority than the registry itself.
+
+Provider-specific session ids, process lifecycle, wire formats, model discovery, approvals, tools, and resume details should stay inside the provider layer whenever possible. Orchestration should depend on capabilities and canonical events rather than provider names.
+
+## Persistence and local resources
+
+Synara's server owns the local durable state and resource lifecycles:
+
+- SQLite persistence and projections under `apps/server/src/persistence`;
+- managed Git/worktree operations under `apps/server/src/git` and checkpointing/orchestration services;
+- terminal processes under `apps/server/src/terminal`;
+- attachments and workspace files through server-owned filesystem services;
+- provider processes/sessions through adapter scopes and provider runtime services.
+
+This ownership is why the web client can reload or reconnect without becoming the source of truth for an active turn.
+
+## Desktop shell
+
+`apps/desktop` is a native host, not a second orchestration implementation. It supervises a desktop-scoped Synara backend, loads the shared web UI, and provides OS/Electron integrations such as window lifecycle, native menus/shortcuts, updates, and platform-specific bridges.
+
+Browser/web mode and desktop mode therefore share the same server contracts and most UI code.
+
+## Connection and recovery model
+
+The feature socket is negotiated before use and server restarts are fenced by server-instance/protocol compatibility. See [transport.md](./transport.md) for the detailed handshake.
+
+For orchestration state, the client uses two principal subscription shapes:
+
+- a lightweight shell stream for projects/thread summaries and application-level navigation state;
+- scoped thread-detail streams for full conversation/activity state.
+
+Streams support snapshot/replay recovery and client-side sequence fences. A late query or replay must not roll the client behind a newer live sequence; when recovery cannot be proven safe, Synara prefers a fresh snapshot.
+
+## Design rules
+
+When adding a feature, keep these ownership rules explicit:
+
+1. durable domain truth belongs to server orchestration/persistence, not React state; client-owned drafts/layout remain explicitly local;
+2. provider-native behavior belongs behind `ProviderAdapter` unless it is genuinely cross-provider orchestration;
+3. state-changing side effects should have one authoritative server path and idempotent/replay-safe semantics;
+4. client subscriptions may cache/project state but must respect server sequence/version fences;
+5. resource lifecycles (processes, worktrees, sessions, streams) need deterministic cleanup and bounded queues/timeouts;
+6. shared contracts belong in `packages/contracts`; cross-runtime utilities belong in `packages/shared`.
+
+## Related documentation
+
+- [provider-architecture.md](./provider-architecture.md) — provider adapter boundary and integration flow
+- [transport.md](./transport.md) — WebSocket negotiation, compression, subscriptions, and resume
+- [runtime-modes.md](./runtime-modes.md) — permission/runtime modes
+- [workspace-layout.md](./workspace-layout.md) — repository package layout
+- [ci.md](./ci.md) — pull-request quality gates

@@ -299,8 +299,8 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
         setComposerTrigger(null);
         return;
       }
-      if (item.command === "plan" || item.command === "default") {
-        setInteractionMode(item.command === "plan" ? "plan" : "default");
+      if (item.command === "plan" || item.command === "debug" || item.command === "default") {
+        setInteractionMode(item.command);
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
       }
     }

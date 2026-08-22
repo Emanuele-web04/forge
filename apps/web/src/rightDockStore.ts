@@ -129,8 +129,9 @@ export const useRightDockStore = create<RightDockStore>()(
   ),
 );
 
-export function selectRightDockState(threadId: ThreadId) {
+export function selectRightDockState(threadId: ThreadId | null) {
   // Keep the fallback snapshot stable so React does not observe phantom store
   // changes while mounting a thread that has no persisted dock state yet.
-  return (store: RightDockStore) => store.dockStateByThreadId[threadId] ?? DEFAULT_RIGHT_DOCK_STATE;
+  return (store: RightDockStore) =>
+    (threadId ? store.dockStateByThreadId[threadId] : undefined) ?? DEFAULT_RIGHT_DOCK_STATE;
 }

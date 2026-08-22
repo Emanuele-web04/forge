@@ -492,6 +492,43 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
     });
   });
 
+  it("keeps a failed main-frame load visible until the next navigation", async () => {
+    const manager = new DesktopBrowserManager();
+    const initial = manager.open({ threadId: THREAD_ID });
+    const tabId = initial.activeTabId!;
+    const guest = new FakeRendererWebContents(86);
+    rendererWebContentsById.set(guest.id, guest);
+
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: guest.id }, 41);
+    await Promise.resolve();
+
+    guest.currentUrl = "http://localhost:3000/";
+    guest.emit("did-start-navigation", {}, guest.currentUrl, false, true);
+    guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", guest.currentUrl, true);
+    guest.emit("did-stop-loading");
+    await Promise.resolve();
+
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]).toMatchObject({
+      lastError: "Connection refused.",
+      isLoading: false,
+    });
+
+    guest.emit("did-start-navigation", {}, "https://example.test/", false, true);
+
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBe(
+      "Connection refused.",
+    );
+
+    guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", "https://example.test/", true);
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBe(
+      "Connection refused.",
+    );
+
+    guest.currentUrl = "https://example.test/";
+    guest.emit("did-navigate");
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.lastError).toBeNull();
+  });
+
   it("treats keyboard and pointer interaction inside an OAuth popup as human control", () => {
     const manager = new DesktopBrowserManager();
     const initial = manager.open({ threadId: THREAD_ID });

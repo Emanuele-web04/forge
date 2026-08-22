@@ -13,6 +13,21 @@ export function isValidGitHubRepositoryNameWithOwner(repository: string): boolea
   );
 }
 
+/**
+ * Parse the deliberately small input surface used when provisioning a GitHub project.
+ * Accepts `owner/repository` or a credential-free GitHub.com HTTPS repository root.
+ */
+export function parseGitHubRepositoryInput(input: string | null | undefined): string | null {
+  const trimmed = input?.trim() ?? "";
+  if (isValidGitHubRepositoryNameWithOwner(trimmed)) return trimmed;
+
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/?#\s]+?)(?:\.git)?\/?$/i.exec(trimmed);
+  const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
+  return isValidGitHubRepositoryNameWithOwner(repositoryNameWithOwner)
+    ? repositoryNameWithOwner
+    : null;
+}
+
 /** Normalize a supported GitHub remote URL into its `owner/repository` identity. */
 export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
   url: string | null | undefined,

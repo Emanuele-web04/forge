@@ -4,8 +4,13 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
+import type { ThreadId } from "@synara/contracts";
 import { GoRepoForked } from "react-icons/go";
 
+import {
+  resolveThreadPullRequestFallback,
+  type ThreadPullRequest,
+} from "~/hooks/useThreadPullRequests";
 import { PrStateChip } from "../pullRequest/PrStateChip";
 import { resolveThreadStatusPill } from "../Sidebar.logic";
 import { ThreadStatusPillChip } from "../ThreadStatusPillChip";
@@ -26,11 +31,15 @@ import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import { KANBAN_COLUMN_LABELS, kanbanThreadCardId, type KanbanCard } from "./kanban.logic";
 
+/** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
+export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
+
 export interface KanbanCardViewProps {
   card: KanbanCard;
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
   /** The in-column original while its overlay clone is being dragged. */
@@ -84,6 +93,7 @@ function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
+  prByThreadId,
   isOverlay: isOverlayProp,
   isDragSource: isDragSourceProp,
   nowMs,
@@ -102,7 +112,17 @@ function KanbanCardViewComponent({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
   }).worktreeBadgeLabel;
-  const pr = card.thread?.lastKnownPr ?? null;
+  // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+  // checkout moved on); rows the board root has not resolved yet get the same validation
+  // without live status instead of the raw — possibly stale — persisted badge.
+  const pr = card.thread
+    ? prByThreadId.has(card.threadId)
+      ? (prByThreadId.get(card.threadId) ?? null)
+      : resolveThreadPullRequestFallback({
+          branch: card.thread.branch,
+          lastKnownPr: card.thread.lastKnownPr ?? null,
+        })
+    : null;
   const activeWorkElapsed =
     card.activeWorkStartedAt && nowMs
       ? formatElapsed(card.activeWorkStartedAt, new Date(nowMs).toISOString())

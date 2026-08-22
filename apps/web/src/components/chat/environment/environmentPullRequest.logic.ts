@@ -115,6 +115,7 @@ export interface PullRequestCommentDisplay {
 
 const COMMENT_TITLE_MAX_LENGTH = 120;
 const COMMENT_SNIPPET_MAX_LENGTH = 160;
+const DESCRIPTION_METADATA_MARKER_PATTERN = /<!--\s*DESCRIPTION\s+(?:START|END)\s*-->/gi;
 
 function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
@@ -166,8 +167,10 @@ export function describePullRequestComment(
   comment: GitPullRequestComment,
 ): PullRequestCommentDisplay {
   // Strip markup per line before picking the title so a leading badge line cannot shadow
-  // the real summary line below it.
+  // the real summary line below it. Bot description markers can span lines, so remove them
+  // from the whole body first without hiding unrelated HTML comments quoted as code.
   const lines = comment.body
+    .replace(DESCRIPTION_METADATA_MARKER_PATTERN, "")
     .split("\n")
     .map((raw) => ({ text: stripInlineMarkdown(raw), decorationOnly: isDecorationOnlyLine(raw) }))
     .filter((line) => line.text.length > 0);

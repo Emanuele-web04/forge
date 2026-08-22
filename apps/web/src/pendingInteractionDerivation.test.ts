@@ -13,6 +13,7 @@ import { makeActivity } from "./storeTestFixtures";
 function makePendingInteraction(
   interactionKind: OrchestrationPendingInteraction["interactionKind"],
   status: OrchestrationPendingInteraction["status"],
+  overrides: Partial<OrchestrationPendingInteraction> = {},
 ): OrchestrationPendingInteraction {
   return {
     interactionKind,
@@ -26,6 +27,7 @@ function makePendingInteraction(
     responseRequestedAt: null,
     createdAt: "2026-02-23T00:00:01.000Z",
     resolvedAt: null,
+    ...overrides,
   };
 }
 
@@ -389,6 +391,65 @@ describe("derivePendingUserInputs", () => {
         authoritativeHasPending: false,
         latestTurnId: undefined,
       }),
+    ).toHaveLength(1);
+  });
+
+  it("restores retry access after rehydrating uncertain and orphaned user-input responses", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-retry-recovery",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-settlement",
+          lifecycleGeneration: "generation-settlement",
+          questions: [
+            {
+              id: "continue",
+              header: "Continue",
+              question: "Continue after context recovery?",
+              options: [{ label: "Yes", description: "Retry the response" }],
+            },
+          ],
+        },
+      }),
+    ];
+    const options = {
+      authoritativeHasPending: false,
+      latestTurnId: undefined,
+      responseClaimReferenceAt: "2026-02-23T00:01:00.000Z",
+    };
+
+    expect(
+      derivePendingUserInputs(
+        activities,
+        [makePendingInteraction("userInput", "uncertain")],
+        options,
+      ),
+    ).toHaveLength(1);
+    expect(
+      derivePendingUserInputs(
+        activities,
+        [
+          makePendingInteraction("userInput", "responding", {
+            responseRequestedAt: "2026-02-23T00:00:45.000Z",
+          }),
+        ],
+        options,
+      ),
+    ).toHaveLength(0);
+    expect(
+      derivePendingUserInputs(
+        activities,
+        [
+          makePendingInteraction("userInput", "responding", {
+            responseRequestedAt: "2026-02-23T00:00:30.000Z",
+          }),
+        ],
+        options,
+      ),
     ).toHaveLength(1);
   });
 

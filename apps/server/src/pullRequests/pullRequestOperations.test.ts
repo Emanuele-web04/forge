@@ -1,8 +1,9 @@
 import { ProjectId, type OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
+import { GitHubCliError } from "../git/Errors";
+import type { GitHubCliShape, GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
 import { createGitHubCliWithFakeGh } from "../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
 import { makePullRequestOperations } from "./pullRequestOperations";
@@ -50,6 +51,29 @@ const detail: GitHubPullRequestDetailData = {
   comments: [],
   commits: [],
 };
+
+function makeTestOperations(github: GitHubCliShape) {
+  const pins: ProjectPullRequestPinsShape = {
+    listByProjectIds: () => Effect.succeed([]),
+    setPinned: () => Effect.void,
+  };
+  return makePullRequestOperations({
+    github,
+    pins,
+    findProject: () => Effect.succeed(project),
+    validateRepository: (repository) => Effect.succeed(repository),
+    validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+    loadMergeCapabilities: () =>
+      Effect.succeed({
+        merge: true,
+        squash: true,
+        rebase: true,
+        deleteBranchOnMerge: false,
+      }),
+    withGitHubRead: (effect) => effect,
+    finalizeMutationCaches: () => Effect.void,
+  });
+}
 
 describe("makePullRequestOperations", () => {
   it("starts detail, merge-capability, and review-comment reads together", async () => {
@@ -107,5 +131,57 @@ describe("makePullRequestOperations", () => {
         }),
       ),
     );
+  });
+
+  it("keeps pull request detail available when stack metadata cannot be loaded", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const operations = makeTestOperations({
+      ...base,
+      getPullRequestDetail: () => Effect.succeed(detail),
+      getPullRequestStack: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "getPullRequestStack",
+            detail: "Stack GraphQL is unavailable.",
+          }),
+        ),
+    });
+
+    const result = await Effect.runPromise(
+      operations.detail({ projectId: project.id, repository: "acme/widgets", number: 42 }),
+    );
+
+    expect(result.stack).toBeNull();
+    expect(result.stackMetadataIncomplete).toBe(true);
+    expect(result.number).toBe(42);
+  });
+
+  it("does not merge when stack metadata cannot be verified", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const runPullRequestAction = vi.fn(base.runPullRequestAction);
+    const operations = makeTestOperations({
+      ...base,
+      getPullRequestStack: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "getPullRequestStack",
+            detail: "Stack GraphQL is unavailable.",
+          }),
+        ),
+      runPullRequestAction,
+    });
+
+    const exit = await Effect.runPromiseExit(
+      operations.action({
+        projectId: project.id,
+        repository: "acme/widgets",
+        number: 42,
+        action: "merge",
+        mergeMethod: "squash",
+      }),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    expect(runPullRequestAction).not.toHaveBeenCalled();
   });
 });

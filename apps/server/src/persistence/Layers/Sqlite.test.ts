@@ -62,6 +62,19 @@ describe("SQLite persistence", () => {
         expect(lockingMode?.locking_mode).toBe("exclusive");
         expect(journalMode?.journal_mode).toBe("wal");
 
+        // Large-database tuning must actually take effect, not silently
+        // no-op: a reverted or ignored cache_size reintroduces multi-minute
+        // startups on multi-GB event logs. mmap_size may be capped by the
+        // runtime build, so only require that mapping is enabled at all.
+        const [cacheSize] = yield* sql<{ readonly cache_size: number }>`
+          PRAGMA cache_size;
+        `;
+        const [mmapSize] = yield* sql<{ readonly mmap_size: number }>`
+          PRAGMA mmap_size;
+        `;
+        expect(cacheSize?.cache_size).toBe(-262144);
+        expect(mmapSize?.mmap_size).toBeGreaterThan(0);
+
         yield* sql`CREATE TABLE ownership_probe(value TEXT NOT NULL)`;
         yield* sql`INSERT INTO ownership_probe(value) VALUES ('owned-by-synara')`;
         yield* Effect.promise(async () => {

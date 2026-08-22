@@ -11,6 +11,7 @@ import {
   extractLocalServerPageTitle,
   isIgnoredLocalServerProcess,
   isLikelyDevServerProcess,
+  parseProcessInfo,
   parseLsofCwdOutput,
   parseLsofTcpListenOutput,
   type LocalServerProcessInfo,
@@ -30,6 +31,14 @@ async function withMockedFetch<T>(
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+function buildServerForCommand(commandLine: string, port: number) {
+  const processInfo = new Map<number, LocalServerProcessInfo>([[123, { ppid: 1, commandLine }]]);
+  return buildLocalServerProcesses(
+    parseLsofTcpListenOutput(["p123", "cnode", "PTCP", `n127.0.0.1:${port}`].join("\n")),
+    processInfo,
+  );
 }
 
 describe("localServerMonitor", () => {
@@ -287,6 +296,110 @@ describe("localServerMonitor", () => {
 
     expect(enriched[0]?.displayName).toBe("Vite");
     expect(enriched[0]?.pageTitle).toBe("Acme Admin");
+  });
+
+  it.each([
+    ["Expo CLI", "node ./node_modules/@expo/cli/build/bin/cli start", "Expo"],
+    ["Expo through bunx", "bunx expo start", "Expo"],
+    ["standalone Metro", "node ./node_modules/metro/src/index.js", "Metro"],
+    ["React Native CLI", "react-native start", "Metro"],
+  ])("keeps %s visible without probing it", async (_case, commandLine, displayName) => {
+    const servers = buildServerForCommand(commandLine, 8081);
+    const fetchTitle = vi.fn(async () => "Unexpected browser title");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(enriched[0]).toMatchObject({
+      displayName,
+      ports: [8081],
+    });
+    expect(fetchTitle).not.toHaveBeenCalled();
+  });
+
+  it("allows page-title probing when Expo is explicitly started for web", async () => {
+    const servers = buildServerForCommand(
+      "node ./node_modules/@expo/cli/build/bin/cli start --web",
+      8081,
+    );
+    const fetchTitle = vi.fn(async () => "Expo Web");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(enriched[0]).toMatchObject({
+      displayName: "Expo",
+      pageTitle: "Expo Web",
+    });
+    expect(fetchTitle).toHaveBeenCalledOnce();
+  });
+
+  it("uses parent process arguments to recognize Expo web mode", async () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 456, commandLine: "node generic-listener.js" }],
+      [456, { ppid: 1, commandLine: "bunx expo start --web" }],
+    ]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:8081"].join("\n")),
+      processInfo,
+    );
+    const fetchTitle = vi.fn(async () => "Expo Web");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(enriched[0]).toMatchObject({ displayName: "Expo", pageTitle: "Expo Web" });
+    expect(fetchTitle).toHaveBeenCalledOnce();
+  });
+
+  it("classifies from raw lineage context while returning only redacted arguments", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 456, commandLine: "node generic-listener.js" }],
+      [
+        456,
+        {
+          ppid: 1,
+          commandLine: "sh -c APP_PASSWORD=[redacted]",
+          rawCommandLine: "sh -c APP_PASSWORD=secret npm run dev",
+        },
+      ],
+    ]);
+
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]?.args).toBe("node generic-listener.js");
+    expect(JSON.stringify(servers[0])).not.toContain("secret");
+  });
+
+  it("keeps full raw lineage context beyond the bounded display arguments", () => {
+    const secret = "s".repeat(1_100);
+    const processInfo = parseProcessInfo(
+      ["123 456 node generic-listener.js", `456 1 sh -c AUTH_TOKEN=${secret} npm run dev`].join(
+        "\n",
+      ),
+    );
+
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(JSON.stringify(servers[0])).not.toContain(secret);
+  });
+
+  it("does not classify browser servers from project directory names", async () => {
+    const servers = buildServerForCommand(
+      "node /projects/expo-app/node_modules/vite/bin/vite.js",
+      5173,
+    );
+    const fetchTitle = vi.fn(async () => "Vite App");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(enriched[0]).toMatchObject({ displayName: "Vite", pageTitle: "Vite App" });
+    expect(fetchTitle).toHaveBeenCalledOnce();
   });
 
   it("keeps page-title redirects on local/private hosts", async () => {

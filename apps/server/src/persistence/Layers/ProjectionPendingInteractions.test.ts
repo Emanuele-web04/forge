@@ -132,4 +132,117 @@ layer("ProjectionPendingInteractionRepository", (it) => {
       }
     }),
   );
+
+  it.effect("re-claims an uncertain interaction so a later response can settle it", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionPendingInteractionRepository;
+      const threadId = ThreadId.makeUnsafe("thread-reclaim-uncertain");
+      const requestId = ApprovalRequestId.makeUnsafe("request-reclaim-uncertain");
+      yield* repository.upsert({
+        interactionKind: "userInput",
+        requestId,
+        threadId,
+        turnId: null,
+        lifecycleGeneration: "generation-uncertain",
+        status: "uncertain",
+        decision: null,
+        responseCommandId: "command-uncertain-old" as never,
+        responseRequestedAt: "2026-07-14T12:20:00.000Z",
+        createdAt: "2026-07-14T12:19:00.000Z",
+        resolvedAt: null,
+      });
+
+      assert.strictEqual(
+        yield* repository.claimResponse({
+          threadId,
+          interactionKind: "userInput",
+          requestId,
+          lifecycleGeneration: "generation-uncertain",
+          responseCommandId: "command-uncertain-retry" as never,
+          decision: null,
+          requestedAt: "2026-07-14T12:21:00.000Z",
+        }),
+        true,
+      );
+      const row = yield* repository.getByIdentity({
+        threadId,
+        interactionKind: "userInput",
+        requestId,
+      });
+      assert.strictEqual(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.strictEqual(row.value.status, "responding");
+        assert.strictEqual(row.value.responseCommandId, "command-uncertain-retry");
+      }
+    }),
+  );
+
+  it.effect("re-claims an orphaned responding interaction after the reclaim grace period", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionPendingInteractionRepository;
+      const threadId = ThreadId.makeUnsafe("thread-reclaim-orphaned");
+      const requestId = ApprovalRequestId.makeUnsafe("request-reclaim-orphaned");
+      const base = {
+        interactionKind: "userInput" as const,
+        requestId,
+        threadId,
+        turnId: null,
+        lifecycleGeneration: "generation-orphaned",
+        status: "responding" as const,
+        decision: null,
+        responseCommandId: "command-orphaned" as never,
+        createdAt: "2026-07-14T12:30:00.000Z",
+        resolvedAt: null,
+      };
+      yield* repository.upsert({
+        ...base,
+        responseRequestedAt: "2026-07-14T12:30:00.000Z",
+      });
+
+      // Inside the grace period the in-flight claim still shields the row.
+      assert.strictEqual(
+        yield* repository.claimResponse({
+          threadId,
+          interactionKind: "userInput",
+          requestId,
+          lifecycleGeneration: "generation-orphaned",
+          responseCommandId: "command-orphaned-retry" as never,
+          decision: null,
+          requestedAt: "2026-07-14T12:30:10.000Z",
+        }),
+        false,
+      );
+      // A claim that never settled must not lock the interaction out forever.
+      assert.strictEqual(
+        yield* repository.claimResponse({
+          threadId,
+          interactionKind: "userInput",
+          requestId,
+          lifecycleGeneration: "generation-orphaned",
+          responseCommandId: "command-orphaned-retry" as never,
+          decision: null,
+          requestedAt: "2026-07-14T12:31:00.000Z",
+        }),
+        true,
+      );
+      // A responding row without a claim timestamp is orphaned by definition.
+      yield* repository.upsert({
+        ...base,
+        requestId: ApprovalRequestId.makeUnsafe("request-reclaim-no-timestamp"),
+        responseRequestedAt: null,
+      });
+      assert.strictEqual(
+        yield* repository.claimResponse({
+          threadId,
+          interactionKind: "userInput",
+          requestId: ApprovalRequestId.makeUnsafe("request-reclaim-no-timestamp"),
+          lifecycleGeneration: "generation-orphaned",
+          responseCommandId: "command-orphaned-retry" as never,
+          decision: null,
+          requestedAt: "2026-07-14T12:30:10.000Z",
+        }),
+        true,
+      );
+    }),
+  );
 });

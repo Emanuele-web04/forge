@@ -103,6 +103,26 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("persists both platform variants of the commit-and-push binding", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "git.commitAndPush"),
+        [
+          {
+            key: "meta+ctrl+p",
+            command: "git.commitAndPush",
+            when: "!terminalFocus && isMac",
+          },
+          {
+            key: "ctrl+alt+p",
+            command: "git.commitAndPush",
+            when: "!terminalFocus && !isMac",
+          },
+        ],
+      );
+    }),
+  );
+
   it.effect("compiles valid rule with parsed when AST", () =>
     Effect.sync(() => {
       const compiled = compileResolvedKeybindingRule({
@@ -855,6 +875,53 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
       const persistedView = persisted.map(({ key, command }) => ({ key, command }));
       assert.deepEqual(persistedView, [{ key: "mod+shift+r", command: "script.run-tests.run" }]);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("preserves sibling conditions when replacing one keybinding rule", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "cmd+k", command: "sidebar.search" },
+        { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.upsertKeybindingRule(
+          { key: "meta+shift+k", command: "sidebar.search" },
+          { key: "meta+k", command: "sidebar.search" },
+        );
+      });
+
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [
+        { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
+        { key: "meta+shift+k", command: "sidebar.search" },
+      ]);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("rejects invalid conditions without overwriting the existing binding", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const existingRule = {
+        key: "mod+r",
+        command: "script.run-tests.run",
+        when: "!terminalFocus",
+      } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [existingRule]);
+
+      const result = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.upsertKeybindingRule({
+          key: "mod+shift+r",
+          command: "script.run-tests.run",
+          when: "!terminalFocus &&",
+        });
+      }).pipe(toDetailResult);
+
+      assertFailure(result, "invalid shortcut or condition expression");
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [existingRule]);
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 

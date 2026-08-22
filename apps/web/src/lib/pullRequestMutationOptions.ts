@@ -128,6 +128,27 @@ function pullRequestActionTargetState(
   }
 }
 
+function invalidatePullRequestActionDetails(
+  queryClient: QueryClient,
+  input: PullRequestActionInput,
+) {
+  if (input.action !== "merge") {
+    return queryClient.invalidateQueries({
+      queryKey: pullRequestQueryKeys.detail(input),
+      exact: true,
+    });
+  }
+  // A stacked merge changes every PR through the selected stack position. The action payload is
+  // intentionally small, so invalidate all cached details for this repository; standalone merges
+  // pay the same bounded invalidation and avoid a second pre-merge stack lookup.
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey;
+      return key[0] === "pull-requests" && key[1] === "detail" && key[3] === input.repository;
+    },
+  });
+}
+
 export function pullRequestActionMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationKey: pullRequestMutationKeys.action,
@@ -205,20 +226,14 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         context
           ? invalidatePullRequestListScopes(queryClient, context.affectedScopes)
           : Promise.resolve(),
-        queryClient.invalidateQueries({
-          queryKey: pullRequestQueryKeys.detail(input),
-          exact: true,
-        }),
+        invalidatePullRequestActionDetails(queryClient, input),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
     onSuccess: async (result, input, context) => {
       await Promise.all([
         invalidatePullRequestListScopes(queryClient, context.affectedScopes),
-        queryClient.invalidateQueries({
-          queryKey: pullRequestQueryKeys.detail(input),
-          exact: true,
-        }),
+        invalidatePullRequestActionDetails(queryClient, input),
         queryClient.invalidateQueries({
           queryKey: gitQueryKeys.pullRequest(result.workspaceRoot),
         }),

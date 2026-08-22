@@ -13,7 +13,9 @@ import {
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  completedThreadNotificationKey,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
@@ -119,6 +121,20 @@ function buildCollectedTaskCompletionCopy(assistantText: string) {
   return buildTaskCompletionCopy(candidate);
 }
 
+describe("shouldAttemptSystemTaskNotification", () => {
+  it("only attempts enabled notifications while the window is in the background", () => {
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: false })).toBe(
+      true,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: true })).toBe(
+      false,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: false, isWindowForeground: false })).toBe(
+      false,
+    );
+  });
+});
+
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {
     const previous = [
@@ -168,6 +184,7 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "Finished the task and everything looks good.",
       },
@@ -378,6 +395,7 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "Done and verified.",
       },
@@ -500,10 +518,149 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "First block is done.",
       },
     ]);
+  });
+
+  it.each([{ state: "interrupted" }, { state: "error" }] as const)(
+    "does not notify a settled $state turn as a completion",
+    ({ state }) => {
+      const previous = [
+        makeThread({
+          session: {
+            provider: "codex",
+            status: "running",
+            orchestrationStatus: "running",
+            activeTurnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:00.000Z",
+            updatedAt: "2026-04-05T10:00:01.000Z",
+          },
+        }),
+      ];
+      const next = [
+        makeThread({
+          session: {
+            provider: "codex",
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-04-05T10:00:00.000Z",
+            updatedAt: "2026-04-05T10:00:05.000Z",
+          },
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state,
+            requestedAt: "2026-04-05T10:00:00.000Z",
+            startedAt: "2026-04-05T10:00:00.000Z",
+            completedAt: "2026-04-05T10:00:05.000Z",
+            assistantMessageId: null,
+            sourceProposedPlan: undefined,
+          },
+        }),
+      ];
+
+      expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+    },
+  );
+
+  it("re-emits a settle wobble under the same dedup key as the original completion", () => {
+    // A follow-up turn spinning up flips orchestrationStatus to "running" while
+    // latestTurn still points at the finished turn; when the status wobbles back
+    // out of "running" before the new turn registers, the old completion is
+    // re-emitted. The runtime dedupes it because the key is identical.
+    const settledTurn = {
+      turnId: TurnId.makeUnsafe("turn-1"),
+      state: "completed",
+      requestedAt: "2026-04-05T10:00:00.000Z",
+      startedAt: "2026-04-05T10:00:00.000Z",
+      completedAt: "2026-04-05T10:00:05.000Z",
+      assistantMessageId: null,
+      sourceProposedPlan: undefined,
+    } as const;
+    const idleSession = {
+      provider: "codex",
+      status: "ready",
+      orchestrationStatus: "ready",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:05.000Z",
+    } as const;
+    const followUpStartingSession = {
+      provider: "codex",
+      status: "running",
+      orchestrationStatus: "running",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:09.000Z",
+    } as const;
+
+    const [original] = collectCompletedThreadCandidates(
+      [makeThread({})],
+      [makeThread({ session: idleSession, latestTurn: settledTurn })],
+    );
+    const [reEmitted] = collectCompletedThreadCandidates(
+      [makeThread({ session: followUpStartingSession, latestTurn: settledTurn })],
+      [makeThread({ session: idleSession, latestTurn: settledTurn })],
+    );
+    if (!original || !reEmitted) {
+      throw new Error("Expected both snapshots to emit a completion candidate");
+    }
+
+    expect(completedThreadNotificationKey(reEmitted)).toBe(
+      completedThreadNotificationKey(original),
+    );
+  });
+
+  it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
+    // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
+    // timestamp, so the same turn can re-settle under a different completedAt
+    // than the one originally notified. The key must not depend on it.
+    const settledTurnAt = (completedAt: string) =>
+      ({
+        turnId: TurnId.makeUnsafe("turn-1"),
+        state: "completed",
+        requestedAt: "2026-04-05T10:00:00.000Z",
+        startedAt: "2026-04-05T10:00:00.000Z",
+        completedAt,
+        assistantMessageId: null,
+        sourceProposedPlan: undefined,
+      }) as const;
+    const idleSession = {
+      provider: "codex",
+      status: "ready",
+      orchestrationStatus: "ready",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:05.000Z",
+    } as const;
+    const followUpStartingSession = {
+      provider: "codex",
+      status: "running",
+      orchestrationStatus: "running",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:09.000Z",
+    } as const;
+
+    const [original] = collectCompletedThreadCandidates(
+      [makeThread({})],
+      [makeThread({ session: idleSession, latestTurn: settledTurnAt("2026-04-05T10:00:05.000Z") })],
+    );
+    const [reEmitted] = collectCompletedThreadCandidates(
+      [
+        makeThread({
+          session: followUpStartingSession,
+          latestTurn: settledTurnAt("2026-04-05T10:00:05.250Z"),
+        }),
+      ],
+      [makeThread({ session: idleSession, latestTurn: settledTurnAt("2026-04-05T10:00:05.250Z") })],
+    );
+    if (!original || !reEmitted) {
+      throw new Error("Expected both snapshots to emit a completion candidate");
+    }
+
+    expect(reEmitted.completedAt).not.toBe(original.completedAt);
+    expect(completedThreadNotificationKey(reEmitted)).toBe(
+      completedThreadNotificationKey(original),
+    );
   });
 
   it("ignores initial hydrated threads and non-completion updates", () => {

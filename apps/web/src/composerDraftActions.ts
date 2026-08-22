@@ -6,6 +6,7 @@ import {
   type ModelSelection,
   type ProviderKind,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
@@ -1013,7 +1014,11 @@ export const createComposerDraftStoreState =
         return;
       }
       const nextInteractionMode =
-        interactionMode === "plan" || interactionMode === "default" ? interactionMode : null;
+        interactionMode !== null &&
+        interactionMode !== undefined &&
+        Schema.is(ProviderInteractionMode)(interactionMode)
+          ? interactionMode
+          : null;
       set((state) => {
         const existing = state.draftsByThreadId[threadId];
         if (!existing && nextInteractionMode === null) {

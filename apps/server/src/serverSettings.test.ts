@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
+import { dirname } from "node:path";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
@@ -59,7 +60,7 @@ describe("ServerSettingsService", () => {
     expect(result.updated.providers.codex.binaryPath).toBe("/usr/local/bin/codex");
     expect(result.parsed).toMatchObject({
       revision: 1,
-      migrationVersion: 1,
+      migrationVersion: 2,
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: false,
@@ -71,6 +72,46 @@ describe("ServerSettingsService", () => {
         },
       },
     });
+  });
+
+  it("migrates the previous Git writing default to GPT-5.6 Luna", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(dirname(settingsPath), { recursive: true });
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            revision: 7,
+            migrationVersion: 1,
+            settings: {
+              textGenerationModelSelection: {
+                provider: "codex",
+                model: "gpt-5.4-mini",
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        const persisted = JSON.parse(yield* fs.readFileString(settingsPath)) as {
+          migrationVersion: number;
+          settings: { textGenerationModelSelection: { model: string } };
+        };
+        return { settings, persisted };
+      }),
+    );
+
+    expect(result.settings.textGenerationModelSelection.model).toBe(
+      DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    );
+    expect(result.persisted.migrationVersion).toBe(2);
+    expect(result.persisted.settings.textGenerationModelSelection.model).toBe(
+      DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    );
   });
 
   it("keeps provider passwords server-only and returns configured flags to clients", async () => {

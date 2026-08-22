@@ -25,6 +25,7 @@ function makeProvider(input: {
   name: string;
   source?: Provider["source"];
   env?: ReadonlyArray<string>;
+  options?: Record<string, unknown>;
   models?: Record<string, TestModelInput>;
 }): Provider {
   return {
@@ -32,7 +33,7 @@ function makeProvider(input: {
     name: input.name,
     source: input.source ?? "api",
     env: input.env ? [...input.env] : [],
-    options: {},
+    options: input.options ?? {},
     models: Object.fromEntries(
       Object.entries(input.models ?? {}).map(([modelId, model]) => [
         modelId,
@@ -196,6 +197,34 @@ describe("resolvePreferredOpenCodeModelProviders", () => {
     });
 
     expect(providers.map((provider) => provider.id)).toEqual(["opencode"]);
+  });
+
+  it("keeps connected config providers with inline apiKey even without auth.json credentials", () => {
+    const providers = resolvePreferredOpenCodeModelProviders({
+      inventory: {
+        providerList: {
+          connected: ["fastapicloud", "opencode"],
+          all: [
+            makeProvider({
+              id: "fastapicloud",
+              name: "FastAPI Cloud AI",
+              source: "config",
+              options: { baseURL: "https://example.invalid/v1", apiKey: "test-key" },
+            }),
+            makeProvider({
+              id: "opencode",
+              name: "OpenCode Zen",
+              source: "custom",
+              env: ["OPENCODE_API_KEY"],
+            }),
+          ],
+        },
+        consoleState: null,
+      },
+      credentialProviderIDs: ["unrelated"],
+    });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["fastapicloud", "opencode"]);
   });
 
   it("falls back to non-environment connected providers when no stronger OpenCode signals exist", () => {

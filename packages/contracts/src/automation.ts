@@ -13,15 +13,11 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import {
-  ModelSelection,
-  ProviderInteractionMode,
-  ProviderKind,
-  ProviderStartOptions,
-  RuntimeMode,
-} from "./orchestration";
+import { ModelSelection, ProviderKind, ProviderStartOptions, RuntimeMode } from "./orchestration";
 
 export const DEFAULT_AUTOMATION_RUNTIME_MODE: RuntimeMode = "approval-required";
+export const AutomationInteractionMode = Schema.Literals(["default", "plan"]);
+export type AutomationInteractionMode = typeof AutomationInteractionMode.Type;
 
 const AutomationIsoDateTime = IsoDateTime.check(
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/),
@@ -158,7 +154,7 @@ export const AutomationPermissionSnapshot = Schema.Struct({
   /** Stable one-based iteration ordinal claimed for this run. */
   iterationNumber: Schema.optional(PositiveInt),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: AutomationInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   allowedCapabilities: Schema.Array(AutomationAllowedCapability),
   createdAt: AutomationIsoDateTime,
@@ -184,13 +180,25 @@ export type AutomationRetryPolicy = typeof AutomationRetryPolicy.Type;
 export const AutomationMisfirePolicy = Schema.Literals(["skip", "coalesce", "run-latest"]);
 export type AutomationMisfirePolicy = typeof AutomationMisfirePolicy.Type;
 
+export const AutomationDisabledReason = Schema.Literals([
+  "failures",
+  "max-iterations",
+  "completion",
+  "schedule",
+  "user",
+]);
+export type AutomationDisabledReason = typeof AutomationDisabledReason.Type;
+
 export const DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS = 60;
 export const DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS = 10;
 export const DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS = 60 * 60;
+export const DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES = 3;
 export const DEFAULT_AUTOMATION_RETRY_POLICY: AutomationRetryPolicy = { type: "none" };
 export const DEFAULT_AUTOMATION_MISFIRE_POLICY: AutomationMisfirePolicy = "coalesce";
 export const DEFAULT_AUTOMATION_COMPLETION_POLICY = { type: "none" } as const;
 export const DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD = 0.8;
+export const AUTOMATION_NAME_MAX_LENGTH = 160;
+export const AUTOMATION_PROMPT_MAX_LENGTH = 64_000;
 
 export const AutomationCompletionPolicy = Schema.Union([
   Schema.Struct({ type: Schema.Literal("none") }),
@@ -208,15 +216,15 @@ export const AutomationDefinition = Schema.Struct({
   id: AutomationId,
   projectId: ProjectId,
   sourceThreadId: Schema.NullOr(ThreadId),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
-  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
   schedule: AutomationSchedule,
   enabled: Schema.Boolean,
   nextRunAt: Schema.NullOr(AutomationIsoDateTime),
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: AutomationInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   mode: AutomationMode,
   /**
@@ -239,8 +247,19 @@ export const AutomationDefinition = Schema.Struct({
   ),
   /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
   maxIterations: Schema.NullOr(PositiveInt),
-  /** When true, a failed run disables the automation (stops a runaway loop). */
-  stopOnError: Schema.Boolean,
+  /** Consecutive failed runs allowed before auto-disable. Null = never auto-disable. */
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES),
+  ),
+  consecutiveFailureCount: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => 0),
+  ),
+  disabledReason: Schema.optional(Schema.NullOr(AutomationDisabledReason)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  disabledAt: Schema.optional(Schema.NullOr(AutomationIsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   /** Natural language stop condition, evaluated in every mode. */
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
@@ -273,8 +292,8 @@ const AutomationDefinitionConfig = Schema.Struct({
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
-  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
   schedule: AutomationSchedule,
   enabled: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
   modelSelection: ModelSelection,
@@ -282,7 +301,7 @@ const AutomationDefinitionConfig = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeMode).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_RUNTIME_MODE),
   ),
-  interactionMode: Schema.optional(ProviderInteractionMode).pipe(
+  interactionMode: Schema.optional(AutomationInteractionMode).pipe(
     Schema.withDecodingDefault(() => "default" as const),
   ),
   worktreeMode: Schema.optional(AutomationWorktreeMode).pipe(
@@ -306,7 +325,9 @@ const AutomationDefinitionConfig = Schema.Struct({
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  stopOnError: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)),
+  /** @deprecated Use stopAfterConsecutiveFailures. */
+  stopOnError: Schema.optional(Schema.Boolean),
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
@@ -334,14 +355,18 @@ export const AutomationUpdateInput = Schema.Struct({
   id: AutomationId,
   projectId: Schema.optional(ProjectId),
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
-  prompt: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64_000))),
+  name: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  ),
+  prompt: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
+  ),
   schedule: Schema.optional(AutomationSchedule),
   enabled: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: Schema.optional(RuntimeMode),
-  interactionMode: Schema.optional(ProviderInteractionMode),
+  interactionMode: Schema.optional(AutomationInteractionMode),
   worktreeMode: Schema.optional(AutomationWorktreeMode),
   mode: Schema.optional(AutomationMode),
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
@@ -349,6 +374,8 @@ export const AutomationUpdateInput = Schema.Struct({
   notificationPolicy: Schema.optional(AutomationNotificationPolicy),
   heartbeatCooldownSeconds: Schema.optional(NonNegativeInt),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)),
+  /** @deprecated Use stopAfterConsecutiveFailures. */
   stopOnError: Schema.optional(Schema.Boolean),
   completionPolicy: Schema.optional(AutomationCompletionPolicy),
   minimumIntervalSeconds: Schema.optional(PositiveInt),

@@ -51,7 +51,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import * as Semaphore from "effect/Semaphore";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import { ProviderValidationError } from "../Errors.ts";
@@ -63,14 +62,17 @@ import {
   type ProviderSessionDirectoryWriteError,
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { PersistenceDecodeError } from "../../persistence/Errors.ts";
-import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import {
+  ProviderRuntimeEventRepository,
+  type PersistedProviderRuntimeEvent,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   classifyTerminalTurnApplicability,
   isStartedTurnApplicable,
 } from "../terminalTurnApplicability.ts";
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
@@ -88,7 +90,9 @@ export interface ProviderServiceLiveOptions {
   /** Test/embedding override for the lossless runtime-event fan-out budget. */
   readonly runtimeEventBufferCapacity?: number;
   /** Production journal hook. The event must be durable before this effect returns. */
-  readonly persistRuntimeEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void, unknown>;
+  readonly persistRuntimeEvent?: (
+    event: ProviderRuntimeEvent,
+  ) => Effect.Effect<PersistedProviderRuntimeEvent, unknown>;
   /** Durable fallback for events that can never be accepted by the canonical journal. */
   readonly quarantineRuntimeEvent?: (
     event: ProviderRuntimeEvent,
@@ -286,33 +290,19 @@ function hasResumeCursor(value: unknown): boolean {
   return value !== null && value !== undefined;
 }
 
-function makeKeyedThreadLock() {
-  const entries = new Map<ThreadId, { readonly semaphore: Semaphore.Semaphore; users: number }>();
-  const withLock = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> => {
-    let entry = entries.get(threadId);
-    if (entry === undefined) {
-      entry = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
-      entries.set(threadId, entry);
-    }
-    entry.users += 1;
-    const acquiredEntry = entry;
-    return acquiredEntry.semaphore
-      .withPermits(1)(effect)
-      .pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            acquiredEntry.users -= 1;
-            if (acquiredEntry.users === 0 && entries.get(threadId) === acquiredEntry) {
-              entries.delete(threadId);
-            }
-          }),
-        ),
-      );
-  };
-  return withLock;
+/**
+ * True for events that settle a turn/session lifecycle (as opposed to stream
+ * or item-level events). Terminal events are the only stale-generation events
+ * that may still be processed: they are the sole signal that can settle a
+ * thread whose runtime died after its lifecycle generation was rotated away.
+ */
+function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return (
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted" ||
+    event.type === "session.exited" ||
+    event.type === "runtime.error"
+  );
 }
 
 function runtimeStatusForEvent(
@@ -379,7 +369,6 @@ function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | 
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
-    const analytics = yield* Effect.service(AnalyticsService);
     const canonicalEventLogger =
       options?.canonicalEventLogger ??
       (options?.canonicalEventLogPath !== undefined
@@ -400,7 +389,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       1,
       Math.floor(options?.runtimeEventBufferCapacity ?? PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY),
     );
-    const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(
+    type PublishedRuntimeEvent = {
+      readonly event: ProviderRuntimeEvent;
+      readonly persisted?: PersistedProviderRuntimeEvent;
+    };
+    const runtimeEventPubSub = yield* PubSub.bounded<PublishedRuntimeEvent>(
       runtimeEventBufferCapacity,
     );
     const runtimeEventProducerScope = yield* Scope.make("sequential");
@@ -682,18 +675,29 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const persistCanonicalRuntimeEvent = (
       event: ProviderRuntimeEvent,
-    ): Effect.Effect<void, unknown> =>
-      Effect.uninterruptible(
-        (options?.persistRuntimeEvent ? options.persistRuntimeEvent(event) : Effect.void).pipe(
-          Effect.andThen(
+    ): Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> => {
+      const persistence: Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> =
+        options?.persistRuntimeEvent
+          ? options.persistRuntimeEvent(event)
+          : Effect.succeed(undefined);
+
+      return Effect.uninterruptible(
+        persistence.pipe(
+          Effect.tap(() =>
             canonicalEventLogger ? canonicalEventLogger.write(event, null) : Effect.void,
           ),
-          Effect.asVoid,
         ),
       );
+    };
 
-    const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+    const publishRuntimeEvent = (
+      event: ProviderRuntimeEvent,
+      persisted: PersistedProviderRuntimeEvent | undefined,
+    ): Effect.Effect<void> =>
+      PubSub.publish(runtimeEventPubSub, {
+        event,
+        ...(persisted === undefined ? {} : { persisted }),
+      }).pipe(Effect.asVoid);
 
     const upsertSessionBinding = (
       session: ProviderSession,
@@ -817,7 +821,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // still be overwritten. Lifecycle events are low-frequency, so a per-thread
     // mutex adds no meaningful contention. Creation is synchronous
     // (Semaphore.makeUnsafe), so concurrent callers cannot mint two locks.
-    const withBindingWriteLock = makeKeyedThreadLock();
+    const withBindingWriteLock = makeKeyedLock<ThreadId>().withLock;
 
     interface StartedTurnPersistenceInput {
       readonly threadId: ThreadId;
@@ -1064,7 +1068,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             event.lifecycleGeneration !== undefined &&
             binding.lifecycleGeneration !== event.lifecycleGeneration
           ) {
-            return;
+            // The pump gate lets a stale terminal event through only when it
+            // can safely settle the thread: no current generation exists, or
+            // the event still names the turn the binding has active. Mirror
+            // that acceptance here, otherwise the accepted event is journaled
+            // and published but the durable binding keeps the dead turn active
+            // forever and the thread stays a reconciliation candidate.
+            const staleTerminalSettlesThread =
+              isTerminalRuntimeEvent(event) &&
+              (lifecycle.currentGeneration(event.threadId) === undefined ||
+                (event.turnId !== undefined &&
+                  runtimeActiveTurnId(binding.runtimePayload) === String(event.turnId)));
+            if (!staleTerminalSettlesThread) {
+              return;
+            }
           }
 
           const currentActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
@@ -1185,38 +1202,92 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void, unknown> =>
       Effect.uninterruptible(
         Effect.suspend(() => {
+          const journalAndPublish = (acceptedEvent: ProviderRuntimeEvent) =>
+            persistCanonicalRuntimeEvent(acceptedEvent).pipe(
+              Effect.flatMap((persisted) =>
+                Effect.sync(() => {
+                  if (acceptedEvent.type === "turn.started") {
+                    reconcileRuntimeIdleTimer(acceptedEvent);
+                  }
+                }).pipe(
+                  Effect.andThen(updateSessionBindingFromRuntimeEvent(acceptedEvent)),
+                  Effect.andThen(publishRuntimeEvent(acceptedEvent, persisted)),
+                  Effect.andThen(scheduleRetiredGatewaySessionRecovery(acceptedEvent)),
+                ),
+              ),
+            );
+          const canonicalEvent = event;
           if (
             event.lifecycleGeneration !== undefined &&
             lifecycle.currentGeneration(event.threadId) !== event.lifecycleGeneration
           ) {
-            // Warn, not debug: a persistent mismatch silently discards every
-            // runtime event for the thread — the provider runs, the UI shows
-            // nothing, and the runtime reconciler later settles the turn as
-            // interrupted. This log line is the only way to see it happening.
-            return Effect.logWarning("provider.session.stale_generation_event_ignored", {
-              threadId: event.threadId,
-              provider: event.provider,
-              eventType: event.type,
-              eventLifecycleGeneration: event.lifecycleGeneration,
-              currentLifecycleGeneration: lifecycle.currentGeneration(event.threadId),
-            });
+            const currentGeneration = lifecycle.currentGeneration(event.threadId);
+            // A stale-generation event is normally noise from a superseded
+            // session, but terminal events are the exception: they are the
+            // only signal that can settle a turn whose runtime died after its
+            // generation was rotated or retired (a stop, a recovery, or an
+            // idle retire). Dropping them strands the thread "working" with a
+            // dead runtime until the reconciler or an app restart intervenes,
+            // and silently discards the very error that explains the death.
+            //
+            // A stale terminal event is safe to let through when either:
+            //  - no current generation exists (nothing newer can be corrupted
+            //    by settling the old session's state), or
+            //  - the event still names the turn the binding considers active
+            //    (a newer epoch has not started a different turn, so settling
+            //    this turn cannot clobber newer state).
+            const staleTerminalIsSettling =
+              isTerminalRuntimeEvent(event) &&
+              (currentGeneration === undefined || event.turnId !== undefined);
+            if (!staleTerminalIsSettling) {
+              // Warn, not debug: a persistent mismatch silently discards every
+              // runtime event for the thread — the provider runs, the UI shows
+              // nothing, and the runtime reconciler later settles the turn as
+              // interrupted. This log line is the only way to see it happening.
+              return Effect.logWarning("provider.session.stale_generation_event_ignored", {
+                threadId: event.threadId,
+                provider: event.provider,
+                eventType: event.type,
+                eventLifecycleGeneration: event.lifecycleGeneration,
+                currentLifecycleGeneration: currentGeneration,
+              });
+            }
+            if (currentGeneration !== undefined) {
+              // A newer generation exists: only accept the stale terminal event
+              // when it still names the turn the binding has active. If the
+              // binding already moved on (or is gone), keep dropping it.
+              return directory.getBinding(event.threadId).pipe(
+                Effect.flatMap((maybeBinding) => {
+                  const binding = Option.getOrUndefined(maybeBinding);
+                  const boundActiveTurnId = binding
+                    ? runtimeActiveTurnId(binding.runtimePayload)
+                    : undefined;
+                  if (binding === undefined || boundActiveTurnId !== String(event.turnId)) {
+                    return Effect.logWarning("provider.session.stale_generation_event_ignored", {
+                      threadId: event.threadId,
+                      provider: event.provider,
+                      eventType: event.type,
+                      eventLifecycleGeneration: event.lifecycleGeneration,
+                      currentLifecycleGeneration: currentGeneration,
+                    });
+                  }
+                  return Effect.logInfo(
+                    "provider.session.stale_generation_terminal_event_accepted",
+                    {
+                      threadId: event.threadId,
+                      provider: event.provider,
+                      eventType: event.type,
+                      eventLifecycleGeneration: event.lifecycleGeneration,
+                      currentLifecycleGeneration: currentGeneration,
+                    },
+                  ).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
+                }),
+              );
+            }
+            // No current generation and the event is terminal: fall through so
+            // the stale session's exit/error settles the binding and projection.
           }
-          const canonicalEvent = event;
-          // Journal before mutating lifecycle/task state. If durable persistence
-          // fails, the supervised pump retries the same event while its source
-          // generation is still current and no recovery waiter has been released.
-          return persistCanonicalRuntimeEvent(canonicalEvent).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                if (canonicalEvent.type === "turn.started") {
-                  reconcileRuntimeIdleTimer(canonicalEvent);
-                }
-              }),
-            ),
-            Effect.andThen(updateSessionBindingFromRuntimeEvent(canonicalEvent)),
-            Effect.andThen(publishRuntimeEvent(canonicalEvent)),
-            Effect.andThen(scheduleRetiredGatewaySessionRecovery(canonicalEvent)),
-          );
+          return journalAndPublish(canonicalEvent);
         }),
       );
 
@@ -1315,11 +1386,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               );
               if (existing) {
                 lease.adopt(binding.lifecycleGeneration ?? "legacy");
-                yield* analytics.record("provider.session.recovered", {
-                  provider: existing.provider,
-                  strategy: "adopt-existing",
-                  hasResumeCursor: hasResumeCursor(existing.resumeCursor),
-                });
                 return adapter;
               }
             }
@@ -1383,11 +1449,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ),
             );
             lease.commit();
-            yield* analytics.record("provider.session.recovered", {
-              provider: resumed.provider,
-              strategy: "resume-thread",
-              hasResumeCursor: hasResumeCursor(resumed.resumeCursor),
-            });
             return adapter;
           }),
         );
@@ -1510,7 +1571,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
           ] === true;
-        if (hasActiveSession && (!input.allowRecovery || !requiresCredentialRotation)) {
+        // A live adapter session whose persisted generation no longer matches
+        // the thread's current generation is a zombie: its runtime events are
+        // rejected by the stale-generation gate, so a turn routed into it can
+        // produce no visible output and the thread appears wedged. Recovery-
+        // capable callers (turn sends) must replace it instead of fast-pathing
+        // into it. Control-plane callers (interrupts, responses) keep routing
+        // to the live session — stopping a wedged runtime is the user's escape
+        // hatch and must keep working.
+        const bindingMatchesCurrentGeneration =
+          binding.lifecycleGeneration === undefined ||
+          binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
+        if (
+          hasActiveSession &&
+          (!input.allowRecovery || (bindingMatchesCurrentGeneration && !requiresCredentialRotation))
+        ) {
           return {
             adapter,
             isActive: true,
@@ -1562,10 +1637,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           Effect.gen(function* () {
             const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
             const effectiveResumeCursor =
-              input.resumeCursor ??
-              (persistedBinding?.provider === input.provider
-                ? persistedBinding.resumeCursor
-                : undefined);
+              input.forkSourceResumeCursor !== undefined
+                ? undefined
+                : (input.resumeCursor ??
+                  (persistedBinding?.provider === input.provider
+                    ? persistedBinding.resumeCursor
+                    : undefined));
+            const adapterStartInput = { ...input };
+            delete adapterStartInput.resumeCursor;
             const effectiveProviderOptions =
               input.providerOptions ??
               (persistedBinding?.provider === input.provider
@@ -1580,7 +1659,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // with text the caller can surface as a session error.
               const started = yield* adapter
                 .startSession({
-                  ...input,
+                  ...adapterStartInput,
                   lifecycleGeneration: lease.generation,
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
@@ -1642,15 +1721,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ),
               );
               lease.commit();
-              yield* analytics.record("provider.session.started", {
-                provider: session.provider,
-                runtimeMode: input.runtimeMode,
-                hasResumeCursor: hasResumeCursor(session.resumeCursor),
-                hasCwd: typeof input.cwd === "string" && input.cwd.trim().length > 0,
-                hasModel:
-                  typeof input.modelSelection?.model === "string" &&
-                  input.modelSelection.model.trim().length > 0,
-              });
               if (
                 replacementFence !== undefined &&
                 providerInterruptionFences.get(threadId) === replacementFence
@@ -1741,6 +1811,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const existingTargetBinding = Option.getOrUndefined(
+          yield* directory.getBinding(input.threadId),
+        );
+        if (existingTargetBinding) {
+          const existingTargetPayload = runtimePayloadRecord(existingTargetBinding.runtimePayload);
+          if (
+            existingTargetPayload.lastRuntimeEvent === "provider.thread.forked" &&
+            hasResumeCursor(existingTargetBinding.resumeCursor)
+          ) {
+            return {
+              threadId: input.threadId,
+              resumeCursor: existingTargetBinding.resumeCursor,
+            };
+          }
+          return null;
+        }
+
         const sourceBinding = Option.getOrUndefined(
           yield* directory.getBinding(input.sourceThreadId),
         );
@@ -1748,13 +1835,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
 
-        if (Option.isSome(yield* directory.getBinding(input.threadId))) {
-          return null;
-        }
-
         const effectiveProviderOptions =
           input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
+        const targetCwd = input.cwd ?? sourceCwd;
         yield* validateAutoRuntimeMode(
           "ProviderService.forkThread",
           sourceBinding.provider,
@@ -1832,7 +1916,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 lifecycleGeneration: lease.generation,
                 ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
                 runtimePayload: {
-                  cwd: input.cwd ?? null,
+                  cwd: targetCwd ?? null,
                   model: input.modelSelection?.model ?? null,
                   activeTurnId: null,
                   lastError: null,
@@ -1850,9 +1934,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             lease.commit();
           }),
         );
-        yield* analytics.record("provider.thread.forked", {
-          provider: adapter.provider,
-        });
         return forked;
       });
 
@@ -1904,13 +1985,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // runtime-event handler, so a terminal event cannot slip between
             // them and then be overwritten.
             yield* persistStartedTurn(persistenceInput);
-            yield* analytics.record("provider.turn.sent", {
-              provider: routed.adapter.provider,
-              model: input.modelSelection?.model,
-              interactionMode: input.interactionMode,
-              attachmentCount: input.attachments.length,
-              hasInput: typeof input.input === "string" && input.input.trim().length > 0,
-            });
             return turn;
           }),
         );
@@ -1964,13 +2038,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             };
             rememberSuccessfulTurnDispatch(persistenceInput);
             yield* persistStartedTurn(persistenceInput);
-            yield* analytics.record("provider.turn.steered", {
-              provider: routed.adapter.provider,
-              model: input.modelSelection?.model,
-              interactionMode: input.interactionMode,
-              attachmentCount: input.attachments.length,
-              hasInput: typeof input.input === "string" && input.input.trim().length > 0,
-            });
             return turn;
           }),
         );
@@ -2009,10 +2076,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             };
             rememberSuccessfulTurnDispatch(persistenceInput);
             yield* persistStartedTurn(persistenceInput);
-            yield* analytics.record("provider.review.started", {
-              provider: routed.adapter.provider,
-              target: input.target.type,
-            });
             return turn;
           }),
         );
@@ -2149,9 +2212,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 state: "confirmed",
               });
             }
-            yield* analytics.record("provider.turn.interrupted", {
-              provider: routed.adapter.provider,
-            });
           }),
         );
         return yield* Effect.uninterruptible(
@@ -2215,9 +2275,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
               yield* routed.adapter.stopTask(input.threadId, input.taskId);
-              yield* analytics.record("provider.task.stopped", {
-                provider: routed.adapter.provider,
-              });
             }),
           ),
         ),
@@ -2250,9 +2307,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
               yield* routed.adapter.backgroundTask(input.threadId, input.toolUseId);
-              yield* analytics.record("provider.task.backgrounded", {
-                provider: routed.adapter.provider,
-              });
             }),
           ),
         ),
@@ -2290,9 +2344,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ...(attachments.length > 0 ? { attachments } : {}),
                 ...(input.skills !== undefined ? { skills: input.skills } : {}),
                 ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-              });
-              yield* analytics.record("provider.subagent.steered", {
-                provider: routed.adapter.provider,
               });
             }),
           ),
@@ -2344,10 +2395,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               input.requestId,
               response.input.decision,
             );
-            yield* analytics.record("provider.request.responded", {
-              provider: routed.adapter.provider,
-              decision: response.input.decision,
-            });
             return;
           }
           yield* routed.adapter.respondToUserInput(
@@ -2411,9 +2458,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             providerInterruptionFences.delete(input.threadId);
             lease.retire();
             retireRuntimeIdleGeneration(input.threadId);
-            yield* analytics.record("provider.session.stopped", {
-              provider: routed.adapter.provider,
-            });
           }),
         );
       });
@@ -2493,9 +2537,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }),
             );
             lease.commit();
-            yield* analytics.record("provider.session.runtime_stopped", {
-              provider: binding.provider,
-            });
             retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
           }),
         );
@@ -2581,7 +2622,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         clearRuntimeIdleTimer(input.threadId);
         // Share the runtime-event binding lock so a delayed session.exited
         // update cannot restore the stale cursor after this explicit clear.
-        const clearedProvider = yield* lifecycle.run(input.threadId, (lease) =>
+        yield* lifecycle.run(input.threadId, (lease) =>
           withBindingWriteLock(
             input.threadId,
             Effect.gen(function* () {
@@ -2625,11 +2666,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ),
         );
         yield* waitForRuntimeIdleStop(input.threadId);
-        if (clearedProvider !== undefined) {
-          yield* analytics.record("provider.session.resume_cursor_cleared", {
-            provider: clearedProvider,
-          });
-        }
         retireRuntimeIdleGeneration(input.threadId);
       });
 
@@ -2715,10 +2751,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   });
               yield* active.adapter.rollbackThread(input.threadId, input.numTurns);
             }
-            yield* analytics.record("provider.conversation.rolled_back", {
-              provider: routed.adapter.provider,
-              turns: input.numTurns,
-            });
           }),
           { scheduleIdleStopOnSuccess: true },
         );
@@ -2763,9 +2795,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 },
               });
             }
-            yield* analytics.record("provider.thread.compacted", {
-              provider: routed.adapter.provider,
-            });
           }),
           { scheduleIdleStopOnSuccess: true },
         );
@@ -2786,10 +2815,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             markThreadStopped(threadId, stoppedAt, activeSessionByThreadId.get(threadId)),
         );
         yield* Effect.forEach(adapters, (adapter) => adapter.stopAll());
-        yield* analytics.record("provider.sessions.stopped_all", {
-          sessionCount: threadIds.length,
-        });
-        yield* analytics.flush;
       });
 
     const awaitRuntimeEventFanoutDrained: Effect.Effect<void> = Effect.suspend(() =>
@@ -2868,8 +2893,26 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
       // independently receive all runtime events.
       get streamEvents(): ProviderServiceShape["streamEvents"] {
-        return Stream.fromPubSub(runtimeEventPubSub);
+        return Stream.fromPubSub(runtimeEventPubSub).pipe(Stream.map(({ event }) => event));
       },
+      ...(options?.persistRuntimeEvent === undefined
+        ? {}
+        : {
+            get streamPersistedEvents(): NonNullable<
+              ProviderServiceShape["streamPersistedEvents"]
+            > {
+              return Stream.fromPubSub(runtimeEventPubSub).pipe(
+                Stream.filter(
+                  (
+                    published,
+                  ): published is PublishedRuntimeEvent & {
+                    readonly persisted: PersistedProviderRuntimeEvent;
+                  } => published.persisted !== undefined,
+                ),
+                Stream.map(({ persisted }) => persisted),
+              );
+            },
+          }),
     } satisfies ProviderServiceShape;
   });
 
@@ -2887,7 +2930,7 @@ export function makeDurableProviderServiceLive(options?: ProviderServiceLiveOpti
       const runtimeEvents = yield* ProviderRuntimeEventRepository;
       return yield* makeProviderService({
         ...options,
-        persistRuntimeEvent: (event) => runtimeEvents.append(event).pipe(Effect.asVoid),
+        persistRuntimeEvent: (event) => runtimeEvents.append(event),
         quarantineRuntimeEvent: (event, cause) =>
           runtimeEvents
             .append({

@@ -2,11 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveTerminalSelectionActionPosition,
+  resolveTerminalSelectionContextMenuItems,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
 } from "./terminal/terminalSelectionActions";
 
 describe("resolveTerminalSelectionActionPosition", () => {
+  it("only offers Add to chat when a composer target exists", () => {
+    expect(resolveTerminalSelectionContextMenuItems(false)).toEqual([]);
+    expect(resolveTerminalSelectionContextMenuItems(true)).toEqual([
+      { id: "add-to-chat", label: "Add to chat" },
+    ]);
+  });
+
   it("prefers the selection rect over the last pointer position", () => {
     expect(
       resolveTerminalSelectionActionPosition({

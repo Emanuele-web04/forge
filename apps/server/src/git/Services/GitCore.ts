@@ -12,6 +12,7 @@ import type {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
+  GitWorktreeSetupPhase,
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
@@ -27,6 +28,7 @@ import type {
   GitStashInfoResult,
   GitStatusInput,
   GitStatusResult,
+  GitWorkingTreeDiffStatsResult,
 } from "@synara/contracts";
 
 import type { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
@@ -39,6 +41,7 @@ export interface ExecuteGitInput {
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
+  readonly outputMode?: "error" | "truncate";
   readonly progress?: ExecuteGitProgress;
 }
 
@@ -54,6 +57,14 @@ export interface GitStatusDetails extends Omit<GitStatusResult, "pr"> {
   isDefaultBranch: boolean;
   upstreamRef: string | null;
 }
+
+export interface GitBranchContext {
+  readonly isRepo: boolean;
+  readonly branch: string | null;
+  readonly upstreamRef: string | null;
+}
+
+export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree";
 
 export interface GitPreparedCommitContext {
   stagedSummary: string;
@@ -203,6 +214,9 @@ export interface GitCoreShape {
    */
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
 
+  /** Read only branch identity, without diff stats or remote refresh work. */
+  readonly readBranchContext: (cwd: string) => Effect.Effect<GitBranchContext, GitCommandError>;
+
   /**
    * Read a unified patch for the current working tree, including untracked files.
    */
@@ -224,6 +238,12 @@ export interface GitCoreShape {
    * Read aggregate branch changes from the upstream/base merge-base through the working tree.
    */
   readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
+  /** Read aggregate diff counts without materializing a unified patch. */
+  readonly readDiffStats: (
+    cwd: string,
+    scope: GitDiffScope,
+  ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitCommandError>;
 
   /**
    * Build staged change context for commit generation.
@@ -305,10 +325,14 @@ export interface GitCoreShape {
   ) => Effect.Effect<void, GitCommandError>;
 
   /**
-   * Create a detached worktree from a branch or ref.
+   * Create a detached worktree from a branch or ref. `onPhase` fires as each
+   * setup phase (branch → worktree → copy-changes) begins, for progress UIs.
    */
   readonly createDetachedWorktree: (
     input: GitCreateDetachedWorktreeInput,
+    options?: {
+      readonly onPhase?: (phase: GitWorktreeSetupPhase) => Effect.Effect<void>;
+    },
   ) => Effect.Effect<GitCreateDetachedWorktreeResult, GitCommandError>;
 
   /**

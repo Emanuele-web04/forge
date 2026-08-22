@@ -94,4 +94,79 @@ describe("Synara harness policy", () => {
       assert.notInclude(text, "one exact synara_create_threads plan", provider);
     }
   });
+
+  it("teaches the device tools well enough for a plain prompt to work", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+
+    // When to reach for them at all: the demo needed "using your device_* tools"
+    // spelled out because the policy only triggered on the user naming a tool.
+    assert.include(policy, "run, test, check, demo, debug, or interact with an iOS app");
+    assert.include(policy, "whether or not the user names a tool");
+    assert.include(policy, "never drive the simulator with xcrun simctl");
+    // A rival agent-device skill on the host was read before the tools were
+    // tried; the browser guidance names its competitors, so this does too.
+    assert.include(policy, "do not load or use an agent-device");
+    assert.include(policy, "rather than reading skill files first");
+
+    // The workflow, so the agent does not have to guess an ordering.
+    assert.include(policy, "device_list first");
+    // Reusing a booted device rather than starting a second one: two live
+    // simulators compete for the pane and the user watches the wrong screen.
+    assert.include(policy, "already booted, use that one");
+    assert.include(policy, "device_install and device_launch");
+    assert.include(policy, "com.apple.Preferences");
+
+    // Expo/RN CLI paths boot the sim through Simulator.app, which foregrounds
+    // a window the user is not watching and leaves the Synara pane empty. A
+    // real demo also stalled for minutes on a dev server holding the shell.
+    assert.include(policy, "For Expo or React Native work");
+    assert.include(policy, "expo start --ios");
+    assert.include(policy, "npm run ios");
+    assert.include(policy, "opens Simulator.app");
+    assert.include(policy, "exp://127.0.0.1:8081");
+    assert.include(policy, "start it detached in the background");
+
+    // Interaction discipline: describe before tapping, verify after.
+    assert.include(policy, "device points from device_describe_ui, never screenshot pixels");
+    assert.include(policy, "again afterwards to confirm the screen changed");
+
+    // Semantic targeting is the headline: making the model do the coordinate
+    // arithmetic is where taps go wrong, so label targeting leads.
+    assert.include(policy, "Tap by label rather than by coordinates");
+    assert.include(policy, "device_tap {udid, label}");
+    assert.include(policy, "device_tap {udid, label, role}");
+    assert.include(policy, "only when nothing in the tree labels the target");
+
+    // Why a row-centre tap does nothing, for the cases still using coordinates.
+    assert.include(policy, "the row's frame centre is dead space");
+
+    // Scrolling is motor control the server owns. A demo agent swiped three
+    // times to reach Developer when one call should have done it.
+    assert.include(policy, "Never write a swipe loop");
+    assert.include(policy, "device_scroll_to_element {udid, label}");
+    assert.include(policy, "device_tap with a label already scrolls");
+    // device_swipe still has a job; this must not read as a blanket ban.
+    assert.include(policy, "gestures that are the point in themselves");
+
+    // Reading and verifying toggle state from the tree instead of pixels. The
+    // same run took a screenshot purely to work out whether the switch moved.
+    assert.include(policy, "A toggle reports its state in the node's value");
+    assert.include(policy, "Never take a screenshot to check state");
+    assert.include(policy, "device_screenshot is for showing the user a result");
+
+    // The traps that made the demo agent report success it never observed.
+    assert.include(policy, "an unchanged tree after a tap means the tap missed");
+    assert.include(policy, "not delivered to the simulator");
+    assert.include(policy, "Never report success you have not observed");
+    assert.include(policy, "device_open_url always requires explicit user approval");
+    assert.include(policy, "Airplane Mode");
+  });
+
+  it("withholds device guidance from sessions with no gateway control", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    // Promising tools this session cannot reach would be a lie.
+    assert.notInclude(policy, "device_list");
+    assert.notInclude(policy, "device_describe_ui");
+  });
 });

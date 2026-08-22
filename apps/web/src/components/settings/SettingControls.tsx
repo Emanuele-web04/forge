@@ -9,6 +9,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 import { Undo2Icon } from "~/lib/icons";
 import { SETTINGS_CONTROL_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsSelectPopup } from "./SettingsPanelPrimitives";
@@ -85,11 +86,10 @@ export function SettingsSelectControl({
 export type SettingsSegmentedOption<T extends string> = {
   value: T;
   label: string;
-  icon?: ReactNode;
 };
 
 /** Inline row of toggle buttons used in place of a select when there are only a
- *  handful of mutually exclusive options (e.g. theme: Light / Dark / System).
+ *  handful of mutually exclusive options (e.g. UI density, follow-up behavior).
  *  The active option reads as a filled pill; the rest stay quiet until hovered. */
 export function SettingsSegmentedControl<T extends string>({
   value,
@@ -102,6 +102,11 @@ export function SettingsSegmentedControl<T extends string>({
   options: readonly SettingsSegmentedOption<T>[];
   ariaLabel: string;
 }) {
+  const radioItemProps = useRadioGroupKeyboardNav({
+    values: options.map((option) => option.value),
+    value,
+    onValueChange,
+  });
   return (
     <div
       role="radiogroup"
@@ -123,8 +128,8 @@ export function SettingsSegmentedControl<T extends string>({
               !isActive && "text-muted-foreground",
             )}
             onClick={() => onValueChange(option.value)}
+            {...radioItemProps(option.value)}
           >
-            {option.icon}
             {option.label}
           </Button>
         );

@@ -12,6 +12,7 @@ import { render } from "vitest-browser-react";
 import type { PDFDocumentProxy } from "~/lib/pdf/pdfEngine";
 import { usePdfDocument } from "~/lib/pdf/usePdfDocument";
 import { LocalImagePreview } from "./LocalImagePreview";
+import { PdfFilePreview } from "./PdfFilePreview";
 import { PdfViewerToolbar } from "./pdf/PdfViewerToolbar";
 
 const { loadPdfDocumentMock } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const { loadPdfDocumentMock } = vi.hoisted(() => ({
 
 vi.mock("~/lib/pdf/pdfEngine", () => ({
   loadPdfDocument: loadPdfDocumentMock,
+  renderPageTextLayer: vi.fn(),
 }));
 
 vi.mock("./chat/OpenInPicker", () => ({
@@ -171,6 +173,23 @@ describe("local preview resource generations", () => {
       ),
     );
     expect(document.body.textContent).not.toContain("Couldn’t open this image");
+  });
+
+  it("reports PDF document load failures to its preview owner", async () => {
+    const onPreviewError = vi.fn();
+
+    await render(
+      <PdfFilePreview
+        filePath="missing.pdf"
+        cwd="/workspace"
+        openInTarget={null}
+        onPreviewError={onPreviewError}
+      />,
+    );
+    await vi.waitFor(() => expect([...fetchRequests.values()].flat()).toHaveLength(1));
+    [...fetchRequests.values()][0]?.[0]?.resolve(new Response(null, { status: 404 }));
+
+    await vi.waitFor(() => expect(onPreviewError).toHaveBeenCalledOnce());
   });
 });
 

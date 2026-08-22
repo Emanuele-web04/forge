@@ -124,6 +124,46 @@ describe("pullRequestActionMutationOptions", () => {
     expect(queryClient.getQueryState(unrelatedGitPullRequestKey)?.isInvalidated).toBe(false);
   });
 
+  it("invalidates every cached detail in the repository after an atomic merge", async () => {
+    const queryClient = new QueryClient();
+    const projectId = "project-a" as ProjectId;
+    const input = {
+      projectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "merge",
+      mergeMethod: "squash",
+    } as const;
+    const selectedDetail = pullRequestQueryKeys.detail(input);
+    const lowerStackDetail = pullRequestQueryKeys.detail({
+      projectId,
+      repository: "acme/widgets",
+      number: 41,
+    });
+    const unrelatedDetail = pullRequestQueryKeys.detail({
+      projectId,
+      repository: "acme/other",
+      number: 41,
+    });
+    for (const key of [selectedDetail, lowerStackDetail, unrelatedDetail]) {
+      queryClient.setQueryData(key, {});
+    }
+
+    const options = pullRequestActionMutationOptions(queryClient);
+    if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
+    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+    await Reflect.apply(options.onSuccess, undefined, [
+      { workspaceRoot: "/repo", mergeOutcome: "merged" },
+      input,
+      context,
+      undefined,
+    ]);
+
+    expect(queryClient.getQueryState(selectedDetail)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(lowerStackDetail)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(unrelatedDetail)?.isInvalidated).toBe(false);
+  });
+
   it("updates the global row when an action starts from another associated project", async () => {
     const queryClient = new QueryClient();
     const projectA = "project-a" as ProjectId;

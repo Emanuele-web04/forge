@@ -12,6 +12,7 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -22,10 +23,12 @@ import {
   buildInputNeededCopy,
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
+  completedThreadNotificationKey,
   collectCompletedTerminalCandidates,
   collectInputNeededThreadCandidates,
   collectTerminalAttentionCandidates,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 
@@ -97,7 +100,13 @@ async function showSystemThreadNotification(
     if (!supported) {
       return false;
     }
-    return window.desktopBridge.notifications.show({ title, body, silent: false, threadId });
+    return window.desktopBridge.notifications.show({
+      title,
+      body,
+      silent: false,
+      suppressWhenForeground: true,
+      threadId,
+    });
   }
 
   if (readBrowserNotificationPermissionState() !== "granted") {
@@ -152,17 +161,26 @@ export function TaskCompletionNotifications() {
   const splitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
+  const rightDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+  );
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
-  const visibleThreadIds = resolveVisibleToastThreadIds({ activeThreadId, splitView });
+  const visibleThreadIds = resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   // Lazy state init: evaluated once, keeping the impure Date.now() call out
   // of re-renders (useRef(Date.now()) re-evaluates its argument every render).
   const [runtimeStartedAtMs] = useState(() => Date.now());
   const readyRef = useRef(false);
+  const notifiedCompletionKeysRef = useRef(new Set<string>());
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -202,8 +220,10 @@ export function TaskCompletionNotifications() {
     const completions = collectCompletedThreadCandidates(
       previousThreadsRef.current,
       threads,
-    ).filter((candidate) =>
-      isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs),
+    ).filter(
+      (candidate) =>
+        isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs) &&
+        !notifiedCompletionKeysRef.current.has(completedThreadNotificationKey(candidate)),
     );
     const terminalCompletions = collectCompletedTerminalCandidates(
       previousTerminalStateRef.current,
@@ -231,11 +251,13 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const shouldAttemptSystemNotification =
-      settings.enableSystemTaskCompletionNotifications &&
-      (window.desktopBridge ? true : !isWindowForeground());
+    const shouldAttemptSystemNotification = shouldAttemptSystemTaskNotification({
+      enabled: settings.enableSystemTaskCompletionNotifications,
+      isWindowForeground: isWindowForeground(),
+    });
 
     for (const completion of completions) {
+      notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));
       const copy = buildTaskCompletionCopy(completion);
       if (
         settings.enableTaskCompletionToasts &&

@@ -86,8 +86,11 @@ export function scheduleDeferredDockPaneHydration(input: {
   };
 }
 
+// The device pane holds a WebCodecs decoder and a frame socket, so a restored
+// tab must stay in preview until the user actually looks at it.
 const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "browser",
+  "device",
   "sidechat",
   "terminal",
 ]);
