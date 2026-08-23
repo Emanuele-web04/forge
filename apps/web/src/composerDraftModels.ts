@@ -839,7 +839,9 @@ export function resolvePreferredComposerModelSelection(input: {
   const draftSelection = input.draft?.modelSelectionByProvider?.[preferredProvider] ?? null;
 
   return (
-    (input.fresh ? persistedSelection ?? draftSelection : draftSelection ?? persistedSelection) ?? {
+    (input.fresh
+      ? (persistedSelection ?? draftSelection)
+      : (draftSelection ?? persistedSelection)) ?? {
       provider: preferredProvider === "pi" ? "codex" : preferredProvider,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }
