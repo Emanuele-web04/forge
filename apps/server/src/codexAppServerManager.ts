@@ -3527,10 +3527,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       "session/ready",
       `Connected to thread ${input.providerThreadId}`,
     );
-    // Codex does not emit session/started on thread/resume or thread/fork.
-    // ProviderService only re-arms the cursor-preserving idle-stop timer on
-    // session.started / thread.started / terminal turn events, so we emit it
-    // after every successful open.
+    // Resume/fork do not notify session start; emit it so idle-stop re-arms.
     this.emitLifecycleEvent(
       context,
       "session/started",

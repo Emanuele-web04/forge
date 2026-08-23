@@ -75,7 +75,7 @@ function makeLayer(input: {
 
 function makeProviderServiceStub(input: {
   readonly stopSession: ProviderServiceShape["stopSession"];
-  readonly stopRuntimeSession: NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
+  readonly stopRuntimeSession?: NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
 }): ProviderServiceShape {
   return {
     startSession: () => unsupported(),
@@ -89,7 +89,7 @@ function makeProviderServiceStub(input: {
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: input.stopSession,
-    stopRuntimeSession: input.stopRuntimeSession,
+    ...(input.stopRuntimeSession ? { stopRuntimeSession: input.stopRuntimeSession } : {}),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => unsupported(),
     rollbackConversation: () => unsupported(),
@@ -252,6 +252,50 @@ describe("ProviderSessionReaperLive", () => {
     }
 
     expect(stopRuntimeSession).not.toHaveBeenCalled();
+    expect(stopSession).not.toHaveBeenCalled();
+  });
+
+  it("skips idle sweep when stopRuntimeSession is unavailable", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-reaper-missing-runtime-stop");
+    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
+    const directory: ProviderSessionDirectoryShape = {
+      upsert: () => Effect.void,
+      getProvider: () => unsupported(),
+      getBinding: () => unsupported(),
+      remove: () => Effect.void,
+      listThreadIds: () => Effect.succeed([]),
+      listBindings: () =>
+        Effect.succeed([
+          {
+            threadId,
+            provider: "codex",
+            status: "running",
+            lastSeenAt: "2026-01-01T00:00:00.000Z",
+            resumeCursor: { threadId: "native-thread-reaper-missing-runtime-stop" },
+          },
+        ]),
+    };
+
+    const scope = await Effect.runPromise(Scope.make());
+    try {
+      await Effect.gen(function* () {
+        const reaper = yield* ProviderSessionReaper;
+        yield* Scope.provide(reaper.start(), scope);
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            threadShell: makeThreadShell({ threadId, activeTurnId: null }),
+            directory,
+            providerService: makeProviderServiceStub({ stopSession }),
+          }),
+        ),
+        Effect.runPromise,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
+
     expect(stopSession).not.toHaveBeenCalled();
   });
 

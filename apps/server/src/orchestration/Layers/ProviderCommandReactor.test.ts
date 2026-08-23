@@ -210,6 +210,7 @@ describe("ProviderCommandReactor", () => {
     readonly commandEventTimeout?: Duration.Duration;
     readonly gatewayOperationId?: string;
     readonly gitWritingModelSelection?: ModelSelection;
+    readonly omitStopRuntimeSession?: boolean;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -473,9 +474,13 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
-      stopRuntimeSession: stopRuntimeSession as NonNullable<
-        ProviderServiceShape["stopRuntimeSession"]
-      >,
+      ...(input?.omitStopRuntimeSession
+        ? {}
+        : {
+            stopRuntimeSession: stopRuntimeSession as NonNullable<
+              ProviderServiceShape["stopRuntimeSession"]
+            >,
+          }),
       clearSessionResumeCursor: clearSessionResumeCursor as NonNullable<
         ProviderServiceShape["clearSessionResumeCursor"]
       >,
@@ -9646,6 +9651,62 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("does not delete the resume cursor when stopRuntimeSession is unavailable", async () => {
+    const harness = await createHarness({ omitStopRuntimeSession: true });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-missing-runtime-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-session-stop-missing-runtime-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.session?.status === "stopped" &&
+        thread.activities.some((activity) => activity.kind === "provider.session.stop.failed")
+      );
+    });
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.session?.status).toBe("stopped");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.session.stop.failed"),
+    ).toMatchObject({
+      summary: "Provider session stop failed",
+      payload: {
+        detail: "The cursor-preserving runtime stop is unavailable.",
+      },
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
   });
 
   it("serializes archive cleanup through the durable provider intent source", async () => {
