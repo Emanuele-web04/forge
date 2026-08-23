@@ -6,7 +6,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   type LocalDispatchSnapshot,
-  type QueuedSteerGate,
+  resolveQueuedComposerAutoDispatchHold,
   shouldHoldQueuedComposerAutoDispatch,
 } from "./ChatView.logic";
 
@@ -49,63 +49,29 @@ const gapSession: Thread["session"] = {
   updatedAt: "2026-04-13T00:00:01.000Z",
 };
 
-/**
- * Mirrors ChatView's auto-dispatch early-return derivation so this file locks
- * the #774 composition: message echo acks the send, takeover has not happened,
- * remaining queued turns must stay parked.
- */
-function resolveQueuedComposerAutoDispatchHold(input: {
-  localDispatch: LocalDispatchSnapshot | null;
-  phase: "disconnected" | "connecting" | "ready" | "running";
-  latestTurn: Thread["latestTurn"] | null;
-  session: Thread["session"] | null;
-  messages: readonly ChatMessage[];
-  queuedTurnCount: number;
-  isConnecting?: boolean;
-  queuedSteerGate?: QueuedSteerGate | null;
-  hasPendingApproval?: boolean;
-  hasPendingProgress?: boolean;
-  hasPendingUserInput?: boolean;
-  threadError?: string | null;
+function resolveHold(overrides: {
+  localDispatch?: LocalDispatchSnapshot | null;
+  phase?: "disconnected" | "connecting" | "ready" | "running";
+  latestTurn?: Thread["latestTurn"] | null;
+  session?: Thread["session"] | null;
+  messages?: readonly ChatMessage[];
+  queuedTurnCount?: number;
   now?: number;
 }): boolean {
-  const hasPendingApproval = input.hasPendingApproval ?? false;
-  const hasPendingUserInput = input.hasPendingUserInput ?? false;
-  const isSendBusy =
-    input.localDispatch !== null &&
-    !hasServerAcknowledgedLocalDispatch({
-      localDispatch: input.localDispatch,
-      phase: input.phase,
-      latestTurn: input.latestTurn,
-      session: input.session,
-      messages: input.messages,
-      hasPendingApproval,
-      hasPendingUserInput,
-      threadError: input.threadError,
-    });
-  const turnTakenOver = hasLiveTurnTakenOver({
-    localDispatch: input.localDispatch,
-    phase: input.phase,
-    latestTurn: input.latestTurn,
-    session: input.session,
-    hasPendingApproval,
-    hasPendingUserInput,
-    threadError: input.threadError,
-    ...(input.now === undefined ? {} : { now: input.now }),
-  });
-  const isAwaitingTurnStart = input.localDispatch !== null && !turnTakenOver;
-  const hasQueueableLiveTurn = input.phase === "running" && input.session?.activeTurnId != null;
-  return shouldHoldQueuedComposerAutoDispatch({
-    hasQueueableLiveTurn,
-    phase: input.phase,
-    isSendBusy,
-    isConnecting: input.isConnecting ?? false,
-    isAwaitingTurnStart,
-    queuedSteerGate: input.queuedSteerGate ?? null,
-    hasPendingApproval,
-    hasPendingProgress: input.hasPendingProgress ?? false,
-    hasPendingUserInput,
-    queuedTurnCount: input.queuedTurnCount,
+  return resolveQueuedComposerAutoDispatchHold({
+    localDispatch: overrides.localDispatch === undefined ? localDispatch : overrides.localDispatch,
+    phase: overrides.phase ?? "ready",
+    latestTurn: overrides.latestTurn === undefined ? gapLatestTurn : overrides.latestTurn,
+    session: overrides.session === undefined ? gapSession : overrides.session,
+    messages: overrides.messages ?? [echoedUserMessage],
+    isConnecting: false,
+    queuedSteerGate: null,
+    hasPendingApproval: false,
+    hasPendingProgress: false,
+    hasPendingUserInput: false,
+    queuedTurnCount: overrides.queuedTurnCount ?? 1,
+    threadError: null,
+    ...(overrides.now === undefined ? {} : { now: overrides.now }),
   });
 }
 
@@ -155,7 +121,7 @@ describe("shouldHoldQueuedComposerAutoDispatch", () => {
   });
 });
 
-describe("queued composer auto-dispatch gap (#774)", () => {
+describe("resolveQueuedComposerAutoDispatchHold", () => {
   it("does not drain remaining queued turns after message-sent / turn-start-requested", () => {
     const now = Date.parse("2026-04-13T00:00:02.000Z");
     expect(
@@ -182,24 +148,12 @@ describe("queued composer auto-dispatch gap (#774)", () => {
         now,
       }),
     ).toBe(false);
-
-    expect(
-      resolveQueuedComposerAutoDispatchHold({
-        localDispatch,
-        phase: "ready",
-        latestTurn: gapLatestTurn,
-        session: gapSession,
-        messages: [echoedUserMessage],
-        queuedTurnCount: 1,
-        now,
-      }),
-    ).toBe(true);
+    expect(resolveHold({ now })).toBe(true);
   });
 
   it("keeps holding once the dispatched turn is observably live", () => {
     expect(
-      resolveQueuedComposerAutoDispatchHold({
-        localDispatch,
+      resolveHold({
         phase: "running",
         latestTurn: {
           ...gapLatestTurn,
@@ -211,30 +165,20 @@ describe("queued composer auto-dispatch gap (#774)", () => {
           orchestrationStatus: "running",
           activeTurnId: "turn-1" as never,
         },
-        messages: [echoedUserMessage],
-        queuedTurnCount: 1,
       }),
     ).toBe(true);
   });
 
   it("releases the next queued turn after the previous one finished and dispatch cleared", () => {
     expect(
-      resolveQueuedComposerAutoDispatchHold({
+      resolveHold({
         localDispatch: null,
-        phase: "ready",
         latestTurn: {
           ...gapLatestTurn,
           state: "completed",
           startedAt: "2026-04-13T00:00:02.000Z",
           completedAt: "2026-04-13T00:00:10.000Z",
         },
-        session: {
-          ...gapSession,
-          status: "ready",
-          orchestrationStatus: "ready",
-        },
-        messages: [echoedUserMessage],
-        queuedTurnCount: 1,
       }),
     ).toBe(false);
   });
@@ -253,16 +197,6 @@ describe("queued composer auto-dispatch gap (#774)", () => {
         now,
       }),
     ).toBe(true);
-    expect(
-      resolveQueuedComposerAutoDispatchHold({
-        localDispatch,
-        phase: "ready",
-        latestTurn: gapLatestTurn,
-        session: gapSession,
-        messages: [echoedUserMessage],
-        queuedTurnCount: 1,
-        now,
-      }),
-    ).toBe(false);
+    expect(resolveHold({ now })).toBe(false);
   });
 });

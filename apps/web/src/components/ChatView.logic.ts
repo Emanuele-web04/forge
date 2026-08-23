@@ -1457,15 +1457,6 @@ export function resolveQueuedSteerGateTransition(input: {
   };
 }
 
-/**
- * Guards the queued-composer auto-dispatch effect. After sending
- * `queuedTurns[0]`, the thread can look idle: the user-message echo and
- * `thread.turn-start-requested` are not live-turn takeover, so
- * `hasQueueableLiveTurn` is still false. Holding through
- * `isAwaitingTurnStart` (`localDispatch` set, takeover not observed)
- * stops the rest of the queue from flushing in that gap. Same failure
- * mode the steer gate already covers for interrupt→re-dispatch.
- */
 export function shouldHoldQueuedComposerAutoDispatch(input: {
   hasQueueableLiveTurn: boolean;
   phase: SessionPhase;
@@ -1490,6 +1481,58 @@ export function shouldHoldQueuedComposerAutoDispatch(input: {
     input.hasPendingUserInput ||
     input.queuedTurnCount === 0
   );
+}
+
+/** The post-ack gap is not live-turn takeover, so hold until `hasLiveTurnTakenOver` or fail-open. */
+export function resolveQueuedComposerAutoDispatchHold(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
+  isConnecting: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+  threadError: string | null | undefined;
+  now?: number;
+}): boolean {
+  const isSendBusy =
+    input.localDispatch !== null &&
+    !hasServerAcknowledgedLocalDispatch({
+      localDispatch: input.localDispatch,
+      phase: input.phase,
+      latestTurn: input.latestTurn,
+      session: input.session,
+      messages: input.messages,
+      hasPendingApproval: input.hasPendingApproval,
+      hasPendingUserInput: input.hasPendingUserInput,
+      threadError: input.threadError,
+    });
+  const turnTakenOver = hasLiveTurnTakenOver({
+    localDispatch: input.localDispatch,
+    phase: input.phase,
+    latestTurn: input.latestTurn,
+    session: input.session,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingUserInput: input.hasPendingUserInput,
+    threadError: input.threadError,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
+  return shouldHoldQueuedComposerAutoDispatch({
+    hasQueueableLiveTurn: input.phase === "running" && input.session?.activeTurnId != null,
+    phase: input.phase,
+    isSendBusy,
+    isConnecting: input.isConnecting,
+    isAwaitingTurnStart: input.localDispatch !== null && !turnTakenOver,
+    queuedSteerGate: input.queuedSteerGate,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingProgress: input.hasPendingProgress,
+    hasPendingUserInput: input.hasPendingUserInput,
+    queuedTurnCount: input.queuedTurnCount,
+  });
 }
 
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;

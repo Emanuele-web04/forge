@@ -593,7 +593,7 @@ import {
   PullRequestDialogState,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
-  shouldHoldQueuedComposerAutoDispatch,
+  resolveQueuedComposerAutoDispatchHold,
   shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
@@ -9364,22 +9364,21 @@ export default function ChatView({
   }, [activeTurnIdForSteerGate, phase, queuedSteerGate, sessionErroredForSteerGate]);
 
   useEffect(() => {
-    // After dispatching queuedTurns[0], the thread can look idle until the
-    // provider session reports running + activeTurnId. Message echo and
-    // turn-start-requested are not takeover, so isAwaitingTurnStart holds
-    // the rest of the queue through that gap (#774).
     if (
-      shouldHoldQueuedComposerAutoDispatch({
-        hasQueueableLiveTurn,
+      resolveQueuedComposerAutoDispatchHold({
+        localDispatch,
         phase,
-        isSendBusy,
+        latestTurn: activeLatestTurn,
+        session: activeThread?.session ?? null,
+        messages: activeThread?.messages ?? EMPTY_MESSAGES,
         isConnecting,
-        isAwaitingTurnStart,
         queuedSteerGate,
         hasPendingApproval: activePendingApproval !== null,
         hasPendingProgress: activePendingProgress !== null,
         hasPendingUserInput: pendingUserInputs.length > 0,
         queuedTurnCount: queuedComposerTurns.length,
+        threadError: activeThread?.error,
+        now: Date.now(),
       })
     ) {
       return;
@@ -9408,15 +9407,17 @@ export default function ChatView({
       autoDispatchingQueuedTurnRef.current = false;
     })();
   }, [
+    activeLatestTurn,
     activePendingApproval,
     activePendingProgress,
+    activeThread?.error,
+    activeThread?.messages,
+    activeThread?.session,
     dispatchQueuedComposerTurn,
-    phase,
-    isAwaitingTurnStart,
     isConnecting,
-    isSendBusy,
+    localDispatch,
     pendingUserInputs.length,
-    hasQueueableLiveTurn,
+    phase,
     queuedAutoDispatchTick,
     queuedComposerTurns,
     queuedSteerGate,
