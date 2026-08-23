@@ -46,7 +46,10 @@ export function ThreadFindBar({
   onHighlightChangeRef.current = onHighlightChange;
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const documents = useMemo(() => collectThreadFindDocuments(timelineEntries), [timelineEntries]);
+  const documents = useMemo(
+    () => (open ? collectThreadFindDocuments(timelineEntries) : []),
+    [open, timelineEntries],
+  );
   const matches = useMemo(() => findThreadMatches(documents, query), [documents, query]);
   matchesRef.current = matches;
   const matchCount = matches.length;

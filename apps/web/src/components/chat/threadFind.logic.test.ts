@@ -1,8 +1,13 @@
 // FILE: threadFind.logic.test.ts
 // Purpose: Matching, next/prev wrap, and jump-to-message selection for in-thread find.
 
-import { MessageId } from "@synara/contracts";
+import { MessageId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { appendPastedTextsToPrompt, createPastedTextDraft } from "../../lib/composerPastedText";
+import {
+  appendTerminalContextsToPrompt,
+  type TerminalContextDraft,
+} from "../../lib/terminalContext";
 import type { TimelineEntry } from "../../session-logic";
 import {
   collectCaseInsensitiveSubstringRanges,
@@ -11,6 +16,7 @@ import {
   resolveThreadFindJump,
   stepThreadFindIndex,
   threadFindMarkdownProps,
+  wrapFindQueryInHtml,
   type ThreadFindDocument,
 } from "./threadFind.logic";
 
@@ -125,6 +131,86 @@ describe("collectThreadFindDocuments", () => {
       { messageId: assistantId, text: "first slice", segmentIndex: 0 },
       { messageId: assistantId, text: "later slice", segmentIndex: 1 },
     ]);
+  });
+
+  it("matches the visible user bubble and ignores stripped transport XML", () => {
+    const pastedPrompt = appendPastedTextsToPrompt("Fix the login button", [
+      createPastedTextDraft({
+        id: "paste-1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        text: "secret error in the pasted payload",
+      }),
+    ]);
+    const terminalContext: TerminalContextDraft = {
+      id: "context-1",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      terminalId: "default",
+      terminalLabel: "Terminal 1",
+      lineStart: 12,
+      lineEnd: 13,
+      text: "git status\nOn branch main",
+      createdAt: "2026-03-13T12:00:00.000Z",
+    };
+    const terminalPrompt = appendTerminalContextsToPrompt("Investigate this", [terminalContext]);
+    const entries: TimelineEntry[] = [
+      {
+        id: "user-pasted",
+        kind: "message",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        message: {
+          id: messageId("user-pasted"),
+          role: "user",
+          text: pastedPrompt,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "user-terminal",
+        kind: "message",
+        createdAt: "2026-01-01T00:00:01.000Z",
+        message: {
+          id: messageId("user-terminal"),
+          role: "user",
+          text: terminalPrompt,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          streaming: false,
+        },
+      },
+    ];
+
+    const documents = collectThreadFindDocuments(entries);
+    expect(documents.map((document) => document.text)).toEqual([
+      "Fix the login button",
+      "@terminal-1:12-13 Investigate this",
+    ]);
+    expect(findThreadMatches(documents, "error")).toEqual([]);
+    expect(findThreadMatches(documents, "login button")).toEqual([
+      {
+        messageId: messageId("user-pasted"),
+        startOffset: 8,
+        endOffset: 20,
+      },
+    ]);
+    expect(findThreadMatches(documents, "@terminal-1:12-13")).toEqual([
+      {
+        messageId: messageId("user-terminal"),
+        startOffset: 0,
+        endOffset: 17,
+      },
+    ]);
+  });
+});
+
+describe("wrapFindQueryInHtml", () => {
+  it("wraps matches inside highlighted code without breaking tags", () => {
+    const html = '<pre class="shiki"><code><span class="line">Error: failed</span></code></pre>';
+    const wrapped = wrapFindQueryInHtml(html, "error", 10);
+    expect(wrapped).toContain('data-chat-find-match="true"');
+    expect(wrapped).toContain('data-chat-find-start="10"');
+    expect(wrapped).toContain(">Error</span>");
+    expect(wrapped).toContain('class="shiki"');
+    expect(wrapped).toContain("failed");
   });
 });
 

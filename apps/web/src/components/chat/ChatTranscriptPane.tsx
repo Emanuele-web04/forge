@@ -209,6 +209,7 @@ export function ChatTranscriptPane({
   const handleFindJump = (match: ThreadFindMatch) => {
     timelineControllerRef?.current?.scrollToMessage(match.messageId, {
       ...(match.segmentIndex === undefined ? {} : { segmentIndex: match.segmentIndex }),
+      fineScrollFind: true,
     });
   };
   useEffect(() => {

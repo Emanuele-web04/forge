@@ -280,6 +280,71 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
+export interface ThreadFindJumpTarget {
+  rowIndex: number;
+  visibleMessageId: MessageId;
+  expandCollapsedWorkMessageId?: MessageId;
+  collapsedNarrationMessageId?: MessageId;
+}
+
+/**
+ * Map a find match onto the row that currently owns it. Settled turns splice
+ * earlier assistant messages out of the live list and fold them into the
+ * terminal row's collapsed narration, so jumping by message id alone misses.
+ */
+export function resolveThreadFindJumpTarget(
+  rows: readonly MessagesTimelineRow[],
+  match: { messageId: MessageId; segmentIndex?: number },
+): ThreadFindJumpTarget | null {
+  const { messageId, segmentIndex } = match;
+  if (segmentIndex !== undefined) {
+    const segmentRowIndex = rows.findIndex(
+      (row) =>
+        row.kind === "message-segment" &&
+        row.message.id === messageId &&
+        row.segmentIndex === segmentIndex,
+    );
+    if (segmentRowIndex >= 0) {
+      return { rowIndex: segmentRowIndex, visibleMessageId: messageId };
+    }
+  }
+
+  const messageRowIndex = rows.findIndex(
+    (row) => row.kind === "message" && row.message.id === messageId,
+  );
+  if (messageRowIndex >= 0) {
+    return { rowIndex: messageRowIndex, visibleMessageId: messageId };
+  }
+
+  const anySegmentRowIndex = rows.findIndex(
+    (row) => row.kind === "message-segment" && row.message.id === messageId,
+  );
+  if (anySegmentRowIndex >= 0) {
+    return { rowIndex: anySegmentRowIndex, visibleMessageId: messageId };
+  }
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]!;
+    if (row.kind !== "message" || row.message.role !== "assistant") {
+      continue;
+    }
+    const hasNarration = (row.collapsedTurnItems ?? []).some(
+      (item) => item.kind === "narration" && item.message.id === messageId,
+    );
+    if (!hasNarration) {
+      continue;
+    }
+    return {
+      rowIndex,
+      visibleMessageId: row.message.id,
+      expandCollapsedWorkMessageId: row.message.id,
+      collapsedNarrationMessageId: messageId,
+    };
+  }
+
+  return null;
+}
+
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Map<string, string> {

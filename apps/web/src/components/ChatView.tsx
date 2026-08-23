@@ -6401,7 +6401,14 @@ export default function ChatView({
       }
 
       if (command === "chat.find") {
-        if (isCenteredEmptyLanding) return;
+        if (
+          isCenteredEmptyLanding ||
+          terminalWorkspaceTerminalTabActive ||
+          !shouldRenderChatPaneContent ||
+          openAgentActivityDetail
+        ) {
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         setThreadFindOpen(true);
@@ -6644,6 +6651,8 @@ export default function ChatView({
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
     isCenteredEmptyLanding,
+    openAgentActivityDetail,
+    shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,

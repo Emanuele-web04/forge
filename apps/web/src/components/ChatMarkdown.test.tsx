@@ -174,7 +174,7 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("|---|");
   });
 
-  it("wraps in-thread find matches and marks the active range", async () => {
+  it("wraps in-thread find matches and records source offsets", async () => {
     const { default: ChatMarkdown } = await import("./ChatMarkdown");
     const markup = renderToStaticMarkup(
       <ChatMarkdown
@@ -186,8 +186,22 @@ describe("ChatMarkdown", () => {
       />,
     );
     expect(markup).toContain('data-chat-find-match="true"');
-    expect(markup).toContain('data-chat-find-match="active"');
-    expect(markup).toContain("chat-find-match-active");
+    expect(markup).toContain('data-chat-find-start="0"');
+    expect(markup).toContain('data-chat-find-start="32"');
+  });
+
+  it("keeps fenced-code find matches after the highlighter replaces children", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderToStaticMarkup(
+      <ChatMarkdown
+        text={["```", "Error: command failed", "```"].join("\n")}
+        cwd={undefined}
+        isStreaming={false}
+        findQuery="error"
+      />,
+    );
+    expect(markup).toContain("chat-find-match");
+    expect(markup).toContain("Error");
   });
 
   it("renders exact thread marker ranges without changing markdown structure", async () => {

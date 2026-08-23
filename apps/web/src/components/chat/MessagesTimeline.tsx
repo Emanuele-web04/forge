@@ -107,6 +107,7 @@ import {
   type MessagesTimelineRow,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  resolveThreadFindJumpTarget,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
@@ -130,10 +131,7 @@ import {
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
 import { formatDayAwareTimestamp } from "../../timestampFormat";
-import {
-  buildInlineTerminalContextText,
-  textContainsInlineTerminalContextLabels,
-} from "./userMessageTerminalContexts";
+import { resolveUserMessageMarkdownText } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   getChatMessageFooterTextStyle,
@@ -164,7 +162,12 @@ import {
   type ActiveTrailSnapshot,
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
-import { threadFindMarkdownProps, type ThreadFindHighlight } from "./threadFind.logic";
+import {
+  collectCaseInsensitiveSubstringRanges,
+  splitTextWithFindMatches,
+  threadFindMarkdownProps,
+  type ThreadFindHighlight,
+} from "./threadFind.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -223,7 +226,10 @@ function readLegendListState(
  * checklist can scroll the virtualized list to (and briefly flash) a specific message.
  */
 export interface MessagesTimelineController {
-  scrollToMessage: (messageId: MessageId, options?: { segmentIndex?: number }) => void;
+  scrollToMessage: (
+    messageId: MessageId,
+    options?: { segmentIndex?: number; fineScrollFind?: boolean },
+  ) => void;
   scrollToMarker: (marker: ThreadMarker) => void;
 }
 
@@ -982,39 +988,38 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!controllerRef) {
       return;
     }
-    const scrollToMessage = (messageId: MessageId, segmentIndex?: number) => {
-      const rows = rowsRef.current;
-      let index = -1;
-      if (segmentIndex !== undefined) {
-        index = rows.findIndex(
-          (row) =>
-            row.kind === "message-segment" &&
-            row.message.id === messageId &&
-            row.segmentIndex === segmentIndex,
-        );
+    const scrollToMessage = (
+      messageId: MessageId,
+      segmentIndex?: number,
+    ): ReturnType<typeof resolveThreadFindJumpTarget> => {
+      const target = resolveThreadFindJumpTarget(rowsRef.current, {
+        messageId,
+        ...(segmentIndex === undefined ? {} : { segmentIndex }),
+      });
+      if (!target) {
+        return null;
       }
-      if (index < 0) {
-        index = rows.findIndex((row) => row.kind === "message" && row.message.id === messageId);
+      if (target.expandCollapsedWorkMessageId) {
+        setCollapsedWorkExpanded(target.expandCollapsedWorkMessageId, true);
       }
-      if (index < 0) {
-        index = rows.findIndex(
-          (row) =>
-            (row.kind === "message" || row.kind === "message-segment") &&
-            row.message.id === messageId,
-        );
-      }
-      if (index < 0) {
-        return false;
-      }
-      setExpandedUserMessagesById((previous) =>
-        previous[messageId] === true ? previous : { ...previous, [messageId]: true },
-      );
+      setExpandedUserMessagesById((previous) => {
+        const expandIds = [messageId, target.visibleMessageId];
+        let changed = false;
+        const next = { ...previous };
+        for (const id of expandIds) {
+          if (next[id] !== true) {
+            next[id] = true;
+            changed = true;
+          }
+        }
+        return changed ? next : previous;
+      });
       scrollLegendListToIndex(resolvedListRef, {
-        index,
+        index: target.rowIndex,
         animated: true,
         viewPosition: 0.2,
       });
-      return true;
+      return target;
     };
     const clearJumpHighlightAfterDelay = () => {
       if (jumpHighlightTimeoutRef.current !== null) {
@@ -1031,6 +1036,46 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         window.cancelAnimationFrame(markerFineScrollFrameRef.current);
         markerFineScrollFrameRef.current = null;
       }
+    };
+    const scheduleFindMatchFineScroll = (
+      target: NonNullable<ReturnType<typeof resolveThreadFindJumpTarget>>,
+    ) => {
+      cancelPendingMarkerFineScroll();
+      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      let attempts = 0;
+      const tick = () => {
+        markerFineScrollFrameRef.current = null;
+        const root = timelineRootRef.current;
+        if (!root) {
+          return;
+        }
+        const narrationId = target.collapsedNarrationMessageId;
+        const scope =
+          narrationId === undefined
+            ? root
+            : (root.querySelector(
+                `[data-chat-find-narration-id="${cssAttributeSelectorValue(narrationId)}"]`,
+              ) ?? root);
+        const activeMatch = scope.querySelector('[data-chat-find-match="active"]');
+        if (activeMatch instanceof HTMLElement) {
+          activeMatch.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          return;
+        }
+        if (narrationId !== undefined) {
+          const narration = root.querySelector(
+            `[data-chat-find-narration-id="${cssAttributeSelectorValue(narrationId)}"]`,
+          );
+          if (narration instanceof HTMLElement) {
+            narration.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+            return;
+          }
+        }
+        attempts += 1;
+        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
+          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+        }
+      };
+      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
     };
     const scheduleMarkerFineScroll = (marker: ThreadMarker) => {
       cancelPendingMarkerFineScroll();
@@ -1056,18 +1101,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       scrollToMessage: (messageId, options) => {
         cancelPendingMarkerFineScroll();
         clearActiveMarkerDecoration();
-        if (!scrollToMessage(messageId, options?.segmentIndex)) {
+        const target = scrollToMessage(messageId, options?.segmentIndex);
+        if (!target) {
           return;
         }
-        setHighlightedMessageId(messageId);
+        setHighlightedMessageId(target.visibleMessageId);
         clearJumpHighlightAfterDelay();
+        if (options?.fineScrollFind || target.collapsedNarrationMessageId) {
+          scheduleFindMatchFineScroll(target);
+        }
       },
       scrollToMarker: (marker) => {
         clearActiveMarkerDecoration();
-        if (!scrollToMessage(marker.messageId)) {
+        const target = scrollToMessage(marker.messageId);
+        if (!target) {
           return;
         }
-        setHighlightedMessageId(marker.messageId);
+        setHighlightedMessageId(target.visibleMessageId);
         clearJumpHighlightAfterDelay();
         scheduleMarkerFineScroll(marker);
       },
@@ -1078,7 +1128,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         controllerRef.current = null;
       }
     };
-  }, [controllerRef, resolvedListRef, applyActiveMarkerDecoration, clearActiveMarkerDecoration]);
+  }, [
+    applyActiveMarkerDecoration,
+    clearActiveMarkerDecoration,
+    controllerRef,
+    resolvedListRef,
+    setCollapsedWorkExpanded,
+  ]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -1354,8 +1410,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         enteringMessageRowIds.has(row.id) ? "chat-message-send-enter" : null,
       )}
       data-timeline-row-kind={row.kind}
-      data-message-id={row.kind === "message" ? row.message.id : undefined}
-      data-message-role={row.kind === "message" ? row.message.role : undefined}
+      data-message-id={
+        row.kind === "message" || row.kind === "message-segment" ? row.message.id : undefined
+      }
+      data-message-role={
+        row.kind === "message" || row.kind === "message-segment" ? row.message.role : undefined
+      }
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
@@ -2044,6 +2104,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
                 className={MUTED_LABEL_TEXT_CLASS_NAME}
+                data-chat-find-narration-id={item.message.id}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -3059,19 +3120,82 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
 });
 
 // Renders read-only user text with the same inline skill pill treatment as the composer.
+function renderFindWrappedText(
+  text: string,
+  keyPrefix: string,
+  query: string | undefined,
+  activeRange: { startOffset: number; endOffset: number } | null,
+  sourceOffset = 0,
+): ReactNode {
+  if (!query) {
+    return text;
+  }
+  const parts = splitTextWithFindMatches(text, query, activeRange, sourceOffset);
+  if (parts.length === 1 && !parts[0]!.match) {
+    return text;
+  }
+  return parts.map((part, partIndex) =>
+    part.match ? (
+      <span
+        key={`${keyPrefix}:${partIndex}`}
+        className={part.active ? "chat-find-match chat-find-match-active" : "chat-find-match"}
+        data-chat-find-match={part.active ? "active" : "true"}
+        data-chat-find-start={part.startOffset}
+      >
+        {part.text}
+      </span>
+    ) : (
+      part.text
+    ),
+  );
+}
+
 function renderUserMessageInlineText(
   text: string,
   keyPrefix: string,
   resolvedTheme: "light" | "dark",
   mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
+  findQuery?: string,
+  findActiveRange: { startOffset: number; endOffset: number } | null = null,
 ): ReactNode[] {
+  let sourceOffset = 0;
   return splitPromptIntoDisplaySegments(text, mentionReferences).flatMap((segment, index) => {
     const key = `${keyPrefix}:${index}`;
     if (segment.type === "text") {
-      return segment.text.length > 0 ? [<span key={`${key}:text`}>{segment.text}</span>] : [];
+      const content =
+        segment.text.length > 0
+          ? [
+              <span key={`${key}:text`}>
+                {renderFindWrappedText(
+                  segment.text,
+                  `${key}:find`,
+                  findQuery,
+                  findActiveRange,
+                  sourceOffset,
+                )}
+              </span>,
+            ]
+          : [];
+      sourceOffset += segment.text.length;
+      return content;
     }
     if (segment.type === "skill") {
-      return [<InlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
+      const chip = <InlineSkillChip skillName={segment.name} />;
+      const highlighted =
+        findQuery && collectCaseInsensitiveSubstringRanges(segment.name, findQuery).length > 0 ? (
+          <span
+            key={`${key}:skill`}
+            className="chat-find-match"
+            data-chat-find-match="true"
+            data-chat-find-start={sourceOffset}
+          >
+            {chip}
+          </span>
+        ) : (
+          <span key={`${key}:skill`}>{chip}</span>
+        );
+      sourceOffset += segment.name.length;
+      return [highlighted];
     }
     if (segment.type === "mention") {
       return [
@@ -3317,14 +3441,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   findActiveRange?: { startOffset: number; endOffset: number } | null;
 }) {
   if (props.terminalContexts.length > 0) {
-    const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
-      props.text,
-      props.terminalContexts,
-    );
-    const inlinePrefix = buildInlineTerminalContextText(props.terminalContexts);
-    const markdownText = hasEmbeddedInlineLabels
-      ? props.text
-      : [inlinePrefix, props.text].filter((part) => part.length > 0).join(" ");
+    const markdownText = resolveUserMessageMarkdownText(props.text, props.terminalContexts);
     if (markdownText.length === 0) {
       return null;
     }
@@ -3361,6 +3478,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           "user-message-inline-chip-only",
           props.resolvedTheme,
           props.mentionReferences,
+          props.findQuery,
+          props.findActiveRange ?? null,
         )}
       </div>
     );
