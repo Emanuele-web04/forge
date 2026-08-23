@@ -11,10 +11,13 @@ import type { Thread, ThreadSession } from "../types";
 import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
+  endQueuedComposerAutoDispatch,
+  getQueuedComposerSteerGate,
   releaseQueuedComposerAutoDispatch,
   resetQueuedComposerDrainForTests,
   shouldAutoDispatchQueuedComposerTurn,
   startQueuedComposerDrainWatcher,
+  tryBeginQueuedComposerAutoDispatch,
   type QueuedComposerAutoDispatchGates,
 } from "./queuedComposerDrain";
 
@@ -295,5 +298,104 @@ describe("queued composer drain watcher", () => {
 
     await flushDrain();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("gives ChatView and the watcher one exclusive per-thread drain lock", () => {
+    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
+    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(false);
+    endQueuedComposerAutoDispatch(THREAD_ID);
+    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
+    endQueuedComposerAutoDispatch(THREAD_ID);
+  });
+
+  it("does not let ChatView send the same queue head the watcher already started", async () => {
+    let resolveDispatch: ((value: boolean) => void) | undefined;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveDispatch = resolve;
+        }),
+    );
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-overlap-focus"));
+
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(false);
+
+    resolveDispatch?.(true);
+    await vi.waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+      ).toEqual([]);
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let the watcher send a queue head ChatView already started after unmount", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-overlap-unmount"));
+    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
+
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    endQueuedComposerAutoDispatch(THREAD_ID);
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("restores the shared steer gate after ChatView unmounts and remounts during the interrupt gap", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    const armedGate = {
+      sawInterruptGap: false,
+      gapStartedAt: null,
+      armedActiveTurnId: "turn-original",
+    };
+    armQueuedComposerSteerGate(THREAD_ID, armedGate);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-steer-remount"));
+
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const restoredGate = getQueuedComposerSteerGate(THREAD_ID);
+    expect(restoredGate).not.toBeNull();
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    expect(getQueuedComposerSteerGate(THREAD_ID)).toEqual(restoredGate);
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        steerGate: restoredGate,
+      }),
+    ).toBe(false);
   });
 });

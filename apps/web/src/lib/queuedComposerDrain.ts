@@ -2,7 +2,8 @@
 // Purpose: Auto-dispatch composer queued turns for every thread, including ones
 //          whose ChatView is unmounted, using the same gates as the open chat.
 // Layer: Web subscription utility
-// Exports: drain gates, steer-gate sharing, ChatView claim/release, watcher start
+// Exports: drain gates, exclusive per-thread send lock, steer-gate sharing,
+//          ChatView claim/release, watcher start
 
 import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 
@@ -53,7 +54,7 @@ type QueuedComposerDispatchFn = (input: {
 }) => Promise<boolean>;
 
 const claimedThreadIds = new Set<ThreadId>();
-const inFlightThreadIds = new Set<ThreadId>();
+const autoDispatchLocks = new Set<ThreadId>();
 const steerGatesByThreadId = new Map<ThreadId, QueuedSteerGate>();
 
 let drainStartCount = 0;
@@ -76,8 +77,23 @@ export function clearQueuedComposerSteerGate(threadId: ThreadId): void {
   requestQueuedComposerDrainPass();
 }
 
-function getQueuedComposerSteerGate(threadId: ThreadId): QueuedSteerGate | null {
+export function getQueuedComposerSteerGate(threadId: ThreadId): QueuedSteerGate | null {
   return steerGatesByThreadId.get(threadId) ?? null;
+}
+
+export function tryBeginQueuedComposerAutoDispatch(threadId: ThreadId): boolean {
+  if (autoDispatchLocks.has(threadId)) {
+    return false;
+  }
+  autoDispatchLocks.add(threadId);
+  return true;
+}
+
+export function endQueuedComposerAutoDispatch(threadId: ThreadId): void {
+  if (!autoDispatchLocks.delete(threadId)) {
+    return;
+  }
+  requestQueuedComposerDrainPass();
 }
 
 export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
@@ -151,7 +167,7 @@ function requestQueuedComposerDrainPass(): void {
 
 export function resetQueuedComposerDrainForTests(): void {
   claimedThreadIds.clear();
-  inFlightThreadIds.clear();
+  autoDispatchLocks.clear();
   steerGatesByThreadId.clear();
   drainStartCount = 0;
   stopDrainSubscriptions?.();
@@ -263,7 +279,7 @@ function runQueuedComposerDrainPass(): void {
 
   const threadIds = collectThreadIdsWithQueuedTurns();
   for (const threadId of threadIds) {
-    if (claimedThreadIds.has(threadId) || inFlightThreadIds.has(threadId)) {
+    if (claimedThreadIds.has(threadId)) {
       continue;
     }
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
@@ -275,11 +291,12 @@ function runQueuedComposerDrainPass(): void {
     if (!shouldAutoDispatchQueuedComposerTurn(gates)) {
       continue;
     }
-    inFlightThreadIds.add(threadId);
+    if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
+      continue;
+    }
     void (async () => {
-      let succeeded = false;
       try {
-        succeeded = await dispatchQueuedTurn({
+        const succeeded = await dispatchQueuedTurn({
           threadId,
           queuedTurn: nextQueuedTurn,
           dispatchMode: "queue",
@@ -289,10 +306,7 @@ function runQueuedComposerDrainPass(): void {
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
         }
       } finally {
-        inFlightThreadIds.delete(threadId);
-      }
-      if (succeeded) {
-        requestQueuedComposerDrainPass();
+        endQueuedComposerAutoDispatch(threadId);
       }
     })();
   }

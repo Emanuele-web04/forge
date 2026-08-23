@@ -166,8 +166,11 @@ import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
   clearQueuedComposerSteerGate,
+  endQueuedComposerAutoDispatch,
+  getQueuedComposerSteerGate,
   releaseQueuedComposerAutoDispatch,
   shouldAutoDispatchQueuedComposerTurn,
+  tryBeginQueuedComposerAutoDispatch,
 } from "../lib/queuedComposerDrain";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
@@ -1628,8 +1631,11 @@ export default function ChatView({
   const autoDispatchingQueuedTurnRef = useRef(false);
   // Holds queued-composer auto-dispatch through a non-natively-steerable
   // provider steer's interrupt→re-dispatch gap; see
-  // resolveQueuedSteerGateTransition.
-  const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(null);
+  // resolveQueuedSteerGateTransition. Seed from the shared map so a remount
+  // during the interrupt gap still sees the gate the watcher has been holding.
+  const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(() =>
+    getQueuedComposerSteerGate(threadId),
+  );
   // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
   // blocked it; nothing else re-triggers the effect once they reset.
   const [queuedAutoDispatchTick, setQueuedAutoDispatchTick] = useState(0);
@@ -5637,17 +5643,11 @@ export default function ChatView({
 
   useEffect(() => {
     autoDispatchingQueuedTurnRef.current = false;
-    // Async setState (post-paint) keeps this thread-change reset out of the
-    // render->effect->render cascade. Do not clear the shared steer gate: a
-    // backgrounded thread may still need it until the watcher advances it.
-    const settle = window.setTimeout(() => {
-      setQueuedSteerGate(null);
-    }, 0);
-    return () => window.clearTimeout(settle);
   }, [threadId]);
 
   useLayoutEffect(() => {
     claimQueuedComposerAutoDispatch(threadId);
+    setQueuedSteerGate(getQueuedComposerSteerGate(threadId));
     return () => {
       releaseQueuedComposerAutoDispatch(threadId);
     };
@@ -9396,7 +9396,7 @@ export default function ChatView({
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
         isConnecting,
-        queuedSteerGate,
+        queuedSteerGate: getQueuedComposerSteerGate(threadId) ?? queuedSteerGate,
         hasPendingApproval: activePendingApproval !== null,
         hasPendingProgress: activePendingProgress !== null,
         hasPendingUserInput: pendingUserInputs.length > 0,
@@ -9422,13 +9422,23 @@ export default function ChatView({
     if (!nextQueuedTurn) {
       return;
     }
+    if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
+      // The watcher already owns this thread's queue head (background drain
+      // started before this ChatView claimed). Poll until that send settles.
+      const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
+      return () => window.clearTimeout(timer);
+    }
     autoDispatchingQueuedTurnRef.current = true;
     void (async () => {
-      const succeeded = await dispatchQueuedComposerTurn(nextQueuedTurn, "queue");
-      if (succeeded) {
-        removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
+      try {
+        const succeeded = await dispatchQueuedComposerTurn(nextQueuedTurn, "queue");
+        if (succeeded) {
+          removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
+        }
+      } finally {
+        autoDispatchingQueuedTurnRef.current = false;
+        endQueuedComposerAutoDispatch(threadId);
       }
-      autoDispatchingQueuedTurnRef.current = false;
     })();
   }, [
     activeLatestTurn,
