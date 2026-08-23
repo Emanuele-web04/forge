@@ -780,6 +780,49 @@ describe("WsTransport", () => {
     }
   });
 
+  it("aborts an in-place unary capacity retry when the request signal aborts", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const capacityError = {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+        message: "WebSocket expensive-read request capacity exceeded.",
+      };
+      const runPromise = vi.fn().mockRejectedValue(capacityError);
+      Object.assign(internals, {
+        getClient: vi.fn(async () => ({
+          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+        })),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      const controller = new AbortController();
+      const pending = transport.request(
+        WS_METHODS.projectsReadFile,
+        {},
+        {
+          timeoutMs: null,
+          signal: controller.signal,
+        },
+      );
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: "WS_REQUEST_ABORTED",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      await rejected;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry a non-capacity unary failure in place", async () => {
     const { transport, internals } = makeBareTransport();
     const failure = new Error("file missing");

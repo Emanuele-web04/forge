@@ -685,7 +685,10 @@ export interface NativeApi {
     prewarmSearchIndex: (
       input: ProjectPrewarmSearchIndexInput,
     ) => Promise<ProjectPrewarmSearchIndexResult>;
-    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    readFile: (
+      input: ProjectReadFileInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ProjectReadFileResult>;
     resolveOutOfRootFileReference: (
       input: ProjectResolveOutOfRootFileReferenceInput,
     ) => Promise<ProjectResolveOutOfRootFileReferenceResult>;

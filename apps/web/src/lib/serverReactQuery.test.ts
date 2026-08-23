@@ -2,7 +2,7 @@
 // Purpose: Locks down server React Query polling profiles and cache options.
 // Layer: Web data-fetching unit tests
 
-import type { ServerConfig, ServerProviderStatus } from "@synara/contracts";
+import { ThreadId, type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +16,7 @@ import {
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
+  studioThreadOutputsQueryOptions,
 } from "./serverReactQuery";
 
 const READY_CODEX_STATUS = {
@@ -226,5 +227,26 @@ describe("serverProviderUsageSnapshotQueryOptions", () => {
     });
 
     expect(options.enabled).toBe(false);
+  });
+});
+
+describe("studio thread outputs query options", () => {
+  const capacityError = {
+    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+    retryable: true,
+    retryAfterMs: 375,
+  };
+
+  it("retries generic output failures without stacking capacity retries", () => {
+    const options = studioThreadOutputsQueryOptions({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(typeof options.retry).toBe("function");
+    if (typeof options.retry !== "function") {
+      throw new Error("Expected retry on studioThreadOutputsQueryOptions.");
+    }
+    expect(options.retry(0, capacityError as never)).toBe(false);
+    expect(options.retry(0, new Error("network"))).toBe(true);
+    expect(options.retry(3, new Error("network"))).toBe(false);
   });
 });

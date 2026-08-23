@@ -14,7 +14,7 @@ import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 import {
-  EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS,
+  EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadErrorRefetchInterval,
 } from "./expensiveReadRetry";
 
@@ -181,20 +181,25 @@ export function projectReadFileQueryOptions(input: {
       : null);
   return queryOptions<ProjectReadFileResult>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!effectiveCwd || !input.relativePath) {
         throw new Error("Workspace file read is unavailable.");
       }
-      return api.projects.readFile({
-        cwd: effectiveCwd,
-        relativePath: input.relativePath,
-        ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
-      });
+      return api.projects.readFile(
+        {
+          cwd: effectiveCwd,
+          relativePath: input.relativePath,
+          ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
+        },
+        { signal },
+      );
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
-    ...EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS,
+    // File-not-found must surface immediately for out-of-root relocation.
+    // Capacity is retried in-place by the transport; do not stack another budget.
+    retry: false,
     refetchInterval: expensiveReadErrorRefetchInterval,
   });
 }
@@ -296,7 +301,7 @@ export function projectSearchEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.cwd !== null && input.query.length > 0,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_ENTRIES_RESULT,
-    ...EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -327,7 +332,7 @@ export function projectSearchLocalEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.rootPath !== null && trimmedQuery.length >= 2,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_LOCAL_ENTRIES_RESULT,
-    ...EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -359,6 +364,6 @@ export function projectSearchContentQueryOptions(input: {
       trimmedQuery.length >= SEARCH_CONTENT_MIN_QUERY_LENGTH,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_CONTENT_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_CONTENT_RESULT,
-    ...EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }

@@ -55,18 +55,10 @@ export function getUnaryRpcCapacityRetryDelayMs(
 }
 
 export function shouldRetryExpensiveRead(failureCount: number, error: unknown): boolean {
-  return isRetryableRpcCapacityExceededError(error)
-    ? failureCount < RPC_CAPACITY_RETRY_LIMIT
-    : failureCount < DEFAULT_GENERIC_RETRY_LIMIT;
-}
-
-export function shouldRetryExpensiveReadCapacityOnly(
-  failureCount: number,
-  error: unknown,
-): boolean {
-  return isRetryableRpcCapacityExceededError(error)
-    ? failureCount < RPC_CAPACITY_RETRY_LIMIT
-    : false;
+  // Capacity rejections are already retried in-place by wsTransport.request().
+  // A second query-level budget would multiply into 13×13 admission probes.
+  if (isRetryableRpcCapacityExceededError(error)) return false;
+  return failureCount < DEFAULT_GENERIC_RETRY_LIMIT;
 }
 
 export function expensiveReadRetryDelay(attemptIndex: number, error: unknown): number {
@@ -86,21 +78,20 @@ export const EXPENSIVE_READ_RETRY_OPTIONS: ExpensiveReadRetryFns = {
   retryDelay: expensiveReadRetryDelay as ExpensiveReadRetryFns["retryDelay"],
 };
 
-// Capacity-only: do not override QueryClient retry for generic misses
-// such as "file not found", which must surface immediately for relocation.
-export const EXPENSIVE_READ_CAPACITY_RETRY_OPTIONS: ExpensiveReadRetryFns = {
-  retry: shouldRetryExpensiveReadCapacityOnly as ExpensiveReadRetryFns["retry"],
-  retryDelay: expensiveReadRetryDelay as ExpensiveReadRetryFns["retryDelay"],
-};
+export const MAX_EXPENSIVE_READ_ERROR_REFETCH_INTERVAL_MS = 10_000;
 
 /**
  * Error-only refetch so a saturated read recovers without waiting for another
  * file-change, window focus, or reconnect. Successful queries stay event-driven.
+ * Back off from retryAfterMs so each tick does not immediately re-arm a full
+ * unary capacity-retry loop.
  */
 export function expensiveReadErrorRefetchInterval(query: {
-  readonly state: { readonly error: unknown };
+  readonly state: { readonly error: unknown; readonly errorUpdateCount?: number };
 }): number | false {
-  return isRetryableRpcCapacityExceededError(query.state.error)
-    ? getRpcCapacityRetryAfterMs(query.state.error)
-    : false;
+  if (!isRetryableRpcCapacityExceededError(query.state.error)) return false;
+  const base = getRpcCapacityRetryAfterMs(query.state.error);
+  const failures = Math.max(1, query.state.errorUpdateCount ?? 1);
+  const exponent = Math.min(failures - 1, 16);
+  return Math.min(base * 2 ** exponent, MAX_EXPENSIVE_READ_ERROR_REFETCH_INTERVAL_MS);
 }

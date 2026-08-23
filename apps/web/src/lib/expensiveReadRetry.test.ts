@@ -9,9 +9,9 @@ import {
   expensiveReadRetryDelay,
   getUnaryRpcCapacityRetryDelayMs,
   isRpcCapacityExceededError,
+  MAX_EXPENSIVE_READ_ERROR_REFETCH_INTERVAL_MS,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
   shouldRetryExpensiveRead,
-  shouldRetryExpensiveReadCapacityOnly,
 } from "./expensiveReadRetry";
 
 const capacityError = {
@@ -32,14 +32,11 @@ describe("expensive-read capacity retry", () => {
     ).toBe(true);
     expect(isRpcCapacityExceededError(new Error("network"))).toBe(false);
 
-    expect(shouldRetryExpensiveRead(0, capacityError)).toBe(true);
-    expect(shouldRetryExpensiveRead(11, capacityError)).toBe(true);
-    expect(shouldRetryExpensiveRead(12, capacityError)).toBe(false);
+    expect(shouldRetryExpensiveRead(0, capacityError)).toBe(false);
+    expect(getUnaryRpcCapacityRetryDelayMs(capacityError, 0)).toBe(375);
     expect(shouldRetryExpensiveRead(0, new Error("Workspace file not found"))).toBe(true);
-    expect(shouldRetryExpensiveReadCapacityOnly(0, capacityError)).toBe(true);
-    expect(shouldRetryExpensiveReadCapacityOnly(0, new Error("Workspace file not found"))).toBe(
-      false,
-    );
+    expect(shouldRetryExpensiveRead(2, new Error("network"))).toBe(true);
+    expect(shouldRetryExpensiveRead(3, new Error("network"))).toBe(false);
     expect(expensiveReadRetryDelay(0, capacityError)).toBe(375);
     expect(
       expensiveReadRetryDelay(0, {
@@ -65,7 +62,15 @@ describe("expensive-read capacity retry", () => {
   });
 
   it("self-heals only while a retryable capacity error is retained", () => {
-    expect(expensiveReadErrorRefetchInterval({ state: { error: capacityError } })).toBe(375);
+    expect(
+      expensiveReadErrorRefetchInterval({ state: { error: capacityError, errorUpdateCount: 1 } }),
+    ).toBe(375);
+    expect(
+      expensiveReadErrorRefetchInterval({ state: { error: capacityError, errorUpdateCount: 2 } }),
+    ).toBe(750);
+    expect(
+      expensiveReadErrorRefetchInterval({ state: { error: capacityError, errorUpdateCount: 8 } }),
+    ).toBe(MAX_EXPENSIVE_READ_ERROR_REFETCH_INTERVAL_MS);
     expect(expensiveReadErrorRefetchInterval({ state: { error: null } })).toBe(false);
     expect(expensiveReadErrorRefetchInterval({ state: { error: new Error("ENOENT") } })).toBe(
       false,

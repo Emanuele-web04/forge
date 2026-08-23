@@ -527,7 +527,10 @@ export function createWsNativeApi(): NativeApi {
       searchContent: (input) => transport.request(WS_METHODS.projectsSearchContent, input),
       prewarmSearchIndex: (input) =>
         transport.request(WS_METHODS.projectsPrewarmSearchIndex, input),
-      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      readFile: (input, options) =>
+        options?.signal
+          ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
+          : transport.request(WS_METHODS.projectsReadFile, input),
       resolveOutOfRootFileReference: (input) =>
         transport.request(WS_METHODS.projectsResolveOutOfRootFileReference, input),
       createLocalFilePreviewGrant: (input) =>

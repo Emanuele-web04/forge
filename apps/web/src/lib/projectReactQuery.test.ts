@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import type { NativeApi } from "@synara/contracts";
+import { QueryClient } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as nativeApi from "../nativeApi";
 import {
   isLocalPreviewGrantUsable,
   LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS,
   localPreviewGrantRefetchIntervalMs,
   projectLocalPreviewGrantQueryOptions,
+  projectQueryKeys,
   projectReadFileQueryOptions,
+  projectSearchEntriesQueryOptions,
 } from "./projectReactQuery";
 
 describe("local preview grant query options", () => {
@@ -59,6 +64,10 @@ describe("local preview grant query options", () => {
   });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("project read file capacity retry", () => {
   const capacityError = {
     code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
@@ -66,28 +75,69 @@ describe("project read file capacity retry", () => {
     retryAfterMs: 375,
   };
 
-  it("honors retryAfterMs and self-heals only while the read is in a capacity error", () => {
+  it("does not stack query-level capacity retries on top of transport", () => {
     const options = projectReadFileQueryOptions({
       cwd: "/repo",
       relativePath: "src/app.ts",
     });
-    expect(typeof options.retry).toBe("function");
-    expect(typeof options.retryDelay).toBe("function");
+    expect(options.retry).toBe(false);
     expect(typeof options.refetchInterval).toBe("function");
-    if (
-      typeof options.retry !== "function" ||
-      typeof options.retryDelay !== "function" ||
-      typeof options.refetchInterval !== "function"
-    ) {
-      throw new Error("Expected capacity retry options on projectReadFileQueryOptions.");
+    if (typeof options.refetchInterval !== "function") {
+      throw new Error("Expected error-only refetchInterval on projectReadFileQueryOptions.");
     }
 
-    expect(options.retry(0, capacityError as never)).toBe(true);
-    expect(options.retry(12, capacityError as never)).toBe(false);
-    expect(options.retry(0, new Error("Workspace file not found"))).toBe(false);
-    expect(options.retryDelay(0, capacityError as never)).toBe(375);
-    expect(options.refetchInterval({ state: { error: capacityError } } as never)).toBe(375);
+    expect(
+      options.refetchInterval({ state: { error: capacityError, errorUpdateCount: 1 } } as never),
+    ).toBe(375);
+    expect(
+      options.refetchInterval({ state: { error: capacityError, errorUpdateCount: 2 } } as never),
+    ).toBe(750);
     expect(options.refetchInterval({ state: { error: null } } as never)).toBe(false);
     expect(options.refetchInterval({ state: { error: new Error("ENOENT") } } as never)).toBe(false);
+  });
+
+  it("aborts an in-flight read when the query is cancelled", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const readFile = vi.fn((_input: unknown, options?: { signal?: AbortSignal }) => {
+      seenSignal = options?.signal;
+      return new Promise(() => undefined);
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      projects: { readFile },
+    } as unknown as NativeApi);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchPromise = queryClient.fetchQuery(
+      projectReadFileQueryOptions({ cwd: "/repo", relativePath: "src/app.ts" }),
+    );
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(1));
+    expect(seenSignal?.aborted).toBe(false);
+
+    await queryClient.cancelQueries({
+      queryKey: projectQueryKeys.readFile("/repo", "src/app.ts"),
+    });
+
+    expect(seenSignal?.aborted).toBe(true);
+    await expect(fetchPromise).rejects.toBeDefined();
+    queryClient.clear();
+  });
+});
+
+describe("project search capacity retry", () => {
+  const capacityError = {
+    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+    retryable: true,
+    retryAfterMs: 375,
+  };
+
+  it("retries generic search failures without stacking capacity retries", () => {
+    const options = projectSearchEntriesQueryOptions({ cwd: "/repo", query: "app" });
+    expect(typeof options.retry).toBe("function");
+    if (typeof options.retry !== "function") {
+      throw new Error("Expected retry on projectSearchEntriesQueryOptions.");
+    }
+    expect(options.retry(0, capacityError as never)).toBe(false);
+    expect(options.retry(0, new Error("network"))).toBe(true);
+    expect(options.retry(3, new Error("network"))).toBe(false);
   });
 });
