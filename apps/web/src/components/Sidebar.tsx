@@ -2685,9 +2685,19 @@ export default function Sidebar() {
   }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   const handlePrimaryNewThread = useCallback(() => {
-    if (primaryNewThreadTarget) {
-      prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
-      void handleNewThread(primaryNewThreadTarget.projectId, {
+    // Resolve against the live store so a click during a hydration gap cannot use a
+    // stale memoized target from the previous render (projects cleared, handler not yet
+    // recomputed).
+    const liveState = useStore.getState();
+    const liveTarget =
+      primaryNewThreadTarget &&
+      liveState.projects.some((project) => project.id === primaryNewThreadTarget.projectId)
+        ? primaryNewThreadTarget
+        : null;
+
+    if (liveTarget) {
+      prefetchModelsForProjectNewThread(liveTarget.projectId, { includeDroid: true });
+      void handleNewThread(liveTarget.projectId, {
         envMode: resolveSidebarNewThreadEnvMode({
           defaultEnvMode: appSettings.defaultThreadEnvMode,
         }),
@@ -2697,7 +2707,7 @@ export default function Sidebar() {
 
     // The projects snapshot can be temporarily empty during startup. Wait for hydration
     // before treating a missing target as a genuine no-project state.
-    if (!threadsHydrated) {
+    if (!liveState.threadsHydrated) {
       return;
     }
     handleStartAddProject();
@@ -2707,7 +2717,6 @@ export default function Sidebar() {
     handleStartAddProject,
     prefetchModelsForProjectNewThread,
     primaryNewThreadTarget,
-    threadsHydrated,
   ]);
 
   const handleImportThread = useCallback(
