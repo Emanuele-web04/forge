@@ -2,8 +2,8 @@
 // Purpose: Auto-dispatch composer queued turns for every thread, including ones
 //          whose ChatView is unmounted, using the same gates as the open chat.
 // Layer: Web subscription utility
-// Exports: drain gates, exclusive per-thread send lock, steer-gate sharing,
-//          ChatView claim/release, watcher start
+// Exports: drain gates, exclusive per-thread send lock, locked-dispatch helper,
+//          steer-gate sharing, ChatView claim/release, watcher start
 
 import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 
@@ -94,6 +94,21 @@ export function endQueuedComposerAutoDispatch(threadId: ThreadId): void {
     return;
   }
   requestQueuedComposerDrainPass();
+}
+
+// Module-scope try/finally: ChatView is a hot-path compiler target and cannot
+// lower TryStatement without a catch. Callers must already hold the lock.
+export async function runLockedQueuedComposerAutoDispatch(input: {
+  threadId: ThreadId;
+  run: () => Promise<void>;
+  onSettled?: () => void;
+}): Promise<void> {
+  try {
+    await input.run();
+  } finally {
+    input.onSettled?.();
+    endQueuedComposerAutoDispatch(input.threadId);
+  }
 }
 
 export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
@@ -294,8 +309,9 @@ function runQueuedComposerDrainPass(): void {
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
       continue;
     }
-    void (async () => {
-      try {
+    void runLockedQueuedComposerAutoDispatch({
+      threadId,
+      run: async () => {
         const succeeded = await dispatchQueuedTurn({
           threadId,
           queuedTurn: nextQueuedTurn,
@@ -305,9 +321,7 @@ function runQueuedComposerDrainPass(): void {
         if (succeeded) {
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
         }
-      } finally {
-        endQueuedComposerAutoDispatch(threadId);
-      }
-    })();
+      },
+    });
   }
 }

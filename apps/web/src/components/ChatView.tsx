@@ -166,9 +166,9 @@ import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
   clearQueuedComposerSteerGate,
-  endQueuedComposerAutoDispatch,
   getQueuedComposerSteerGate,
   releaseQueuedComposerAutoDispatch,
+  runLockedQueuedComposerAutoDispatch,
   shouldAutoDispatchQueuedComposerTurn,
   tryBeginQueuedComposerAutoDispatch,
 } from "../lib/queuedComposerDrain";
@@ -9429,17 +9429,18 @@ export default function ChatView({
       return () => window.clearTimeout(timer);
     }
     autoDispatchingQueuedTurnRef.current = true;
-    void (async () => {
-      try {
+    void runLockedQueuedComposerAutoDispatch({
+      threadId,
+      run: async () => {
         const succeeded = await dispatchQueuedComposerTurn(nextQueuedTurn, "queue");
         if (succeeded) {
           removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
         }
-      } finally {
+      },
+      onSettled: () => {
         autoDispatchingQueuedTurnRef.current = false;
-        endQueuedComposerAutoDispatch(threadId);
-      }
-    })();
+      },
+    });
   }, [
     activeLatestTurn,
     activePendingApproval,
