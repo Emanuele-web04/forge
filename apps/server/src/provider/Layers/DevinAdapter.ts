@@ -118,6 +118,7 @@ import {
 } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
@@ -126,7 +127,6 @@ import {
   isFormElicitationRequest,
 } from "../acp/AcpElicitationSupport.ts";
 import {
-  getDevinApiKeyEnv,
   hasDevinApiKeyEnv,
   mapDevinAcpCommands,
   makeDevinAcpRuntime,
@@ -158,7 +158,6 @@ const DEVIN_DISCOVERY_CACHE_MAX_ENTRIES = 16;
 const DEVIN_ACP_TRANSPORT_DEBUG_MARKER = "devin-acp-meta-stripper-v2";
 const DEVIN_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const DEVIN_ACP_DEBUG_ENV = "SYNARA_DEVIN_ACP_DEBUG";
-const SYNARA_DEVIN_ACP_DEBUG_ENV = "SYNARA_DEVIN_ACP_DEBUG";
 const LEGACY_DEVIN_ACP_DEBUG_ENV = "DP_DEVIN_ACP_DEBUG";
 // On session/load, Devin can replay old ACP updates after the session reports
 // ready; suppression stays active until that stream goes quiet.
@@ -302,16 +301,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readDevinProviderStartOptions(
   providerOptions: unknown,
-): { readonly binaryPath?: string; readonly model?: string } | undefined {
+): { readonly binaryPath?: string } | undefined {
   if (!isRecord(providerOptions) || !isRecord(providerOptions.devin)) {
     return undefined;
   }
   const binaryPath = providerOptions.devin.binaryPath;
-  const model = providerOptions.devin.model;
-  return {
-    ...(typeof binaryPath === "string" ? { binaryPath } : {}),
-    ...(typeof model === "string" ? { model } : {}),
-  };
+  return typeof binaryPath === "string" ? { binaryPath } : {};
 }
 
 function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string } | undefined {
@@ -518,9 +513,7 @@ function collectStreamAsString<E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 
 function isDevinAcpDebugEnabled(): boolean {
   return (
-    process.env[DEVIN_ACP_DEBUG_ENV] === "1" ||
-    process.env[SYNARA_DEVIN_ACP_DEBUG_ENV] === "1" ||
-    process.env[LEGACY_DEVIN_ACP_DEBUG_ENV] === "1"
+    process.env[DEVIN_ACP_DEBUG_ENV] === "1" || process.env[LEGACY_DEVIN_ACP_DEBUG_ENV] === "1"
   );
 }
 
@@ -1333,9 +1326,6 @@ export function makeDevinAdapter(
             ...(providerDevinOptions?.binaryPath !== undefined
               ? { binaryPath: providerDevinOptions.binaryPath }
               : {}),
-            ...(providerDevinOptions?.model !== undefined
-              ? { model: providerDevinOptions.model }
-              : {}),
             ...(devinModelSelection?.model ? { model: devinModelSelection.model } : {}),
             // Devin's ACP process accepts a concrete model UID, not a separate
             // effort/context flag. The web client resolves runtime selections
@@ -1360,7 +1350,7 @@ export function makeDevinAdapter(
             requestedModel: devinModelSelection?.model,
             modelVariant: devinModelSelection?.options?.modelVariant,
             reasoningEffort: devinModelSelection?.options?.reasoningEffort,
-            apiKeyConfigured: hasDevinApiKeyEnv() && getDevinApiKeyEnv() !== undefined,
+            apiKeyConfigured: hasDevinApiKeyEnv(),
             alwaysApprove: input.runtimeMode === "full-access",
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
@@ -1585,9 +1575,11 @@ export function makeDevinAdapter(
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                // Only genuine turn-progress events keep the idle watchdog at
+                // bay; mode/config/usage heartbeats must not mask a hung turn.
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -2324,8 +2316,24 @@ export function makeDevinAdapter(
 
     const listCommands: NonNullable<DevinAdapterShape["listCommands"]> = (
       input: ProviderListCommandsInput,
-    ) =>
-      discoveryLock.withPermits(1)(
+    ) => {
+      const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
+      const cacheKey =
+        cwd === undefined
+          ? undefined
+          : `${input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin"}\u0000${cwd}`;
+      const cached = cacheKey === undefined ? undefined : commandDiscoveryCache.get(cacheKey);
+      // Fast path: serve a fresh cached result without serializing behind the
+      // discovery lock.
+      if (
+        cacheKey !== undefined &&
+        input.forceReload !== true &&
+        cached &&
+        cached.expiresAt > Date.now()
+      ) {
+        return Effect.succeed({ ...cached.result, cached: true });
+      }
+      return discoveryLock.withPermits(1)(
         Effect.gen(function* () {
           const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
           if (!cwd) {
@@ -2338,6 +2346,8 @@ export function makeDevinAdapter(
           const binaryPath =
             input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
           const cacheKey = `${binaryPath}\u0000${cwd}`;
+          // Recheck under the lock: a concurrent discovery may have populated
+          // the cache while this fiber waited for the permit.
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
@@ -2392,6 +2402,7 @@ export function makeDevinAdapter(
           ),
         ),
       );
+    };
 
     const compactThread: NonNullable<DevinAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {

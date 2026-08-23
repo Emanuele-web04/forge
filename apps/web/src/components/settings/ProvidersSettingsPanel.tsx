@@ -85,8 +85,7 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir"
-  | "devinBinaryPath";
+  | "piAgentDir";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"

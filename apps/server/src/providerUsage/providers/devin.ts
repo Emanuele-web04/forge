@@ -49,7 +49,7 @@ function normalizeDevinApiServerUrl(raw: string | undefined): string | null {
   const candidate = raw?.trim() || DEFAULT_API_SERVER_URL;
   try {
     const parsed = new URL(candidate);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    if (parsed.protocol !== "https:") {
       return null;
     }
     parsed.hash = "";

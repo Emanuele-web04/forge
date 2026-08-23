@@ -75,8 +75,6 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
-    case "devin":
-      return { label: PROVIDER_DISPLAY_NAMES.devin, provider: "devin" };
     case "agents":
       return { label: "Shared (.agents)", provider: null };
     case "project":

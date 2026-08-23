@@ -2332,6 +2332,7 @@ export default function ChatView({
     customModelsByProvider,
     modelOptionsByProvider,
     loadingModelProviders,
+    discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeAgents: dynamicAgents,
     selectedProviderModelsLoading,
@@ -9700,6 +9701,7 @@ export default function ChatView({
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={loadingModelProviders}
+        discoveryErrorsByProvider={discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={onProviderModelSelect}
@@ -9736,6 +9738,7 @@ export default function ChatView({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={loadingModelProviders}
+      discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
       threadId={threadId}
@@ -10042,6 +10045,7 @@ export default function ChatView({
         api,
         workspaceRoot,
         createIfMissing: false,
+        defaultProvider: settings.defaultProvider,
         loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
       });
       if (creationResult.snapshot) {
@@ -10059,6 +10063,7 @@ export default function ChatView({
       handleSelectProjectForEmptyDraft,
       isLocalDraftThread,
       moveEmptyDraftToLocalProject,
+      settings.defaultProvider,
       syncServerShellSnapshot,
     ],
   );

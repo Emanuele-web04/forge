@@ -22,11 +22,11 @@ function redactSecretString(value: string): string {
   return value
     .replace(/(\bBearer\s+)[^\s"',}\]]+/gi, `$1${ACP_LOG_REDACTED_VALUE}`)
     .replace(
-      /("(?:api_key|devin_api_key|windsurf_api_key)"\s*:\s*")[^"]*/gi,
+      /("(?:api[_-]?key|devin[_-]?api[_-]?key|windsurf[_-]?api[_-]?key)"\s*:\s*")[^"]*/gi,
       `$1${ACP_LOG_REDACTED_VALUE}`,
     )
     .replace(
-      /((?:api_key|devin_api_key|windsurf_api_key)\s*=\s*)[^\s"',}\]]+/gi,
+      /((?:api[_-]?key|devin[_-]?api[_-]?key|windsurf[_-]?api[_-]?key)\s*=\s*)[^\s"',}\]]+/gi,
       `$1${ACP_LOG_REDACTED_VALUE}`,
     )
     .replace(/(SYNARA_AGENT_GATEWAY_TOKEN\s*=\s*)[^\s"',}\]]+/g, `$1${ACP_LOG_REDACTED_VALUE}`)
@@ -123,7 +123,7 @@ function formatRequestLogPayload(event: AcpSessionRequestLogEvent) {
     status: event.status,
     request: event.payload,
     ...(event.result !== undefined ? { result: event.result } : {}),
-    ...(event.cause !== undefined ? { cause: Cause.pretty(event.cause) } : {}),
+    ...(event.cause !== undefined ? { cause: redactAcpLogSecrets(Cause.pretty(event.cause)) } : {}),
   };
 }
 
@@ -167,7 +167,7 @@ export function makeAcpDebugLoggers(input: {
                   event.method === "session/prompt"
                     ? "[redacted session/prompt payload]"
                     : summarize(event.payload),
-                cause: event.cause ? Cause.pretty(event.cause) : undefined,
+                cause: event.cause ? redactAcpLogSecrets(Cause.pretty(event.cause)) : undefined,
               });
             }
           })

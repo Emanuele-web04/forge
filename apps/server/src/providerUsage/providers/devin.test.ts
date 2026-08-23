@@ -208,4 +208,17 @@ describe("devinUsageFetcher", () => {
     expect(snapshot.status).toBe("error");
     expect(snapshot.detail).toContain("API server URL is invalid");
   });
+  it("rejects a plain http API server URL with no loopback exception", async () => {
+    const snapshot = await devinUsageFetcher.fetch({
+      homeDir: "/nonexistent-home",
+      env: {
+        DEVIN_API_KEY: "env-key",
+        DEVIN_API_SERVER_URL: "http://localhost:3000",
+      },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.detail).toContain("API server URL is invalid");
+  });
 });

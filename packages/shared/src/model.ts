@@ -284,7 +284,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode" || provider === "devin") {
+  if (provider === "kilo" || provider === "opencode") {
     return "variant";
   }
   if (provider === "pi") {
@@ -298,7 +298,7 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode" || provider === "devin"
+    provider === "kilo" || provider === "opencode"
       ? (caps.variantOptions ?? [])
       : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
@@ -306,10 +306,7 @@ function legacyCapabilityDescriptors(
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
       id: reasoningDescriptorId(provider),
-      label:
-        provider === "kilo" || provider === "opencode" || provider === "devin"
-          ? "Variant"
-          : "Reasoning",
+      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,

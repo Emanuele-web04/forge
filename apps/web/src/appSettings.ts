@@ -654,8 +654,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
-    hasOwn(patch, "piAgentDir") ||
-    hasOwn(patch, "devinBinaryPath")
+    hasOwn(patch, "piAgentDir")
   );
 }
 
@@ -800,15 +799,6 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
   }
-  if (hasOwn(patch, "devinBinaryPath") || hasOwn(patch, "customDevinModels")) {
-    providers.devin = {
-      ...(hasOwn(patch, "devinBinaryPath") ? { binaryPath: patch.devinBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customDevinModels")
-        ? { customModels: patch.customDevinModels ?? [] }
-        : {}),
-    };
-  }
-
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
@@ -846,7 +836,6 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeServerUrl",
     "piAgentDir",
     "piBinaryPath",
-    "devinBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {
@@ -875,7 +864,6 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
-    "customDevinModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
       patch[key] = normalizedSettings[key] as never;

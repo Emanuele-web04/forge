@@ -7,6 +7,7 @@ import {
   assistantItemId,
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
+  isAcpAuthRequiredError,
   makeAcpIncomingFrameGuard,
   makeStartupInteractionRegistry,
   runAcpFreshSessionSetup,
@@ -403,5 +404,31 @@ describe("makeStartupInteractionRegistry", () => {
     });
 
     await Effect.runPromise(program);
+  });
+});
+
+describe("isAcpAuthRequiredError", () => {
+  it("classifies a qualified missing or invalid api key message as auth-required", () => {
+    expect(
+      isAcpAuthRequiredError(
+        new AcpErrors.AcpRequestError({ code: -32000, errorMessage: "Missing api key." }),
+      ),
+    ).toBe(true);
+    expect(
+      isAcpAuthRequiredError(
+        new AcpErrors.AcpRequestError({ code: -32000, errorMessage: "Invalid api key." }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat a bare api-key mention as an auth challenge", () => {
+    expect(
+      isAcpAuthRequiredError(
+        new AcpErrors.AcpRequestError({
+          code: -32000,
+          errorMessage: "API key could not be verified by the upstream service.",
+        }),
+      ),
+    ).toBe(false);
   });
 });

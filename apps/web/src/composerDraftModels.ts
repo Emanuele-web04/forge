@@ -806,18 +806,28 @@ export function resolvePreferredComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
+  // Fresh bootstrap: the draft has no thread history yet, so its model state is
+  // only sticky-seeded carry-over. An explicit persisted default (or an explicit
+  // thread/project selection) must beat that stale sticky provider.
+  fresh?: boolean;
 }): ModelSelection {
   const draftProviderWithSelection =
     COMPOSER_PROVIDER_KINDS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
-  const preferredProvider =
-    input.draft?.activeProvider ??
-    draftProviderWithSelection ??
-    input.threadModelSelection?.provider ??
-    input.projectModelSelection?.provider ??
-    input.defaultProvider ??
-    "codex";
+  const preferredProvider = input.fresh
+    ? (input.threadModelSelection?.provider ??
+      input.projectModelSelection?.provider ??
+      input.defaultProvider ??
+      input.draft?.activeProvider ??
+      draftProviderWithSelection ??
+      "codex")
+    : (input.draft?.activeProvider ??
+      draftProviderWithSelection ??
+      input.threadModelSelection?.provider ??
+      input.projectModelSelection?.provider ??
+      input.defaultProvider ??
+      "codex");
 
   return (
     input.draft?.modelSelectionByProvider?.[preferredProvider] ??

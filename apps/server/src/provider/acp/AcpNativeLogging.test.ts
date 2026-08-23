@@ -4,11 +4,15 @@ import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 
 import { SYNARA_AGENT_GATEWAY_TOKEN_ENV } from "../../agentGateway/mcpInjection.ts";
 import { makeEventNdjsonLogger } from "../Layers/EventNdjsonLogger.ts";
-import { ACP_LOG_REDACTED_VALUE, makeAcpNativeLoggers } from "./AcpNativeLogging.ts";
+import {
+  ACP_LOG_REDACTED_VALUE,
+  makeAcpNativeLoggers,
+  redactAcpLogSecrets,
+} from "./AcpNativeLogging.ts";
 
 describe("AcpNativeLogging", () => {
   it.effect("redacts gateway credentials from request and protocol NDJSON logs", () =>
@@ -90,4 +94,26 @@ describe("AcpNativeLogging", () => {
       }
     }),
   );
+});
+
+describe("redactAcpLogSecrets", () => {
+  it("redacts camelCase api keys in colon-quoted JSON values", () => {
+    const input = JSON.stringify({
+      apiKey: "sk-camel-quoted-sentinel",
+      devinApiKey: "sk-devin-camel-sentinel",
+      windsurfApiKey: "sk-windsurf-camel-sentinel",
+    });
+    const redacted = String(redactAcpLogSecrets(input));
+    assert.notInclude(redacted, "sk-camel-quoted-sentinel");
+    assert.notInclude(redacted, "sk-devin-camel-sentinel");
+    assert.notInclude(redacted, "sk-windsurf-camel-sentinel");
+    assert.equal((redacted.match(/\[REDACTED\]/g) ?? []).length, 3);
+  });
+
+  it("redacts secrets from Cause.pretty output", () => {
+    const cause = Cause.fail("request failed: Authorization: Bearer sk-cause-pretty-sentinel");
+    const redacted = String(redactAcpLogSecrets(Cause.pretty(cause)));
+    assert.notInclude(redacted, "sk-cause-pretty-sentinel");
+    assert.include(redacted, ACP_LOG_REDACTED_VALUE);
+  });
 });

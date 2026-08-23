@@ -13,6 +13,7 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import {
@@ -113,6 +114,25 @@ export function useHandleNewThread() {
         model: defaultModel,
       });
     };
+    // Fresh chat drafts carry only sticky-seeded composer state, so resolve the
+    // draft model selection against the full precedence (explicit provider >
+    // project default > global default > sticky) instead of overwriting the
+    // sticky provider with the global default alone.
+    const applyResolvedDefault = (threadId: ThreadId) => {
+      if (options?.provider) {
+        return;
+      }
+      const draftComposerState =
+        useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const modelSelection = resolvePreferredComposerModelSelection({
+        draft: draftComposerState,
+        threadModelSelection: null,
+        projectModelSelection: projectDefaultModelSelection,
+        defaultProvider: settings.defaultProvider,
+        fresh: true,
+      });
+      setModelSelection(threadId, modelSelection);
+    };
     const restoreComposerDraft = (
       threadId: ThreadId,
       draftState: ComposerThreadDraftState | null,
@@ -174,6 +194,11 @@ export function useHandleNewThread() {
       projectId,
       routeThreadId: focusedThreadId,
     });
+    // A fresh bootstrap (explicit options.fresh or a plan with no reusable draft)
+    // means the new draft's composer state is only sticky-seeded carry-over, so
+    // resolve its model selection against explicit thread/project/default
+    // providers instead of that stale sticky provider.
+    const freshBootstrap = options?.fresh === true || bootstrapPlan.kind === "fresh";
     // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
@@ -192,6 +217,7 @@ export function useHandleNewThread() {
         draftComposerState:
           useComposerDraftStore.getState().draftsByThreadId[targetThreadId] ?? null,
         draftThread,
+        fresh: freshBootstrap,
         options: creationOptions,
         projectDefaultModelSelection,
         projectId,
@@ -323,6 +349,7 @@ export function useHandleNewThread() {
           activateThreadEntryPoint(threadId);
           applyStickyState(threadId);
           applyProviderOverride(threadId);
+          applyResolvedDefault(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route
         // subtree renders interruptibly and the browser can paint the chat

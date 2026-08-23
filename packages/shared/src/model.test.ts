@@ -519,6 +519,40 @@ describe("provider option descriptor helpers", () => {
     expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
   });
 
+  it("surfaces Devin runtime reasoningEffortLevels and keeps effort/fast controls", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "devin",
+      caps: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        supportsFastMode: true,
+        supportsThinkingToggle: true,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+      selections: { reasoningEffort: "high" },
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "reasoningEffort")).toMatchObject({
+      label: "Reasoning",
+      type: "select",
+      currentValue: "high",
+    });
+    const reasoning = descriptors.find((descriptor) => descriptor.id === "reasoningEffort");
+    if (reasoning?.type === "select") {
+      expect(reasoning.options.map((option) => option.id)).toEqual(["low", "medium", "high"]);
+    }
+    expect(descriptors.some((descriptor) => descriptor.id === "variant")).toBe(false);
+    expect(descriptors.find((descriptor) => descriptor.id === "fastMode")).toMatchObject({
+      type: "boolean",
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "thinking")).toMatchObject({
+      type: "boolean",
+      currentValue: true,
+    });
+  });
   it("honors explicit descriptors and serializes their current values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",

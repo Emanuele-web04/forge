@@ -1074,8 +1074,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
-  // Devin ACP exposes a live model list via session/get_config_options; this is a
-  // small static fallback for when the CLI is unreachable.
+  // Devin selects its model at process start via `devin acp --model`; the ACP
+  // session does not expose a live model list. This list is a static fallback
+  // for when the CLI is unreachable.
   devin: [
     {
       slug: "adaptive",

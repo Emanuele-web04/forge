@@ -75,6 +75,7 @@ Synara connects to coding-agent runtimes that are installed and authenticated lo
 | **Kilo**        | Kilo Code or a configured Kilo server       |
 | **OpenCode**    | OpenCode and its configured model providers |
 | **Pi**          | Pi and its configured model providers       |
+| **Devin**       | Devin CLI                                   |
 
 ### 5. Isolated parallel work
 

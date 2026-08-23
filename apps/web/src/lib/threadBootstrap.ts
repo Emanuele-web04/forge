@@ -107,6 +107,10 @@ interface ResolveTerminalThreadCreationStateInput {
   defaultProvider?: ProviderKind | null | undefined;
   draftComposerState: ComposerThreadDraftState | null;
   draftThread: DraftThreadState | null;
+  // Fresh bootstrap: the new draft carries only sticky-seeded composer state, so
+  // the resolved model selection must favor explicit thread/project/default
+  // providers over that stale sticky provider (see resolvePreferredComposerModelSelection).
+  fresh?: boolean;
   options: NewThreadOptions | undefined;
   projectDefaultModelSelection: ModelSelection | null;
   projectId: ProjectId;
@@ -310,6 +314,7 @@ export function resolveTerminalThreadCreationState(
           : null,
       projectModelSelection: input.projectDefaultModelSelection,
       defaultProvider: input.defaultProvider,
+      ...(input.fresh === undefined ? {} : { fresh: input.fresh }),
     }),
     runtimeMode:
       input.draftThread?.runtimeMode ??

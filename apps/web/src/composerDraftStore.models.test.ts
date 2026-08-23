@@ -66,6 +66,73 @@ describe("resolvePreferredComposerModelSelection", () => {
       }),
     ).toEqual(cursorSelection);
   });
+
+  it("prefers the persisted default provider over a stale sticky draft on fresh bootstrap", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        fresh: true,
+        draft: {
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        },
+        threadModelSelection: null,
+        projectModelSelection: null,
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("devin", "adaptive"));
+  });
+
+  it("lets an explicit thread selection win over a stale sticky draft on fresh bootstrap", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        fresh: true,
+        draft: {
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        },
+        threadModelSelection: modelSelection("codex", "gpt-5"),
+        projectModelSelection: null,
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("codex", "gpt-5"));
+  });
+
+  it("lets an explicit project selection win over a stale sticky draft on fresh bootstrap", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        fresh: true,
+        draft: {
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        },
+        threadModelSelection: null,
+        projectModelSelection: modelSelection("codex", "gpt-5.4"),
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("codex", "gpt-5.4"));
+  });
+
+  it("keeps a non-fresh draft preference ahead of the persisted default", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        },
+        threadModelSelection: null,
+        projectModelSelection: null,
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("pi", "pi-auto"));
+  });
 });
 
 describe("composerDraftStore modelSelection", () => {
@@ -800,6 +867,20 @@ describe("composerDraftStore sticky composer settings", () => {
         claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6"),
       },
       activeProvider: "claudeAgent",
+    });
+  });
+  it("overrides a sticky activeProvider with the saved default provider on a fresh draft", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.makeUnsafe("thread-sticky-saved-default");
+    store.setStickyModelSelection(modelSelection("pi", "pi-auto"));
+    store.applyStickyState(threadId);
+    store.setModelSelection(threadId, modelSelection("devin", "adaptive"));
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
+      modelSelectionByProvider: {
+        pi: modelSelection("pi", "pi-auto"),
+        devin: modelSelection("devin", "adaptive"),
+      },
+      activeProvider: "devin",
     });
   });
 

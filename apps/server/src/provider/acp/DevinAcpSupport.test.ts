@@ -4,7 +4,6 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  applyDevinAcpModelSelection,
   buildDevinAcpAuthenticateMeta,
   buildDevinAcpSpawnInput,
   mapDevinAcpCommands,
@@ -211,46 +210,6 @@ devin_webapp_host = "https://app.devin.ai"
       api_key: "stored-key",
       api_server_url: "https://server.codeium.com",
     });
-  });
-});
-
-describe("applyDevinAcpModelSelection", () => {
-  it("does not call Devin's unsupported ACP config-option method", async () => {
-    const calls: Array<
-      { type: "model"; value: string } | { type: "config"; id: string; value: string }
-    > = [];
-    const runtime = {
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model_config",
-          type: "select",
-          currentValue: "adaptive",
-          options: [{ value: "adaptive", name: "Adaptive" }],
-        },
-      ] as ReadonlyArray<Acp.SessionConfigOption>),
-      setConfigOption: (id: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", id, value: String(value) });
-          return { configOptions: [] };
-        }),
-    };
-
-    await Effect.runPromise(
-      applyDevinAcpModelSelection({
-        runtime,
-        model: "opus",
-        options: { fastMode: true },
-        mapError: (context) => context,
-      }),
-    );
-
-    expect(calls).toEqual([]);
   });
 });
 

@@ -38,11 +38,6 @@ export interface DevinAcpRuntimeInput extends Omit<
   readonly runtimeMode: RuntimeMode;
 }
 
-export interface DevinAcpModelSelectionErrorContext {
-  readonly cause: AcpErrors.AcpError;
-  readonly method: "session/set_config_option";
-}
-
 const DEVIN_API_KEY_AUTH_METHOD_IDS = new Set([
   "windsurf-api-key",
   "windsurf.api_key",
@@ -337,19 +332,3 @@ export const makeDevinAcpRuntime = (
     );
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
-
-export function applyDevinAcpModelSelection<E>(input: {
-  readonly runtime: Pick<
-    AcpSessionRuntimeShape,
-    "getConfigOptions" | "setConfigOption" | "setModel"
-  >;
-  readonly model: string;
-  readonly options?: { readonly fastMode?: boolean } | null | undefined;
-  readonly mapError: (context: DevinAcpModelSelectionErrorContext) => E;
-}): Effect.Effect<void, E> {
-  void input;
-  // Model selection is a process-start flag (`devin acp --model`); Devin does
-  // not implement `session/set_config_option` for models. The flag is supplied
-  // by `buildDevinAcpSpawnInput`.
-  return Effect.void;
-}
