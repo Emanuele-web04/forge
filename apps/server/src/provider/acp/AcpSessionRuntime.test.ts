@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
+import * as OfficialAcp from "@agentclientprotocol/sdk";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Sink, Stream } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { TestClock } from "effect/testing";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
+  AcpSessionRuntime,
   assistantItemId,
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   isAcpAuthRequiredError,
+  isAcpStartupTimeoutError,
   makeAcpIncomingFrameGuard,
   makeStartupInteractionRegistry,
   runAcpFreshSessionSetup,
@@ -431,4 +436,174 @@ describe("isAcpAuthRequiredError", () => {
       ),
     ).toBe(false);
   });
+});
+
+describe("AcpSessionRuntime startup timeouts", () => {
+  // Per-step budget; the aggregate handshake budget stays far above it so the
+  // step timeout is what fires first.
+  const STEP_TIMEOUT_MS = 1_000;
+  const TOTAL_TIMEOUT_MS = 60_000;
+  // Generous vitest timeout: the flow is real-async and contains no sleeps,
+  // but a regression that stalls the handshake should fail visibly, not hang.
+  const TEST_TIMEOUT_MS = 15_000;
+
+  /**
+   * Returns an ACP request handler that records that the request arrived and
+   * then holds the response open in-process. Only the runtime's step budget
+   * (advanced on the test clock) can resolve it.
+   */
+  const holdResponseOpen = (received: Deferred.Deferred<void>) => () => {
+    Deferred.doneUnsafe(received, Effect.succeed(undefined));
+    return new Promise<never>(() => {});
+  };
+
+  /**
+   * Bridges an in-memory OfficialAcp.agent() to the runtime through a fake
+   * ChildProcessSpawner, then runs start until the step budget fires.
+   */
+  const runStartTimeout = (input: {
+    readonly agentApp: OfficialAcp.AgentApp;
+    readonly received: Deferred.Deferred<void>;
+  }) => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+
+    const agentInput = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        return Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => {
+          controller.enqueue(chunk);
+        });
+      },
+    });
+    const agentOutput = new WritableStream<Uint8Array>({
+      write(chunk) {
+        return Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined);
+      },
+    });
+
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          input.agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+
+    const tornDownPids: number[] = [];
+
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "synara-test", version: "0.0.0" },
+      authPolicy: "always",
+      authMethodId: "test-auth",
+      startupTimeouts: {
+        initializeMs: STEP_TIMEOUT_MS,
+        authenticateMs: STEP_TIMEOUT_MS,
+        sessionSetupMs: STEP_TIMEOUT_MS,
+        totalMs: TOTAL_TIMEOUT_MS,
+      },
+      teardownProcessTree: async ({ rootPid }) => {
+        tornDownPids.push(rootPid);
+        return { escalated: false, signalErrors: [] };
+      },
+    }).pipe(Layer.provide(spawnerLayer));
+
+    const program = Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const startFiber = yield* runtime.start().pipe(Effect.forkChild);
+      yield* Deferred.await(input.received);
+      yield* TestClock.adjust(Duration.millis(STEP_TIMEOUT_MS));
+      yield* Effect.yieldNow;
+      return yield* Fiber.join(startFiber).pipe(Effect.flip);
+    }).pipe(Effect.provide(TestClock.layer()), Effect.provide(runtimeLayer), Effect.scoped);
+
+    return Effect.runPromise(program).then((error) => ({ error, tornDownPids }));
+  };
+
+  it(
+    "times out initialize with acp-startup-timeout and tears the child down",
+    async () => {
+      const received = Deferred.makeUnsafe<void>();
+      const agentApp = OfficialAcp.agent({ name: "startup-timeout-agent" }).onRequest(
+        OfficialAcp.methods.agent.initialize,
+        holdResponseOpen(received),
+      );
+
+      const { error, tornDownPids } = await runStartTimeout({ agentApp, received });
+
+      expect(isAcpStartupTimeoutError(error)).toBe(true);
+      expect(error).toMatchObject({
+        code: -32001,
+        errorMessage: "ACP agent did not respond to initialize within 1s.",
+        data: { reason: "acp-startup-timeout", step: "initialize", timeoutMs: STEP_TIMEOUT_MS },
+      });
+      expect(tornDownPids).toEqual([1]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "times out authenticate with acp-startup-timeout and tears the child down",
+    async () => {
+      const received = Deferred.makeUnsafe<void>();
+      const agentApp = OfficialAcp.agent({ name: "startup-timeout-agent" })
+        .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+          protocolVersion: 1,
+          agentCapabilities: {},
+          authMethods: [],
+        }))
+        .onRequest(OfficialAcp.methods.agent.authenticate, holdResponseOpen(received));
+
+      const { error, tornDownPids } = await runStartTimeout({ agentApp, received });
+
+      expect(isAcpStartupTimeoutError(error)).toBe(true);
+      expect(error).toMatchObject({
+        code: -32001,
+        errorMessage: "ACP agent did not respond to authenticate within 1s.",
+        data: { reason: "acp-startup-timeout", step: "authenticate", timeoutMs: STEP_TIMEOUT_MS },
+      });
+      expect(tornDownPids).toEqual([1]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "times out session setup with acp-startup-timeout and tears the child down",
+    async () => {
+      const received = Deferred.makeUnsafe<void>();
+      const agentApp = OfficialAcp.agent({ name: "startup-timeout-agent" })
+        .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+          protocolVersion: 1,
+          agentCapabilities: {},
+          authMethods: [],
+        }))
+        .onRequest(OfficialAcp.methods.agent.authenticate, () => ({}))
+        .onRequest(OfficialAcp.methods.agent.session.new, holdResponseOpen(received));
+
+      const { error, tornDownPids } = await runStartTimeout({ agentApp, received });
+
+      expect(isAcpStartupTimeoutError(error)).toBe(true);
+      expect(error).toMatchObject({
+        code: -32001,
+        errorMessage: "ACP agent did not respond to session/new within 1s.",
+        data: { reason: "acp-startup-timeout", step: "session/new", timeoutMs: STEP_TIMEOUT_MS },
+      });
+      expect(tornDownPids).toEqual([1]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

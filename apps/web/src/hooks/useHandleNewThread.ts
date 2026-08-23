@@ -131,6 +131,27 @@ export function useHandleNewThread() {
         defaultProvider: settings.defaultProvider,
         fresh: true,
       });
+      // A fresh chat draft was seeded with sticky composer state, so the
+      // resolved project/global default would otherwise get the sticky model's
+      // same-provider options merged back onto it by setModelSelection's option
+      // preservation. Drop the resolved provider's sticky-seeded entry first so
+      // only the resolved selection lands in the draft. When resolution fell
+      // back to the sticky draft selection, that selection already carries its
+      // own options.
+      useComposerDraftStore.setState((state) => {
+        const draft = state.draftsByThreadId[threadId];
+        if (!draft) {
+          return state;
+        }
+        const modelSelectionByProvider = { ...draft.modelSelectionByProvider };
+        delete modelSelectionByProvider[modelSelection.provider];
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...draft, modelSelectionByProvider },
+          },
+        };
+      });
       setModelSelection(threadId, modelSelection);
     };
     const restoreComposerDraft = (

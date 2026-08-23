@@ -6535,6 +6535,62 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("does not inherit sticky codex options onto a fresh project default", async () => {
+    useComposerDraftStore.setState({
+      stickyModelSelectionByProvider: {
+        codex: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+          options: {
+            reasoningEffort: "medium",
+            fastMode: true,
+          },
+        },
+      },
+      stickyActiveProvider: "codex",
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sticky-codex-options-clean-test" as MessageId,
+        targetText: "sticky codex options clean test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
+        modelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            model: "gpt-5",
+          },
+        },
+        activeProvider: "codex",
+      });
+      // The fresh project default must not inherit the sticky codex fastMode or
+      // reasoningEffort options through same-provider option preservation.
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.modelSelectionByProvider
+          .codex,
+      ).not.toHaveProperty("options");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("offers New worktree from an empty draft thread", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

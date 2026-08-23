@@ -9,7 +9,7 @@ import nodePath from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { outboundHttp } from "@synara/shared/outboundHttp";
-import { devinUsageFetcher } from "./devin";
+import { devinUsageFetcher, parseDevinUsage } from "./devin";
 
 const NOW_MS = 1_780_000_000_000;
 const tempDirs: string[] = [];
@@ -220,5 +220,244 @@ describe("devinUsageFetcher", () => {
     });
     expect(snapshot.status).toBe("error");
     expect(snapshot.detail).toContain("API server URL is invalid");
+  });
+});
+
+describe("parseDevinUsage", () => {
+  it("falls back to the daily quota for the weekly limit when the daily quota is hidden", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            dailyQuotaRemainingPercent: 70,
+            weeklyQuotaResetAtUnix: 1_790_000_000,
+            planInfo: { hideDailyQuota: true },
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.limits).toEqual([
+      {
+        window: "Weekly",
+        usedPercent: 30,
+        resetsAt: "2026-09-21T14:13:20.000Z",
+        windowDurationMins: 10_080,
+      },
+    ]);
+    expect(snapshot.usageLines).toEqual([]);
+  });
+
+  it("uses the weekly quota directly when present even with a hidden daily quota", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            dailyQuotaRemainingPercent: 70,
+            weeklyQuotaRemainingPercent: 40,
+            planInfo: { hide_daily_quota: true },
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.find((limit) => limit.window === "Weekly")?.usedPercent).toBe(60);
+    expect(snapshot.limits.find((limit) => limit.window === "Daily")).toBeUndefined();
+  });
+
+  it("formats prompt and flex credits into usage lines", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            usedPromptCredits: 150,
+            availablePromptCredits: 350,
+            usedFlexCredits: 25,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.usageLines).toEqual([
+      { label: "Prompt credits", value: "150 of 500" },
+      { label: "Flex credits", value: "25 used" },
+    ]);
+    expect(snapshot.limits).toEqual([]);
+  });
+
+  it("rounds fractional credit amounts to two decimals", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            usedPromptCredits: 12.5,
+            availablePromptCredits: 87.5,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.usageLines.find((line) => line.label === "Prompt credits")?.value).toBe(
+      "12.5 of 100",
+    );
+  });
+
+  it("suppresses credit lines for negative available credits", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            usedPromptCredits: 10,
+            availablePromptCredits: -5,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.usageLines).toEqual([]);
+  });
+
+  it("formats the overage balance in micros as a USD remaining line", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { overageBalanceMicros: 5_000_000 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.usageLines).toEqual([
+      { label: "Extra usage balance", value: "$5.00 remaining" },
+    ]);
+  });
+
+  it("adds a Current limit from planEnd when no other quota limits exist", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { planEnd: 1_790_000_000 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits).toEqual([{ window: "Current", resetsAt: "2026-09-21T14:13:20.000Z" }]);
+  });
+
+  it("falls back to a string end_date on plan info for the Current limit", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { plan_info: { end_date: "2026-10-01T00:00:00Z" } },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits).toEqual([{ window: "Current", resetsAt: "2026-10-01T00:00:00.000Z" }]);
+  });
+
+  it("renders no credit lines for a free plan with zero credits", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            usedPromptCredits: 0,
+            availablePromptCredits: 0,
+            usedFlexCredits: 0,
+            availableFlexCredits: 0,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.usageLines).toEqual([]);
+    expect(snapshot.limits).toEqual([]);
+  });
+
+  it("tolerates malformed numeric and date fields", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            dailyQuotaRemainingPercent: "not-a-number",
+            planEnd: "not-a-date",
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.limits).toEqual([]);
+    expect(snapshot.usageLines).toEqual([]);
+  });
+
+  it("tolerates a non-object payload", () => {
+    const snapshot = parseDevinUsage({ json: 42, nowMs: NOW_MS });
+
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.limits).toEqual([]);
+    expect(snapshot.usageLines).toEqual([]);
+  });
+
+  it("maps 100% remaining to 0% used", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { dailyQuotaRemainingPercent: 100 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.find((limit) => limit.window === "Daily")?.usedPercent).toBe(0);
+  });
+
+  it("maps 0% remaining to 100% used", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { dailyQuotaRemainingPercent: 0 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.find((limit) => limit.window === "Daily")?.usedPercent).toBe(100);
+  });
+
+  it("clamps remaining above 100% to 0% used", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { weeklyQuotaRemainingPercent: 150 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.find((limit) => limit.window === "Weekly")?.usedPercent).toBe(0);
+  });
+
+  it("clamps negative remaining to 100% used", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: { weeklyQuotaRemainingPercent: -50 },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.find((limit) => limit.window === "Weekly")?.usedPercent).toBe(100);
   });
 });

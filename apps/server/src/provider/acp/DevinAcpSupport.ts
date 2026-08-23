@@ -17,6 +17,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { isLoopbackHost } from "../../startupAccess.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -175,21 +176,80 @@ export async function readDevinStoredCredentials(
   return raw === undefined ? undefined : parseDevinCredentialsToml(raw);
 }
 
-export function buildDevinAcpAuthenticateMeta(
+export type DevinApiServerUrlRejection =
+  | "malformed"
+  | "unsupported_scheme"
+  | "credentials_in_url"
+  | "insecure_non_loopback";
+
+export type DevinApiServerUrlValidation =
+  | { readonly kind: "unset" }
+  | { readonly kind: "url"; readonly url: string }
+  | { readonly kind: "rejected"; readonly reason: DevinApiServerUrlRejection };
+
+/**
+ * Validate a configured/stored Devin API server URL before any credential is
+ * attached to auth metadata. Only HTTPS is allowed, except explicit HTTP on the
+ * local loopback; URLs that are malformed, embed credentials, use an unsafe
+ * scheme, or point insecure HTTP at a non-loopback host are rejected.
+ */
+export function validateDevinApiServerUrl(raw: string | undefined): DevinApiServerUrlValidation {
+  const candidate = raw?.trim();
+  if (!candidate) {
+    return { kind: "unset" };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch (error) {
+    // A malformed URL is a typed rejection, not a swallowed failure: it surfaces
+    // as a sanitized auth error so credentials are never attached to a bad endpoint.
+    if (error instanceof TypeError) {
+      return { kind: "rejected", reason: "malformed" };
+    }
+    throw error;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { kind: "rejected", reason: "unsupported_scheme" };
+  }
+  if (parsed.username || parsed.password) {
+    return { kind: "rejected", reason: "credentials_in_url" };
+  }
+  if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+    return { kind: "rejected", reason: "insecure_non_loopback" };
+  }
+  parsed.hash = "";
+  parsed.search = "";
+  return { kind: "url", url: parsed.toString().replace(/\/+$/u, "") };
+}
+
+const DEVIN_API_SERVER_URL_REJECTED_MESSAGE =
+  "Rejected the configured Devin API server URL. Only HTTPS is allowed, except explicit HTTP on the local loopback, and the URL must not embed credentials. Check WINDSURF_API_SERVER_URL / DEVIN_API_SERVER_URL or the URL stored by `devin auth login`, then retry.";
+
+export const buildDevinAcpAuthenticateMeta = (
   input: {
     readonly credentials?: DevinAcpCredentials;
     readonly env?: NodeJS.ProcessEnv;
   } = {},
-): Record<string, unknown> {
-  const env = input.env ?? process.env;
-  const apiKey = getDevinApiKeyEnv(env) ?? input.credentials?.apiKey;
-  const apiServerUrl = getDevinApiServerUrlEnv(env) ?? input.credentials?.apiServerUrl;
-  return {
-    headless: true,
-    ...(apiKey ? { api_key: apiKey } : {}),
-    ...(apiServerUrl ? { api_server_url: apiServerUrl } : {}),
-  };
-}
+): Effect.Effect<Record<string, unknown>, AcpErrors.AcpError> =>
+  Effect.gen(function* () {
+    const env = input.env ?? process.env;
+    const apiKey = getDevinApiKeyEnv(env) ?? input.credentials?.apiKey;
+    const apiServerUrl = getDevinApiServerUrlEnv(env) ?? input.credentials?.apiServerUrl;
+    const urlValidation = validateDevinApiServerUrl(apiServerUrl);
+    if (urlValidation.kind === "rejected") {
+      return yield* new AcpErrors.AcpRequestError({
+        code: -32602,
+        errorMessage: DEVIN_API_SERVER_URL_REJECTED_MESSAGE,
+        data: { reason: "invalid_api_server_url", urlReason: urlValidation.reason },
+      });
+    }
+    return {
+      headless: true,
+      ...(apiKey ? { api_key: apiKey } : {}),
+      ...(urlValidation.kind === "url" ? { api_server_url: urlValidation.url } : {}),
+    };
+  });
 
 export function runDevinAcpCompactionCommand(
   runtime: Pick<AcpSessionRuntimeShape, "getAvailableCommands" | "prompt">,
@@ -311,7 +371,7 @@ export const makeDevinAcpRuntime = (
     const storedCredentials = yield* Effect.tryPromise(() => readDevinStoredCredentials()).pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const authenticateMeta = buildDevinAcpAuthenticateMeta(
+    const authenticateMeta = yield* buildDevinAcpAuthenticateMeta(
       storedCredentials ? { credentials: storedCredentials } : {},
     );
     const apiKey = authenticateMeta.api_key;
