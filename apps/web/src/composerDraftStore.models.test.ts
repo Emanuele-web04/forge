@@ -118,6 +118,23 @@ describe("resolvePreferredComposerModelSelection", () => {
     ).toEqual(modelSelection("codex", "gpt-5.4"));
   });
 
+  it("prefers a same-provider project model over stale sticky state on fresh bootstrap", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        fresh: true,
+        draft: {
+          modelSelectionByProvider: {
+            codex: modelSelection("codex", "gpt-5"),
+          },
+          activeProvider: "codex",
+        },
+        threadModelSelection: null,
+        projectModelSelection: modelSelection("codex", "gpt-5.4"),
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("codex", "gpt-5.4"));
+  });
+
   it("keeps a non-fresh draft preference ahead of the persisted default", () => {
     expect(
       resolvePreferredComposerModelSelection({

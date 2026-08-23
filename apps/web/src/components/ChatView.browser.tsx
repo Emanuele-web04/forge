@@ -6485,7 +6485,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("snapshots sticky codex settings into a new draft thread", async () => {
+  it("applies the project model over sticky codex settings on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
@@ -6525,10 +6525,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5.3-codex",
-            options: {
-              fastMode: true,
-            },
+            model: "gpt-5",
           },
         },
         activeProvider: "codex",
@@ -6966,7 +6963,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("hydrates the provider alongside a sticky claude model", async () => {
+  it("prefers the project model over a sticky claude model on fresh chat", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         claudeAgent: {
@@ -7004,23 +7001,19 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
         modelSelectionByProvider: {
-          claudeAgent: {
-            provider: "claudeAgent",
-            model: "claude-opus-4-6",
-            options: {
-              effort: "max",
-              fastMode: true,
-            },
+          codex: {
+            provider: "codex",
+            model: "gpt-5",
           },
         },
-        activeProvider: "claudeAgent",
+        activeProvider: "codex",
       });
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("falls back to defaults when no sticky composer settings exist", async () => {
+  it("materializes the project default when no sticky composer settings exist", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -7042,7 +7035,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toBeUndefined();
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
+        modelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            model: "gpt-5",
+          },
+        },
+        activeProvider: "codex",
+      });
     } finally {
       await mounted.cleanup();
     }
@@ -7088,10 +7089,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5.3-codex",
-            options: {
-              fastMode: true,
-            },
+            model: "gpt-5",
           },
         },
         activeProvider: "codex",
