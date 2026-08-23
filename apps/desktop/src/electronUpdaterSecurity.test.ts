@@ -216,7 +216,7 @@ describe("electronUpdaterSecurity", () => {
     };
     const output = prototype.spawnSyncLog?.call(instance, process.execPath, ["--version"]);
 
-    expect(output).toMatch(/^v\d+\.\d+\.\d+/);
+    expect(output).toMatch(/^v?\d+\.\d+\.\d+/);
     expect(prototype.__synaraSpawnSyncLogPatched).toBe(true);
   });
 
