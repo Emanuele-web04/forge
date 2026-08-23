@@ -96,4 +96,11 @@ describe("ChatTranscriptPane", () => {
     expect(markup).toContain('style="padding-right:360px"');
     expect(markup).toContain("Scroll to bottom");
   });
+
+  it("does not host the in-thread find bar as a transcript overlay", () => {
+    const markup = renderTranscriptPaneMarkup();
+
+    expect(markup).not.toContain('data-testid="thread-find-bar"');
+    expect(markup).not.toContain("absolute right-2 top-2");
+  });
 });

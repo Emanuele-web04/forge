@@ -409,6 +409,62 @@ export function wrapFindQueryInHtml(
   return next;
 }
 
+export function eventTargetsInAppBrowser(target: EventTarget | null): boolean {
+  if (typeof Element === "undefined" || !(target instanceof Element)) {
+    return false;
+  }
+  return (
+    target.closest(
+      "[data-floating-browser-host='true'], [data-floating-browser-panel='true'], [data-browser-panel='true']",
+    ) !== null
+  );
+}
+
+export function shouldCaptureChatFindShortcut(input: {
+  shouldRenderChatPaneContent: boolean;
+  terminalWorkspaceTerminalTabActive: boolean;
+  inAppBrowserFocused: boolean;
+}): boolean {
+  return (
+    input.shouldRenderChatPaneContent &&
+    !input.terminalWorkspaceTerminalTabActive &&
+    !input.inAppBrowserFocused
+  );
+}
+
+/**
+ * Highlight snapshots flow from the find bar to the timeline without ChatView
+ * state, so typing in find does not re-render the whole chat shell.
+ */
+export interface ThreadFindHighlightStore {
+  get: () => ThreadFindHighlight | null;
+  set: (value: ThreadFindHighlight | null) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+export function createThreadFindHighlightStore(): ThreadFindHighlightStore {
+  let current: ThreadFindHighlight | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => current,
+    set: (value) => {
+      if (Object.is(current, value)) {
+        return;
+      }
+      current = value;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
 export function applyActiveChatFindMatch(
   root: ParentNode | null,
   activeRange: ThreadFindRange | null,

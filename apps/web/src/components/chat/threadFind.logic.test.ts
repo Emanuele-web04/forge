@@ -12,8 +12,11 @@ import type { TimelineEntry } from "../../session-logic";
 import {
   collectCaseInsensitiveSubstringRanges,
   collectThreadFindDocuments,
+  createThreadFindHighlightStore,
+  eventTargetsInAppBrowser,
   findThreadMatches,
   resolveThreadFindJump,
+  shouldCaptureChatFindShortcut,
   stepThreadFindIndex,
   threadFindMarkdownProps,
   wrapFindQueryInHtml,
@@ -300,5 +303,66 @@ describe("threadFindMarkdownProps", () => {
       findActiveRange: null,
     });
     expect(threadFindMarkdownProps(null, messageId("m3"), 1)).toEqual({});
+  });
+});
+
+describe("shouldCaptureChatFindShortcut", () => {
+  it("opens find on the empty landing chat surface", () => {
+    expect(
+      shouldCaptureChatFindShortcut({
+        shouldRenderChatPaneContent: true,
+        terminalWorkspaceTerminalTabActive: false,
+        inAppBrowserFocused: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not steal Ctrl+F from a focused terminal tab or in-app browser", () => {
+    expect(
+      shouldCaptureChatFindShortcut({
+        shouldRenderChatPaneContent: true,
+        terminalWorkspaceTerminalTabActive: true,
+        inAppBrowserFocused: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCaptureChatFindShortcut({
+        shouldRenderChatPaneContent: true,
+        terminalWorkspaceTerminalTabActive: false,
+        inAppBrowserFocused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCaptureChatFindShortcut({
+        shouldRenderChatPaneContent: false,
+        terminalWorkspaceTerminalTabActive: false,
+        inAppBrowserFocused: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("eventTargetsInAppBrowser", () => {
+  it("treats missing or non-element targets as outside the in-app browser", () => {
+    expect(eventTargetsInAppBrowser(null)).toBe(false);
+  });
+});
+
+describe("createThreadFindHighlightStore", () => {
+  it("notifies subscribers when the highlight snapshot changes", () => {
+    const store = createThreadFindHighlightStore();
+    const seen: Array<string | null> = [];
+    const unsubscribe = store.subscribe(() => {
+      seen.push(store.get()?.query ?? null);
+    });
+
+    store.set({ query: "error", activeMatch: null });
+    store.set({ query: "error", activeMatch: null });
+    store.set(null);
+    unsubscribe();
+    store.set({ query: "later", activeMatch: null });
+
+    expect(seen).toEqual(["error", "error", null]);
+    expect(store.get()).toEqual({ query: "later", activeMatch: null });
   });
 });
