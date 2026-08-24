@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.7.3 - 2026-08-21
+
+### Added
+
+- Added a desktop quit confirmation that lists every running or connecting chat before Synara closes, with Cancel and Quit actions and a persisted "Resume chats automatically" choice.
+- Added durable quit-resume records: confirmed quits snapshot exact in-flight turn identities before interruption, consume the record once at next startup, and dispatch one ordinary continuation only when the task and project are still eligible and unchanged.
+- Added a draggable, eight-way resizable browser panel that floats over the owning conversation, shares its existing browser tabs and cookies, stays clamped to the visible chat surface, and can move back into the right sidebar without creating a second live guest.
+- Added provider-usage adapters and UI coverage for Antigravity, Cursor, Grok, OpenCode, and locally authenticated providers, extending the existing Codex and Claude usage views to every signed-in provider Synara can verify.
+- Added provider-specific usage explanations for runtimes that expose local authentication but no machine-readable personal quota, plus shared caching, cooldown, stale-snapshot, pacing, and learn-more behavior.
+- Added first-class Windows WSL workspace launching: `\\\\wsl.localhost` and `\\\\wsl$` paths resolve to `wsl.exe --distribution <distro> --cd <linux-path> --exec ...`, and ACP session payloads receive the corresponding Linux cwd.
+- Added a custom title-bar preference for Windows and Linux under Settings → Appearance, including native window controls, persisted boot-time frame selection, explicit restart-required state, and a one-click relaunch action.
+- Added `synara-server-<version>.tar.gz` to GitHub releases, built from the staged server package and bundled web client alongside the desktop artifacts.
+- Added `synara server status`, with persisted-runtime discovery, explicit `--url`, optional `--json`, runtime identity verification, `/health` projection readiness, a three-second bounded probe, and a non-zero exit when the server is not ready.
+- Added cross-provider side chats through `/side <provider> <prompt>`, accepting provider kinds or display names, validating installed targets, and retaining the guarded source-thread relationship.
+- Added shell-visible Windows ICO generation and refresh support so runtime app-icon changes propagate to the taskbar and revert cleanly to the default icon.
+
+### Changed
+
+- Reduced renderer and GPU work during live output by removing repeated array scans, narrowing runtime-event projections, avoiding redundant visual effects, and pausing sidebar spinner animation while hidden.
+- Reduced Git-stat overhead by aggregating repository statistics in one pass and avoiding repeated work across unchanged inputs.
+- Trimmed idle Codex discovery processes sooner while restarting their grace period after real catalogue requests, reducing process-tree memory without interrupting active discovery.
+- Reworked workspace search presentation and ranking with fuzzy match emphasis, head-clipped parent paths, direct directory opening, stable memoized rows, a 30-result mount bound, 100 ms server-query debounce, and short-lived query reuse.
+- Extended Antigravity activity handling so tool cards stream as the provider emits them, completed turns settle without a reload, subagent activity routes to child tasks, and background tasks keep the CLI alive until the real terminal outcome.
+- Aligned Grok reasoning choices with each live CLI model ladder and kept Cursor's fast-mode/Grok-HIGH controls from remaining active after their toggles are turned off.
+- Sorted Claude models by live catalogue order, widened provider picker menus, and made provider metadata exhaustive at compile time.
+- Refined the empty landing surface, composer borders, muted task labels, disclosure contrast, translucent sidebar seams, and light/dark overlays around one consistent shell treatment.
+- Restyled the running-chat quit dialog to match the command palette and refined its keyboard, disabled, overflow, and progress states.
+- Extracted the browser tab strip into a focused component and made new-tab selection preserve the current tab context and ownership more predictably.
+- Refreshed the README and internal architecture, provider, CI, packaging, quick-start, and workspace-layout documentation to match the shipped runtime.
+- Bumped Synara release package versions to `0.7.3` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed desktop shutdown silently interrupting active work without naming the affected chats or offering a guarded continuation on next launch.
+- Fixed quit-resume races by writing before the renderer allows shutdown, bounding the acknowledgement wait, expiring records when a quit is abandoned, atomically claiming records at startup, and rechecking each continuation precondition inside serialized dispatch.
+- Fixed assistant replies that completed in the background remaining hidden until reload; terminal fences now remain attached until the final post-settle assistant reply is projected.
+- Fixed floating browser resize, drag, tab, and dock transitions that could move the native guest outside its host, leave two surfaces competing for the live guest, or forget the requested task across route changes.
+- Fixed Antigravity background tasks being interpreted as an immediate terminal CLI outcome and killed before their real completion event.
+- Fixed OpenCode raw assistant deltas being dropped from streamed replies.
+- Fixed Cursor fallback model options disappearing and fast/Grok-HIGH state staying active after the corresponding control was disabled.
+- Fixed Grok drafts restoring an unsupported `Extra High` effort and custom models accepting efforts outside their advertised ladder.
+- Fixed provider usage refreshes losing useful evidence during transient errors or rate limiting, and isolated provider-specific authentication and quota parsing from the rest of the catalogue.
+- Fixed `cmd.exe`-style launches being used for WSL UNC workspaces; commands now execute inside the owning distribution and ACP receives a Linux path instead of a Windows UNC cwd.
+- Fixed local-folder mentions rejecting UNC paths, the project browser misreading Windows home paths, and Windows workspace comparisons treating case-only differences as different roots.
+- Fixed runtime Windows taskbar-icon changes updating Electron state without producing a shell-visible ICO or refreshing Explorer's cached icon.
+- Fixed custom title-bar preferences drifting between renderer settings and the frame state read before `BrowserWindow` creation.
+- Fixed permanent task deletion reclaiming unowned worktrees; cleanup now preserves paths Synara does not own while still removing eligible managed worktrees.
+- Fixed duplicate approval responses being accepted after reconnect or retry by persisting idempotency at the orchestration decider.
+- Fixed malformed feature-flag storage leaving stale values cached instead of returning to canonical defaults.
+- Fixed diagnostic resume cursors being accepted beyond the current high-water mark.
+- Fixed WebSocket authentication tokens being appended to off-origin URLs and duplicate HTTP Origin headers being accepted.
+- Fixed quoted, wrapped, truncated, serialized, reordered, compact, URL-embedded, shell-composed, and unterminated secret values leaking through process or provider diagnostics.
+- Fixed restricted provider children inheriting OpenAI credentials and private scratch workspaces being recovered or reused without revalidating ownership, location, and restrictive permissions.
+- Fixed diagnostic sanitizers performing unbounded traversal, losing safe JSON number tokens, or ambiguously interpreting command substitutions and partial assignments.
+- Fixed process output and bounded stream truncation breaking UTF-8 characters split across buffer boundaries.
+- Fixed multi-dot attachment names losing their final extension during content-type normalization.
+- Fixed normalized provider command-not-found errors being misclassified and malformed Claude authentication JSON being treated as usable state.
+- Fixed Codex prerelease versions losing hyphenated suffix segments during compatibility checks.
+- Fixed route restoration applying a stale snapshot after a newer refresh had already won, and fixed large-state projection repair repeatedly resnapshotting while an existing repair was in flight.
+- Fixed workspace search opening stale or poorly ranked results, clipping the most useful part of long paths, and mounting more result rows than the palette can display.
+- Fixed project script shortcuts disappearing from the empty landing tray before a first chat was created.
+- Fixed the iOS Simulator helper failing to locate SimulatorKit after its Xcode 27 beta framework move.
+- Fixed browser policy copy that incorrectly implied localhost and `file:` navigation were universally blocked.
+- Fixed merged CI fixtures for Antigravity retention, scratch-workspace cleanup, platform-specific geometry, and release-smoke coverage after the server tarball job was added.
+- Reverted the experimental DeepSeek Harness provider before release; v0.7.3 does not advertise or ship that provider.
+
+### Contributors
+
+- Thanks to `xFurti`, `cmdr-chara`, `diliprt`, `sebbonit`, `D3nnis72`, `rogalio`, `sanirudh17`, `kartikkabadi`, `aristotl-dylan`, and `HumanInTheLoopReal` for the provider, platform, browser, runtime, documentation, performance, and reliability work merged into this release.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,979 files.
+- `bun run lint` passed with 451 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing Effect informational messages were reported.
+- `bun run release:smoke` passed across the 1,448-package dependency graph after rerunning with normal temporary-directory access.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecation, plugin-timing, and large-chunk advisories remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m9.669s. Web passed 320 files / 4,029 tests. Server/CLI passed 355 files / 4,060 tests with 3 skipped files / 16 skipped tests. No targeted rerun or flaky product failure was needed.
+
 ## 0.7.2 - 2026-08-15
 
 ### Added

@@ -218,6 +218,8 @@ import type {
   OrchestrationListProviderDeliveryBlockersResult,
   OrchestrationReconcileProviderDeliveryInput,
   OrchestrationReconcileProviderDeliveryResult,
+  OrchestrationPrepareQuitResumeInput,
+  OrchestrationPrepareQuitResumeResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
@@ -871,6 +873,9 @@ export interface NativeApi {
     reconcileProviderDelivery: (
       input: OrchestrationReconcileProviderDeliveryInput,
     ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
+    prepareQuitResume: (
+      input: OrchestrationPrepareQuitResumeInput,
+    ) => Promise<OrchestrationPrepareQuitResumeResult>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;

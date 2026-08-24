@@ -22,6 +22,124 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.7.3",
+    date: "Aug 21",
+    features: [
+      {
+        id: "safe-quit-and-resume",
+        title: "Quit without silently abandoning running chats",
+        description:
+          "Synara now shows every chat still working before the desktop app closes and can continue eligible work on the next launch.",
+        details:
+          "The quit dialog lists live chats and remembers whether automatic resume is enabled. When you confirm, Synara records the exact in-flight turns before interrupting them, then starts one guarded continuation per unchanged chat after restart. Completed, archived, deleted, replaced, or otherwise advanced work is skipped, and a bounded fallback still lets the app quit if the local server cannot acknowledge the resume record.",
+      },
+      {
+        id: "floating-in-chat-browser",
+        title: "Keep the browser over the conversation",
+        description:
+          "The task browser can now float inside the chat instead of taking over the right sidebar.",
+        details:
+          "The floating panel shares the task's existing browser tabs and session, opens automatically when an agent requests the browser, and can be dragged, resized from every edge, closed, or returned to the sidebar. Its bounds stay inside the visible chat surface, new tabs use the current page's context more predictably, and the hidden dock remains preview-only so one live browser guest is never driven by two surfaces.",
+      },
+      {
+        id: "all-provider-usage",
+        title: "See usage for every signed-in provider",
+        description:
+          "Provider usage is no longer limited to Codex and Claude; Settings and in-context meters now cover every authenticated runtime Synara can verify.",
+        details:
+          "Synara adds account or quota views for Antigravity, Cursor, Grok, OpenCode, and locally authenticated providers, while keeping Codex and Claude's detailed windows. Provider-specific adapters use local credentials or documented account endpoints, share cached snapshots, retain useful stale data through transient failures, apply bounded cooldowns after rate limiting, and explain when a provider exposes sign-in state but no machine-readable quota.",
+      },
+      {
+        id: "runtime-performance-pass",
+        title: "Lower CPU, GPU, memory, and Git overhead",
+        description:
+          "A measured performance pass cuts work in the renderer, sidebar, Git statistics, runtime-event pipeline, and idle provider discovery.",
+        details:
+          "Streaming updates avoid repeated full-array scans and unnecessary visual effects, Git diff statistics are aggregated in one pass, runtime-event handling performs fewer repeated traversals, sidebar spinners pause when hidden, and animated translucency costs less. The server also trims idle Codex discovery sessions sooner while extending the grace period when real requests arrive, reducing process-tree memory without interrupting active model discovery.",
+      },
+      {
+        id: "windows-wsl-and-title-bar",
+        title: "Windows and Linux workspaces feel more native",
+        description:
+          "WSL repositories, UNC paths, taskbar icons, and desktop chrome now behave like first-class platform paths and controls.",
+        details:
+          "On Windows, a project opened through \\\\wsl.localhost or \\\\wsl$ launches provider commands inside the selected distribution with a Linux cwd, while local-folder mentions and the project browser recognize UNC and Windows home paths. Runtime icon changes now refresh the shell-visible taskbar icon. Windows and Linux users can also switch between Synara's custom title bar and the system title bar from Appearance, with an explicit restart to apply the frame change.",
+      },
+      {
+        id: "headless-server-distribution",
+        title: "Run and inspect Synara without the desktop shell",
+        description:
+          "GitHub releases now include a versioned headless server tarball, and the CLI can verify whether a server is reachable and ready.",
+        details:
+          "The release pipeline builds synara-server-<version>.tar.gz from the same source and web client as the desktop release. The new `synara server status` command discovers the persisted local runtime or accepts an explicit HTTP(S) URL, verifies the runtime identity, probes `/health`, reports projection readiness, supports JSON output, and exits non-zero when the server is unreachable or not ready.",
+      },
+      {
+        id: "cross-provider-side-chats",
+        title: "Send a side chat to another provider",
+        description:
+          "`/side` can now target a different installed provider without moving the main conversation.",
+        details:
+          "Use `/side <provider> <prompt>` with a provider kind or display name. Synara validates the requested provider against the runtimes currently available to the task, removes the provider token from the child prompt, and keeps the existing guarded side-chat creation and source relationship. Omitting the provider continues to open the side chat on the current runtime.",
+      },
+      {
+        id: "provider-runtime-correctness",
+        title: "Provider turns keep their real text, tools, and children",
+        description:
+          "Antigravity, OpenCode, Cursor, and Grok received focused lifecycle and option fixes.",
+        details:
+          "Antigravity now streams tool cards, settles completed turns, routes subagents into child threads, and keeps background task turns alive instead of killing the CLI. OpenCode preserves raw streamed assistant text. Cursor no longer leaves fast mode or Grok HIGH reasoning stuck after their controls are disabled, preserves fallback model options, and Grok's effort picker follows the live CLI model ladders.",
+      },
+      {
+        id: "diagnostic-secret-hardening",
+        title: "Diagnostics reveal less and reject ambiguous input",
+        description:
+          "Process, provider, environment, URL, and fixture diagnostics now apply a broader fail-closed credential policy.",
+        details:
+          "Synara redacts quoted, wrapped, truncated, serialized, reordered, compact, URL-embedded, and shell-composed secret forms; bounds sanitizer traversal; preserves safe numeric diagnostic tokens; and keeps OpenAI credentials out of restricted provider children. Duplicate Origin headers, off-origin WebSocket token injection, high-water cursor violations, unterminated credentials, and ambiguous command substitutions are rejected instead of being interpreted optimistically.",
+      },
+      {
+        id: "workspace-and-landing-flow",
+        title: "Find files and start work with fewer corrective clicks",
+        description:
+          "Workspace search ranks and presents results more clearly, while project scripts are available again from the empty landing view.",
+        details:
+          "File search now emphasizes fuzzy matches, keeps the most useful parent path visible, limits mounted rows, debounces server work, and opens directories directly in Explorer. The landing composer and project controls share a flatter, more consistent visual treatment, muted labels and disclosure contrast are normalized, and project script shortcuts remain accessible before a chat exists.",
+      },
+      {
+        id: "approval-worktree-and-route-safety",
+        title: "Repeated actions and restored state converge safely",
+        description:
+          "Approvals, managed worktrees, feature flags, and route restoration now have stronger replay and ownership fences.",
+        details:
+          "Duplicate approval responses are rejected durably at the serialized decider. Permanent deletion reclaims only Synara-owned managed worktrees and preserves unowned paths. Malformed cached feature flags reset instead of leaving stale values, route restoration ignores snapshots from superseded refreshes, and large projection repair stops thrashing when the state is already being repaired.",
+      },
+      {
+        id: "stream-and-path-integrity",
+        title: "Text, paths, attachments, and origins survive edge cases",
+        description:
+          "Several low-level boundaries now preserve exact data instead of corrupting, truncating, or misclassifying it.",
+        details:
+          "Process output and bounded runtime text preserve UTF-8 characters split across chunks, multi-dot attachments keep their final extension, Windows workspace comparisons ignore case, Codex prerelease versions retain every hyphenated segment, malformed Claude auth JSON fails closed, missing provider commands are classified consistently, and duplicate HTTP Origin headers are refused.",
+      },
+      {
+        id: "desktop-and-simulator-compatibility",
+        title: "Desktop replies and simulator support recover more cleanly",
+        description:
+          "Background completions appear without reloads, terminal fences settle at the right reply, and Xcode 27 beta remains usable.",
+        details:
+          "The web client keeps a completed assistant reply attached to its terminal fence until the final post-settle text arrives, including work that finishes in the background. Xcode 27 beta's relocated SimulatorKit framework is discovered by the iOS device helper, and browser navigation guidance now accurately distinguishes supported localhost and file behavior from genuinely blocked destinations.",
+      },
+      {
+        id: "interface-polish-and-model-pickers",
+        title: "A calmer shell with clearer model choices",
+        description:
+          "Sidebar surfaces, the landing composer, quit confirmation, and provider pickers received a cohesive visual and interaction pass.",
+        details:
+          "Translucent surfaces have fewer seams and better light/dark contrast, the quit dialog now matches the command palette, and empty-landing controls sit flush with the composer. Claude models sort by their live catalogue order, picker menus have more room for full names, and provider metadata is enforced exhaustively so new runtimes cannot silently miss required UI descriptions.",
+      },
+    ],
+  },
+  {
     version: "0.7.2",
     date: "Aug 15",
     features: [

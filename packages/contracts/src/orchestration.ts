@@ -41,6 +41,7 @@ export const ORCHESTRATION_WS_METHODS = {
   replayEvents: "orchestration.replayEvents",
   listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
   reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
+  prepareQuitResume: "orchestration.prepareQuitResume",
   subscribeShell: "orchestration.subscribeShell",
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -1362,6 +1363,17 @@ export const ThreadTurnStartCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Server-only (quit resume): accept the turn only while the thread is not archived,
+  // has nothing in flight, and no turn finished on its own since the record was
+  // taken (the recorded turn itself, or any later one). Clients cannot set it:
+  // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
+  resumePrecondition: Schema.optional(
+    Schema.Struct({
+      /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+      recordedTurnId: Schema.NullOr(TurnId),
+      recordedAt: IsoDateTime,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -2549,6 +2561,31 @@ export const OrchestrationReconcileProviderDeliveryResult = Schema.Struct({
 export type OrchestrationReconcileProviderDeliveryResult =
   typeof OrchestrationReconcileProviderDeliveryResult.Type;
 
+/**
+ * Desktop quit with "Resume chats automatically": the server durably records the
+ * listed threads (plus their current turn) and interrupts them in one step, so
+ * the renderer can reply to the quit request only after the record exists.
+ */
+export const QUIT_RESUME_MAX_THREADS = 256;
+export const QUIT_RESUME_MAX_PROMPT_CHARS = 2_000;
+
+export const OrchestrationPrepareQuitResumeInput = Schema.Struct({
+  threadIds: Schema.Array(ThreadId).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(QUIT_RESUME_MAX_THREADS),
+  ),
+  /** User-turn text dispatched on each recorded thread at the next server start. */
+  continuationPrompt: TrimmedNonEmptyString.check(Schema.isMaxLength(QUIT_RESUME_MAX_PROMPT_CHARS)),
+});
+export type OrchestrationPrepareQuitResumeInput = typeof OrchestrationPrepareQuitResumeInput.Type;
+
+export const OrchestrationPrepareQuitResumeResult = Schema.Struct({
+  /** Threads durably recorded for resume (unknown or deleted threads are dropped). */
+  recordedThreadIds: Schema.Array(ThreadId),
+  recordedAt: IsoDateTime,
+});
+export type OrchestrationPrepareQuitResumeResult = typeof OrchestrationPrepareQuitResumeResult.Type;
+
 export const OrchestrationSubscribeShellInput = Schema.Struct({});
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
 
@@ -2637,6 +2674,10 @@ export const OrchestrationRpcSchemas = {
   reconcileProviderDelivery: {
     input: OrchestrationReconcileProviderDeliveryInput,
     output: OrchestrationReconcileProviderDeliveryResult,
+  },
+  prepareQuitResume: {
+    input: OrchestrationPrepareQuitResumeInput,
+    output: OrchestrationPrepareQuitResumeResult,
   },
   subscribeShell: {
     input: OrchestrationSubscribeShellInput,

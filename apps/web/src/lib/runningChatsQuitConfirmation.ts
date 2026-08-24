@@ -18,9 +18,13 @@ export interface RunningChatQuitSummary {
 export interface RunningChatsQuitCopy {
   readonly title: string;
   readonly description: string;
+  readonly resumeLabel: string;
   readonly stayLabel: string;
   readonly quitLabel: string;
 }
+
+/** Bounded wait for the server to record the resume intent; quit must stay snappy. */
+export const QUIT_RESUME_PREPARE_TIMEOUT_MS = 1500;
 
 export interface RunningChatsQuitStoreSlice {
   readonly sidebarThreadSummaryById: Readonly<Record<string, RunningChatQuitCandidate>>;
@@ -90,22 +94,82 @@ export function runningChatsQuitCopy(
   return {
     title: chats.length === 1 ? "A chat is still running" : "Chats are still running",
     description: `Work in progress will stop when ${appName} is closed.`,
+    resumeLabel: chats.length === 1 ? "Resume chat automatically" : "Resume chats automatically",
     stayLabel: "Cancel",
     quitLabel: "Quit",
   };
 }
 
-export async function stopRunningChatsForQuit(input: {
+/** The ordinary user turn dispatched on each remembered chat at the next launch. */
+export function quitResumeContinuationPrompt(appName = "Synara"): string {
+  return `${appName} was closed while this chat was still running. Continue where you left off.`;
+}
+
+export interface StopRunningChatsForQuitInput {
   readonly chats: ReadonlyArray<Pick<RunningChatQuitSummary, "id">>;
   readonly dispatchInterrupt: (threadId: string) => Promise<unknown> | unknown;
-}): Promise<void> {
+  /**
+   * When set, ask the server to durably record the chats for resume (it also
+   * interrupts them) and wait — bounded — for that ack. On failure or timeout
+   * fall back to plain interrupts so quit never hangs and never double-resumes.
+   */
+  readonly resume?: {
+    readonly prepare: (threadIds: ReadonlyArray<string>) => Promise<unknown>;
+    readonly timeoutMs?: number;
+  };
+}
+
+export interface StopRunningChatsForQuitResult {
+  /** True when the server acknowledged the resume record (and owns the interrupts). */
+  readonly resumeRecorded: boolean;
+}
+
+export async function stopRunningChatsForQuit(
+  input: StopRunningChatsForQuitInput,
+): Promise<StopRunningChatsForQuitResult> {
   if (input.chats.length === 0) {
-    return;
+    return { resumeRecorded: false };
+  }
+  const threadIds = input.chats.map((chat) => chat.id);
+
+  if (input.resume) {
+    const recorded = await withBoundedWait(
+      () => input.resume!.prepare(threadIds),
+      input.resume.timeoutMs ?? QUIT_RESUME_PREPARE_TIMEOUT_MS,
+    );
+    if (recorded) {
+      return { resumeRecorded: true };
+    }
   }
 
-  await Promise.allSettled(
-    input.chats.map((chat) => Promise.resolve(input.dispatchInterrupt(chat.id))),
-  );
+  // Fire-and-forget: the window must close as soon as the outcome is known, and an
+  // interrupt RPC against an unresponsive server could otherwise hold quit for its
+  // full transport timeout.
+  for (const threadId of threadIds) {
+    void new Promise((resolve) => resolve(input.dispatchInterrupt(threadId))).catch(() => {});
+  }
+  return { resumeRecorded: false };
+}
+
+/** Resolves true only when `run` settles successfully within `timeoutMs`. */
+async function withBoundedWait(run: () => Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(run)
+        .then(
+          () => true,
+          () => false,
+        ),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function compareRunningChatSummaries(
