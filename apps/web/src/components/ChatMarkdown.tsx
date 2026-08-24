@@ -5,7 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
-import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
@@ -40,11 +40,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import {
-  findExplicitDirectoryBase,
-  resolveMarkdownFileLinkTarget,
-  rewriteMarkdownFileUriHref,
-} from "../markdown-links";
+import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -129,8 +125,6 @@ interface ChatMarkdownProps {
    * length- and newline-preserving). Without it checkboxes render read-only.
    */
   onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
-  /** Allows assistant transcript `Dir:` lists to supply an explicit base for inline file chips. */
-  allowExplicitDirectoryFileTargets?: boolean | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -747,10 +741,8 @@ function extractCodeBlock(
 
 const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
 
-// Decides whether an inline code span names a file/path that should render as a
-// mention chip (icon + medium label), matching how a file reads in the composer.
-// Conservative on purpose: requires a recognized filename/extension and rejects
-// whitespace and URLs so ordinary prose tokens stay plain inline code.
+// Decides whether an inline code span names a file/path that can become a
+// mention chip. Relative names stay code; only absolute local paths chip.
 function inlineCodeFilePath(raw: string): string | null {
   // Strip a pair of surrounding quotes/backticks the author may have wrapped the
   // path in (e.g. `'src/data/social-metrics.ts'`).
@@ -1078,7 +1070,6 @@ function ChatMarkdown({
   onImageExpand,
   markers,
   onTaskToggle,
-  allowExplicitDirectoryFileTargets: allowExplicitDirectoryFileTargetsProp,
   variant: variantProp,
   mentionReferences,
   terminalContexts,
@@ -1089,7 +1080,6 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
-  const allowExplicitDirectoryFileTargets = allowExplicitDirectoryFileTargetsProp ?? false;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1224,26 +1214,19 @@ function ChatMarkdown({
           </MarkdownCodeBlock>
         );
       },
-      code({ node, className, children, ...props }) {
-        // Fenced blocks carry a `language-*` class and are rendered by `pre`;
-        // only inline code (no class) that names a file becomes an openable
-        // mention chip. The target is resolved against cwd so it opens like a
-        // markdown file link; an unresolvable path still chips on its raw value.
+      code({ node: _node, className, children, ...props }) {
+        // Fenced blocks carry a `language-*` class and are rendered by `pre`.
+        // Inline code becomes an openable chip only when the span already names
+        // an absolute local file. Relative backticks stay code: joining them to
+        // cwd invents a workspace URL for files that live elsewhere.
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const referenceOffset = node?.position?.start.offset;
-            const explicitDirectory =
-              allowExplicitDirectoryFileTargets && referenceOffset !== undefined
-                ? findExplicitDirectoryBase(renderedText, referenceOffset)
-                : null;
             const pathWithoutPosition = filePath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
-            const cwdForChip =
-              explicitDirectory !== null && isWorkspaceRelativePathSafe(pathWithoutPosition)
-                ? explicitDirectory
-                : cwd;
-            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwdForChip) ?? filePath;
-            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            if (isLocalAbsolutePath(pathWithoutPosition)) {
+              const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+              return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            }
           }
         }
         return (
@@ -1322,7 +1305,6 @@ function ChatMarkdown({
       } as unknown as Components),
     }),
     [
-      allowExplicitDirectoryFileTargets,
       cwd,
       diffThemeName,
       isStreaming,
@@ -1331,7 +1313,6 @@ function ChatMarkdown({
       onImageExpand,
       onTaskToggle,
       resolvedTheme,
-      renderedText,
       terminalContexts,
     ],
   );

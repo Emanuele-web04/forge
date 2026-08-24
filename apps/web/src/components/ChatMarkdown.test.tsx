@@ -272,6 +272,30 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("does not turn relative inline-code file names into openable chips", async () => {
+    const markup = await renderMarkdown(
+      "See `references/uploadthing.md` and `src/index.ts`.",
+      "/Users/tester/chat-workspace",
+    );
+
+    expect(markup).toContain("<code>references/uploadthing.md</code>");
+    expect(markup).toContain("<code>src/index.ts</code>");
+    expect(markup).not.toContain('href="/Users/tester/chat-workspace/references/uploadthing.md"');
+    expect(markup).not.toContain('href="/Users/tester/chat-workspace/src/index.ts"');
+  });
+
+  it("chips absolute inline-code paths and authored file URLs", async () => {
+    const absolutePath = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
+    const markup = await renderMarkdown(
+      [`See \`${absolutePath}\`.`, "", `[uploadthing.md](file://${absolutePath})`].join("\n"),
+      "/Users/tester/chat-workspace",
+    );
+
+    expect(markup).toContain(`title="${absolutePath}"`);
+    expect(markup).toContain(`href="${absolutePath}"`);
+    expect(markup).not.toContain(`<code>${absolutePath}</code>`);
+  });
+
   it("keeps plan, diff, and transcript surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(

@@ -26,34 +26,24 @@ beforeEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
-  it("opens a listed file from its explicit directory", async () => {
+  it("keeps relative inline-code file names as plain code", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
-          text={[
-            "Dir: `/Users/tester/external-tool`",
-            "- `docs/example.md`",
-          ].join("\n")}
+          text={["Dir: `/Users/tester/external-tool`", "- `docs/example.md`"].join("\n")}
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
-          allowExplicitDirectoryFileTargets
         />
       </WorkspaceFileOpenerContext.Provider>,
     );
 
-    screen
-      .getByRole("link", { name: "example.md" })
-      .element()
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-
-    expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith(
-      "/Users/tester/external-tool/docs/example.md",
-    );
+    await expect.element(screen.getByText("docs/example.md")).toBeInTheDocument();
+    expect(screen.container.querySelectorAll("a")).toHaveLength(0);
+    expect(openFile).not.toHaveBeenCalled();
   });
 
-  it("opens an authored absolute file URL without directory inference", async () => {
+  it("opens an authored absolute file URL", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
@@ -61,7 +51,6 @@ describe("ChatMarkdown file context menu", () => {
           text="[docs/example.md](file:///Users/tester/external-tool/docs/example.md)"
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
-          allowExplicitDirectoryFileTargets
         />
       </WorkspaceFileOpenerContext.Provider>,
     );
@@ -72,9 +61,28 @@ describe("ChatMarkdown file context menu", () => {
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith(
-      "/Users/tester/external-tool/docs/example.md",
+    expect(openFile).toHaveBeenCalledWith("/Users/tester/external-tool/docs/example.md");
+  });
+
+  it("opens an absolute inline-code path", async () => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          text="See `/Users/tester/external-tool/docs/example.md`."
+          cwd="/Users/tester/chat-workspace"
+          isStreaming={false}
+        />
+      </WorkspaceFileOpenerContext.Provider>,
     );
+
+    screen
+      .getByRole("link", { name: "example.md" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith("/Users/tester/external-tool/docs/example.md");
   });
 
   it("opens the shared file menu with a position-free absolute path", async () => {

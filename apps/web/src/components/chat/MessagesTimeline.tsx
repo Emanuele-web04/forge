@@ -1456,7 +1456,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
-                  allowExplicitDirectoryFileTargets
                 />
               </div>
             </div>
@@ -2022,7 +2021,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
-                  allowExplicitDirectoryFileTargets
                 />
               </div>
             );
@@ -2133,7 +2131,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
-                      allowExplicitDirectoryFileTargets
                     />
                   </div>
                 ) : null}

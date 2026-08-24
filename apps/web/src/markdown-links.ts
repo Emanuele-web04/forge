@@ -1,5 +1,3 @@
-import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
-
 import { resolvePathLinkTarget } from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -22,8 +20,6 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/private/",
   "/root/",
 ] as const;
-const EXPLICIT_DIRECTORY_PATTERN = /^\s*Dir:\s+`([^`\n]+)`\s*$/;
-const EXPLICIT_DIRECTORY_CHILD_PATTERN = /^(\s*)-\s+`([^`\n]+)`\s*$/;
 
 function safeDecode(value: string): string {
   try {
@@ -111,64 +107,6 @@ function hasExternalScheme(path: string): boolean {
   const rest = match[2] ?? "";
   if (rest.startsWith("//")) return true;
   return !POSITION_ONLY_PATTERN.test(rest);
-}
-
-function pathWithoutPositionSuffix(value: string): string {
-  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
-}
-
-/**
- * Returns the absolute `Dir:` header for one exact, contiguous list group.
- * The source offset must point into the current list item's inline-code span;
- * prose, blank lines, malformed items, and unsafe children break the group.
- */
-export function findExplicitDirectoryBase(text: string, referenceOffset: number): string | null {
-  if (!Number.isInteger(referenceOffset) || referenceOffset < 0 || referenceOffset >= text.length) {
-    return null;
-  }
-
-  const lineStart = text.lastIndexOf("\n", referenceOffset - 1) + 1;
-  const nextNewline = text.indexOf("\n", referenceOffset);
-  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
-  const line = text.slice(lineStart, lineEnd);
-  const childMatch = line.match(EXPLICIT_DIRECTORY_CHILD_PATTERN);
-  if (!childMatch) {
-    return null;
-  }
-
-  const openingBacktick = line.indexOf("`");
-  const closingBacktick = line.lastIndexOf("`");
-  const inlineCodeStart = lineStart + openingBacktick;
-  const inlineCodeEnd = lineStart + closingBacktick;
-  if (referenceOffset < inlineCodeStart || referenceOffset > inlineCodeEnd) {
-    return null;
-  }
-
-  const childPath = pathWithoutPositionSuffix(childMatch[2] ?? "");
-  if (
-    childPath.includes("\0") ||
-    hasExternalScheme(childPath) ||
-    !isWorkspaceRelativePathSafe(childPath)
-  ) {
-    return null;
-  }
-
-  const siblingIndentation = childMatch[1] ?? "";
-  let groupStart = lineStart;
-  while (groupStart > 0) {
-    const previousLineEnd = groupStart - 1;
-    const previousLineStart = text.lastIndexOf("\n", previousLineEnd - 1) + 1;
-    const previousLine = text.slice(previousLineStart, previousLineEnd);
-    const previousChildMatch = previousLine.match(EXPLICIT_DIRECTORY_CHILD_PATTERN);
-    if (!previousChildMatch || (previousChildMatch[1] ?? "") !== siblingIndentation) {
-      const directoryMatch = previousLine.match(EXPLICIT_DIRECTORY_PATTERN);
-      const directory = directoryMatch?.[1]?.trim() ?? null;
-      return directory !== null && isLocalAbsolutePath(directory) ? directory : null;
-    }
-    groupStart = previousLineStart;
-  }
-
-  return null;
 }
 
 export function resolveMarkdownFileLinkTarget(
