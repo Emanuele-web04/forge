@@ -18,6 +18,7 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
+import { WorkspaceFileOpenerContext } from "../lib/workspaceFileOpener";
 
 beforeEach(() => {
   harness.showFileReferenceContextMenu.mockReset();
@@ -25,6 +26,32 @@ beforeEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
+  it("carries same-message absolute provenance when opening a relative file", async () => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          text={[
+            "Dir: `/Users/tester/.cache/ember-204`",
+            "- `artifacts/quartz-731.md`",
+            "Also exists at `/Users/tester/.local/share/onyx-918`.",
+          ].join("\n")}
+          cwd="/Users/tester/chat-workspace"
+          isStreaming={false}
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+
+    screen
+      .getByRole("link", { name: "quartz-731.md" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledWith("/Users/tester/chat-workspace/artifacts/quartz-731.md", {
+      externalFileCandidates: ["/Users/tester/.cache/ember-204/artifacts/quartz-731.md"],
+    });
+  });
+
   it("opens the shared file menu with a position-free absolute path", async () => {
     const screen = await render(
       <ChatMarkdown

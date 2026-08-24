@@ -13,6 +13,7 @@ import { PanelStateMessage } from "./PanelStateMessage";
 export function DockFilePane(props: {
   workspaceRoot: string | null;
   filePath: string | null;
+  externalFileCandidates?: ReadonlyArray<string>;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
@@ -21,6 +22,9 @@ export function DockFilePane(props: {
     <WorkspaceFilePreview
       workspaceRoot={props.workspaceRoot}
       filePath={props.filePath}
+      {...(props.externalFileCandidates
+        ? { externalFileCandidates: props.externalFileCandidates }
+        : {})}
       markdownPreviewDefault
       emptyState={
         <PanelStateMessage density="compact" fill="flex">

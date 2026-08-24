@@ -295,6 +295,8 @@ export interface WorkspaceFilePreviewProps {
    * touch the workspace-relative file-read RPC.
    */
   filePath: string | null;
+  /** Exact absolute fallback paths retained from the assistant turn that opened this pane. */
+  externalFileCandidates?: ReadonlyArray<string>;
   /**
    * Initial markdown render mode per file: the dock opens markdown already
    * parsed, the editor surface stays source-first. The header toggle still
@@ -455,10 +457,17 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     projectResolveOutOfRootFileReferenceQueryOptions({
       cwd: workspaceRoot,
       relativePath: requestedFilePath,
+      ...(props.externalFileCandidates
+        ? { externalFileCandidates: props.externalFileCandidates }
+        : {}),
       enabled: outOfRootResolutionEnabled,
     }),
   );
-  const resolvedOutOfRootFullPath = outOfRootResolutionQuery.data?.fullPath ?? null;
+  const resolvedOutOfRootFullPath =
+    outOfRootResolutionQuery.data?.kind === "resolved"
+      ? outOfRootResolutionQuery.data.fullPath
+      : null;
+  const outOfRootResolutionAmbiguous = outOfRootResolutionQuery.data?.kind === "ambiguous";
   const locatingOutOfRootFile =
     outOfRootResolutionEnabled &&
     (outOfRootResolutionQuery.isPending || outOfRootResolutionQuery.isFetching);
@@ -902,6 +911,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </div>
       ) : fileQuery.isLoading ? (
         <FilePreviewLoadingState />
+      ) : outOfRootResolutionAmbiguous ? (
+        <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
+          <p className="text-left text-[11px] text-destructive/85">
+            Multiple files from this assistant turn match this relative path. Use an absolute path
+            to choose one.
+          </p>
+        </PanelStateMessage>
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
           <p className="text-left text-[11px] text-destructive/85">

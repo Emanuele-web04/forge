@@ -40,7 +40,11 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import {
+  deriveMarkdownExternalFileCandidates,
+  resolveMarkdownFileLinkTarget,
+  rewriteMarkdownFileUriHref,
+} from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -125,6 +129,8 @@ interface ChatMarkdownProps {
    * length- and newline-preserving). Without it checkboxes render read-only.
    */
   onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
+  /** Absolute paths retained by structured tool activity for this assistant turn. */
+  fileProvenancePaths?: ReadonlyArray<string> | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -771,6 +777,7 @@ function OpenableFileChip(props: {
   theme: "light" | "dark";
   label?: ReactNode;
   href?: string;
+  externalFileCandidates?: ReadonlyArray<string>;
 }) {
   const opener = useWorkspaceFileOpener();
   const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
@@ -784,7 +791,20 @@ function OpenableFileChip(props: {
         event.preventDefault();
         event.stopPropagation();
         const forceExternalEditor = event.metaKey || event.ctrlKey;
-        openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
+        if (forceExternalEditor) {
+          openWorkspaceFileReference(null, props.targetPath);
+          return;
+        }
+        if (
+          opener?.openFile(props.targetPath, {
+            ...(props.externalFileCandidates
+              ? { externalFileCandidates: props.externalFileCandidates }
+              : {}),
+          })
+        ) {
+          return;
+        }
+        openWorkspaceFileReference(null, props.targetPath);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -1072,6 +1092,7 @@ function ChatMarkdown({
   onImageExpand,
   markers,
   onTaskToggle,
+  fileProvenancePaths,
   variant: variantProp,
   mentionReferences,
   terminalContexts,
@@ -1142,7 +1163,7 @@ function ChatMarkdown({
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node: _node, href, children, ...props }) {
+      a({ node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const isExternalHttp = isExternalHttpHref(restoredHref);
         if (isUserVariant && isExternalHttp) {
@@ -1188,6 +1209,12 @@ function ChatMarkdown({
             targetPath={targetPath}
             theme={resolvedTheme}
             label={nodeToPlainText(children)}
+            externalFileCandidates={deriveMarkdownExternalFileCandidates({
+              text: renderedText,
+              reference: restoredHref ?? "",
+              referenceOffset: node?.position?.start.offset ?? renderedText.length,
+              ...(fileProvenancePaths ? { provenancePaths: fileProvenancePaths } : {}),
+            })}
             {...(restoredHref ? { href: restoredHref } : {})}
           />
         );
@@ -1216,7 +1243,7 @@ function ChatMarkdown({
           </MarkdownCodeBlock>
         );
       },
-      code({ node: _node, className, children, ...props }) {
+      code({ node, className, children, ...props }) {
         // Fenced blocks carry a `language-*` class and are rendered by `pre`;
         // only inline code (no class) that names a file becomes an openable
         // mention chip. The target is resolved against cwd so it opens like a
@@ -1225,7 +1252,18 @@ function ChatMarkdown({
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
             const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
-            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            return (
+              <OpenableFileChip
+                targetPath={targetPath}
+                theme={resolvedTheme}
+                externalFileCandidates={deriveMarkdownExternalFileCandidates({
+                  text: renderedText,
+                  reference: filePath,
+                  referenceOffset: node?.position?.start.offset ?? renderedText.length,
+                  ...(fileProvenancePaths ? { provenancePaths: fileProvenancePaths } : {}),
+                })}
+              />
+            );
           }
         }
         return (
@@ -1306,12 +1344,14 @@ function ChatMarkdown({
     [
       cwd,
       diffThemeName,
+      fileProvenancePaths,
       isStreaming,
       isUserVariant,
       mentionReferences,
       onImageExpand,
       onTaskToggle,
       resolvedTheme,
+      renderedText,
       terminalContexts,
     ],
   );

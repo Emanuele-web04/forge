@@ -519,7 +519,7 @@ export function SingleChatSurface(props: {
   // outside the workspace report unhandled so chips fall back to the external
   // editor.
   const dockFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, options) => {
       // In-workspace references map to relative paths for the file-read RPC;
       // binary previews in a session's scratch workspace (outside the chat
       // workspace) open by absolute path through the local-image route.
@@ -528,7 +528,11 @@ export function SingleChatSurface(props: {
         return false;
       }
       requestImmediateDockHydration("file");
-      openPane(props.threadId, { kind: "file", filePath: targetPath });
+      openPane(props.threadId, {
+        kind: "file",
+        filePath: targetPath,
+        externalFileCandidates: options?.externalFileCandidates ?? [],
+      });
       return true;
     },
     prefetchFile: prefetchOpenerFile,
@@ -949,6 +953,9 @@ export function SingleChatSurface(props: {
             <DockFilePane
               workspaceRoot={workspaceRoot}
               filePath={pane.filePath}
+              {...(pane.externalFileCandidates
+                ? { externalFileCandidates: pane.externalFileCandidates }
+                : {})}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
               onCommentInChat={handleCommentInChat}

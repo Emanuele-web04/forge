@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "./markdown-links";
+import {
+  deriveMarkdownExternalFileCandidates,
+  resolveMarkdownFileLinkTarget,
+  rewriteMarkdownFileUriHref,
+} from "./markdown-links";
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {
@@ -59,5 +63,49 @@ describe("resolveMarkdownFileLinkTarget", () => {
 
   it("does not treat app routes as file links", () => {
     expect(resolveMarkdownFileLinkTarget("/chat/settings")).toBeNull();
+  });
+});
+
+describe("deriveMarkdownExternalFileCandidates", () => {
+  it("joins a relative reference to the nearest preceding absolute directory", () => {
+    const text = [
+      "Dir: `/Users/tester/.cache/ember-204`",
+      "- `artifacts/quartz-731.md`",
+      "Also exists at `/Users/tester/.local/share/onyx-918`.",
+    ].join("\n");
+    const reference = "artifacts/quartz-731.md";
+
+    expect(
+      deriveMarkdownExternalFileCandidates({
+        text,
+        reference,
+        referenceOffset: text.indexOf(reference),
+      }),
+    ).toEqual(["/Users/tester/.cache/ember-204/artifacts/quartz-731.md"]);
+  });
+
+  it("keeps only structured paths with the full relative suffix", () => {
+    expect(
+      deriveMarkdownExternalFileCandidates({
+        text: "`artifacts/quartz-731.md`",
+        reference: "artifacts/quartz-731.md",
+        referenceOffset: 0,
+        provenancePaths: [
+          "/Users/tester/.cache/ember-204/artifacts/quartz-731.md",
+          "/Users/tester/.cache/ember-204",
+          "/Users/tester/archive/quartz-731.md",
+        ],
+      }),
+    ).toEqual(["/Users/tester/.cache/ember-204/artifacts/quartz-731.md"]);
+  });
+
+  it("does not derive candidates for unsafe traversal", () => {
+    expect(
+      deriveMarkdownExternalFileCandidates({
+        text: "Dir: `/Users/tester/project` then `../secret.md`",
+        reference: "../secret.md",
+        referenceOffset: 40,
+      }),
+    ).toEqual([]);
   });
 });

@@ -1,3 +1,10 @@
+import { PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT } from "@synara/contracts";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
+} from "@synara/shared/path";
+
 import { resolvePathLinkTarget } from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -20,6 +27,7 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/private/",
   "/root/",
 ] as const;
+const INLINE_CODE_SPAN_PATTERN = /`([^`\n]+)`/g;
 
 function safeDecode(value: string): string {
   try {
@@ -142,4 +150,71 @@ export function resolveMarkdownFileLinkTarget(
 
   if (!cwd) return null;
   return resolvePathLinkTarget(pathWithPosition, cwd);
+}
+
+function pathWithoutPositionSuffix(value: string): string {
+  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
+}
+
+function nearestPrecedingAbsoluteInlineCodePath(text: string, beforeOffset: number): string | null {
+  let nearest: string | null = null;
+  for (const match of text.matchAll(INLINE_CODE_SPAN_PATTERN)) {
+    if ((match.index ?? text.length) >= beforeOffset) {
+      break;
+    }
+    const candidate = pathWithoutPositionSuffix(match[1] ?? "");
+    if (isLocalAbsolutePath(candidate)) {
+      nearest = candidate;
+    }
+  }
+  return nearest;
+}
+
+/**
+ * Builds exact absolute fallback candidates for one relative reference from
+ * bounded same-turn provenance. Structured tool paths only count when they
+ * already end in the full relative suffix. The nearest preceding absolute
+ * inline-code path in the same assistant message may also act as its base,
+ * which covers lists introduced by `Dir: /absolute/path` without combining
+ * the reference with every unrelated directory mentioned later in the turn.
+ */
+export function deriveMarkdownExternalFileCandidates(input: {
+  readonly text: string;
+  readonly reference: string;
+  readonly referenceOffset: number;
+  readonly provenancePaths?: ReadonlyArray<string>;
+}): string[] {
+  const relativePath = pathWithoutPositionSuffix(input.reference);
+  if (!isWorkspaceRelativePathSafe(relativePath)) {
+    return [];
+  }
+
+  const normalizedSuffix = relativePath.replace(/\\/g, "/");
+  const candidates = new Set<string>();
+  const addExactSuffixMatch = (rawPath: string) => {
+    const candidate = pathWithoutPositionSuffix(rawPath);
+    if (
+      isLocalAbsolutePath(candidate) &&
+      candidate.replace(/\\/g, "/").endsWith(`/${normalizedSuffix}`)
+    ) {
+      candidates.add(candidate);
+    }
+  };
+
+  for (const provenancePath of input.provenancePaths ?? []) {
+    addExactSuffixMatch(provenancePath);
+    if (candidates.size >= PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT) {
+      return [...candidates];
+    }
+  }
+
+  const messageBase = nearestPrecedingAbsoluteInlineCodePath(input.text, input.referenceOffset);
+  if (messageBase) {
+    addExactSuffixMatch(messageBase);
+    if (candidates.size < PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT) {
+      candidates.add(joinWorkspaceRelativePath(messageBase, normalizedSuffix));
+    }
+  }
+
+  return [...candidates].slice(0, PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT);
 }
