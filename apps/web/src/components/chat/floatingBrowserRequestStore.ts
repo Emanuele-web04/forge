@@ -49,7 +49,10 @@ export const useFloatingBrowserRequestStore = create<FloatingBrowserRequestStore
     }),
   dismiss: (threadId) =>
     set((current) => {
-      if (!current.requestedByThreadId[threadId] && current.rectByThreadId[threadId] === undefined) {
+      if (
+        !current.requestedByThreadId[threadId] &&
+        current.rectByThreadId[threadId] === undefined
+      ) {
         return current;
       }
       const requestedByThreadId = { ...current.requestedByThreadId };

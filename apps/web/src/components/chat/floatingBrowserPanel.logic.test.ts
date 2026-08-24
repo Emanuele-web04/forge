@@ -27,9 +27,9 @@ describe("floating browser panel geometry", () => {
       initialFloatingBrowserPanelRect(host),
     );
     expect(restoreFloatingBrowserPanelRect(host, saved)).toEqual(saved);
-    expect(
-      restoreFloatingBrowserPanelRect({ width: 400, height: 300 }, saved),
-    ).toEqual(clampFloatingBrowserPanelRect(saved, { width: 400, height: 300 }));
+    expect(restoreFloatingBrowserPanelRect({ width: 400, height: 300 }, saved)).toEqual(
+      clampFloatingBrowserPanelRect(saved, { width: 400, height: 300 }),
+    );
   });
 
   it("clamps movement and size inside a small host", () => {

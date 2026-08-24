@@ -393,8 +393,7 @@ function mouseCoordinatesMatch(
   ) {
     return true;
   }
-  const zoom =
-    Number.isFinite(pageZoomFactor) && pageZoomFactor > 0 ? pageZoomFactor : 1;
+  const zoom = Number.isFinite(pageZoomFactor) && pageZoomFactor > 0 ? pageZoomFactor : 1;
   if (Math.abs(zoom - 1) < 0.001) {
     return false;
   }

@@ -40,19 +40,19 @@ describe("floating browser request store", () => {
     store.rememberRect(THREAD_A, RECT_A);
     store.rememberRect(THREAD_B, RECT_B);
 
-    expect(selectFloatingBrowserPanelRect(THREAD_A)(useFloatingBrowserRequestStore.getState())).toEqual(
-      RECT_A,
-    );
-    expect(selectFloatingBrowserPanelRect(THREAD_B)(useFloatingBrowserRequestStore.getState())).toEqual(
-      RECT_B,
-    );
+    expect(
+      selectFloatingBrowserPanelRect(THREAD_A)(useFloatingBrowserRequestStore.getState()),
+    ).toEqual(RECT_A);
+    expect(
+      selectFloatingBrowserPanelRect(THREAD_B)(useFloatingBrowserRequestStore.getState()),
+    ).toEqual(RECT_B);
 
     store.dismiss(THREAD_A);
-    expect(selectFloatingBrowserPanelRect(THREAD_A)(useFloatingBrowserRequestStore.getState())).toBe(
-      undefined,
-    );
-    expect(selectFloatingBrowserPanelRect(THREAD_B)(useFloatingBrowserRequestStore.getState())).toEqual(
-      RECT_B,
-    );
+    expect(
+      selectFloatingBrowserPanelRect(THREAD_A)(useFloatingBrowserRequestStore.getState()),
+    ).toBe(undefined);
+    expect(
+      selectFloatingBrowserPanelRect(THREAD_B)(useFloatingBrowserRequestStore.getState()),
+    ).toEqual(RECT_B);
   });
 });
