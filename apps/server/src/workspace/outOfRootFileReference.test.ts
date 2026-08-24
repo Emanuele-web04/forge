@@ -4,10 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  resolveOutOfRootFileReference,
-  resolveOutOfRootFileReferenceResult,
-} from "./outOfRootFileReference";
+import { resolveOutOfRootFileReference } from "./outOfRootFileReference";
 
 describe("resolveOutOfRootFileReference", () => {
   let homeDir: string;
@@ -108,43 +105,6 @@ describe("resolveOutOfRootFileReference", () => {
     });
 
     expect(resolved).toBeNull();
-  });
-
-  it("resolves one exact external candidate by normalized path suffix", async () => {
-    const actualPath = path.join(homeDir, ".cache", "ember-204", "artifacts", "quartz-731.md");
-    writeFile(actualPath);
-
-    const resolved = await resolveOutOfRootFileReferenceResult({
-      workspaceRoot,
-      relativePath: "artifacts/quartz-731.md",
-      homeDir,
-      externalFileCandidates: [actualPath, path.join(homeDir, "archive", "quartz-731.md")],
-    });
-
-    expect(resolved).toEqual({ kind: "resolved", fullPath: fs.realpathSync(actualPath) });
-  });
-
-  it("returns ambiguous when two existing candidates have the same suffix", async () => {
-    const firstPath = path.join(homeDir, ".cache", "source-a", "assets", "mercury-552.txt");
-    const secondPath = path.join(
-      homeDir,
-      ".local",
-      "share",
-      "source-b",
-      "assets",
-      "mercury-552.txt",
-    );
-    writeFile(firstPath);
-    writeFile(secondPath);
-
-    const resolved = await resolveOutOfRootFileReferenceResult({
-      workspaceRoot,
-      relativePath: "assets/mercury-552.txt",
-      homeDir,
-      externalFileCandidates: [firstPath, secondPath],
-    });
-
-    expect(resolved).toEqual({ kind: "ambiguous" });
   });
 
   it("skips ancestor candidates that are directories", async () => {

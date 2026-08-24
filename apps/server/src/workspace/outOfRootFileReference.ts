@@ -24,11 +24,6 @@ import { isContainedPath } from "./realPathContainment";
 // pathologically deep workspace path from turning into a long stat loop.
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
-export type OutOfRootFileReferenceResolution =
-  | { readonly kind: "resolved"; readonly fullPath: string }
-  | { readonly kind: "not-found" }
-  | { readonly kind: "ambiguous" };
-
 async function realpathOrNull(candidate: string): Promise<string | null> {
   try {
     return await fs.realpath(candidate);
@@ -64,57 +59,16 @@ export async function resolveOutOfRootFileReference(input: {
   readonly relativePath: string;
   readonly homeDir: string;
 }): Promise<string | null> {
-  const resolution = await resolveOutOfRootFileReferenceResult(input);
-  return resolution.kind === "resolved" ? resolution.fullPath : null;
-}
-
-function normalizedPathEndsWithReference(candidate: string, relativePath: string): boolean {
-  const normalizedCandidate = candidate.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedReference = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-  return normalizedCandidate.endsWith(`/${normalizedReference}`);
-}
-
-async function resolveExternalCandidates(input: {
-  readonly relativePath: string;
-  readonly externalFileCandidates: ReadonlyArray<string>;
-}): Promise<OutOfRootFileReferenceResolution> {
-  const matchingRealPaths = new Set<string>();
-  for (const rawCandidate of input.externalFileCandidates) {
-    const candidate = rawCandidate.trim();
-    if (
-      !path.isAbsolute(candidate) ||
-      !normalizedPathEndsWithReference(candidate, input.relativePath)
-    ) {
-      continue;
-    }
-    const realCandidate = await realpathOrNull(candidate);
-    if (realCandidate !== null && (await statIsFileOrNull(realCandidate))) {
-      matchingRealPaths.add(realCandidate);
-    }
-  }
-  if (matchingRealPaths.size > 1) {
-    return { kind: "ambiguous" };
-  }
-  const [fullPath] = matchingRealPaths;
-  return fullPath ? { kind: "resolved", fullPath } : { kind: "not-found" };
-}
-
-export async function resolveOutOfRootFileReferenceResult(input: {
-  readonly workspaceRoot: string;
-  readonly relativePath: string;
-  readonly homeDir: string;
-  readonly externalFileCandidates?: ReadonlyArray<string>;
-}): Promise<OutOfRootFileReferenceResolution> {
   const relativePath = input.relativePath.trim();
   if (relativePath.includes("\0") || !isWorkspaceRelativePathSafe(relativePath)) {
-    return { kind: "not-found" };
+    return null;
   }
   const [realHome, realRoot] = await Promise.all([
     realpathOrNull(input.homeDir),
     realpathOrNull(input.workspaceRoot),
   ]);
   if (!realHome || !realRoot || !isContainedPath(realHome, realRoot)) {
-    return { kind: "not-found" };
+    return null;
   }
 
   const segments = relativePath.split(/[\\/]/);
@@ -129,18 +83,10 @@ export async function resolveOutOfRootFileReferenceResult(input: {
     return null;
   });
   if (inRootStat === false) {
-    return { kind: "not-found" };
+    return null;
   }
   if (inRootStat !== null) {
-    return { kind: "not-found" };
-  }
-
-  const candidateResolution = await resolveExternalCandidates({
-    relativePath,
-    externalFileCandidates: input.externalFileCandidates ?? [],
-  });
-  if (candidateResolution.kind !== "not-found") {
-    return candidateResolution;
+    return null;
   }
 
   let ancestor = path.dirname(realRoot);
@@ -156,7 +102,7 @@ export async function resolveOutOfRootFileReferenceResult(input: {
       isContainedPath(realHome, realCandidate) &&
       (await statIsFileOrNull(realCandidate))
     ) {
-      return { kind: "resolved", fullPath: realCandidate };
+      return realCandidate;
     }
     const parent = path.dirname(ancestor);
     if (parent === ancestor) {
@@ -164,5 +110,5 @@ export async function resolveOutOfRootFileReferenceResult(input: {
     }
     ancestor = parent;
   }
-  return { kind: "not-found" };
+  return null;
 }

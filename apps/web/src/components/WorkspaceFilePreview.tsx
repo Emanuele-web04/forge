@@ -295,8 +295,6 @@ export interface WorkspaceFilePreviewProps {
    * touch the workspace-relative file-read RPC.
    */
   filePath: string | null;
-  /** Exact absolute fallback paths retained from the assistant turn that opened this pane. */
-  externalFileCandidates?: ReadonlyArray<string>;
   /**
    * Initial markdown render mode per file: the dock opens markdown already
    * parsed, the editor surface stays source-first. The header toggle still
@@ -457,17 +455,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     projectResolveOutOfRootFileReferenceQueryOptions({
       cwd: workspaceRoot,
       relativePath: requestedFilePath,
-      ...(props.externalFileCandidates
-        ? { externalFileCandidates: props.externalFileCandidates }
-        : {}),
       enabled: outOfRootResolutionEnabled,
     }),
   );
-  const resolvedOutOfRootFullPath =
-    outOfRootResolutionQuery.data?.kind === "resolved"
-      ? outOfRootResolutionQuery.data.fullPath
-      : null;
-  const outOfRootResolutionAmbiguous = outOfRootResolutionQuery.data?.kind === "ambiguous";
+  const resolvedOutOfRootFullPath = outOfRootResolutionQuery.data?.fullPath ?? null;
   const locatingOutOfRootFile =
     outOfRootResolutionEnabled &&
     (outOfRootResolutionQuery.isPending || outOfRootResolutionQuery.isFetching);

@@ -26,30 +26,55 @@ beforeEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
-  it("carries same-message absolute provenance when opening a relative file", async () => {
+  it("opens a listed file from its explicit directory", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
           text={[
-            "Dir: `/Users/tester/.cache/ember-204`",
-            "- `artifacts/quartz-731.md`",
-            "Also exists at `/Users/tester/.local/share/onyx-918`.",
+            "Dir: `/Users/tester/external-tool`",
+            "- `docs/example.md`",
           ].join("\n")}
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
+          allowExplicitDirectoryFileTargets
         />
       </WorkspaceFileOpenerContext.Provider>,
     );
 
     screen
-      .getByRole("link", { name: "quartz-731.md" })
+      .getByRole("link", { name: "example.md" })
       .element()
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
-    expect(openFile).toHaveBeenCalledWith("/Users/tester/chat-workspace/artifacts/quartz-731.md", {
-      externalFileCandidates: ["/Users/tester/.cache/ember-204/artifacts/quartz-731.md"],
-    });
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/tester/external-tool/docs/example.md",
+    );
+  });
+
+  it("opens an authored absolute file URL without directory inference", async () => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          text="[docs/example.md](file:///Users/tester/external-tool/docs/example.md)"
+          cwd="/Users/tester/chat-workspace"
+          isStreaming={false}
+          allowExplicitDirectoryFileTargets
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+
+    screen
+      .getByRole("link", { name: "docs/example.md" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/tester/external-tool/docs/example.md",
+    );
   });
 
   it("opens the shared file menu with a position-free absolute path", async () => {

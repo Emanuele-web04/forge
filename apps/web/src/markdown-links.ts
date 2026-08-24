@@ -1,9 +1,4 @@
-import { PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT } from "@synara/contracts";
-import {
-  isLocalAbsolutePath,
-  isWorkspaceRelativePathSafe,
-  joinWorkspaceRelativePath,
-} from "@synara/shared/path";
+import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
 
 import { resolvePathLinkTarget } from "./terminal-links";
 
@@ -27,7 +22,8 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/private/",
   "/root/",
 ] as const;
-const INLINE_CODE_SPAN_PATTERN = /`([^`\n]+)`/g;
+const EXPLICIT_DIRECTORY_PATTERN = /^\s*Dir:\s+`([^`\n]+)`\s*$/;
+const EXPLICIT_DIRECTORY_CHILD_PATTERN = /^(\s*)-\s+`([^`\n]+)`\s*$/;
 
 function safeDecode(value: string): string {
   try {
@@ -117,6 +113,64 @@ function hasExternalScheme(path: string): boolean {
   return !POSITION_ONLY_PATTERN.test(rest);
 }
 
+function pathWithoutPositionSuffix(value: string): string {
+  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
+}
+
+/**
+ * Returns the absolute `Dir:` header for one exact, contiguous list group.
+ * The source offset must point into the current list item's inline-code span;
+ * prose, blank lines, malformed items, and unsafe children break the group.
+ */
+export function findExplicitDirectoryBase(text: string, referenceOffset: number): string | null {
+  if (!Number.isInteger(referenceOffset) || referenceOffset < 0 || referenceOffset >= text.length) {
+    return null;
+  }
+
+  const lineStart = text.lastIndexOf("\n", referenceOffset - 1) + 1;
+  const nextNewline = text.indexOf("\n", referenceOffset);
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+  const line = text.slice(lineStart, lineEnd);
+  const childMatch = line.match(EXPLICIT_DIRECTORY_CHILD_PATTERN);
+  if (!childMatch) {
+    return null;
+  }
+
+  const openingBacktick = line.indexOf("`");
+  const closingBacktick = line.lastIndexOf("`");
+  const inlineCodeStart = lineStart + openingBacktick;
+  const inlineCodeEnd = lineStart + closingBacktick;
+  if (referenceOffset < inlineCodeStart || referenceOffset > inlineCodeEnd) {
+    return null;
+  }
+
+  const childPath = pathWithoutPositionSuffix(childMatch[2] ?? "");
+  if (
+    childPath.includes("\0") ||
+    hasExternalScheme(childPath) ||
+    !isWorkspaceRelativePathSafe(childPath)
+  ) {
+    return null;
+  }
+
+  const siblingIndentation = childMatch[1] ?? "";
+  let groupStart = lineStart;
+  while (groupStart > 0) {
+    const previousLineEnd = groupStart - 1;
+    const previousLineStart = text.lastIndexOf("\n", previousLineEnd - 1) + 1;
+    const previousLine = text.slice(previousLineStart, previousLineEnd);
+    const previousChildMatch = previousLine.match(EXPLICIT_DIRECTORY_CHILD_PATTERN);
+    if (!previousChildMatch || (previousChildMatch[1] ?? "") !== siblingIndentation) {
+      const directoryMatch = previousLine.match(EXPLICIT_DIRECTORY_PATTERN);
+      const directory = directoryMatch?.[1]?.trim() ?? null;
+      return directory !== null && isLocalAbsolutePath(directory) ? directory : null;
+    }
+    groupStart = previousLineStart;
+  }
+
+  return null;
+}
+
 export function resolveMarkdownFileLinkTarget(
   href: string | undefined,
   cwd?: string,
@@ -150,71 +204,4 @@ export function resolveMarkdownFileLinkTarget(
 
   if (!cwd) return null;
   return resolvePathLinkTarget(pathWithPosition, cwd);
-}
-
-function pathWithoutPositionSuffix(value: string): string {
-  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
-}
-
-function nearestPrecedingAbsoluteInlineCodePath(text: string, beforeOffset: number): string | null {
-  let nearest: string | null = null;
-  for (const match of text.matchAll(INLINE_CODE_SPAN_PATTERN)) {
-    if ((match.index ?? text.length) >= beforeOffset) {
-      break;
-    }
-    const candidate = pathWithoutPositionSuffix(match[1] ?? "");
-    if (isLocalAbsolutePath(candidate)) {
-      nearest = candidate;
-    }
-  }
-  return nearest;
-}
-
-/**
- * Builds exact absolute fallback candidates for one relative reference from
- * bounded same-turn provenance. Structured tool paths only count when they
- * already end in the full relative suffix. The nearest preceding absolute
- * inline-code path in the same assistant message may also act as its base,
- * which covers lists introduced by `Dir: /absolute/path` without combining
- * the reference with every unrelated directory mentioned later in the turn.
- */
-export function deriveMarkdownExternalFileCandidates(input: {
-  readonly text: string;
-  readonly reference: string;
-  readonly referenceOffset: number;
-  readonly provenancePaths?: ReadonlyArray<string>;
-}): string[] {
-  const relativePath = pathWithoutPositionSuffix(input.reference);
-  if (!isWorkspaceRelativePathSafe(relativePath)) {
-    return [];
-  }
-
-  const normalizedSuffix = relativePath.replace(/\\/g, "/");
-  const candidates = new Set<string>();
-  const addExactSuffixMatch = (rawPath: string) => {
-    const candidate = pathWithoutPositionSuffix(rawPath);
-    if (
-      isLocalAbsolutePath(candidate) &&
-      candidate.replace(/\\/g, "/").endsWith(`/${normalizedSuffix}`)
-    ) {
-      candidates.add(candidate);
-    }
-  };
-
-  for (const provenancePath of input.provenancePaths ?? []) {
-    addExactSuffixMatch(provenancePath);
-    if (candidates.size >= PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT) {
-      return [...candidates];
-    }
-  }
-
-  const messageBase = nearestPrecedingAbsoluteInlineCodePath(input.text, input.referenceOffset);
-  if (messageBase) {
-    addExactSuffixMatch(messageBase);
-    if (candidates.size < PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT) {
-      candidates.add(joinWorkspaceRelativePath(messageBase, normalizedSuffix));
-    }
-  }
-
-  return [...candidates].slice(0, PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT);
 }

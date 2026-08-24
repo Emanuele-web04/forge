@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-03.8";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-25.1";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -58,6 +58,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
   return [
     SYNARA_HARNESS_POLICY_MARKER,
     "You are running inside Synara. Synara is the host and harness for this session.",
+    "When referencing a local file in user-facing Markdown, use a readable label (usually a relative path or basename). For a file outside the session working directory, link its known absolute path with an absolute file URL, for example [config.ts](file:///absolute/path/config.ts).",
     ...controlPolicy,
   ].join("\n");
 }

@@ -114,7 +114,7 @@ import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
-import { resolveOutOfRootFileReferenceResult } from "./workspace/outOfRootFileReference";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import {
   WorkspaceFileConflictError,
@@ -1158,14 +1158,13 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
         [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
           rpcEffect(
-            Effect.promise(() =>
-              resolveOutOfRootFileReferenceResult({
+            Effect.promise(async () => ({
+              fullPath: await resolveOutOfRootFileReference({
                 workspaceRoot: input.cwd,
                 relativePath: input.relativePath,
                 homeDir: config.homeDir,
-                externalFileCandidates: input.externalFileCandidates ?? [],
               }),
-            ),
+            })),
             "Failed to resolve file reference outside the workspace",
           ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>

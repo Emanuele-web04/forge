@@ -39,155 +39,11 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("relocates a missing relative file to one matching external candidate", async () => {
-  const workspaceRoot = "/Users/tester/workspaces/cobalt-417";
-  const requestedPath = "artifacts/quartz-731.md";
-  const relocatedPath = "/Users/tester/.cache/ember-204/artifacts/quartz-731.md";
-  const readFile = vi.fn(async (input: { relativePath: string; previewGrant?: string }) => {
-    if (input.relativePath === relocatedPath && input.previewGrant === "preview-grant") {
-      return {
-        relativePath: relocatedPath,
-        contents: "Synthetic fixture contents",
-        truncated: false,
-      };
-    }
-    throw new Error(`Workspace file not found: ${input.relativePath}`);
-  });
-  const resolveOutOfRootFileReference = vi.fn(
-    async (input: { externalFileCandidates?: ReadonlyArray<string> }) =>
-      input.externalFileCandidates?.includes(relocatedPath)
-        ? { kind: "resolved" as const, fullPath: relocatedPath }
-        : { kind: "not-found" as const },
-  );
-  const createLocalFilePreviewGrant = vi.fn().mockResolvedValue({
-    grant: "preview-grant",
-    expiresAt: new Date(Date.now() + 60_000).toISOString(),
-  });
-  const restoreNativeApi = installNativeApi({
-    projects: {
-      readFile,
-      resolveOutOfRootFileReference,
-      createLocalFilePreviewGrant,
-    },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview
-          workspaceRoot={workspaceRoot}
-          filePath={requestedPath}
-          externalFileCandidates={[relocatedPath]}
-        />
-      </QueryClientProvider>,
-    );
-
-    await vi.waitFor(() =>
-      expect(document.body.textContent).toContain("Synthetic fixture contents"),
-    );
-    expect(createLocalFilePreviewGrant).toHaveBeenCalledWith({ path: relocatedPath });
-  } finally {
-    restoreNativeApi();
-  }
-});
-
-it("keeps an existing workspace file ahead of external candidates", async () => {
-  const workspaceRoot = "/Users/tester/project";
-  const requestedPath = "assets/mercury-552.txt";
-  const readFile = vi.fn().mockResolvedValue({
-    relativePath: requestedPath,
-    contents: "workspace wins",
-    truncated: false,
-  });
-  const resolveOutOfRootFileReference = vi.fn();
-  const createLocalFilePreviewGrant = vi.fn();
-  const restoreNativeApi = installNativeApi({
-    projects: { readFile, resolveOutOfRootFileReference, createLocalFilePreviewGrant },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview
-          workspaceRoot={workspaceRoot}
-          filePath={requestedPath}
-          externalFileCandidates={["/Users/tester/.local/share/atlas-630/assets/mercury-552.txt"]}
-        />
-      </QueryClientProvider>,
-    );
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain("workspace wins"));
-    expect(resolveOutOfRootFileReference).not.toHaveBeenCalled();
-    expect(createLocalFilePreviewGrant).not.toHaveBeenCalled();
-  } finally {
-    restoreNativeApi();
-  }
-});
-
-it("settles to a clear error when external candidates are ambiguous", async () => {
-  const workspaceRoot = "/Users/tester/project";
-  const requestedPath = "assets/mercury-552.txt";
-  const restoreNativeApi = installNativeApi({
-    projects: {
-      readFile: vi.fn().mockRejectedValue(new Error("Workspace file not found")),
-      resolveOutOfRootFileReference: vi.fn().mockResolvedValue({ kind: "ambiguous" }),
-    },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview
-          workspaceRoot={workspaceRoot}
-          filePath={requestedPath}
-          externalFileCandidates={[
-            "/Users/tester/.cache/source-a/assets/mercury-552.txt",
-            "/Users/tester/.local/share/source-b/assets/mercury-552.txt",
-          ]}
-        />
-      </QueryClientProvider>,
-    );
-
-    await vi.waitFor(() =>
-      expect(document.body.textContent).toContain("Multiple files from this assistant turn match"),
-    );
-    expect(document.body.textContent).not.toContain("Loading file...");
-  } finally {
-    restoreNativeApi();
-  }
-});
-
-it("settles to the original read error when no external candidate matches", async () => {
-  const workspaceRoot = "/Users/tester/project";
-  const requestedPath = "missing/opal-903.md";
-  const restoreNativeApi = installNativeApi({
-    projects: {
-      readFile: vi.fn().mockRejectedValue(new Error("Workspace file not found")),
-      resolveOutOfRootFileReference: vi.fn().mockResolvedValue({ kind: "not-found" }),
-    },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview workspaceRoot={workspaceRoot} filePath={requestedPath} />
-      </QueryClientProvider>,
-    );
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Workspace file not found"));
-    expect(document.body.textContent).not.toContain("Loading file...");
-  } finally {
-    restoreNativeApi();
-  }
-});
-
 it("relocates a workspace-relative image after its in-root preview fails", async () => {
   const workspaceRoot = "/Users/tester/Documents/Claude/Skills";
   const requestedPath = "Claude/Outbox/shot.png";
   const relocatedPath = "/Users/tester/Documents/Claude/Outbox/shot.png";
-  const resolveOutOfRootFileReference = vi
-    .fn()
-    .mockResolvedValue({ kind: "resolved", fullPath: relocatedPath });
+  const resolveOutOfRootFileReference = vi.fn().mockResolvedValue({ fullPath: relocatedPath });
   const createLocalFilePreviewGrant = vi.fn().mockResolvedValue({
     grant: "preview-grant",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -237,8 +93,8 @@ it("returns to a newly created workspace file after relocation", async () => {
   let workspaceFileExists = false;
   const resolveOutOfRootFileReference = vi
     .fn()
-    .mockResolvedValueOnce({ kind: "resolved", fullPath: relocatedPath })
-    .mockResolvedValueOnce({ kind: "not-found" });
+    .mockResolvedValueOnce({ fullPath: relocatedPath })
+    .mockResolvedValueOnce({ fullPath: null });
   const readFile = vi.fn(async (input: { relativePath: string; previewGrant?: string }) => {
     if (input.relativePath === relocatedPath) {
       if (input.previewGrant !== "preview-grant") {

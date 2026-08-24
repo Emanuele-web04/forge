@@ -25,18 +25,8 @@ export const projectQueryKeys = {
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
-  resolveOutOfRootFileReference: (
-    cwd: string | null,
-    relativePath: string | null,
-    externalFileCandidates: ReadonlyArray<string>,
-  ) =>
-    [
-      "projects",
-      "resolve-out-of-root-file-reference",
-      cwd,
-      relativePath,
-      externalFileCandidates,
-    ] as const,
+  resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
+    ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -221,16 +211,10 @@ export function projectReadFileQueryOptions(input: {
 export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
   cwd: string | null;
   relativePath: string | null;
-  externalFileCandidates?: ReadonlyArray<string>;
   enabled?: boolean;
 }) {
-  const externalFileCandidates = input.externalFileCandidates ?? [];
   return queryOptions<ProjectResolveOutOfRootFileReferenceResult>({
-    queryKey: projectQueryKeys.resolveOutOfRootFileReference(
-      input.cwd,
-      input.relativePath,
-      externalFileCandidates,
-    ),
+    queryKey: projectQueryKeys.resolveOutOfRootFileReference(input.cwd, input.relativePath),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.relativePath) {
@@ -239,7 +223,6 @@ export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
       return api.projects.resolveOutOfRootFileReference({
         cwd: input.cwd,
         relativePath: input.relativePath,
-        ...(externalFileCandidates.length > 0 ? { externalFileCandidates } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,

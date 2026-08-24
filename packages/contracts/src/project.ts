@@ -11,7 +11,6 @@ const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_LOCAL_ENTRIES_MAX_LIMIT = 100;
 const PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
-export const PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT = 24;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
@@ -210,27 +209,22 @@ export const ProjectReadFileResult = Schema.Struct({
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
-// Locates a chat file reference that failed to read inside the workspace root.
-// The optional candidates are exact absolute paths derived from bounded
-// same-turn provenance. The server checks them before its existing ancestor
-// fallback and never searches for additional files.
+// Locates a chat file reference that failed to read inside the workspace root:
+// the server retries the workspace-relative path against ancestor directories
+// of the root (bounded to the user's home directory) and returns the absolute
+// path of the real file, or null when no candidate exists. Reading the located
+// file still goes through the preview-grant flow — this method never returns
+// file contents.
 export const ProjectResolveOutOfRootFileReferenceInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-  externalFileCandidates: Schema.optional(
-    Schema.Array(
-      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-    ).check(Schema.isMaxLength(PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT)),
-  ),
 });
 export type ProjectResolveOutOfRootFileReferenceInput =
   typeof ProjectResolveOutOfRootFileReferenceInput.Type;
 
-export const ProjectResolveOutOfRootFileReferenceResult = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("resolved"), fullPath: TrimmedNonEmptyString }),
-  Schema.Struct({ kind: Schema.Literal("not-found") }),
-  Schema.Struct({ kind: Schema.Literal("ambiguous") }),
-]);
+export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
+  fullPath: Schema.NullOr(TrimmedNonEmptyString),
+});
 export type ProjectResolveOutOfRootFileReferenceResult =
   typeof ProjectResolveOutOfRootFileReferenceResult.Type;
 

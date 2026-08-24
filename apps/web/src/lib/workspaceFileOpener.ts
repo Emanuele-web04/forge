@@ -29,10 +29,7 @@ export interface WorkspaceFileOpener {
    * handled by an in-app viewer; false tells the caller to fall back to the
    * external editor (path outside the workspace, no viewer on this surface).
    */
-  openFile: (
-    path: string,
-    options?: { readonly externalFileCandidates?: ReadonlyArray<string> },
-  ) => boolean;
+  openFile: (path: string) => boolean;
   /** Optional hover warm-up for the file contents + syntax highlighter. */
   prefetchFile?: (path: string) => void;
 }

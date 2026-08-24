@@ -331,18 +331,15 @@ describe("empty launcher state", () => {
 
 describe("file panes", () => {
   it("opens a file pane carrying the file path", () => {
-    const externalFileCandidates = ["/Users/tester/.cache/ember-204/artifacts/quartz-731.md"];
     const state = openPaneInState(createDefaultRightDockState(), {
       paneId: "f1",
       kind: "file",
-      filePath: "artifacts/quartz-731.md",
-      externalFileCandidates,
+      filePath: "src/page.tsx",
     });
     expect(state.open).toBe(true);
     expect(state.activePaneId).toBe("f1");
     expect(state.panes).toHaveLength(1);
-    expect(state.panes[0]?.filePath).toBe("artifacts/quartz-731.md");
-    expect(state.panes[0]?.externalFileCandidates).toEqual(externalFileCandidates);
+    expect(state.panes[0]?.filePath).toBe("src/page.tsx");
   });
 
   it("opens another file in a new tab instead of swapping the existing pane", () => {
@@ -428,13 +425,11 @@ describe("file panes", () => {
           diffTurnId: null,
           diffFilePath: null,
           filePath: "src/page.tsx",
-          externalFileCandidates: ["/Users/tester/external/src/page.tsx"],
         },
       ],
     });
     expect(state.panes[0]?.kind).toBe("file");
     expect(state.panes[0]?.filePath).toBe("src/page.tsx");
-    expect(state.panes[0]?.externalFileCandidates).toEqual(["/Users/tester/external/src/page.tsx"]);
   });
 });
 

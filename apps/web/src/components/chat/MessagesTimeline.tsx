@@ -1456,6 +1456,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  allowExplicitDirectoryFileTargets
                 />
               </div>
             </div>
@@ -1825,9 +1826,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
-          const turnFileProvenancePaths = [
-            ...new Set(allTurnWorkEntries.flatMap((entry) => entry.changedFiles ?? [])),
-          ];
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2024,7 +2022,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
-                  fileProvenancePaths={turnFileProvenancePaths}
+                  allowExplicitDirectoryFileTargets
                 />
               </div>
             );
@@ -2135,7 +2133,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
-                      fileProvenancePaths={turnFileProvenancePaths}
+                      allowExplicitDirectoryFileTargets
                     />
                   </div>
                 ) : null}

@@ -5,7 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
-import { isLocalAbsolutePath } from "@synara/shared/path";
+import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
@@ -41,7 +41,7 @@ import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import {
-  deriveMarkdownExternalFileCandidates,
+  findExplicitDirectoryBase,
   resolveMarkdownFileLinkTarget,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
@@ -129,8 +129,8 @@ interface ChatMarkdownProps {
    * length- and newline-preserving). Without it checkboxes render read-only.
    */
   onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
-  /** Absolute paths retained by structured tool activity for this assistant turn. */
-  fileProvenancePaths?: ReadonlyArray<string> | undefined;
+  /** Allows assistant transcript `Dir:` lists to supply an explicit base for inline file chips. */
+  allowExplicitDirectoryFileTargets?: boolean | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -777,7 +777,6 @@ function OpenableFileChip(props: {
   theme: "light" | "dark";
   label?: ReactNode;
   href?: string;
-  externalFileCandidates?: ReadonlyArray<string>;
 }) {
   const opener = useWorkspaceFileOpener();
   const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
@@ -791,20 +790,7 @@ function OpenableFileChip(props: {
         event.preventDefault();
         event.stopPropagation();
         const forceExternalEditor = event.metaKey || event.ctrlKey;
-        if (forceExternalEditor) {
-          openWorkspaceFileReference(null, props.targetPath);
-          return;
-        }
-        if (
-          opener?.openFile(props.targetPath, {
-            ...(props.externalFileCandidates
-              ? { externalFileCandidates: props.externalFileCandidates }
-              : {}),
-          })
-        ) {
-          return;
-        }
-        openWorkspaceFileReference(null, props.targetPath);
+        openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -1092,7 +1078,7 @@ function ChatMarkdown({
   onImageExpand,
   markers,
   onTaskToggle,
-  fileProvenancePaths,
+  allowExplicitDirectoryFileTargets: allowExplicitDirectoryFileTargetsProp,
   variant: variantProp,
   mentionReferences,
   terminalContexts,
@@ -1103,6 +1089,7 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const allowExplicitDirectoryFileTargets = allowExplicitDirectoryFileTargetsProp ?? false;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1163,7 +1150,7 @@ function ChatMarkdown({
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node, href, children, ...props }) {
+      a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const isExternalHttp = isExternalHttpHref(restoredHref);
         if (isUserVariant && isExternalHttp) {
@@ -1209,12 +1196,6 @@ function ChatMarkdown({
             targetPath={targetPath}
             theme={resolvedTheme}
             label={nodeToPlainText(children)}
-            externalFileCandidates={deriveMarkdownExternalFileCandidates({
-              text: renderedText,
-              reference: restoredHref ?? "",
-              referenceOffset: node?.position?.start.offset ?? renderedText.length,
-              ...(fileProvenancePaths ? { provenancePaths: fileProvenancePaths } : {}),
-            })}
             {...(restoredHref ? { href: restoredHref } : {})}
           />
         );
@@ -1251,19 +1232,18 @@ function ChatMarkdown({
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
-            return (
-              <OpenableFileChip
-                targetPath={targetPath}
-                theme={resolvedTheme}
-                externalFileCandidates={deriveMarkdownExternalFileCandidates({
-                  text: renderedText,
-                  reference: filePath,
-                  referenceOffset: node?.position?.start.offset ?? renderedText.length,
-                  ...(fileProvenancePaths ? { provenancePaths: fileProvenancePaths } : {}),
-                })}
-              />
-            );
+            const referenceOffset = node?.position?.start.offset;
+            const explicitDirectory =
+              allowExplicitDirectoryFileTargets && referenceOffset !== undefined
+                ? findExplicitDirectoryBase(renderedText, referenceOffset)
+                : null;
+            const pathWithoutPosition = filePath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+            const cwdForChip =
+              explicitDirectory !== null && isWorkspaceRelativePathSafe(pathWithoutPosition)
+                ? explicitDirectory
+                : cwd;
+            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwdForChip) ?? filePath;
+            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
           }
         }
         return (
@@ -1342,9 +1322,9 @@ function ChatMarkdown({
       } as unknown as Components),
     }),
     [
+      allowExplicitDirectoryFileTargets,
       cwd,
       diffThemeName,
-      fileProvenancePaths,
       isStreaming,
       isUserVariant,
       mentionReferences,

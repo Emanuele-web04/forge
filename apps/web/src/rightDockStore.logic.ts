@@ -3,12 +3,7 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
-import {
-  PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT,
-  type ProjectId,
-  type ThreadId,
-  type TurnId,
-} from "@synara/contracts";
+import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
@@ -41,7 +36,6 @@ export interface RightDockPane {
   diffFilePath: string | null;
   // file panes preview one workspace-relative file.
   filePath: string | null;
-  externalFileCandidates?: ReadonlyArray<string>;
   pullRequestProjectId: ProjectId | null;
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
@@ -99,11 +93,6 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
     diffTurnId: typeof candidate.diffTurnId === "string" ? (candidate.diffTurnId as TurnId) : null,
     diffFilePath: typeof candidate.diffFilePath === "string" ? candidate.diffFilePath : null,
     filePath: typeof candidate.filePath === "string" ? candidate.filePath : null,
-    externalFileCandidates: Array.isArray(candidate.externalFileCandidates)
-      ? candidate.externalFileCandidates
-          .filter((path): path is string => typeof path === "string" && path.length > 0)
-          .slice(0, PROJECT_EXTERNAL_FILE_CANDIDATE_MAX_COUNT)
-      : [],
     pullRequestProjectId:
       typeof candidate.pullRequestProjectId === "string"
         ? (candidate.pullRequestProjectId as ProjectId)
@@ -176,7 +165,6 @@ export interface OpenPaneInput {
   diffTurnId?: TurnId | null;
   diffFilePath?: string | null;
   filePath?: string | null;
-  externalFileCandidates?: ReadonlyArray<string>;
   pullRequestProjectId?: ProjectId | null;
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
@@ -191,7 +179,6 @@ function createPane(input: OpenPaneInput): RightDockPane {
     diffTurnId: input.diffTurnId ?? null,
     diffFilePath: input.diffFilePath ?? null,
     filePath: input.filePath ?? null,
-    externalFileCandidates: input.externalFileCandidates ?? [],
     pullRequestProjectId: input.pullRequestProjectId ?? null,
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
@@ -268,13 +255,7 @@ export function openPaneInState(
   } else {
     const existing = findMatchingMultiInstancePane(state, input);
     if (existing) {
-      const externalFileCandidates = input.externalFileCandidates;
-      const panes = externalFileCandidates
-        ? state.panes.map((pane) =>
-            pane.id === existing.id ? { ...pane, externalFileCandidates } : pane,
-          )
-        : state.panes;
-      return { open: true, panes, activePaneId: existing.id };
+      return { open: true, panes: state.panes, activePaneId: existing.id };
     }
   }
 
