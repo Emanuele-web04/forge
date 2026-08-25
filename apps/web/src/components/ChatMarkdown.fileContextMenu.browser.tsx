@@ -2,8 +2,10 @@
 // Purpose: Verifies assistant file links replace the browser menu with Synara's file actions.
 // Layer: Web chat browser tests
 
+import type { NativeApi } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "vitest-browser-react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => ({
   showFileReferenceContextMenu: vi.fn(),
@@ -20,9 +22,39 @@ vi.mock("../hooks/useTheme", () => ({
 import ChatMarkdown from "./ChatMarkdown";
 import { WorkspaceFileOpenerContext } from "../lib/workspaceFileOpener";
 
+function installNativeApi(api: NativeApi): () => void {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
+  Object.defineProperty(window, "nativeApi", {
+    configurable: true,
+    value: api,
+  });
+  return () => {
+    if (previousDescriptor) {
+      Object.defineProperty(window, "nativeApi", previousDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "nativeApi");
+    }
+  };
+}
+
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+}
+
+let restoreNativeApi: (() => void) | undefined;
+
 beforeEach(() => {
   harness.showFileReferenceContextMenu.mockReset();
   harness.showFileReferenceContextMenu.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  restoreNativeApi?.();
+  restoreNativeApi = undefined;
 });
 
 describe("ChatMarkdown file context menu", () => {
@@ -78,14 +110,31 @@ describe("ChatMarkdown file context menu", () => {
     );
   });
 
-  it("opens a relative inline-code file against the chat workspace", async () => {
+  it("opens a relative inline-code file that exists in the chat workspace", async () => {
     const openFile = vi.fn().mockReturnValue(true);
+    restoreNativeApi = installNativeApi({
+      projects: {
+        resolveOutOfRootFileReference: vi.fn().mockResolvedValue({
+          fullPath: null,
+          inRootExists: true,
+        }),
+      },
+    } as unknown as NativeApi);
     const screen = await render(
-      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
-        <ChatMarkdown text="See `src/index.ts`." cwd="/Users/tester/project" isStreaming={false} />
-      </WorkspaceFileOpenerContext.Provider>,
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+          <ChatMarkdown
+            text="See `src/index.ts`."
+            cwd="/Users/tester/project"
+            isStreaming={false}
+          />
+        </WorkspaceFileOpenerContext.Provider>
+      </QueryClientProvider>,
     );
 
+    await vi.waitFor(() => {
+      screen.getByRole("link", { name: "index.ts" }).element();
+    });
     screen
       .getByRole("link", { name: "index.ts" })
       .element()
@@ -93,6 +142,53 @@ describe("ChatMarkdown file context menu", () => {
 
     expect(openFile).toHaveBeenCalledOnce();
     expect(openFile).toHaveBeenCalledWith("/Users/tester/project/src/index.ts");
+  });
+
+  it("does not chip a relative file that cannot be found", async () => {
+    restoreNativeApi = installNativeApi({
+      projects: {
+        resolveOutOfRootFileReference: vi.fn().mockResolvedValue({
+          fullPath: null,
+          inRootExists: false,
+        }),
+      },
+    } as unknown as NativeApi);
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <ChatMarkdown
+          text="See `scripts/upsert_pr_proof.py`."
+          cwd="/Users/tester/Documents/Synara/thread"
+          isStreaming={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    await vi.waitFor(() => {
+      expect(document.querySelector("code")?.textContent).toBe("scripts/upsert_pr_proof.py");
+    });
+    expect(document.querySelector('a[href*="upsert_pr_proof.py"]')).toBeNull();
+  });
+
+  it("opens an absolute directory path from inline code", async () => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const absoluteDir = "/Users/tester/.agents/skills/annotate-pr";
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          text={`Dir: \`${absoluteDir}\``}
+          cwd="/Users/tester/chat-workspace"
+          isStreaming={false}
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+
+    screen
+      .getByRole("link", { name: "annotate-pr" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith(absoluteDir);
   });
 
   it("opens an authored absolute file URL", async () => {

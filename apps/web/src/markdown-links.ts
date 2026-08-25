@@ -145,6 +145,58 @@ function uniqueAbsolutePathEndingWith(
   return match;
 }
 
+function looksLikeAbsoluteFilePath(path: string): boolean {
+  const basename = pathBasename(path);
+  return basename.includes(".") && RELATIVE_FILE_NAME_PATTERN.test(basename);
+}
+
+function joinAbsoluteDirectory(directory: string, relative: string): string {
+  const dir = directory.replaceAll("\\", "/").replace(/\/+$/, "");
+  const suffix = relative.replaceAll("\\", "/").replace(/^\/+/, "");
+  return `${dir}/${suffix}`;
+}
+
+const BACKTICK_SPAN_PATTERN = /`([^`]+)`/g;
+const BARE_POSIX_ABSOLUTE_PATH_PATTERN =
+  /(?:^|[\s(])(\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root)\/[^\s`'")]*)/g;
+
+/**
+ * Absolute local files and directories already written in the markdown.
+ * Used to join later relative chips (`scripts/foo.py`) onto `Dir: /abs`.
+ */
+export function extractAbsoluteFilesystemPaths(text: string): string[] {
+  const found = new Set<string>();
+  const consider = (raw: string) => {
+    const trimmed = raw.trim().replace(/[,.;]+$/, "");
+    if (trimmed.length === 0) return;
+    const candidate = pathWithoutPositionSuffix(trimmed).replace(/\/+$/, "");
+    if (candidate.length === 0 || hasExternalScheme(candidate)) return;
+    if (!isLocalAbsolutePath(candidate) && !looksLikePosixFilesystemPath(candidate)) return;
+    found.add(candidate);
+  };
+
+  for (const match of text.matchAll(BACKTICK_SPAN_PATTERN)) {
+    consider(match[1] ?? "");
+  }
+  for (const match of text.matchAll(BARE_POSIX_ABSOLUTE_PATH_PATTERN)) {
+    consider(match[1] ?? "");
+  }
+  return [...found];
+}
+
+function uniqueJoinAgainstKnownDirectories(
+  suffix: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  const matches = new Set<string>();
+  for (const rawPath of knownAbsolutePaths) {
+    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
+    if (!isLocalAbsolutePath(candidate) || looksLikeAbsoluteFilePath(candidate)) continue;
+    matches.add(joinAbsoluteDirectory(candidate, suffix));
+  }
+  return matches.size === 1 ? ([...matches][0] ?? null) : null;
+}
+
 /**
  * If exactly one known absolute path already ends with this relative
  * reference, return that path. Zero or several matches return null so the
@@ -171,6 +223,7 @@ export function resolveUniqueAbsoluteSuffixTarget(
 
   const match =
     uniqueAbsolutePathEndingWith(suffix, knownAbsolutePaths) ??
+    uniqueJoinAgainstKnownDirectories(suffix, knownAbsolutePaths) ??
     (pathBasename(suffix) === suffix
       ? null
       : uniqueAbsolutePathEndingWith(pathBasename(suffix), knownAbsolutePaths));

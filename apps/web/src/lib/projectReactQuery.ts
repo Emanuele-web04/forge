@@ -225,7 +225,11 @@ export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
         relativePath: input.relativePath,
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      input.relativePath !== null &&
+      typeof window !== "undefined",
     staleTime: 30_000,
   });
 }

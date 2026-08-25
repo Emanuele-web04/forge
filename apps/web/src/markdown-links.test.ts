@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  extractAbsoluteFilesystemPaths,
   resolveMarkdownFileLinkTarget,
   resolveUniqueAbsoluteSuffixTarget,
   rewriteMarkdownFileUriHref,
@@ -97,9 +98,7 @@ describe("resolveUniqueAbsoluteSuffixTarget", () => {
   });
 
   it("does not treat workspace-relative tool paths as known destinations", () => {
-    expect(
-      resolveUniqueAbsoluteSuffixTarget("src/index.ts", ["apps/web/src/index.ts"]),
-    ).toBeNull();
+    expect(resolveUniqueAbsoluteSuffixTarget("src/index.ts", ["apps/web/src/index.ts"])).toBeNull();
   });
 
   it("strips a collapsed .../ prefix before matching the real tool path", () => {
@@ -116,5 +115,55 @@ describe("resolveUniqueAbsoluteSuffixTarget", () => {
         "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
       ]),
     ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
+  });
+
+  it("joins a relative file onto a unique directory declared in the same message", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("scripts/delete_uploadthing.py", [
+        "/Users/tester/.agents/skills/annotate-pr",
+      ]),
+    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
+  });
+
+  it("does not treat a unique known file's parent as a join directory", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("scripts/upsert_pr_proof.py", [
+        "/Users/tester/.agents/skills/annotate-pr/SKILL.md",
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null when two declared directories would join to different files", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("scripts/delete_uploadthing.py", [
+        "/Users/tester/.agents/skills/annotate-pr",
+        "/Users/tester/.config/opencode/skills/annotate-pr",
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("extractAbsoluteFilesystemPaths", () => {
+  it("collects backtick absolute files and directories", () => {
+    expect(
+      extractAbsoluteFilesystemPaths(
+        [
+          "**Dir:** `/Users/tester/.agents/skills/annotate-pr`",
+          "- `scripts/delete_uploadthing.py`",
+          "- `/Users/tester/.agents/skills/annotate-pr/SKILL.md:1`",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      "/Users/tester/.agents/skills/annotate-pr",
+      "/Users/tester/.agents/skills/annotate-pr/SKILL.md",
+    ]);
+  });
+
+  it("collects a bare POSIX home path in prose", () => {
+    expect(
+      extractAbsoluteFilesystemPaths(
+        "Created global copy at /Users/tester/.agents/skills/annotate-pr for every project.",
+      ),
+    ).toEqual(["/Users/tester/.agents/skills/annotate-pr"]);
   });
 });

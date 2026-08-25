@@ -224,6 +224,9 @@ export type ProjectResolveOutOfRootFileReferenceInput =
 
 export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
   fullPath: Schema.NullOr(TrimmedNonEmptyString),
+  // True when the workspace-relative join already exists as a regular file.
+  // Absent on older servers; treat missing as unknown.
+  inRootExists: Schema.optional(Schema.Boolean),
 });
 export type ProjectResolveOutOfRootFileReferenceResult =
   typeof ProjectResolveOutOfRootFileReferenceResult.Type;

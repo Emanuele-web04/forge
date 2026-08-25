@@ -40,7 +40,14 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import { resolveChatFileChipTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import { useQuery } from "@tanstack/react-query";
+import { projectResolveOutOfRootFileReferenceQueryOptions } from "../lib/projectReactQuery";
+import {
+  extractAbsoluteFilesystemPaths,
+  resolveChatFileChipTarget,
+  resolveMarkdownFileLinkTarget,
+  rewriteMarkdownFileUriHref,
+} from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -754,15 +761,52 @@ function inlineCodeFilePath(raw: string): string | null {
   // Strip a pair of surrounding quotes/backticks the author may have wrapped the
   // path in (e.g. `'src/data/social-metrics.ts'`).
   const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
-  if (
-    value.length === 0 ||
-    value.length > INLINE_CODE_FILE_PATH_MAX_LENGTH ||
-    /\s/.test(value) ||
-    value.includes("://")
-  ) {
+  if (value.length === 0 || /\s/.test(value) || value.includes("://")) {
     return null;
   }
-  return pathLooksLikeKnownFile(value) ? value : null;
+  const withoutPosition = value.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  // Absolute local files and directories (`/Users/…/annotate-pr`) are chips
+  // even without a known filename extension. Relative names still need a
+  // recognizable file so ordinary tokens stay code.
+  if (resolveMarkdownFileLinkTarget(withoutPosition)) {
+    return value;
+  }
+  if (withoutPosition.length > INLINE_CODE_FILE_PATH_MAX_LENGTH) {
+    return null;
+  }
+  return pathLooksLikeKnownFile(withoutPosition) ? value : null;
+}
+
+function VerifiedWorkspaceFileChip(props: {
+  rawReference: string;
+  cwd: string;
+  cwdTarget: string;
+  theme: "light" | "dark";
+  label?: ReactNode;
+  href?: string;
+}) {
+  const relativePath = props.rawReference.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  const query = useQuery(
+    projectResolveOutOfRootFileReferenceQueryOptions({
+      cwd: props.cwd,
+      relativePath,
+    }),
+  );
+  const fallback = <code>{props.label ?? relativePath}</code>;
+  if (query.isPending || query.isError || query.data === undefined) {
+    return fallback;
+  }
+  if (query.data.inRootExists !== true) {
+    return fallback;
+  }
+  return (
+    <OpenableFileChip
+      targetPath={props.cwdTarget}
+      theme={props.theme}
+      {...(props.label !== undefined ? { label: props.label } : {})}
+      {...(props.href ? { href: props.href } : {})}
+    />
+  );
 }
 
 // Shared openable file chip: the same mention-chip UI (file icon + medium label)
@@ -1091,6 +1135,16 @@ function ChatMarkdown({
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
+  const extractedAbsoluteFilePaths = useMemo(() => extractAbsoluteFilesystemPaths(text), [text]);
+  const knownAbsoluteFilePaths = useMemo(() => {
+    if (
+      (knownAbsoluteFilePathsProp === undefined || knownAbsoluteFilePathsProp.length === 0) &&
+      extractedAbsoluteFilePaths.length === 0
+    ) {
+      return undefined;
+    }
+    return [...new Set([...(knownAbsoluteFilePathsProp ?? []), ...extractedAbsoluteFilePaths])];
+  }, [extractedAbsoluteFilePaths, knownAbsoluteFilePathsProp]);
   // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
   // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
   // streaming or under reduced motion. Governs cadence only; the deferred value below still
@@ -1167,7 +1221,7 @@ function ChatMarkdown({
         }
         const targetPath = isExternalHttp
           ? null
-          : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePathsProp);
+          : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePaths);
         if (!targetPath) {
           return (
             <a
@@ -1188,9 +1242,6 @@ function ChatMarkdown({
           );
         }
 
-        // Local file links keep their openable behavior but adopt the shared
-        // mention-chip UI (file icon + medium label). The link text is preserved
-        // as the label.
         return (
           <OpenableFileChip
             targetPath={targetPath}
@@ -1227,14 +1278,30 @@ function ChatMarkdown({
       code({ node: _node, className, children, ...props }) {
         // Fenced blocks carry a `language-*` class and are rendered by `pre`;
         // only inline code (no class) that names a file becomes an openable
-        // mention chip. The target is resolved against cwd so it opens like a
-        // markdown file link; an unresolvable path still chips on its raw value.
+        // mention chip. Absolute local paths chip immediately. Relative names
+        // chip only when that file actually exists in the chat workspace.
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const targetPath =
-              resolveChatFileChipTarget(filePath, cwd, knownAbsoluteFilePathsProp) ?? filePath;
-            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            const knownTarget = resolveChatFileChipTarget(
+              filePath,
+              undefined,
+              knownAbsoluteFilePaths,
+            );
+            if (knownTarget) {
+              return <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} />;
+            }
+            const cwdTarget = resolveMarkdownFileLinkTarget(filePath, cwd);
+            if (cwdTarget && cwd) {
+              return (
+                <VerifiedWorkspaceFileChip
+                  rawReference={filePath}
+                  cwd={cwd}
+                  cwdTarget={cwdTarget}
+                  theme={resolvedTheme}
+                />
+              );
+            }
           }
         }
         return (
@@ -1314,7 +1381,7 @@ function ChatMarkdown({
     }),
     [
       cwd,
-      knownAbsoluteFilePathsProp,
+      knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
       isUserVariant,

@@ -1826,7 +1826,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
-          const knownAbsoluteFilePaths = collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
+          const knownAbsoluteFilePaths =
+            collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2961,9 +2962,7 @@ function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): strin
   return items.map((item) => `${item.kind}:${item.id}`).join("|");
 }
 
-function collectAbsoluteFilePathsFromWorkEntries(
-  entries: ReadonlyArray<WorkLogEntry>,
-): string[] {
+function collectAbsoluteFilePathsFromWorkEntries(entries: ReadonlyArray<WorkLogEntry>): string[] {
   const paths = new Set<string>();
   for (const entry of entries) {
     for (const path of entry.changedFiles ?? []) {
