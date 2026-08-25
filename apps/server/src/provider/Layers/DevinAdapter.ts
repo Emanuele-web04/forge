@@ -239,13 +239,29 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  // True once ctx.acp.prompt has returned for the current turn (success or
+  // failure). The prompt outcome is then settled; an interrupt that lands
+  // while the post-prompt drain is still running must not reclassify the turn
+  // as cancelled, so interruptTurn stops interrupting the fiber here and the
+  // onInterrupt branch refuses to emit a cancelled completion.
+  activePromptResolved: boolean;
+  // Id of the most recently settled (cleared) turn, captured at the settle
+  // boundary. Preserved until the next turn dispatches so
+  // pruneDevinToolCallTurnIds can keep the just-settled turn's tool-call
+  // mappings for in-place resolution of trailing ToolCallUpdated events even
+  // when the turn already cleared activeTurnId (the dispatch cannot read the
+  // settled turn from activeTurnId once it is undefined). Reset at dispatch
+  // after pruning so only one previous turn's mappings survive.
+  lastSettledTurnId: TurnId | undefined;
   lastPlanFingerprint: string | undefined;
   lastTurnActivityAt: number | undefined;
-  // Provider tool-call ids seen during the most recent turn, mapped to that
-  // turn. A backlogged consumer can process a queued ToolCallUpdated after the
-  // prompt response cleared activeTurnId; this keeps the event attributed to
-  // its originating turn instead of being dropped as an orphan. Cleared when
-  // the next turn dispatches.
+  // Provider tool-call ids seen during a turn, mapped to that turn. A
+  // backlogged consumer can process a queued ToolCallUpdated after the prompt
+  // response cleared activeTurnId or after the next turn dispatched; the
+  // mapping keeps the event attributed to its originating turn instead of
+  // being re-associated with — and allowed to set failure state on — a newer
+  // turn. Pruned to the just-settled turn on each dispatch (a straggler can
+  // lag by at most one turn on the FIFO session/update stream).
   readonly turnToolCallIds: Map<string, TurnId>;
   // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
   // session updates have been fully handled by the notification consumer.
@@ -365,15 +381,22 @@ export function resolveRequestedModeId(input: {
   return Effect.gen(function* () {
     const { modeState, runtimeMode, interactionMode } = input;
 
-    if (interactionMode === "plan" && !modeState) {
-      return yield* new ProviderAdapterValidationError({
-        provider: PROVIDER,
-        operation: "resolveRequestedModeId",
-        issue: "Plan mode requires the ACP session to expose modes, but none were reported.",
-      });
-    }
-
     if (!modeState) {
+      const requiredBy =
+        interactionMode === "plan"
+          ? "plan interaction mode"
+          : runtimeMode === "approval-required"
+            ? `runtime mode "${runtimeMode}"`
+            : undefined;
+
+      if (requiredBy) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "resolveRequestedModeId",
+          issue: `Requested ${requiredBy} requires the ACP session to expose modes, but none were reported.`,
+        });
+      }
+
       return undefined;
     }
 
@@ -936,6 +959,75 @@ function buildDevinPromptParts(input: {
   });
 }
 
+// Devin's ACP process accepts a concrete model UID as its `--model` value, not
+// a separate effort/context flag. The web client resolves runtime selections to
+// a variant before dispatch, so only the variant, the selection slug, and the
+// explicit config are ever candidates; a reasoning-effort label must never be
+// substituted as the model identifier.
+export function resolveDevinEffectiveModel(input: {
+  readonly explicitModel: string | undefined;
+  readonly selectionModel: string | undefined;
+  readonly modelVariant: string | undefined;
+}): string | undefined {
+  if (input.modelVariant) {
+    return input.modelVariant;
+  }
+  if (input.selectionModel) {
+    return input.selectionModel;
+  }
+  return input.explicitModel;
+}
+
+// Which turn a ToolCallUpdated belongs to. A tool call already mapped to a
+// previous turn keeps that provenance even while a newer turn is active, so a
+// trailing update resolves the older turn's row in place instead of being
+// re-associated with the current turn. The caller applies current-turn failure
+// state only when the resolved turn is the active turn, so a reroute can never
+// set the active turn's failed-tool detail. Resume replay stays suppressed.
+export function resolveDevinToolCallUpdatedTurnId(input: {
+  readonly toolCallId: string;
+  readonly activeTurnId: TurnId | undefined;
+  readonly resumeReplayReady: boolean;
+  readonly toolCallTurnIds: ReadonlyMap<string, TurnId>;
+}): TurnId | undefined {
+  if (input.resumeReplayReady) {
+    return undefined;
+  }
+  const recordedTurnId = input.toolCallTurnIds.get(input.toolCallId);
+  if (recordedTurnId !== undefined && recordedTurnId !== input.activeTurnId) {
+    return recordedTurnId;
+  }
+  return input.activeTurnId;
+}
+
+// Prunes tool-call provenance to a single keep turn: a trailing ToolCallUpdated
+// can lag by at most one turn (the session/update stream is FIFO), so the
+// just-settled turn's mappings survive into the next active turn for in-place
+// resolution; anything older is dropped (bounded to one turn of tool-call ids).
+export function pruneDevinToolCallTurnIds(
+  toolCallTurnIds: Map<string, TurnId>,
+  keepTurnId: TurnId | undefined,
+): void {
+  for (const [toolCallId, mappedTurnId] of toolCallTurnIds) {
+    if (mappedTurnId !== keepTurnId) {
+      toolCallTurnIds.delete(toolCallId);
+    }
+  }
+}
+
+// Settles the active turn and records it as the last settled turn. Returns
+// whether the turn was actually cleared (false when it already settled,
+// keeping the call sites idempotent). lastSettledTurnId is what the next
+// dispatch prunes tool-call provenance against: clearAcpActiveTurn wipes
+// activeTurnId, so the dispatch cannot recover the settled turn from it.
+function settleDevinActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolean {
+  if (!clearAcpActiveTurn(ctx, turnId)) {
+    return false;
+  }
+  ctx.lastSettledTurnId = turnId;
+  return true;
+}
+
 export function makeDevinAdapter(
   devinSettings: DevinAcpRuntimeSettings = {},
   options?: DevinAdapterLiveOptions,
@@ -1318,25 +1410,18 @@ export function makeDevinAdapter(
             shouldMirrorIncomingRaw: (payload) => payload.includes("devinShell"),
           });
           const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
+          const effectiveModel = resolveDevinEffectiveModel({
+            explicitModel: devinSettings.model,
+            selectionModel: devinModelSelection?.model,
+            modelVariant: devinModelSelection?.options?.modelVariant,
+          });
           const effectiveDevinSettings: DevinAcpRuntimeSettings = {
             ...(devinSettings.binaryPath !== undefined
               ? { binaryPath: devinSettings.binaryPath }
               : {}),
-            ...(devinSettings.model !== undefined ? { model: devinSettings.model } : {}),
+            ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
             ...(providerDevinOptions?.binaryPath !== undefined
               ? { binaryPath: providerDevinOptions.binaryPath }
-              : {}),
-            ...(devinModelSelection?.model ? { model: devinModelSelection.model } : {}),
-            // Devin's ACP process accepts a concrete model UID, not a separate
-            // effort/context flag. The web client resolves runtime selections
-            // to this variant before dispatch; keep the abstract effort as a
-            // compatibility fallback for older clients.
-            ...(devinModelSelection?.options?.modelVariant
-              ? { model: devinModelSelection.options.modelVariant }
-              : {}),
-            ...(!devinModelSelection?.options?.modelVariant &&
-            devinModelSelection?.options?.reasoningEffort
-              ? { model: devinModelSelection.options.reasoningEffort }
               : {}),
           };
 
@@ -1554,6 +1639,8 @@ export function makeDevinAdapter(
             activeAssistantItemsWithContent: new Set(),
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            activePromptResolved: false,
+            lastSettledTurnId: undefined,
             lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
@@ -1649,16 +1736,19 @@ export function makeDevinAdapter(
                         }
                         return;
                       }
-                      // A queued update for a tool call the just-settled turn
-                      // already rendered belongs to that turn; emit it with the
-                      // originating turn id so the existing tool row resolves in
-                      // place instead of being dropped as an orphan. Resume
-                      // replay stays suppressed like every other event.
-                      const lateTurnId =
-                        ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
-                          ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
-                          : undefined;
-                      if (lateTurnId !== undefined) {
+                      // A tool call already mapped to an older turn keeps that
+                      // provenance even while a newer turn is active: emit under
+                      // the recorded turn so its row resolves in place, and never
+                      // let a trailing update mutate the current turn's failure
+                      // state. Resume replay stays suppressed like every other
+                      // event.
+                      const recordedTurnId = resolveDevinToolCallUpdatedTurnId({
+                        toolCallId: event.toolCall.toolCallId,
+                        activeTurnId: ctx.activeTurnId,
+                        resumeReplayReady: ctx.resumeReplayReady !== undefined,
+                        toolCallTurnIds: ctx.turnToolCallIds,
+                      });
+                      if (recordedTurnId !== undefined && recordedTurnId !== ctx.activeTurnId) {
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                         yield* offerRuntimeEvent(
                           input.lifecycleGeneration,
@@ -1666,8 +1756,11 @@ export function makeDevinAdapter(
                             stamp: yield* makeEventStamp(),
                             provider: PROVIDER,
                             threadId: ctx.threadId,
-                            turnId: lateTurnId,
-                            toolCall: scopeDevinToolCallStateForTurn(lateTurnId, event.toolCall),
+                            turnId: recordedTurnId,
+                            toolCall: scopeDevinToolCallStateForTurn(
+                              recordedTurnId,
+                              event.toolCall,
+                            ),
                             rawPayload: event.rawPayload,
                           }),
                         );
@@ -1833,8 +1926,8 @@ export function makeDevinAdapter(
 
     // Idle-progress watchdog escape hatch: force-fail a turn whose devin child
     // is alive but has gone completely silent. Mirrors the prompt-fiber
-    // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
-    // no-op if the turn settled normally first (whichever fires first wins).
+    // onFailure branch and stays idempotent via settleDevinActiveTurn, so it is
+    // a no-op if the turn settled normally first (whichever fires first wins).
     const failDevinTurnAsTimedOut = (ctx: DevinSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -1842,7 +1935,7 @@ export function makeDevinAdapter(
           return;
         }
         yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-        if (!clearAcpActiveTurn(ctx, turnId)) {
+        if (!settleDevinActiveTurn(ctx, turnId)) {
           return;
         }
         const completedCost = finalizeAcpActiveTurnCost(ctx);
@@ -1998,13 +2091,22 @@ export function makeDevinAdapter(
         // mode configuration, attachment reads) are honored by the prompt fiber's
         // dispatch guard below, so the turn completes through the normal
         // cancelled path instead of surfacing as a provider turn-start failure.
+        // A trailing ToolCallUpdated can lag by at most one turn (the
+        // session/update stream is FIFO), so keep the last settled turn's
+        // tool-call mapping for in-place resolution of its stragglers; anything
+        // older is dropped (bounded to one turn of tool-call ids). The settled
+        // turn is read from lastSettledTurnId (captured at the settle boundary),
+        // not activeTurnId, which clearAcpActiveTurn already wiped.
+        const keptTurnId = ctx.lastSettledTurnId;
+        ctx.lastSettledTurnId = undefined;
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
-        // Late-event attribution only matters between turns; once a new turn
-        // dispatches, stragglers from older turns are stale enough to drop.
-        ctx.turnToolCallIds.clear();
+        // A new turn starts with an unresolved prompt; a late interrupt must be
+        // free to cancel it until ctx.acp.prompt actually returns.
+        ctx.activePromptResolved = false;
+        pruneDevinToolCallTurnIds(ctx.turnToolCallIds, keptTurnId);
         ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
@@ -2048,10 +2150,11 @@ export function makeDevinAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
-                yield* waitForDevinQueuedTurnEventsDrained(ctx);
                 if (ctx.activeTurnId !== turnId) return;
+                ctx.activePromptResolved = true;
+                yield* waitForDevinQueuedTurnEventsDrained(ctx);
                 yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                if (!clearAcpActiveTurn(ctx, turnId)) return;
+                if (!settleDevinActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
                 const detail = error.message;
@@ -2082,14 +2185,15 @@ export function makeDevinAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                if (ctx.activeTurnId !== turnId) return;
+                ctx.activePromptResolved = true;
                 // Drain BEFORE snapshotting turn state: queued events may still
                 // set activeTurnFailedToolDetail or assistant-content flags.
                 yield* waitForDevinQueuedTurnEventsDrained(ctx);
-                if (ctx.activeTurnId !== turnId) return;
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                if (!clearAcpActiveTurn(ctx, turnId)) return;
+                if (!settleDevinActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
                 const { lastError: _lastError2, ...sessionWithoutLastError2 } = ctx.session;
@@ -2131,7 +2235,11 @@ export function makeDevinAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              if (!clearAcpActiveTurn(ctx, turnId)) return;
+              // User interruption leaves a resolved prompt fiber alive. If
+              // teardown interrupts it while the turn remains active, settle
+              // it here before session.exited. settleDevinActiveTurn makes
+              // watchdog and prior-settlement races no-ops.
+              if (!settleDevinActiveTurn(ctx, turnId)) return;
               const completedCost = finalizeAcpActiveTurnCost(ctx);
               ctx.turns.push({
                 id: turnId,
@@ -2219,7 +2327,9 @@ export function makeDevinAdapter(
                 ),
               ),
             );
-            if (activePromptFiber) {
+            // A resolved prompt is already draining or settling its result.
+            // Leave that fiber alive so onInterrupt cannot reclassify it.
+            if (activePromptFiber !== undefined && !ctx.activePromptResolved) {
               yield* Fiber.interrupt(activePromptFiber);
             }
           }),

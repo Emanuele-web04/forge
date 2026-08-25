@@ -108,6 +108,7 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
     expect(normalizeModelSlug("4.5", "grok")).toBe("grok-4.5");
     expect(normalizeModelSlug("grok-4.6", "grok")).toBe("grok-4.6");
+    expect(normalizeModelSlug("Vendor/ModelCase-MEDIUM", "devin")).toBe("Vendor/ModelCase");
   });
 });
 

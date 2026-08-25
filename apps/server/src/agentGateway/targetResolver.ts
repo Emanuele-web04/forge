@@ -379,7 +379,12 @@ function modelTargetOptionRules(
   };
 
   const discoveredEfforts = model.supportedReasoningEfforts?.map((entry) => entry.value) ?? [];
-  replaceAllowedValues(providerPrimaryOptionKey(provider), discoveredEfforts);
+  const primaryOptionKey = providerPrimaryOptionKey(provider);
+  // A custom-value primary option (e.g. Devin modelVariant) accepts arbitrary
+  // values, so the discovered reasoning-effort list must not constrain it.
+  if (rules.find((rule) => rule.key === primaryOptionKey)?.allowsCustomValue !== true) {
+    replaceAllowedValues(primaryOptionKey, discoveredEfforts);
+  }
 
   for (const descriptor of model.optionDescriptors ?? []) {
     const rule = rules.find((candidate) => candidate.key === descriptor.id);

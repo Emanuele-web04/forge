@@ -119,7 +119,9 @@ export function resolveDevinModelVariant(input: {
     !contextWindow && defaultContextWindow
       ? preferred.filter((variant) => variant.contextWindow === defaultContextWindow)
       : preferred;
-  return (withDefaultContext[0] ?? preferred[0] ?? variants[0])?.model;
+  // No match? Return undefined instead of picking a random variant.
+  // The server then chooses the family default.
+  return (withDefaultContext[0] ?? preferred[0])?.model;
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.

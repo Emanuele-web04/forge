@@ -5,6 +5,7 @@
 
 import { Effect } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
+import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
@@ -14,8 +15,13 @@ import {
   buildDevinStaticModelDescriptors,
   mergeDevinModelDescriptors,
   parseDevinCliModelList,
+  pruneDevinToolCallTurnIds,
+  resolveDevinEffectiveModel,
+  resolveDevinToolCallUpdatedTurnId,
   resolveRequestedModeId,
 } from "./DevinAdapter.ts";
+
+const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
 function makeFakeAcpRuntime(initialModeState?: {
   currentModeId: string;
@@ -101,6 +107,21 @@ describe("applyDevinSessionConfiguration", () => {
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
+
+  it("fails closed for approval-required when mode discovery is unavailable", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime();
+
+    await expect(
+      Effect.runPromise(
+        applyDevinSessionConfiguration({
+          runtime,
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("resolveRequestedModeId", () => {
@@ -149,6 +170,64 @@ describe("resolveRequestedModeId", () => {
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
+
+  it("rejects approval-required when mode state is unavailable", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: undefined,
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+  });
+});
+
+describe("resolveDevinEffectiveModel", () => {
+  it("prefers the concrete variant over the selection slug and explicit config", () => {
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: "default-model",
+        selectionModel: "gpt-5.6-sol",
+        modelVariant: "gpt-5-6-sol-high",
+      }),
+    ).toBe("gpt-5-6-sol-high");
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: "default-model",
+        selectionModel: "gpt-5.6-sol",
+        modelVariant: undefined,
+      }),
+    ).toBe("gpt-5.6-sol");
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: "default-model",
+        selectionModel: undefined,
+        modelVariant: undefined,
+      }),
+    ).toBe("default-model");
+  });
+
+  it("never substitutes a reasoning-effort label as the model", () => {
+    // Regression: a runtime selection with only a reasoning effort (no
+    // resolved variant) must keep the selection slug, never the effort label,
+    // as the Devin `--model` value.
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: undefined,
+        selectionModel: "gpt-5.6-sol",
+        modelVariant: undefined,
+      }),
+    ).toBe("gpt-5.6-sol");
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: undefined,
+        selectionModel: undefined,
+        modelVariant: undefined,
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("buildDevinPromptMeta", () => {
@@ -166,6 +245,11 @@ describe("buildDevinStaticModelDescriptors", () => {
     const descriptors = buildDevinStaticModelDescriptors();
     expect(descriptors.some((d) => d.slug === "swe-1-7")).toBe(true);
     expect(descriptors.some((d) => d.slug === "adaptive")).toBe(true);
+  });
+
+  it("does not advertise a fast toggle it cannot resolve to a variant", () => {
+    const descriptors = buildDevinStaticModelDescriptors();
+    expect(descriptors.every((d) => d.supportsFastMode !== true)).toBe(true);
   });
 });
 
@@ -284,5 +368,89 @@ describe("Devin CLI model discovery", () => {
 
   it("returns no descriptors for non-JSON CLI output", () => {
     expect(parseDevinCliModelList("devin: not logged in")).toEqual([]);
+  });
+});
+
+describe("resolveDevinToolCallUpdatedTurnId", () => {
+  it("keeps a trailing update on its recorded older turn while a newer turn is active", () => {
+    // Regression: a late ToolCallUpdated for turn A arriving while turn B is
+    // active must resolve under turn A (so A's tool row updates in place) and
+    // must never be re-associated with turn B — the handler only applies
+    // current-turn failed-tool detail when the resolved turn is the active
+    // turn, so a non-active resolution cannot set turn B's failure state.
+    const toolCallTurnIds = new Map<string, TurnId>([["tc-1", asTurnId("turn-A")]]);
+
+    expect(
+      resolveDevinToolCallUpdatedTurnId({
+        toolCallId: "tc-1",
+        activeTurnId: asTurnId("turn-B"),
+        resumeReplayReady: false,
+        toolCallTurnIds,
+      }),
+    ).toBe(asTurnId("turn-A"));
+  });
+
+  it("routes same-turn updates to the active turn and suppresses during replay", () => {
+    const toolCallTurnIds = new Map<string, TurnId>([["tc-1", asTurnId("turn-A")]]);
+
+    // A not-yet-recorded id belongs to the active turn.
+    expect(
+      resolveDevinToolCallUpdatedTurnId({
+        toolCallId: "tc-2",
+        activeTurnId: asTurnId("turn-B"),
+        resumeReplayReady: false,
+        toolCallTurnIds,
+      }),
+    ).toBe(asTurnId("turn-B"));
+
+    // A recorded id with no active turn (between turns) stays on its turn.
+    expect(
+      resolveDevinToolCallUpdatedTurnId({
+        toolCallId: "tc-1",
+        activeTurnId: undefined,
+        resumeReplayReady: false,
+        toolCallTurnIds,
+      }),
+    ).toBe(asTurnId("turn-A"));
+
+    // Resume replay stays suppressed like every other session/update event.
+    expect(
+      resolveDevinToolCallUpdatedTurnId({
+        toolCallId: "tc-1",
+        activeTurnId: asTurnId("turn-B"),
+        resumeReplayReady: true,
+        toolCallTurnIds,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("pruneDevinToolCallTurnIds", () => {
+  it("keeps only the kept turn's tool-call mappings", () => {
+    const toolCallTurnIds = new Map<string, TurnId>([
+      ["tc-a", asTurnId("turn-A")],
+      ["tc-b", asTurnId("turn-B")],
+      ["tc-c", asTurnId("turn-C")],
+    ]);
+
+    pruneDevinToolCallTurnIds(toolCallTurnIds, asTurnId("turn-B"));
+
+    expect(toolCallTurnIds).toEqual(new Map([["tc-b", asTurnId("turn-B")]]));
+  });
+
+  it("drops every mapping when there is no kept turn", () => {
+    const toolCallTurnIds = new Map<string, TurnId>([["tc-a", asTurnId("turn-A")]]);
+
+    pruneDevinToolCallTurnIds(toolCallTurnIds, undefined);
+
+    expect(toolCallTurnIds.size).toBe(0);
+  });
+
+  it("leaves an empty map unchanged", () => {
+    const toolCallTurnIds = new Map<string, TurnId>();
+
+    pruneDevinToolCallTurnIds(toolCallTurnIds, asTurnId("turn-A"));
+
+    expect(toolCallTurnIds.size).toBe(0);
   });
 });
