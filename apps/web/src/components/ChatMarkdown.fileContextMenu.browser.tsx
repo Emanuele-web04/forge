@@ -26,6 +26,32 @@ beforeEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
+  it("opens a collapsed relative chip from the file the agent actually edited", async () => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          text="See `.../scripts/delete_uploadthing.py`."
+          cwd="/Users/tester/synara-issue-793"
+          isStreaming={false}
+          knownAbsoluteFilePaths={[
+            "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
+          ]}
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+
+    screen
+      .getByRole("link", { name: "delete_uploadthing.py" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
+    );
+  });
+
   it("opens a relative chip from a unique same-turn absolute tool path", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(

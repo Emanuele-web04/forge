@@ -40,11 +40,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import {
-  resolveMarkdownFileLinkTarget,
-  resolveUniqueAbsoluteSuffixTarget,
-  rewriteMarkdownFileUriHref,
-} from "../markdown-links";
+import { resolveChatFileChipTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -1169,7 +1165,9 @@ function ChatMarkdown({
             return <InlineLinkChip url={restoredHref} interactive />;
           }
         }
-        const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
+        const targetPath = isExternalHttp
+          ? null
+          : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePathsProp);
         if (!targetPath) {
           return (
             <a
@@ -1234,12 +1232,8 @@ function ChatMarkdown({
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const knownTarget =
-              knownAbsoluteFilePathsProp && knownAbsoluteFilePathsProp.length > 0
-                ? resolveUniqueAbsoluteSuffixTarget(filePath, knownAbsoluteFilePathsProp)
-                : null;
             const targetPath =
-              knownTarget ?? resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+              resolveChatFileChipTarget(filePath, cwd, knownAbsoluteFilePathsProp) ?? filePath;
             return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
           }
         }

@@ -115,6 +115,36 @@ function pathWithoutPositionSuffix(value: string): string {
   return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
 }
 
+const LEADING_COLLAPSED_SEGMENT_PATTERN = /^(?:\.{3}|…)\/+/;
+
+function stripCollapsedRelativePrefix(path: string): string {
+  let next = path;
+  while (LEADING_COLLAPSED_SEGMENT_PATTERN.test(next)) {
+    next = next.replace(LEADING_COLLAPSED_SEGMENT_PATTERN, "");
+  }
+  return next;
+}
+
+function pathBasename(path: string): string {
+  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
+}
+
+function uniqueAbsolutePathEndingWith(
+  suffix: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  let match: string | null = null;
+  for (const rawPath of knownAbsolutePaths) {
+    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
+    if (!isLocalAbsolutePath(candidate)) continue;
+    if (candidate !== suffix && !candidate.endsWith(`/${suffix}`)) continue;
+    if (match !== null && match !== candidate) return null;
+    match = candidate;
+  }
+  return match;
+}
+
 /**
  * If exactly one known absolute path already ends with this relative
  * reference, return that path. Zero or several matches return null so the
@@ -127,7 +157,9 @@ export function resolveUniqueAbsoluteSuffixTarget(
   const trimmed = reference.trim();
   if (trimmed.length === 0) return null;
 
-  const suffix = pathWithoutPositionSuffix(trimmed).replaceAll("\\", "/");
+  const suffix = stripCollapsedRelativePrefix(
+    pathWithoutPositionSuffix(trimmed).replaceAll("\\", "/"),
+  );
   if (
     suffix.length === 0 ||
     suffix.includes("\0") ||
@@ -137,18 +169,28 @@ export function resolveUniqueAbsoluteSuffixTarget(
     return null;
   }
 
-  let match: string | null = null;
-  for (const rawPath of knownAbsolutePaths) {
-    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
-    if (!isLocalAbsolutePath(candidate)) continue;
-    if (candidate !== suffix && !candidate.endsWith(`/${suffix}`)) continue;
-    if (match !== null && match !== candidate) return null;
-    match = candidate;
-  }
+  const match =
+    uniqueAbsolutePathEndingWith(suffix, knownAbsolutePaths) ??
+    (pathBasename(suffix) === suffix
+      ? null
+      : uniqueAbsolutePathEndingWith(pathBasename(suffix), knownAbsolutePaths));
   if (match === null) return null;
 
   const position = POSITION_SUFFIX_PATTERN.exec(trimmed)?.[0] ?? "";
   return `${match}${position}`;
+}
+
+export function resolveChatFileChipTarget(
+  reference: string | undefined,
+  cwd: string | undefined,
+  knownAbsolutePaths?: ReadonlyArray<string>,
+): string | null {
+  if (!reference) return null;
+  const knownTarget =
+    knownAbsolutePaths && knownAbsolutePaths.length > 0
+      ? resolveUniqueAbsoluteSuffixTarget(reference, knownAbsolutePaths)
+      : null;
+  return knownTarget ?? resolveMarkdownFileLinkTarget(reference, cwd);
 }
 
 export function resolveMarkdownFileLinkTarget(

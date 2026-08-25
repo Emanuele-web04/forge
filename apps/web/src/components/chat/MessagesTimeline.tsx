@@ -1826,13 +1826,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
-          const knownAbsoluteFilePaths = [
-            ...new Set(
-              allTurnWorkEntries.flatMap((entry) =>
-                (entry.changedFiles ?? []).filter((path) => isLocalAbsolutePath(path)),
-              ),
-            ),
-          ];
+          const knownAbsoluteFilePaths = collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2965,6 +2959,22 @@ function applySettledTurnCollapseTransitions(params: {
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
   return items.map((item) => `${item.kind}:${item.id}`).join("|");
+}
+
+function collectAbsoluteFilePathsFromWorkEntries(
+  entries: ReadonlyArray<WorkLogEntry>,
+): string[] {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    for (const path of entry.changedFiles ?? []) {
+      if (isLocalAbsolutePath(path)) paths.add(path);
+    }
+    const detail = entry.detail?.trim();
+    if (detail && isLocalAbsolutePath(detail)) paths.add(detail);
+    const command = entry.command?.trim();
+    if (command && isLocalAbsolutePath(command)) paths.add(command);
+  }
+  return [...paths];
 }
 
 // Keep the live clock scoped to tiny leaf components so active Claude turns do

@@ -101,4 +101,20 @@ describe("resolveUniqueAbsoluteSuffixTarget", () => {
       resolveUniqueAbsoluteSuffixTarget("src/index.ts", ["apps/web/src/index.ts"]),
     ).toBeNull();
   });
+
+  it("strips a collapsed .../ prefix before matching the real tool path", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget(".../scripts/delete_uploadthing.py", [
+        "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
+      ]),
+    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
+  });
+
+  it("uses a unique basename when the relative path is truncated", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("delete_uploadthing.py", [
+        "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
+      ]),
+    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
+  });
 });
