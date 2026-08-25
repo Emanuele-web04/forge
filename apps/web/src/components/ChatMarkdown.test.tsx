@@ -272,16 +272,12 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
-  it("does not turn relative inline-code file names into openable chips", async () => {
-    const markup = await renderMarkdown(
-      "See `references/uploadthing.md` and `src/index.ts`.",
-      "/Users/tester/chat-workspace",
-    );
+  it("chips relative inline-code file names against the chat workspace", async () => {
+    const markup = await renderMarkdown("See `src/index.ts`.", "/Users/tester/project");
 
-    expect(markup).toContain("<code>references/uploadthing.md</code>");
-    expect(markup).toContain("<code>src/index.ts</code>");
-    expect(markup).not.toContain('href="/Users/tester/chat-workspace/references/uploadthing.md"');
-    expect(markup).not.toContain('href="/Users/tester/chat-workspace/src/index.ts"');
+    expect(markup).toContain('title="/Users/tester/project/src/index.ts"');
+    expect(markup).toContain('href="/Users/tester/project/src/index.ts"');
+    expect(markup).not.toContain("<code>src/index.ts</code>");
   });
 
   it("chips absolute inline-code paths and authored file URLs", async () => {

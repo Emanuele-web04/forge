@@ -26,21 +26,21 @@ beforeEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
-  it("keeps relative inline-code file names as plain code", async () => {
+  it("opens a relative inline-code file against the chat workspace", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
-        <ChatMarkdown
-          text={["Dir: `/Users/tester/external-tool`", "- `docs/example.md`"].join("\n")}
-          cwd="/Users/tester/chat-workspace"
-          isStreaming={false}
-        />
+        <ChatMarkdown text="See `src/index.ts`." cwd="/Users/tester/project" isStreaming={false} />
       </WorkspaceFileOpenerContext.Provider>,
     );
 
-    await expect.element(screen.getByText("docs/example.md")).toBeInTheDocument();
-    expect(screen.container.querySelectorAll("a")).toHaveLength(0);
-    expect(openFile).not.toHaveBeenCalled();
+    screen
+      .getByRole("link", { name: "index.ts" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openFile).toHaveBeenCalledWith("/Users/tester/project/src/index.ts");
   });
 
   it("opens an authored absolute file URL", async () => {

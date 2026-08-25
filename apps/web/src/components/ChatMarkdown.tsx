@@ -741,8 +741,10 @@ function extractCodeBlock(
 
 const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
 
-// Decides whether an inline code span names a file/path that can become a
-// mention chip. Relative names stay code; only absolute local paths chip.
+// Decides whether an inline code span names a file/path that should render as a
+// mention chip (icon + medium label), matching how a file reads in the composer.
+// Conservative on purpose: requires a recognized filename/extension and rejects
+// whitespace and URLs so ordinary prose tokens stay plain inline code.
 function inlineCodeFilePath(raw: string): string | null {
   // Strip a pair of surrounding quotes/backticks the author may have wrapped the
   // path in (e.g. `'src/data/social-metrics.ts'`).
@@ -1215,18 +1217,15 @@ function ChatMarkdown({
         );
       },
       code({ node: _node, className, children, ...props }) {
-        // Fenced blocks carry a `language-*` class and are rendered by `pre`.
-        // Inline code becomes an openable chip only when the span already names
-        // an absolute local file. Relative backticks stay code: joining them to
-        // cwd invents a workspace URL for files that live elsewhere.
+        // Fenced blocks carry a `language-*` class and are rendered by `pre`;
+        // only inline code (no class) that names a file becomes an openable
+        // mention chip. The target is resolved against cwd so it opens like a
+        // markdown file link; an unresolvable path still chips on its raw value.
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const pathWithoutPosition = filePath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
-            if (isLocalAbsolutePath(pathWithoutPosition)) {
-              const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
-              return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
-            }
+            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
           }
         }
         return (
