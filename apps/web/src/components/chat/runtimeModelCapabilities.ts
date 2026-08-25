@@ -88,7 +88,7 @@ export function resolveDevinModelVariant(input: {
   contextWindow?: string | null | undefined;
 }): string | undefined {
   const variants = input.runtimeModel?.modelVariants;
-  if (!variants || variants.length === 0) {
+  if (!variants?.length) {
     return undefined;
   }
 
@@ -119,8 +119,7 @@ export function resolveDevinModelVariant(input: {
     !contextWindow && defaultContextWindow
       ? preferred.filter((variant) => variant.contextWindow === defaultContextWindow)
       : preferred;
-  // No match? Return undefined instead of picking a random variant.
-  // The server then chooses the family default.
+  // No match: return undefined so the server picks the family default.
   return (withDefaultContext[0] ?? preferred[0])?.model;
 }
 

@@ -124,6 +124,10 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
   return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
@@ -290,12 +294,7 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
 
-  const claudeThinking =
-    claudeCandidate?.thinking === true
-      ? true
-      : claudeCandidate?.thinking === false
-        ? false
-        : undefined;
+  const claudeThinking = booleanOrUndefined(claudeCandidate?.thinking);
   const claudeEffort: ClaudeCodeEffort | undefined =
     claudeCandidate?.effort === "low" ||
     claudeCandidate?.effort === "medium" ||
@@ -306,12 +305,7 @@ export function normalizeProviderModelOptions(
     claudeCandidate?.effort === "ultracode"
       ? claudeCandidate.effort
       : undefined;
-  const claudeFastMode =
-    claudeCandidate?.fastMode === true
-      ? true
-      : claudeCandidate?.fastMode === false
-        ? false
-        : undefined;
+  const claudeFastMode = booleanOrUndefined(claudeCandidate?.fastMode);
   const claudeAutoCompactWindow =
     trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
     trimStringOrUndefined(claudeCandidate?.contextWindow);
@@ -331,18 +325,8 @@ export function normalizeProviderModelOptions(
       : undefined;
 
   const cursorReasoningEffort = trimStringOrUndefined(cursorCandidate?.reasoningEffort);
-  const cursorFastMode =
-    cursorCandidate?.fastMode === true
-      ? true
-      : cursorCandidate?.fastMode === false
-        ? false
-        : undefined;
-  const cursorThinking =
-    cursorCandidate?.thinking === true
-      ? true
-      : cursorCandidate?.thinking === false
-        ? false
-        : undefined;
+  const cursorFastMode = booleanOrUndefined(cursorCandidate?.fastMode);
+  const cursorThinking = booleanOrUndefined(cursorCandidate?.thinking);
   const cursorContextWindow = trimStringOrUndefined(cursorCandidate?.contextWindow);
   const cursor: CursorModelOptions | undefined =
     cursorReasoningEffort !== undefined ||
@@ -405,19 +389,9 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  const devinFastMode =
-    devinCandidate?.fastMode === true
-      ? true
-      : devinCandidate?.fastMode === false
-        ? false
-        : undefined;
+  const devinFastMode = booleanOrUndefined(devinCandidate?.fastMode);
   const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
-  const devinThinking =
-    devinCandidate?.thinking === true
-      ? true
-      : devinCandidate?.thinking === false
-        ? false
-        : undefined;
+  const devinThinking = booleanOrUndefined(devinCandidate?.thinking);
   const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
   const devinModelVariant = trimStringOrUndefined(devinCandidate?.modelVariant);
   const devin: DevinModelOptions | undefined =

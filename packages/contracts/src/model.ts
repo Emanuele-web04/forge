@@ -547,6 +547,16 @@ type ModelDefinition = {
   readonly capabilities: ModelCapabilities;
 };
 
+// Static catalog entries that rely on live CLI discovery advertise no
+// capabilities of their own.
+const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
 /**
  * TODO: This should not be a static array, each provider
  * should return its own model list over the WS API.
@@ -852,26 +862,14 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "openai/gpt-5",
       name: "OpenAI GPT-5",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",
       name: "Kilo Auto Free",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
@@ -1081,13 +1079,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "adaptive",
       name: "Adaptive",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
     // Static fallback entries carry no runtime modelVariants, so fast mode
     // cannot be resolved to a concrete Devin model UID at process start
@@ -1097,24 +1089,12 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "swe-1-6",
       name: "SWE 1.6",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
     {
       slug: "swe-1-7",
       name: "SWE 1.7",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;

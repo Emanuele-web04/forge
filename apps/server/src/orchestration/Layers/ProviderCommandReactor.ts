@@ -1215,12 +1215,11 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
-    const threadProvider: ProviderKind =
+    const preferredProvider: ProviderKind =
       establishedProvider ??
       requestedModelSelection?.provider ??
       currentProvider ??
       thread.modelSelection.provider;
-    const preferredProvider: ProviderKind = threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settingsSnapshot = yield* serverSettings.getSnapshot;
     if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
@@ -1240,7 +1239,7 @@ const make = Effect.gen(function* () {
     });
     if (workspaceState === "worktree-pending") {
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: preferredProvider,
         operation: "thread.turn.start",
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });

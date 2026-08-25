@@ -180,6 +180,21 @@ export type SessionEpoch = { generation: number; activeSessionId: Option.Option<
 const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
   Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
 
+// True when the session is still the active epoch's session. Every state
+// mutation path re-checks this before applying an update or offering an event,
+// so a stale in-flight handler can never mutate state or enqueue events after
+// the session has been replaced.
+const isCurrentSessionEpoch = (
+  getSessionEpoch: () => Effect.Effect<SessionEpoch>,
+  sessionId: string,
+  epoch: SessionEpoch,
+): Effect.Effect<boolean> =>
+  getSessionEpoch().pipe(
+    Effect.map(
+      (current) => current.generation === epoch.generation && isActiveSessionId(sessionId, current),
+    ),
+  );
+
 export function makeAcpIncomingFrameGuard(
   maxFrameBytes = ACP_MAX_INCOMING_FRAME_BYTES,
 ): (chunk: Uint8Array) => AcpErrors.AcpTransportError | undefined {
@@ -1191,9 +1206,7 @@ const makeAcpSessionRuntime = (
       (sessionId: string, epoch: SessionEpoch) =>
       (event: AcpParsedSessionEvent): Effect.Effect<void> =>
         Effect.gen(function* () {
-          const current = yield* getSessionEpoch();
-          if (current.generation !== epoch.generation) return;
-          if (!isActiveSessionId(sessionId, current)) return;
+          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           sessionUpdatesEnqueued += 1;
           const consumerAttached = yield* Ref.get(consumerAttachedRef);
           if (consumerAttached) {
@@ -1362,9 +1375,7 @@ const makeAcpSessionRuntime = (
           return;
         }
 
-        const current = yield* getSessionEpoch();
-        if (current.generation !== epoch.generation) return;
-        if (!isActiveSessionId(sessionId, current)) return;
+        if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
 
         const offer = offerSessionEvent(sessionId, epoch);
         return yield* processSessionUpdate({
@@ -2160,17 +2171,13 @@ const processSessionUpdate = ({
 
     // Bounded state is always applied because it is not part of the transcript.
     if (update.sessionUpdate === "available_commands_update") {
-      const current = yield* getSessionEpoch();
-      if (current.generation !== epoch.generation) return;
-      if (!isActiveSessionId(sessionId, current)) return;
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
       yield* Ref.set(availableCommandsRef, update.availableCommands);
       return;
     }
 
     if (update.sessionUpdate === "config_option_update") {
-      const current = yield* getSessionEpoch();
-      if (current.generation !== epoch.generation) return;
-      if (!isActiveSessionId(sessionId, current)) return;
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
       yield* Ref.update(configOptionsRef, (currentOptions) =>
         mergeSessionConfigOptions(currentOptions, update.configOptions),
       );
@@ -2179,12 +2186,11 @@ const processSessionUpdate = ({
     }
 
     const parsed = parseSessionUpdateEvent(params);
-    if (parsed.modeId) {
-      const current = yield* getSessionEpoch();
-      if (current.generation !== epoch.generation) return;
-      if (!isActiveSessionId(sessionId, current)) return;
+    const modeId = parsed.modeId;
+    if (modeId) {
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
       yield* Ref.update(modeStateRef, (current) =>
-        current === undefined ? current : updateModeState(current, parsed.modeId!),
+        current === undefined ? current : updateModeState(current, modeId),
       );
     }
 
@@ -2194,9 +2200,7 @@ const processSessionUpdate = ({
 
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
-        const current = yield* getSessionEpoch();
-        if (current.generation !== epoch.generation) return;
-        if (!isActiveSessionId(sessionId, current)) return;
+        if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
         yield* closeActiveAssistantSegment({
           getSessionEpoch,
           offer,
@@ -2227,16 +2231,12 @@ const processSessionUpdate = ({
       }
       if (event._tag === "ContentDelta") {
         if (event.streamKind === "reasoning_text") {
-          const current = yield* getSessionEpoch();
-          if (current.generation !== epoch.generation) return;
-          if (!isActiveSessionId(sessionId, current)) return;
+          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           yield* offer(event);
           continue;
         }
         if (event.text.trim().length === 0) {
-          const current = yield* getSessionEpoch();
-          if (current.generation !== epoch.generation) return;
-          if (!isActiveSessionId(sessionId, current)) return;
+          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
             continue;
@@ -2317,11 +2317,7 @@ const ensureActiveAssistantSegment = ({
   readonly requestedItemId?: string | undefined;
 }) =>
   Effect.gen(function* () {
-    const currentEpoch = yield* getSessionEpoch();
-    if (currentEpoch.generation !== epoch.generation) {
-      return requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, 0);
-    }
-    if (!isActiveSessionId(sessionId, currentEpoch)) {
+    if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) {
       return requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, 0);
     }
     return yield* Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
@@ -2391,9 +2387,7 @@ const closeActiveAssistantSegment = ({
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
 }) =>
   Effect.gen(function* () {
-    const current = yield* getSessionEpoch();
-    if (current.generation !== epoch.generation) return;
-    if (!isActiveSessionId(sessionId, current)) return;
+    if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
     const event = yield* Ref.modify(assistantSegmentRef, (current) => {
       if (!current.activeItemId) {
         return [undefined, current] as const;

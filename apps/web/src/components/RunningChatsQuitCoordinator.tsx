@@ -54,12 +54,14 @@ export function RunningChatsQuitCoordinator() {
 
       const stopped = stopRunningChatsForQuit({
         chats: chatsToStop,
-        dispatchInterrupt: (threadId) => {
+        dispatchInterrupt: async (threadId) => {
           const api = readNativeApi();
           if (!api) {
             return;
           }
-          return api.orchestration.dispatchCommand({
+          // The callback contract is Promise<void>; await adapts the command
+          // envelope while still invoking the interrupt.
+          await api.orchestration.dispatchCommand({
             type: "thread.turn.interrupt",
             commandId: newCommandId(),
             threadId: ThreadId.makeUnsafe(threadId),

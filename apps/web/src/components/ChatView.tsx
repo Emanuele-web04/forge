@@ -2274,10 +2274,7 @@ export default function ChatView({
   const selectedProvider = useMemo<ProviderKind>(
     () =>
       lockedProvider ??
-      // A draft that has not started is pinned to its explicit provider; provider
-      // availability is validated at send time. Rerouting here would silently
-      // change the first send (e.g. a fresh Devin draft to Codex). Drafts without
-      // an explicit provider still fall back to an available one.
+      // Keep an unstarted draft pinned to its explicit provider; availability is validated at send time.
       selectedProviderByThreadId ??
       resolveAvailableProviderPreference({
         preferredProvider: preferredDraftProvider,

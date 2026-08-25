@@ -202,8 +202,8 @@ export function parseDevinUsage(input: { json: unknown; nowMs: number }) {
   if (!hideDailyQuota && (dailyUsed !== undefined || dailyResetsAt)) {
     limits.push({
       window: "Daily",
-      ...(dailyUsed !== undefined ? { usedPercent: dailyUsed } : {}),
-      ...(dailyResetsAt ? { resetsAt: dailyResetsAt } : {}),
+      usedPercent: dailyUsed,
+      resetsAt: dailyResetsAt,
       windowDurationMins: 1_440,
     });
   }
@@ -211,8 +211,8 @@ export function parseDevinUsage(input: { json: unknown; nowMs: number }) {
   if (effectiveWeeklyUsed !== undefined || weeklyResetsAt) {
     limits.push({
       window: "Weekly",
-      ...(effectiveWeeklyUsed !== undefined ? { usedPercent: effectiveWeeklyUsed } : {}),
-      ...(weeklyResetsAt ? { resetsAt: weeklyResetsAt } : {}),
+      usedPercent: effectiveWeeklyUsed,
+      resetsAt: weeklyResetsAt,
       windowDurationMins: 10_080,
     });
   }
@@ -261,7 +261,7 @@ export function parseDevinUsage(input: { json: unknown; nowMs: number }) {
     limits.push({ window: "Current", resetsAt: planEnd });
   }
 
-  const planNameRaw = pickString(planInfo, "planName", "plan_name");
+  const planName = pickString(planInfo, "planName", "plan_name");
   return buildSnapshot({
     provider: "devin",
     nowMs: input.nowMs,
@@ -269,7 +269,7 @@ export function parseDevinUsage(input: { json: unknown; nowMs: number }) {
     source: SOURCE,
     limits,
     usageLines,
-    ...(planNameRaw ? { planName: titleCase(planNameRaw) } : {}),
+    ...(planName ? { planName: titleCase(planName) } : {}),
   });
 }
 

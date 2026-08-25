@@ -4,7 +4,7 @@
 // Depends on: threadUnblock helpers with a stubbed orchestration API.
 
 import type { OrchestrationListProviderDeliveryBlockersResult } from "@synara/contracts";
-import { ThreadId } from "@synara/contracts";
+import { EventId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,7 +23,7 @@ function blocker(input: {
   return {
     consumerName: "provider-command-reactor.v1",
     eventSequence: input.eventSequence,
-    eventId: "event-1",
+    eventId: EventId.makeUnsafe("event-1"),
     eventType: "thread.turn-start-requested",
     occurredAt: "2026-07-26T10:00:00.000Z",
     threadId,
@@ -35,7 +35,7 @@ function blocker(input: {
     lastReconciledAt: null,
     lastReconciledBy: null,
     lastReconciliationNote: null,
-  } as OrchestrationListProviderDeliveryBlockersResult[number];
+  };
 }
 
 function conflictError() {
@@ -62,17 +62,15 @@ describe("unblockThreadFromClient", () => {
       {
         listProviderDeliveryBlockers,
         reconcileProviderDelivery,
-      } as never,
+      },
       threadId,
     );
 
     expect(result).toEqual({ kind: "unblocked", reconciledCount: 2 });
     expect(listProviderDeliveryBlockers).toHaveBeenCalledWith({ threadId });
-    expect(
-      reconcileProviderDelivery.mock.calls.map(
-        ([input]) => (input as never as { eventSequence: number }).eventSequence,
-      ),
-    ).toEqual([17, 42]);
+    expect(reconcileProviderDelivery.mock.calls.map(([input]) => input.eventSequence)).toEqual([
+      17, 42,
+    ]);
     expect(reconcileProviderDelivery.mock.calls[0]?.[0]).toMatchObject({
       threadId,
       expectedState: "uncertain",
@@ -88,7 +86,7 @@ describe("unblockThreadFromClient", () => {
       {
         listProviderDeliveryBlockers: vi.fn(async () => []),
         reconcileProviderDelivery,
-      } as never,
+      },
       threadId,
     );
 
@@ -105,7 +103,7 @@ describe("unblockThreadFromClient", () => {
         reconcileProviderDelivery: vi.fn(async () => {
           throw conflictError();
         }),
-      } as never,
+      },
       threadId,
     );
 
@@ -131,7 +129,7 @@ describe("unblockThreadFromClient", () => {
             reconciledAt: "2026-07-26T10:01:00.000Z",
           };
         }),
-      } as never,
+      },
       threadId,
     );
 
@@ -148,7 +146,7 @@ describe("unblockThreadFromClient", () => {
           reconcileProviderDelivery: vi.fn(async () => {
             throw new Error("Socket closed");
           }),
-        } as never,
+        },
         threadId,
       ),
     ).rejects.toThrow("Socket closed");

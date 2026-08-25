@@ -69,6 +69,13 @@ export interface DevinAcpAuthInput {
   readonly apiKey?: string;
 }
 
+/** Host auth metadata sent in the ACP authenticate request for Devin. */
+export type DevinAcpAuthenticateMeta = {
+  headless: boolean;
+  api_key?: string;
+  api_server_url?: string;
+};
+
 export function mapDevinAcpCommands(
   commands: ReadonlyArray<Acp.AvailableCommand>,
 ): ProviderListCommandsResult["commands"] {
@@ -231,7 +238,7 @@ export const buildDevinAcpAuthenticateMeta = (
     readonly credentials?: DevinAcpCredentials;
     readonly env?: NodeJS.ProcessEnv;
   } = {},
-): Effect.Effect<Record<string, unknown>, AcpErrors.AcpError> =>
+): Effect.Effect<DevinAcpAuthenticateMeta, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const env = input.env ?? process.env;
     const apiKey = getDevinApiKeyEnv(env) ?? input.credentials?.apiKey;
@@ -380,9 +387,7 @@ export const makeDevinAcpRuntime = (
         ...input,
         spawn: buildDevinAcpSpawnInput(input.devinSettings, input.cwd, input.runtimeMode),
         resolveAuthMethodId: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, {
-            ...(typeof apiKey === "string" ? { apiKey } : {}),
-          }),
+          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
         authenticateMeta,
       }).pipe(
         Layer.provide(

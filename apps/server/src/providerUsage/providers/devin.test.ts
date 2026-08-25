@@ -25,11 +25,16 @@ function stubOutboundFetch(
   fetchMock: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
 ): void {
   vi.spyOn(outboundHttp, "request").mockImplementation(async (input) => {
-    const response = await fetchMock(input.url, {
-      ...(input.method === undefined ? {} : { method: input.method }),
+    const init: RequestInit = {
       headers: input.headers,
-      ...(input.body === undefined ? {} : { body: input.body }),
-    });
+    };
+    if (input.method !== undefined) {
+      init.method = input.method;
+    }
+    if (input.body !== undefined) {
+      init.body = input.body;
+    }
+    const response = await fetchMock(input.url, init);
     return {
       status: response.status,
       headers: response.headers,
@@ -73,7 +78,10 @@ describe("devinUsageFetcher", () => {
       expect(String(url)).toBe(
         "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
       );
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer env-key");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer env-key");
+      // SAFETY: devinUsageFetcher constructs the body from the resolved auth, so
+      // JSON.parse of the captured request body yields the metadata object below.
       const body = JSON.parse(String(init?.body)) as {
         metadata?: { apiKey?: string; ideName?: string };
       };
@@ -105,7 +113,8 @@ describe("devinUsageFetcher", () => {
   it("reads the stored Devin CLI API key when env is unset", async () => {
     const homeDir = makeDevinHome(`windsurf_api_key = "stored-key"\n`);
     stubOutboundFetch(async (_url, init) => {
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer stored-key");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer stored-key");
       return jsonResponse({
         user_status: {
           plan_status: {
@@ -180,7 +189,8 @@ describe("devinUsageFetcher", () => {
       expect(String(url)).toBe(
         "https://enterprise.devin.example/exa.seat_management_pb.SeatManagementService/GetUserStatus",
       );
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer stored-key");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer stored-key");
       return jsonResponse({ user_status: { plan_status: { acu_consumed: 1 } } });
     });
 

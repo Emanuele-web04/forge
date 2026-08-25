@@ -437,11 +437,14 @@ export function applyDevinSessionConfiguration(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
 }): Effect.Effect<void, ProviderAdapterError> {
   return Effect.gen(function* () {
-    const modeState = yield* input.runtime.getModeState.pipe(
-      Effect.timeoutOption(5_000),
-      Effect.map(Option.getOrUndefined),
-      Effect.orElseSucceed(() => undefined),
-    );
+    const readModeState = () =>
+      input.runtime.getModeState.pipe(
+        Effect.timeoutOption(5_000),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+
+    const modeState = yield* readModeState();
 
     const requestedModeId = yield* resolveRequestedModeId({
       modeState,
@@ -461,11 +464,7 @@ export function applyDevinSessionConfiguration(input: {
         ),
       );
 
-      const modeStateAfter = yield* input.runtime.getModeState.pipe(
-        Effect.timeoutOption(5_000),
-        Effect.map(Option.getOrUndefined),
-        Effect.orElseSucceed(() => undefined),
-      );
+      const modeStateAfter = yield* readModeState();
       const stillRequired = yield* resolveRequestedModeId({
         modeState: modeStateAfter,
         runtimeMode: input.runtimeMode,
@@ -946,15 +945,15 @@ function buildDevinPromptParts(input: {
       promptParts.push({ type: "text", text: promptText });
     }
 
-    const imageBlocks = yield* loadProviderPromptImageBlocks({
-      attachments: input.attachments,
-      attachmentsDir: input.attachmentsDir,
-      provider: PROVIDER,
-      method: "session/prompt",
-      readFile: input.fileSystem.readFile,
-    });
-
-    promptParts.push(...(imageBlocks as Array<Acp.ContentBlock>));
+    promptParts.push(
+      ...(yield* loadProviderPromptImageBlocks({
+        attachments: input.attachments,
+        attachmentsDir: input.attachmentsDir,
+        provider: PROVIDER,
+        method: "session/prompt",
+        readFile: input.fileSystem.readFile,
+      })),
+    );
     return promptParts;
   });
 }
@@ -2196,9 +2195,9 @@ export function makeDevinAdapter(
                 if (!settleDevinActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-                const { lastError: _lastError2, ...sessionWithoutLastError2 } = ctx.session;
+                const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
-                  ...sessionWithoutLastError2,
+                  ...sessionWithoutLastError,
                   status: "ready",
                   updatedAt: yield* nowIso,
                   ...(model ? { model } : {}),
@@ -2245,9 +2244,9 @@ export function makeDevinAdapter(
                 id: turnId,
                 items: [{ prompt: promptParts, interrupted: true }],
               });
-              const { lastError: _lastError3, ...sessionWithoutLastError3 } = ctx.session;
+              const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
-                ...sessionWithoutLastError3,
+                ...sessionWithoutLastError,
                 status: "ready",
                 updatedAt: yield* nowIso,
                 ...(model ? { model } : {}),
@@ -2592,6 +2591,25 @@ export function makeDevinAdapter(
         return ctx;
       });
 
+    // Every compaction failure path records the same terminal failed event
+    // and surfaces the same request error; only the title/detail differ.
+    const failDevinCompaction = (ctx: DevinSessionContext, title: string, detail: string) =>
+      Effect.gen(function* () {
+        yield* emitDevinContextCompactionRuntimeEvent(ctx, {
+          lifecycle: "item.completed",
+          status: "failed",
+          title,
+          detail,
+        });
+        return yield* Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/prompt",
+            detail,
+          }),
+        );
+      });
+
     const runDevinCompaction = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         // A previous timed-out /compact may still be cancelling; preserve the
@@ -2618,19 +2636,7 @@ export function makeDevinAdapter(
           }
           const squashed = Cause.squash(compactResult.cause);
           const detail = squashed instanceof Error ? squashed.message : String(squashed);
-          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.completed",
-            status: "failed",
-            title: "Context compaction failed",
-            detail,
-          });
-          return yield* Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/prompt",
-              detail,
-            }),
-          );
+          return yield* failDevinCompaction(ctx, "Context compaction failed", detail);
         }
 
         const promptResponse = Option.getOrUndefined(compactResult.value);
@@ -2650,19 +2656,7 @@ export function makeDevinAdapter(
             threadId: ctx.threadId,
             timeoutMs: DEVIN_COMPACT_TIMEOUT_MS,
           });
-          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.completed",
-            status: "failed",
-            title: "Context compaction timed out",
-            detail,
-          });
-          return yield* Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/prompt",
-              detail,
-            }),
-          );
+          return yield* failDevinCompaction(ctx, "Context compaction timed out", detail);
         }
 
         // The failed-tool detail below is recorded by the notification
@@ -2676,19 +2670,7 @@ export function makeDevinAdapter(
         // completed compaction and must not be persisted as one.
         if (promptResponse.stopReason === "cancelled") {
           const detail = "Devin context compaction was cancelled before it completed.";
-          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.completed",
-            status: "failed",
-            title: "Context compaction cancelled",
-            detail,
-          });
-          return yield* Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/prompt",
-              detail,
-            }),
-          );
+          return yield* failDevinCompaction(ctx, "Context compaction cancelled", detail);
         }
 
         // A compaction tool call can fail while the /compact prompt itself
@@ -2696,19 +2678,7 @@ export function makeDevinAdapter(
         // persisting the compaction as completed.
         const failedToolDetail = ctx.compactionFailedToolDetail;
         if (failedToolDetail !== undefined) {
-          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.completed",
-            status: "failed",
-            title: "Context compaction failed",
-            detail: failedToolDetail,
-          });
-          return yield* Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/prompt",
-              detail: failedToolDetail,
-            }),
-          );
+          return yield* failDevinCompaction(ctx, "Context compaction failed", failedToolDetail);
         }
 
         // Success: thread.state.changed is the single terminal signal —
