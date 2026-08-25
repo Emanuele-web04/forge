@@ -11,6 +11,7 @@ import {
   type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -1825,6 +1826,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
+          const knownAbsoluteFilePaths = [
+            ...new Set(
+              allTurnWorkEntries.flatMap((entry) =>
+                (entry.changedFiles ?? []).filter((path) => isLocalAbsolutePath(path)),
+              ),
+            ),
+          ];
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2021,6 +2029,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                 />
               </div>
             );
@@ -2131,6 +2140,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
+                      knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                     />
                   </div>
                 ) : null}

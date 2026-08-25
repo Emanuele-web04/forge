@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "./markdown-links";
+import {
+  resolveMarkdownFileLinkTarget,
+  resolveUniqueAbsoluteSuffixTarget,
+  rewriteMarkdownFileUriHref,
+} from "./markdown-links";
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {
@@ -59,5 +63,42 @@ describe("resolveMarkdownFileLinkTarget", () => {
 
   it("does not treat app routes as file links", () => {
     expect(resolveMarkdownFileLinkTarget("/chat/settings")).toBeNull();
+  });
+});
+
+describe("resolveUniqueAbsoluteSuffixTarget", () => {
+  const skillFile = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
+  const tempFile = "/tmp/synara-codex-workspaces/thread-1/notes.md";
+
+  it("returns the unique known absolute path that already ends with the reference", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [
+        "/Users/tester/project/src/index.ts",
+        skillFile,
+      ]),
+    ).toBe(skillFile);
+  });
+
+  it("keeps line suffixes on the known absolute path", () => {
+    expect(resolveUniqueAbsoluteSuffixTarget("notes.md:12", [tempFile])).toBe(`${tempFile}:12`);
+  });
+
+  it("returns null when no known path matches", () => {
+    expect(resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [tempFile])).toBeNull();
+  });
+
+  it("returns null when two known paths share the same suffix", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [
+        skillFile,
+        "/Users/tester/.codex/skills/other/references/uploadthing.md",
+      ]),
+    ).toBeNull();
+  });
+
+  it("does not treat workspace-relative tool paths as known destinations", () => {
+    expect(
+      resolveUniqueAbsoluteSuffixTarget("src/index.ts", ["apps/web/src/index.ts"]),
+    ).toBeNull();
   });
 });

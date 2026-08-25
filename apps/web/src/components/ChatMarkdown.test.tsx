@@ -280,6 +280,22 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("<code>src/index.ts</code>");
   });
 
+  it("prefers a unique same-turn absolute path over the workspace cwd join", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const absolutePath = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
+    const markup = renderToStaticMarkup(
+      <ChatMarkdown
+        text="See `references/uploadthing.md`."
+        cwd="/Users/tester/chat-workspace"
+        isStreaming={false}
+        knownAbsoluteFilePaths={[absolutePath]}
+      />,
+    );
+
+    expect(markup).toContain(`title="${absolutePath}"`);
+    expect(markup).not.toContain('href="/Users/tester/chat-workspace/references/uploadthing.md"');
+  });
+
   it("chips absolute inline-code paths and authored file URLs", async () => {
     const absolutePath = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
     const markup = await renderMarkdown(

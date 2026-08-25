@@ -40,7 +40,11 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import {
+  resolveMarkdownFileLinkTarget,
+  resolveUniqueAbsoluteSuffixTarget,
+  rewriteMarkdownFileUriHref,
+} from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -125,6 +129,11 @@ interface ChatMarkdownProps {
    * length- and newline-preserving). Without it checkboxes render read-only.
    */
   onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
+  /**
+   * Absolute paths already observed on this turn's tool calls. A relative
+   * inline-code chip uses one of these when the match is unique.
+   */
+  knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -1072,6 +1081,7 @@ function ChatMarkdown({
   onImageExpand,
   markers,
   onTaskToggle,
+  knownAbsoluteFilePaths: knownAbsoluteFilePathsProp,
   variant: variantProp,
   mentionReferences,
   terminalContexts,
@@ -1224,7 +1234,12 @@ function ChatMarkdown({
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+            const knownTarget =
+              knownAbsoluteFilePathsProp && knownAbsoluteFilePathsProp.length > 0
+                ? resolveUniqueAbsoluteSuffixTarget(filePath, knownAbsoluteFilePathsProp)
+                : null;
+            const targetPath =
+              knownTarget ?? resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
             return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
           }
         }
@@ -1305,6 +1320,7 @@ function ChatMarkdown({
     }),
     [
       cwd,
+      knownAbsoluteFilePathsProp,
       diffThemeName,
       isStreaming,
       isUserVariant,

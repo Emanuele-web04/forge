@@ -1,3 +1,5 @@
+import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
+
 import { resolvePathLinkTarget } from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -107,6 +109,46 @@ function hasExternalScheme(path: string): boolean {
   const rest = match[2] ?? "";
   if (rest.startsWith("//")) return true;
   return !POSITION_ONLY_PATTERN.test(rest);
+}
+
+function pathWithoutPositionSuffix(value: string): string {
+  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
+}
+
+/**
+ * If exactly one known absolute path already ends with this relative
+ * reference, return that path. Zero or several matches return null so the
+ * caller can keep the workspace cwd join.
+ */
+export function resolveUniqueAbsoluteSuffixTarget(
+  reference: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  const trimmed = reference.trim();
+  if (trimmed.length === 0) return null;
+
+  const suffix = pathWithoutPositionSuffix(trimmed).replaceAll("\\", "/");
+  if (
+    suffix.length === 0 ||
+    suffix.includes("\0") ||
+    !isRelativePath(suffix) ||
+    !isWorkspaceRelativePathSafe(suffix)
+  ) {
+    return null;
+  }
+
+  let match: string | null = null;
+  for (const rawPath of knownAbsolutePaths) {
+    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
+    if (!isLocalAbsolutePath(candidate)) continue;
+    if (candidate !== suffix && !candidate.endsWith(`/${suffix}`)) continue;
+    if (match !== null && match !== candidate) return null;
+    match = candidate;
+  }
+  if (match === null) return null;
+
+  const position = POSITION_SUFFIX_PATTERN.exec(trimmed)?.[0] ?? "";
+  return `${match}${position}`;
 }
 
 export function resolveMarkdownFileLinkTarget(
