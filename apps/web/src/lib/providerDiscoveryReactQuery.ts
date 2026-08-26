@@ -224,11 +224,18 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
-    // fast so the picker settles to static options instead of spinning (#103).
+    // Instant-open contract for every Synara provider (codex, claudeAgent, cursor,
+    // antigravity, grok, droid, kilo, opencode, pi): a cached catalog paints
+    // immediately on open — same-key refetches keep the real data visible, so no
+    // skeleton flashes — and stale (>30s) entries revalidate on mount so the
+    // "previous model instead of latest" bug stays fixed.
+    // Permanent failures (missing CLI/auth) settle quickly via retry: 0 for
+    // cursor/droid; other providers retry transient failures.
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
-    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    staleTime: 30_000,
+    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
+    // providerModelPrefetch.ts (not imported: that module imports from here).
+    gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }
