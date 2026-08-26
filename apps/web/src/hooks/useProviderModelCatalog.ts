@@ -107,7 +107,7 @@ export function useProviderModelCatalog(input: {
 
   const queryClient = useQueryClient();
 
-  // Provider-agnostic dynamic update (Waku `render: 'dynamic'` – https://github.com/egoist/waku):
+  // Provider-agnostic dynamic update for Synara:
   // When the selected provider changes, invalidate its model cache so the picker
   // revalidates instead of showing the previous provider's stale catalog.
   // Supports all 8–9 providers (codex, claudeAgent, cursor, antigravity, grok,

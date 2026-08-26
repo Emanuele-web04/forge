@@ -224,15 +224,15 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Provider-agnostic dynamic update (see https://github.com/egoist/waku – render: 'dynamic'):
+    // Provider-agnostic dynamic update for Synara:
     // All 8–9 providers (codex, claudeAgent, cursor, antigravity, grok, droid, kilo,
     // opencode, pi) share the same freshness contract. Zen-backed providers
     // (opencode/pi) previously used staleTime: 60_000 with placeholderData, which
-    // kept the *previous* catalog visible while the latest was fetched in the
+    // kept the previous catalog visible while the latest was fetched in the
     // background – the "previous model instead of latest" bug. Using staleTime: 0
     // + refetchOnMount: 'always' + refetchOnWindowFocus makes the picker
     // revalidate whenever the selected provider changes or the window regains
-    // focus, matching Waku's `cache: 'no-store'` / `revalidate: 0` pattern.
+    // focus with cache: 'no-store' / revalidate: 0 semantics.
     // Permanent failures (missing CLI/auth) still settle quickly via retry: 0
     // for cursor/droid, but remain provider-agnostic in shape.
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,

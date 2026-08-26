@@ -65,10 +65,9 @@ export const WARM_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<ProviderKind, "droid
   );
 
 /** Warm results stay fresh for 30 minutes instead of the interactive 60s.
- * Dynamic providers (Waku `render: 'dynamic'` / `revalidate: 0` analogue –
- * https://github.com/egoist/waku) now use staleTime: 0 in the interactive
- * query, so the 30-min warm only affects the prefetch cache, not the picker's
- * visible staleness. */
+ * Dynamic providers now use staleTime: 0 in the interactive query, so the
+ * 30-min warm only affects the prefetch cache, not the picker's visible
+ * staleness within Synara. */
 export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
 
 /** @deprecated kept for backwards compat – all providers now use dynamic staleTime: 0 */
@@ -240,9 +239,8 @@ export function prefetchProviderModelsForNewThread(
       settings: input.settings,
       cwd,
     });
-    // Provider-agnostic warm: same staleTime for all 8–9 providers; the
-    // interactive query's staleTime: 0 (Waku `render: 'dynamic'` /
-    // https://github.com/egoist/waku) ensures the picker revalidates on
+    // Provider-agnostic warm for Synara: same staleTime for all 8–9 providers; the
+    // interactive query's staleTime: 0 ensures the picker revalidates on
     // selectedProvider change regardless of prefetch age.
     void queryClient.prefetchQuery({
       ...modelsOptions,
