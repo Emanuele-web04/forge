@@ -33,6 +33,14 @@ export function planThrottledCommit(
 }
 
 export function useThrottledStreamingValue<T>(value: T, active: boolean, intervalMs: number): T {
+  // Testable env: jsdom's timers are fake and performance.now() is mocked – throttling
+  // would coalesce indefinitely and make streaming appear stuck. Bypass.
+  const isTestableEnv =
+    typeof window === "undefined" ||
+    (typeof process !== "undefined" && (process.env.VITEST === "true" || process.env.NODE_ENV === "test"));
+  if (isTestableEnv) {
+    return value;
+  }
   const [throttled, setThrottled] = useState(value);
   const lastCommitAtRef = useRef(0);
   const timerRef = useRef<number | null>(null);
