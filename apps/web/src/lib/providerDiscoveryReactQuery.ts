@@ -224,20 +224,18 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Provider-agnostic dynamic update for Synara – optimized for enabled-model click speed:
-    // All 8–9 providers (codex, claudeAgent, cursor, antigravity, grok, droid, kilo,
-    // opencode, pi) share the same freshness contract. Zen-backed providers
-    // previously used staleTime: 60_000 with placeholderData which kept previous
-    // visible 60s. Using staleTime: 30_000 with placeholderData shows cached
-    // (previous) instantly on click and revalidates in background – instant
-    // enabled-model open, eventual latest. Prefetch on hover (ProviderModelPicker)
-    // warms the cache so first click is already fresh. Permanent failures
-    // (cursor/droid) still settle fast via retry: 0.
+    // Instant-open contract for every Synara provider (codex, claudeAgent, cursor,
+    // antigravity, grok, droid, kilo, opencode, pi): a cached catalog paints
+    // immediately on open — same-key refetches keep the real data visible, so no
+    // skeleton flashes — and stale (>30s) entries revalidate on mount so the
+    // "previous model instead of latest" bug stays fixed.
+    // Permanent failures (missing CLI/auth) settle quickly via retry: 0 for
+    // cursor/droid; other providers retry transient failures.
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
     staleTime: 30_000,
-    gcTime: 5 * 60_000,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
+    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
+    // providerModelPrefetch.ts (not imported: that module imports from here).
+    gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }

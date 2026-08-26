@@ -90,7 +90,15 @@ const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${t
 const providerCommandId = (event: ProviderRuntimeEvent, tag: string, target = "event"): CommandId =>
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${target}`);
 
-const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
+// The delivery-mode binding handshake (request queue ↔ runtime turn lifecycle)
+// is in-memory: a server restart, a provider that skips turn.started, or a lost
+// request can leave a streaming turn unbound. Defaulting unbound turns to
+// "buffered" silently withheld the whole assistant message until completion
+// (deltas arrived live but were fanned out as one blob at flush time). Fail
+// towards live output instead: an unbound turn streams; only turns whose
+// dispatch explicitly requested "buffered" (assistant streaming setting off)
+// hold text until completion.
+const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "streaming";
 const PROVIDER_RUNTIME_INGESTION_CAPACITY = 1_024;
 const PROVIDER_RUNTIME_REPLAY_PAGE_SIZE = 128;
 const PROVIDER_RUNTIME_REPLAY_POLL_MIN_MS = 250;

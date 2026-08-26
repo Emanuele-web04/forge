@@ -10,12 +10,9 @@ import { cn } from "~/lib/utils";
 export const DISCLOSURE_TRANSITION_MS = 220;
 export const DISCLOSURE_CLEANUP_BUFFER_MS = 40;
 
-/** Shell grid that animates height via grid-template-rows + fade.
- * Initial click lag fix: promote to compositor and hint will-change so first
- * open doesn't trigger synchronous layout measure on the main thread.
- * Preserves 220ms ease-out and motion-reduce fallback. */
+/** Shell grid that animates height via grid-template-rows + fade. */
 export const DISCLOSURE_SHELL_MOTION_CLASS =
-  "grid will-change-[grid-template-rows,opacity] contain-[layout] transform-gpu transition-[grid-template-rows,opacity] duration-220 ease-out motion-reduce:transition-none";
+  "grid transition-[grid-template-rows,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 export const DISCLOSURE_SHELL_OPEN_CLASS = "grid-rows-[1fr] opacity-100";
 export const DISCLOSURE_SHELL_CLOSED_CLASS = "grid-rows-[0fr] opacity-0";

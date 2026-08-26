@@ -7,8 +7,6 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@s
 import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { providerModelsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
@@ -237,24 +235,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
-  let queryClient: ReturnType<typeof useQueryClient> | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- safe fallback for test harness without QueryClientProvider
-    queryClient = useQueryClient();
-  } catch {
-    queryClient = null;
-  }
-  const prefetchProviderModels = (provider: ProviderKind) => {
-    if (!queryClient) return;
-    // Warm on hover/focus so clicking an enabled provider opens instantly
-    void queryClient.prefetchQuery(
-      providerModelsQueryOptions({
-        provider,
-        // Binary paths etc. come from settings via the query's own enabled check;
-        // prefetches with just provider still warms the cache key prefix.
-      }),
-    );
-  };
 
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
@@ -415,10 +395,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         }
         return (
           <MenuSub key={option.value}>
-            <MenuSubTrigger
-              onMouseEnter={() => prefetchProviderModels(option.value)}
-              onFocus={() => prefetchProviderModels(option.value)}
-            >
+            <MenuSubTrigger>
               <OptionIcon
                 aria-hidden="true"
                 className={cn(
