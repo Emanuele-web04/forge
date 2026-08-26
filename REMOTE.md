@@ -49,7 +49,7 @@ tailscale serve --bg 3773
 tailscale serve status
 ```
 
-Synara writes a one-time owner pairing URL when a public URL is configured. For
+Synara writes an owner pairing URL when a public URL is configured. For
 the default packaged installation, retrieve the newest one from the child log:
 
 ```powershell
@@ -60,13 +60,17 @@ Select-String `
 ```
 
 If `SYNARA_HOME` points elsewhere, use its `userdata\logs\server-child.log`.
-Open the complete pairing URL on Android while signed in to the same
-tailnet. Prefer Chrome; Brave shields can block the session cookie. Copy the
-whole URL including `?token=`. Owner startup links expire after 24 hours and
-are exchanged by the server on navigation, which sets a persistent owner
-session cookie. Later visits can use the plain HTTPS URL reported by
-`tailscale serve status`. Treat the complete pairing URL like a password
-until it has been consumed.
+The pairing URL is path-form, `https://<public-url>/pair/<credential>`, with
+no query string - messengers often strip `?token=`, so the path form is
+preferred; the old `?token=` form still works as a legacy fallback. Open the
+complete URL on Android while signed in to the same tailnet. Prefer Chrome;
+Brave shields can block the session cookie. The page asks for a
+tap-to-confirm, which exchanges the credential and sets a persistent owner
+session cookie (via a short-lived `/?sb=<token>` redirect). Owner startup
+links stay reusable for 24 hours - deliberately, so a messenger link preview
+cannot burn the link - and expire after that. Later visits can use the plain
+HTTPS URL reported by `tailscale serve status`. Treat the pairing URL like a
+password while it is valid.
 
 The packaged desktop behavior is intentional:
 
