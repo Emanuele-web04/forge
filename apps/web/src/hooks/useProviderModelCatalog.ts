@@ -9,8 +9,8 @@ import type {
   ProviderKind,
   ProviderModelDescriptor,
 } from "@synara/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
@@ -104,20 +104,6 @@ export function useProviderModelCatalog(input: {
     }
     return prefetchProviderSet?.has(provider) ?? !hiddenProviderSet.has(provider);
   };
-
-  const queryClient = useQueryClient();
-
-  // Provider-agnostic dynamic update for Synara:
-  // When the selected provider changes, invalidate its model cache so the picker
-  // revalidates instead of showing the previous provider's stale catalog.
-  // Supports all 8–9 providers (codex, claudeAgent, cursor, antigravity, grok,
-  // droid, kilo, opencode, pi) with varied auth (API key, OAuth, managed) via
-  // the per-provider queryKey (binaryPath/apiEndpoint/agentDir/cwd).
-  useEffect(() => {
-    void queryClient.invalidateQueries({
-      queryKey: ["provider-discovery", "models", selectedProvider],
-    });
-  }, [selectedProvider, queryClient]);
 
   const claudeModelDiscoveryEnabled = shouldDiscoverProvider("claudeAgent");
   const codexModelDiscoveryEnabled = shouldDiscoverProvider("codex");
