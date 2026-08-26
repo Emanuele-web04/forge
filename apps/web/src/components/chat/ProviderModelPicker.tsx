@@ -235,7 +235,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
-
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
     kilo: kiloFavoriteModelSlugSet,

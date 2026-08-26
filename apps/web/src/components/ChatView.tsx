@@ -88,6 +88,7 @@ import {
   gitStatusQueryOptions,
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
+import { providerModelsPrefetchQueryOptions } from "~/lib/providerModelPrefetch";
 import {
   providerComposerCapabilitiesQueryOptions,
   providerCommandsQueryOptions,
@@ -2340,6 +2341,27 @@ export default function ChatView({
     modelHintByProvider: composerModelHintByProvider,
     agentDiscoveryPolicy: "eager-core",
   });
+  // Warm the selected provider's model catalog on mount so the FIRST picker open
+  // of a session paints from cache instead of waiting on a cold CLI discovery
+  // round-trip (~seconds). providerModelsPrefetchQueryOptions mirrors
+  // useProviderModelCatalog's query keys exactly (binary paths, api endpoint,
+  // agent dir, cwd), so the warm lands on the cache entry the picker reads.
+  // Droid stays excluded: its discovery spins a disposable ACP session per
+  // model, so it only warms on explicit new-thread intent (same policy as the
+  // new-thread prefetch). Later mounts dedupe through the query's staleTime.
+  useEffect(() => {
+    if (selectedProvider === "droid") {
+      return;
+    }
+    void queryClient.prefetchQuery({
+      ...providerModelsPrefetchQueryOptions({
+        provider: selectedProvider,
+        settings,
+        cwd: providerModelDiscoveryCwd,
+      }),
+      retry: 0,
+    });
+  }, [queryClient, selectedProvider, providerModelDiscoveryCwd, settings]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
