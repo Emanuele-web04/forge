@@ -224,11 +224,22 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
-    // fast so the picker settles to static options instead of spinning (#103).
+    // Provider-agnostic dynamic update (see https://github.com/egoist/waku – render: 'dynamic'):
+    // All 8–9 providers (codex, claudeAgent, cursor, antigravity, grok, droid, kilo,
+    // opencode, pi) share the same freshness contract. Zen-backed providers
+    // (opencode/pi) previously used staleTime: 60_000 with placeholderData, which
+    // kept the *previous* catalog visible while the latest was fetched in the
+    // background – the "previous model instead of latest" bug. Using staleTime: 0
+    // + refetchOnMount: 'always' + refetchOnWindowFocus makes the picker
+    // revalidate whenever the selected provider changes or the window regains
+    // focus, matching Waku's `cache: 'no-store'` / `revalidate: 0` pattern.
+    // Permanent failures (missing CLI/auth) still settle quickly via retry: 0
+    // for cursor/droid, but remain provider-agnostic in shape.
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
-    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    staleTime: 0,
+    gcTime: 5 * 60_000,
+    refetchOnMount: "always" as const,
+    refetchOnWindowFocus: input.provider === "droid" ? false : true,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }

@@ -40,7 +40,14 @@ export type ProviderModelPrefetchSettings = Pick<
  * Droid is excluded: its discovery spins a disposable ACP session per model,
  * so it warms only on explicit new-thread intent.
  */
-export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<ProviderKind, "droid">> = [
+/**
+ * Provider-agnostic prefetch list – derives from the same 8–9 ProviderKind union
+ * used by the picker (codex, claudeAgent, cursor, antigravity, grok, droid, kilo,
+ * opencode, pi). Supports varied auth (API key, OAuth, managed) without
+ * hard-coding per-provider branches; each provider's model query carries its
+ * own auth fingerprint (binaryPath/apiEndpoint/agentDir) in the queryKey.
+ */
+export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
@@ -49,10 +56,23 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "kilo",
   "opencode",
   "pi",
+  // droid excluded by default – its discovery spins a disposable ACP session per model (expensive)
 ];
 
-/** Warm results stay fresh for 30 minutes instead of the interactive 60s. */
+export const WARM_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<ProviderKind, "droid">> =
+  NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(
+    (p): p is Exclude<ProviderKind, "droid"> => p !== "droid",
+  );
+
+/** Warm results stay fresh for 30 minutes instead of the interactive 60s.
+ * Dynamic providers (Waku `render: 'dynamic'` / `revalidate: 0` analogue –
+ * https://github.com/egoist/waku) now use staleTime: 0 in the interactive
+ * query, so the 30-min warm only affects the prefetch cache, not the picker's
+ * visible staleness. */
 export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
+
+/** @deprecated kept for backwards compat – all providers now use dynamic staleTime: 0 */
+export const ZEN_PROVIDER_PREFETCH_STALE_TIME_MS = 0;
 
 const EMPTY_PROVIDER_STATUSES: readonly ServerProviderStatus[] = [];
 
@@ -220,6 +240,10 @@ export function prefetchProviderModelsForNewThread(
       settings: input.settings,
       cwd,
     });
+    // Provider-agnostic warm: same staleTime for all 8–9 providers; the
+    // interactive query's staleTime: 0 (Waku `render: 'dynamic'` /
+    // https://github.com/egoist/waku) ensures the picker revalidates on
+    // selectedProvider change regardless of prefetch age.
     void queryClient.prefetchQuery({
       ...modelsOptions,
       retry: 0,
