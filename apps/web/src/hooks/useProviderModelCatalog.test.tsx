@@ -38,6 +38,7 @@ interface QueryResultLike {
   readonly data?: {
     readonly agents?: ReadonlyArray<{ name: string; displayName: string }>;
     readonly cached?: boolean;
+    readonly error?: string;
     readonly models?: ReadonlyArray<ProviderModelDescriptor>;
     readonly source?: string;
   };
@@ -271,5 +272,26 @@ describe("useProviderModelCatalog", () => {
     expect(catalog?.runtimeModelsByProvider.cursor).toEqual([
       { slug: "composer-2", name: "Composer 2" },
     ]);
+  });
+
+  it("surfaces devin discovery errors even when the result falls back to devin.static", () => {
+    modelQueries.set("devin", {
+      data: {
+        models: [],
+        source: "devin.static",
+        cached: false,
+        error: "Devin CLI failed",
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "codex",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.discoveryErrorsByProvider.devin).toBe("Devin CLI failed");
   });
 });
