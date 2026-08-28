@@ -1,3 +1,5 @@
+import nodePath from "node:path";
+
 import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +8,7 @@ import {
   finalizeAcpActiveTurnCost,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
+  resolveAcpToolCallTurnId,
   resolveRequestedAcpSessionModeId,
   resolveAcpTurnInteractionMode,
   scopeAcpRuntimeItemIdForTurn,
@@ -129,6 +132,14 @@ describe("ACP adapter session support", () => {
     });
   });
 
+  it("keeps a known late tool update on its originating turn", () => {
+    const previousTurn = TurnId.makeUnsafe("turn-previous");
+    const currentTurn = TurnId.makeUnsafe("turn-current");
+    expect(resolveAcpToolCallTurnId(currentTurn, previousTurn)).toBe(previousTurn);
+    expect(resolveAcpToolCallTurnId(undefined, previousTurn)).toBe(previousTurn);
+    expect(resolveAcpToolCallTurnId(currentTurn, undefined)).toBe(currentTurn);
+  });
+
   it("clears only the matching active turn and removes it from the session snapshot", () => {
     const turnId = TurnId.makeUnsafe("turn-1");
     const context = {
@@ -195,7 +206,7 @@ describe("ACP adapter session support", () => {
         serverCwd: "/server",
         homeDir: "/home/test",
       }),
-    ).toBe("/explicit");
+    ).toBe(nodePath.resolve("/explicit"));
     expect(
       resolveAcpSessionCwd({
         inputCwd: undefined,
@@ -203,13 +214,13 @@ describe("ACP adapter session support", () => {
         serverCwd: "/server",
         homeDir: "/home/test",
       }),
-    ).toBe("/session");
+    ).toBe(nodePath.resolve("/session"));
     expect(
       resolveAcpSessionCwd({
         inputCwd: undefined,
         serverCwd: "/server",
         homeDir: "/home/test",
       }),
-    ).toBe("/server");
+    ).toBe(nodePath.resolve("/server"));
   });
 });

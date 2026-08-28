@@ -264,6 +264,18 @@ export function scopeAcpToolCallStateForTurn(
   };
 }
 
+/**
+ * Resolve a tool update's turn attribution. Provider tool ids remain stable
+ * across late updates, so an existing mapping must win over a newer active
+ * turn; only an unknown id can fall back to the current turn.
+ */
+export function resolveAcpToolCallTurnId(
+  activeTurnId: TurnId | undefined,
+  mappedToolTurnId: TurnId | undefined,
+): TurnId | undefined {
+  return mappedToolTurnId ?? activeTurnId;
+}
+
 export function acceptAcpPlanUpdate(
   context: { activeTurnId: TurnId | undefined; lastPlanFingerprint: string | undefined },
   payload: unknown,

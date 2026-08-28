@@ -38,6 +38,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "kilo",
   "opencode",
   "pi",
+  "acp",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
@@ -210,6 +211,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
+    case "acp":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "acp" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -254,6 +263,10 @@ export function normalizeProviderModelOptions(
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
+      : null;
+  const acpCandidate =
+    candidate?.acp && typeof candidate.acp === "object"
+      ? (candidate.acp as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -391,6 +404,10 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  // ACP options are negotiated by the selected agent. The shared contract
+  // intentionally carries only an empty marker object for now, so preserve
+  // that marker when a persisted ACP selection explicitly supplied options.
+  const acp = provider === "acp" && acpCandidate !== null ? {} : undefined;
   if (
     !codex &&
     !claude &&
@@ -400,7 +417,8 @@ export function normalizeProviderModelOptions(
     !droid &&
     !kilo &&
     !opencode &&
-    !pi
+    !pi &&
+    !acp
   ) {
     return null;
   }
@@ -414,6 +432,7 @@ export function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
+    ...(acp ? { acp } : {}),
   };
 }
 
@@ -487,7 +506,9 @@ export function normalizeModelSelection(
                     ? modelOptions?.opencode
                     : provider === "pi"
                       ? modelOptions?.pi
-                      : undefined;
+                      : provider === "acp"
+                        ? modelOptions?.acp
+                        : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

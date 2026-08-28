@@ -47,6 +47,7 @@ export const ORIGIN_SECTION_ORDER = [
   "kilo",
   "opencode",
   "pi",
+  "acp",
   "agents",
   "project",
 ] as const;
@@ -72,6 +73,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
+    case "acp":
+      return { label: PROVIDER_DISPLAY_NAMES.acp, provider: "acp" };
     case "agents":
       return { label: "Shared (.agents)", provider: null };
     case "project":

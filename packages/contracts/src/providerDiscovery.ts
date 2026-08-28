@@ -17,6 +17,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  "acp",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -244,6 +245,9 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  // Generic ACP launchers may require arguments beyond the standard default.
+  // Keep this optional so existing provider discovery callers remain unchanged.
+  args: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),

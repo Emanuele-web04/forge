@@ -467,6 +467,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
+  acp: ["agents", "claude", "codex"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 
 function homeRootsForOrigin(

@@ -7,11 +7,9 @@
 import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 
 import { Input } from "~/components/ui/input";
+import { Textarea } from "~/components/ui/textarea";
 
-type DebouncedSettingTextInputProps = Omit<
-  ComponentProps<typeof Input>,
-  "value" | "onChange" | "defaultValue"
-> & {
+type DebouncedSettingTextInputCommonProps = {
   /** Committed settings value. */
   value: string;
   /** Called with the draft once the debounce elapses, or immediately on blur/unmount. */
@@ -19,14 +17,19 @@ type DebouncedSettingTextInputProps = Omit<
   debounceMs?: number;
 };
 
-export function DebouncedSettingTextInput({
-  value,
-  onCommit,
-  debounceMs: debounceMsProp,
-  onBlur,
-  onFocus,
-  ...inputProps
-}: DebouncedSettingTextInputProps) {
+type DebouncedSettingTextInputProps = DebouncedSettingTextInputCommonProps &
+  (
+    | (Omit<ComponentProps<typeof Input>, "value" | "onChange" | "defaultValue"> & {
+        multiline?: false;
+      })
+    | (Omit<ComponentProps<typeof Textarea>, "value" | "onChange" | "defaultValue"> & {
+        /** Render a multi-line textarea for argv lists and other structured text. */
+        multiline: true;
+      })
+  );
+
+export function DebouncedSettingTextInput(props: DebouncedSettingTextInputProps) {
+  const { value, onCommit, debounceMs: debounceMsProp } = props;
   const debounceMs = debounceMsProp ?? 200;
   const [draft, setDraft] = useState(value);
   const focusedRef = useRef(false);
@@ -78,20 +81,59 @@ export function DebouncedSettingTextInput({
     [],
   );
 
+  const updateDraft = (next: string) => {
+    setDraft(next);
+    latestDraftRef.current = next;
+    clearTimer();
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      onCommitRef.current(next);
+    }, debounceMs);
+  };
+
+  if (props.multiline) {
+    const {
+      value: _value,
+      onCommit: _onCommit,
+      debounceMs: _debounceMs,
+      multiline: _multiline,
+      onBlur,
+      onFocus,
+      ...textareaProps
+    } = props;
+    return (
+      <Textarea
+        {...textareaProps}
+        value={draft}
+        onChange={(event) => updateDraft(event.target.value)}
+        onFocus={(event) => {
+          focusedRef.current = true;
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          focusedRef.current = false;
+          flush();
+          onBlur?.(event);
+        }}
+      />
+    );
+  }
+
+  const {
+    value: _value,
+    onCommit: _onCommit,
+    debounceMs: _debounceMs,
+    multiline: _multiline,
+    onBlur,
+    onFocus,
+    ...inputProps
+  } = props;
+
   return (
     <Input
       {...inputProps}
       value={draft}
-      onChange={(event) => {
-        const next = event.target.value;
-        setDraft(next);
-        latestDraftRef.current = next;
-        clearTimer();
-        timerRef.current = setTimeout(() => {
-          timerRef.current = null;
-          onCommitRef.current(next);
-        }, debounceMs);
-      }}
+      onChange={(event) => updateDraft(event.target.value)}
       onFocus={(event) => {
         focusedRef.current = true;
         onFocus?.(event);

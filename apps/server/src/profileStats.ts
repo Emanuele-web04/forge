@@ -34,6 +34,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "kilo",
   "opencode",
   "pi",
+  "acp",
 ]);
 
 type HeatmapCell = ProfileStats["activity"]["heatmap"][number];

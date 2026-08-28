@@ -8,6 +8,8 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type AntigravityModelOptions,
   type AntigravityModelSelection,
+  type AcpModelOptions,
+  type AcpModelSelection,
   type ClaudeModelOptions,
   type ClaudeModelSelection,
   type CodexModelOptions,
@@ -81,7 +83,12 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "kilo" || input.provider === "opencode" || input.provider === "pi") {
+  if (
+    input.provider === "kilo" ||
+    input.provider === "opencode" ||
+    input.provider === "pi" ||
+    input.provider === "acp"
+  ) {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -352,6 +359,9 @@ export function buildNextProviderOptions(
       ...patch,
     } as OpenCodeModelOptions;
   }
+  if (provider === "acp") {
+    return { ...(modelOptions as AcpModelOptions | undefined), ...patch } as AcpModelOptions;
+  }
   return {
     ...(modelOptions as PiModelOptions | undefined),
     ...patch,
@@ -412,6 +422,11 @@ export function buildModelSelection(
   model: string,
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "acp",
+  model: string,
+  options?: AcpModelOptions | null | undefined,
+): AcpModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -494,6 +509,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "acp":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as AcpModelOptions,
           }
         : { provider, model };
   }

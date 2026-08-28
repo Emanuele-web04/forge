@@ -277,6 +277,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "galapagos-alpha",
       ),
@@ -297,6 +298,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "",
       ),
@@ -317,6 +319,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "GPT-5.3 Codex",
       ),
@@ -337,6 +340,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "sonnet",
       ),
@@ -357,6 +361,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "custom/selected-model",
       ),
@@ -596,6 +601,7 @@ describe("provider-indexed custom model settings", () => {
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customAcpModels: ["cline/custom-agent"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -609,6 +615,7 @@ describe("provider-indexed custom model settings", () => {
       "kilo",
       "opencode",
       "pi",
+      "acp",
     ]);
   });
 
@@ -627,6 +634,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+    expect(getCustomModelsForProvider(settings, "acp")).toEqual(["cline/custom-agent"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -640,6 +648,7 @@ describe("provider-indexed custom model settings", () => {
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
+      customAcpModels: ["default/acp-agent"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -655,6 +664,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "acp")).toEqual(["default/acp-agent"]);
   });
 
   it("patches custom models for codex", () => {
@@ -711,6 +721,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for ACP", () => {
+    expect(patchCustomModels("acp", ["cline/custom-agent"])).toEqual({
+      customAcpModels: ["cline/custom-agent"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -722,6 +738,7 @@ describe("provider-indexed custom model settings", () => {
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      acp: ["cline/custom-agent"],
     });
   });
 
@@ -754,6 +771,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );
+    expect(modelOptionsByProvider.acp.some((option) => option.slug === "cline/custom-agent")).toBe(
+      true,
+    );
   });
 
   it("normalizes and deduplicates custom model options per provider", () => {
@@ -779,6 +799,7 @@ describe("provider-indexed custom model settings", () => {
         "anthropic/custom-pi",
         "anthropic/custom-pi",
       ],
+      customAcpModels: [" cline/custom-agent ", "cline/custom-agent"],
     });
 
     expect(

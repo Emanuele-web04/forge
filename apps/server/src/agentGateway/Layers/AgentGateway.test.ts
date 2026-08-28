@@ -815,6 +815,7 @@ function makeHarnessLayer(
         kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto" }],
         opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
         pi: [{ slug: "test-pi", name: "Test Pi" }],
+        acp: [{ slug: "cline/claude-sonnet", name: "Claude Sonnet (Cline)" }],
       };
       return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
     },
@@ -830,6 +831,7 @@ function makeHarnessLayer(
     "kilo",
     "opencode",
     "pi",
+    "acp",
   ];
   let providerStatuses =
     options.providerStatuses ??
