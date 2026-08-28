@@ -226,7 +226,6 @@ export function mergeDynamicModelOptions(input: {
   return [...normalizedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
-/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
 export function providerModelCostMultiplierLabel(description?: string): string | null {
   const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
   return multiplier ? `${multiplier}×` : null;

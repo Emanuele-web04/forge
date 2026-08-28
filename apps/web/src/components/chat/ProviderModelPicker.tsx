@@ -441,7 +441,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
 };
 
-// Resolves the human-readable label for the currently selected model.
 export function resolveProviderModelLabel(input: {
   provider: ProviderKind;
   lockedProvider: ProviderKind | null;

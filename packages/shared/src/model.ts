@@ -132,32 +132,26 @@ export function parseCursorCliReasoningEffort(model: string): string | undefined
   return undefined;
 }
 
-/** Check whether a capabilities object includes a given effort value. */
 export function hasEffortLevel(caps: ModelCapabilities, value: string): boolean {
   return caps.reasoningEffortLevels.some((l) => l.value === value);
 }
 
-/** Return the default effort value for a capabilities object, or null if none. */
 export function getDefaultEffort(caps: ModelCapabilities): string | null {
   return caps.reasoningEffortLevels.find((l) => l.isDefault)?.value ?? null;
 }
 
-/** Check whether a capabilities object includes a given context window value. */
 export function hasContextWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.contextWindowOptions.some((option) => option.value === value);
 }
 
-/** Return the default context window value for a capabilities object, or null if none. */
 export function getDefaultContextWindow(caps: ModelCapabilities): string | null {
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
-/** Check whether a Claude auto-compaction budget is supported. */
 export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
-/** Return the default Claude auto-compaction budget, or null if the model has no override. */
 export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
@@ -564,7 +558,6 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
-/** Trim a string, returning null for empty/missing values. */
 export function trimOrNull<T extends string>(value: T | null | undefined): T | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim() as T;
