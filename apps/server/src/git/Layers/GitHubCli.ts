@@ -22,10 +22,7 @@ import {
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
-import {
-  gitHardenedConfigEnvironment,
-  hardenGitInvocationArgs,
-} from "../gitInvocationSecurity.ts";
+import { gitHardenedConfigEnvironment, hardenGitInvocationArgs } from "../gitInvocationSecurity.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,

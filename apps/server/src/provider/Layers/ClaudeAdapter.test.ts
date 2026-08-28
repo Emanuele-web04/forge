@@ -475,7 +475,9 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
-      });
+        // Exercise the defensive runtime fallback for persisted/legacy input
+        // even though current callers always provide the required field.
+      } as unknown as Parameters<typeof adapter.startSession>[0]);
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.permissionMode, undefined);

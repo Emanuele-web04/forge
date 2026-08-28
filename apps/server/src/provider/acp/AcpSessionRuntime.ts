@@ -50,6 +50,21 @@ const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
 
+export function buildAcpSpawnEnvironment(
+  suppliedEnv: NodeJS.ProcessEnv | undefined,
+  ambientEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const exactEnv = suppliedEnv ? { ...suppliedEnv } : undefined;
+  return buildProviderChildEnvironment({
+    provider: "acp",
+    baseEnv: exactEnv ?? ambientEnv,
+    // Provider-specific ACP launchers already reduced this environment. Keep
+    // only credentials present in that exact capability set; an ambient
+    // fallback receives no provider credentials.
+    additionalCredentialKeys: exactEnv ? Object.keys(exactEnv).filter(isProviderCredentialKey) : [],
+  });
+}
+
 export type AcpSessionStartupStep =
   | "initialize"
   | "authenticate"
@@ -804,17 +819,7 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
-    const suppliedEnv = options.spawn.env ? { ...options.spawn.env } : undefined;
-    const env = buildProviderChildEnvironment({
-      provider: "acp",
-      baseEnv: suppliedEnv ?? process.env,
-      // Provider-specific ACP launchers already reduced this environment. Keep
-      // only credentials present in that exact capability set; the process.env
-      // fallback receives no provider credentials.
-      additionalCredentialKeys: suppliedEnv
-        ? Object.keys(suppliedEnv).filter(isProviderCredentialKey)
-        : [],
-    });
+    const env = buildAcpSpawnEnvironment(options.spawn.env);
     const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
       cwd: options.spawn.cwd,
       env,

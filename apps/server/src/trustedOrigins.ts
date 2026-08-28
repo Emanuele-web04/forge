@@ -137,7 +137,7 @@ export function requiresWebSocketAuthentication(
   );
 }
 
-/** Compatibility credential used only by the loopback desktop bridge. */
+/** Legacy compatibility credential accepted only on a loopback-only server. */
 export function isLegacyLoopbackTokenAccepted(input: {
   readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
   readonly token: string | null;

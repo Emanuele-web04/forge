@@ -5,10 +5,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  gitHardenedConfigEnvironment,
-  hardenGitInvocationArgs,
-} from "./gitInvocationSecurity.ts";
+import { gitHardenedConfigEnvironment, hardenGitInvocationArgs } from "./gitInvocationSecurity.ts";
 
 function readFsmonitor(cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv): string {
   const result = spawnSync("git", [...args, "config", "--get", "core.fsmonitor"], {

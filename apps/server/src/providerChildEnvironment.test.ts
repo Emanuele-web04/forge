@@ -101,8 +101,8 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["kilo", "opencode", "pi"] as const)(
-    "preserves upstream credential discovery for multi-provider %s",
+  it.each(["kilo-server", "opencode-server"] as const)(
+    "preserves upstream credential discovery for the multi-provider %s boundary",
     (provider) => {
       const env = buildProviderChildEnvironment({
         provider,
@@ -135,7 +135,7 @@ describe("buildProviderChildEnvironment", () => {
     });
   });
 
-  it.each(["acp", "pi-shell", "worktree-setup"] as const)(
+  it.each(["acp", "kilo", "opencode", "pi", "pi-shell", "worktree-setup"] as const)(
     "does not grant provider credentials to the %s fallback profile",
     (provider) => {
       const env = buildProviderChildEnvironment({

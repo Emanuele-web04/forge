@@ -831,7 +831,8 @@ function readModelSessionFromThreadSession(
     threadId: previousThread?.id ?? incomingSession?.threadId ?? ThreadId.makeUnsafe("unknown"),
     status: previousSession.orchestrationStatus,
     providerName: previousSession.provider,
-    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    runtimeMode:
+      previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,

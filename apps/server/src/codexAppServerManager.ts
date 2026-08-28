@@ -2757,7 +2757,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       session: {
         provider: "codex",
         status: "connecting",
-        runtimeMode: "full-access",
+        runtimeMode: DEFAULT_RUNTIME_MODE,
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
         threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),

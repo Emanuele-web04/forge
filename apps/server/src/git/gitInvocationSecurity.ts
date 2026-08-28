@@ -3,9 +3,7 @@
 //          configuration from launching filesystem-monitor commands.
 // Layer: Server Git process security
 
-const GIT_HARDENED_CONFIG_ENTRIES = [
-  ["core.fsmonitor", "false"],
-] as const;
+const GIT_HARDENED_CONFIG_ENTRIES = [["core.fsmonitor", "false"]] as const;
 
 export const GIT_HARDENED_CONFIG_ARGS: ReadonlyArray<string> = Object.freeze(
   GIT_HARDENED_CONFIG_ENTRIES.flatMap(([key, value]) => ["-c", `${key}=${value}`]),

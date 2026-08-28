@@ -574,14 +574,7 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
 
   const listedFiles = await runProcess(
     "git",
-    [
-      ...WORKSPACE_GIT_CONFIG_ARGS,
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ],
+    [...WORKSPACE_GIT_CONFIG_ARGS, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     {
       cwd,
       allowNonZeroExit: true,

@@ -11,7 +11,9 @@ export type ProviderChildKind =
   | "droid"
   | "grok"
   | "kilo"
+  | "kilo-server"
   | "opencode"
+  | "opencode-server"
   | "pi"
   | "pi-shell"
   | "worktree-setup";
@@ -66,10 +68,15 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // The Codex process boundary grants either OpenAI or the active custom
   // provider's configured env_key explicitly.
   codex: new Set(),
-  // These profiles deliberately support arbitrary upstream model providers.
-  kilo: "all",
-  opencode: "all",
-  pi: "all",
+  // Health, maintenance, and usage probes do not contact upstream model APIs.
+  kilo: new Set(),
+  opencode: new Set(),
+  pi: new Set(),
+  // The long-lived OpenCode-compatible daemons discover and serve arbitrary
+  // upstream model providers. Isolate their exceptional broad grant from the
+  // short-lived CLI probes above until the daemon pool is provider-keyed.
+  "kilo-server": "all",
+  "opencode-server": "all",
   // Pi's model registry is multi-provider, but commands launched by the model
   // are a separate trust boundary and do not need the model API credentials.
   "pi-shell": new Set(),

@@ -2774,21 +2774,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ),
             ),
           ));
-        const disabledHooksPath = path.join(
-          worktreesDir,
-          MANAGED_WORKTREE_DISABLED_HOOKS_DIRNAME,
-        );
-        yield* fileSystem.makeDirectory(disabledHooksPath, { recursive: true }).pipe(
-          Effect.mapError((cause: unknown) =>
-            createGitCommandError(
-              "GitCore.createDetachedWorktree",
-              input.cwd,
-              ["worktree", "add", "<path>", input.ref],
-              "failed to prepare the managed worktree hook policy.",
-              cause,
+        const disabledHooksPath = path.join(worktreesDir, MANAGED_WORKTREE_DISABLED_HOOKS_DIRNAME);
+        yield* fileSystem
+          .makeDirectory(disabledHooksPath, { recursive: true })
+          .pipe(
+            Effect.mapError((cause: unknown) =>
+              createGitCommandError(
+                "GitCore.createDetachedWorktree",
+                input.cwd,
+                ["worktree", "add", "<path>", input.ref],
+                "failed to prepare the managed worktree hook policy.",
+                cause,
+              ),
             ),
-          ),
-        );
+          );
 
         // Branch-backed managed worktrees still pin to the resolved commit, so
         // ownership proofs and pruning behave exactly like the detached form.
