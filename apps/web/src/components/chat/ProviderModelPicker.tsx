@@ -137,9 +137,12 @@ function resolveSelectedModelLabel(input: {
   model: string;
   options: ReadonlyArray<ProviderModelOption>;
 }): string {
-  const exact = input.options.find((option) => option.slug === input.model);
-  if (exact) {
-    return exact.name;
+  const resolvedSlug = resolveSelectableModel(input.provider, input.model, input.options);
+  if (resolvedSlug) {
+    const resolvedOption = input.options.find((option) => option.slug === resolvedSlug);
+    if (resolvedOption) {
+      return resolvedOption.name;
+    }
   }
   if (input.provider === "cursor") {
     const baseModel = stripParameterizedModelSuffix(input.model);
