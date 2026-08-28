@@ -110,6 +110,13 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("grok-4.6", "grok")).toBe("grok-4.6");
     expect(normalizeModelSlug("Vendor/ModelCase-MEDIUM", "devin")).toBe("Vendor/ModelCase");
   });
+
+  it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
+    expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
+    expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
+  });
 });
 
 describe("resolveModelSlug", () => {
