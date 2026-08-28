@@ -1072,17 +1072,17 @@ export function decodePullRequestListJson(
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
-      try: (signal) =>
-        runProcess("gh", input.args, {
+      try: (signal) => {
+        const inheritedEnv = { ...process.env, ...input.env };
+        return runProcess("gh", input.args, {
           cwd: input.cwd,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           signal,
           // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
           // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
           env: {
-            ...process.env,
-            ...input.env,
-            ...gitHardenedConfigEnvironment(),
+            ...inheritedEnv,
+            ...gitHardenedConfigEnvironment(inheritedEnv),
             GH_HOST: GITHUB_HOST,
           },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
@@ -1093,7 +1093,8 @@ const makeGitHubCli = Effect.sync(() => {
           ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
           ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
-        }),
+        });
+      },
       catch: (error) => normalizeGitHubCliError("execute", error),
     });
 

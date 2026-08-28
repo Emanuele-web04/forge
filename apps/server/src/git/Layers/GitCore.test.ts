@@ -27,7 +27,11 @@ const GitCoreTestLayer = GitCoreLive.pipe(
   Layer.provide(ServerConfigLayer),
   Layer.provide(NodeServices.layer),
 );
-const TestLayer = Layer.mergeAll(NodeServices.layer, GitCoreTestLayer);
+const TestLayer = Layer.mergeAll(
+  NodeServices.layer,
+  GitCoreTestLayer,
+  ServerConfigLayer.pipe(Layer.provide(NodeServices.layer)),
+);
 
 function makeTmpDir(
   prefix = "git-test-",
@@ -1219,28 +1223,44 @@ it.layer(TestLayer)("git integration", (it) => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "does not execute repository-configured hooks while creating a managed worktree",
+      "does not execute configured or poisoned hooks while creating a managed worktree",
       () =>
         Effect.gen(function* () {
           const tmp = yield* makeTmpDir();
           yield* initRepoWithCommit(tmp);
+          const { worktreesDir } = yield* ServerConfig;
           const hooksPath = path.join(tmp, "repository-hooks");
-          const hookPath = path.join(hooksPath, "post-checkout");
-          const markerPath = path.join(tmp, "post-checkout-ran");
+          const branchHookPath = path.join(hooksPath, "reference-transaction");
+          const branchMarkerPath = path.join(tmp, "reference-transaction-ran");
+          const poisonedHooksPath = path.join(worktreesDir, ".disabled-git-hooks");
+          const checkoutHookPath = path.join(poisonedHooksPath, "post-checkout");
+          const checkoutMarkerPath = path.join(tmp, "poisoned-post-checkout-ran");
           const fileSystem = yield* FileSystem.FileSystem;
           yield* fileSystem.makeDirectory(hooksPath, { recursive: true });
+          yield* fileSystem.makeDirectory(poisonedHooksPath, { recursive: true });
           yield* writeTextFile(
-            hookPath,
-            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(markerPath)}\n`,
+            branchHookPath,
+            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(branchMarkerPath)}\n`,
           );
-          yield* Effect.promise(() => fs.chmod(hookPath, 0o700));
+          yield* writeTextFile(
+            checkoutHookPath,
+            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(checkoutMarkerPath)}\n`,
+          );
+          yield* Effect.promise(() => fs.chmod(branchHookPath, 0o700));
+          yield* Effect.promise(() => fs.chmod(checkoutHookPath, 0o700));
           yield* git(tmp, ["config", "core.hooksPath", hooksPath]);
 
           const core = yield* GitCore;
           const wtPath = path.join(tmp, "wt-no-hooks");
-          yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "wt-no-hooks-branch",
+          });
 
-          expect(existsSync(markerPath)).toBe(false);
+          expect(existsSync(branchMarkerPath)).toBe(false);
+          expect(existsSync(checkoutMarkerPath)).toBe(false);
           yield* core.removeWorktree({ cwd: tmp, path: wtPath });
         }),
     );

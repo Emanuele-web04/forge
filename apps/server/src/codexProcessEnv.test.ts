@@ -143,6 +143,33 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("withholds OpenAI credentials from a custom provider without an env_key", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-keyless-provider-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'model_provider = "local"',
+        "",
+        "[model_providers.local]",
+        'base_url = "http://localhost"',
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          OPENAI_API_KEY: "unrelated-openai-secret",
+        },
+        platform: "win32",
+      });
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("replaces a user-defined Synara MCP table only inside the session overlay", async () => {
     const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-source-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-runtime-"));

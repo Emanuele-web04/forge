@@ -41,4 +41,18 @@ describe("Git invocation security", () => {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  it("appends to inherited Git configuration environment entries", () => {
+    expect(
+      gitHardenedConfigEnvironment({
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "safe.directory",
+        GIT_CONFIG_VALUE_0: "/repo",
+      }),
+    ).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_1: "core.fsmonitor",
+      GIT_CONFIG_VALUE_1: "false",
+    });
+  });
 });
