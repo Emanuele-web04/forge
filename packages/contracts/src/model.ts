@@ -1081,20 +1081,27 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "Adaptive",
       capabilities: EMPTY_MODEL_CAPABILITIES,
     },
-    // Static fallback entries carry no runtime modelVariants, so fast mode
-    // cannot be resolved to a concrete Devin model UID at process start
-    // (modelVariant is only populated from runtime discovery). Advertising the
-    // toggle here would surface a no-op control the server cannot honor; live
-    // discovered descriptors advertise it only when real fast variants exist.
     {
       slug: "swe-1-6",
       name: "SWE 1.6",
-      capabilities: EMPTY_MODEL_CAPABILITIES,
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
     },
     {
       slug: "swe-1-7",
       name: "SWE 1.7",
-      capabilities: EMPTY_MODEL_CAPABILITIES,
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
     },
   ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
