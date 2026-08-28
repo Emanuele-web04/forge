@@ -1218,6 +1218,33 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.skipIf(process.platform === "win32")(
+      "does not execute repository-configured hooks while creating a managed worktree",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const hooksPath = path.join(tmp, "repository-hooks");
+          const hookPath = path.join(hooksPath, "post-checkout");
+          const markerPath = path.join(tmp, "post-checkout-ran");
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.makeDirectory(hooksPath, { recursive: true });
+          yield* writeTextFile(
+            hookPath,
+            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(markerPath)}\n`,
+          );
+          yield* Effect.promise(() => fs.chmod(hookPath, 0o700));
+          yield* git(tmp, ["config", "core.hooksPath", hooksPath]);
+
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-no-hooks");
+          yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+
+          expect(existsSync(markerPath)).toBe(false);
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath });
+        }),
+    );
+
     it.effect("copies checkout changes and .worktreeinclude files into a detached worktree", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

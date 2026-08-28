@@ -105,8 +105,39 @@ describe("buildCodexProcessEnv", () => {
     );
 
     try {
-      await buildCodexProcessEnv({ env: { CODEX_HOME: codexHome }, platform: "win32" });
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          "ACME-LICENSE.INTEGRATION": "active-provider-secret",
+          OPENAI_API_KEY: "inactive-openai-secret",
+          ANTHROPIC_API_KEY: "unrelated-provider-secret",
+        },
+        platform: "win32",
+      });
       expect(isProviderCredentialKey("ACME-LICENSE.INTEGRATION")).toBe(true);
+      expect(env["ACME-LICENSE.INTEGRATION"]).toBe("active-provider-secret");
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the OpenAI credential when no custom provider is active", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-openai-key-"));
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          OPENAI_API_KEY: "active-openai-secret",
+          ANTHROPIC_API_KEY: "unrelated-provider-secret",
+        },
+        platform: "win32",
+      });
+      expect(env.OPENAI_API_KEY).toBe("active-openai-secret");
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
     }

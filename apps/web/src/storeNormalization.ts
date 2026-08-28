@@ -21,16 +21,17 @@ import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
 import { hasLiveTurnTailWork } from "./session-logic";
 import { getRememberedProjectUiState, projectCwdKey } from "./storePersistence";
-import type {
-  ChatAttachment,
-  ChatMessage,
-  Project,
-  Space,
-  SidebarThreadSummary,
-  Thread,
-  ThreadSession,
-  ThreadShell,
-  ThreadTurnState,
+import {
+  DEFAULT_RUNTIME_MODE,
+  type ChatAttachment,
+  type ChatMessage,
+  type Project,
+  type Space,
+  type SidebarThreadSummary,
+  type Thread,
+  type ThreadSession,
+  type ThreadShell,
+  type ThreadTurnState,
 } from "./types";
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
@@ -830,7 +831,7 @@ function readModelSessionFromThreadSession(
     threadId: previousThread?.id ?? incomingSession?.threadId ?? ThreadId.makeUnsafe("unknown"),
     status: previousSession.orchestrationStatus,
     providerName: previousSession.provider,
-    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
+    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,

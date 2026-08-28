@@ -26,7 +26,12 @@ it.effect("rejects an unauthorized websocket upgrade on a non-loopback bind", ()
     );
 
     const error = yield* authenticateRpcWebSocketUpgrade({
-      config: { host: "0.0.0.0", authToken: "remote-secret", publicUrl: undefined },
+      config: {
+        host: "0.0.0.0",
+        authToken: "remote-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: null,
       request: {
         headers: {},
@@ -38,6 +43,60 @@ it.effect("rejects an unauthorized websocket upgrade on a non-loopback bind", ()
 
     assert.equal(error.status, 401);
     assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 1);
+  }),
+);
+
+it.effect("rejects an unauthorized websocket upgrade on a built loopback server", () =>
+  Effect.gen(function* () {
+    const authenticateWebSocketUpgrade = vi.fn(() =>
+      Effect.fail(new AuthError({ message: "Authentication required.", status: 401 })),
+    );
+
+    const error = yield* authenticateRpcWebSocketUpgrade({
+      config: {
+        host: "127.0.0.1",
+        authToken: undefined,
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
+      legacyToken: null,
+      request: {
+        headers: {},
+        cookies: {},
+        url: new URL("http://127.0.0.1:3773/ws"),
+      },
+      serverAuth: { authenticateWebSocketUpgrade },
+    }).pipe(Effect.flip);
+
+    assert.equal(error.status, 401);
+    assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 1);
+  }),
+);
+
+it.effect("keeps trusted-origin loopback development in its explicit unauthenticated mode", () =>
+  Effect.gen(function* () {
+    const authenticateWebSocketUpgrade = vi.fn(() =>
+      Effect.fail(new AuthError({ message: "Unexpected authentication call.", status: 500 })),
+    );
+
+    const session = yield* authenticateRpcWebSocketUpgrade({
+      config: {
+        host: "127.0.0.1",
+        authToken: undefined,
+        devUrl: new URL("http://localhost:5173/"),
+        publicUrl: undefined,
+      },
+      legacyToken: null,
+      request: {
+        headers: { origin: "http://localhost:5173" },
+        cookies: {},
+        url: new URL("http://127.0.0.1:3773/ws"),
+      },
+      serverAuth: { authenticateWebSocketUpgrade },
+    });
+
+    assert.equal(session, null);
+    assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 0);
   }),
 );
 
@@ -53,7 +112,12 @@ it.effect("does not accept a legacy query token on a non-loopback bind", () =>
     );
 
     const error = yield* authenticateRpcWebSocketUpgrade({
-      config: { host: "192.168.1.50", authToken: "remote-secret", publicUrl: undefined },
+      config: {
+        host: "192.168.1.50",
+        authToken: "remote-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: "remote-secret",
       request: {
         headers: {},
@@ -79,7 +143,12 @@ it.effect("accepts an authenticated session on a non-loopback bind", () =>
     const authenticateWebSocketUpgrade = vi.fn(() => Effect.succeed(authenticatedSession));
 
     const session = yield* authenticateRpcWebSocketUpgrade({
-      config: { host: "0.0.0.0", authToken: "remote-secret", publicUrl: undefined },
+      config: {
+        host: "0.0.0.0",
+        authToken: "remote-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: "remote-secret",
       request: {
         headers: {},
@@ -101,7 +170,12 @@ it.effect("preserves the legacy query token for loopback desktop sessions", () =
     );
 
     const session = yield* authenticateRpcWebSocketUpgrade({
-      config: { host: "127.0.0.1", authToken: "desktop-secret", publicUrl: undefined },
+      config: {
+        host: "127.0.0.1",
+        authToken: "desktop-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: "desktop-secret",
       request: {
         headers: {},
@@ -123,7 +197,12 @@ it.effect("preserves the legacy loopback token on the device frame socket", () =
     );
 
     const authorized = yield* authorizeDeviceFrameWebSocketUpgrade({
-      config: { host: "127.0.0.1", authToken: "desktop-secret", publicUrl: undefined },
+      config: {
+        host: "127.0.0.1",
+        authToken: "desktop-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: "desktop-secret",
       request: {
         headers: {},
@@ -145,7 +224,12 @@ it.effect("rejects an invalid legacy token on a remotely exposed device frame so
     );
 
     const authorized = yield* authorizeDeviceFrameWebSocketUpgrade({
-      config: { host: "0.0.0.0", authToken: "remote-secret", publicUrl: undefined },
+      config: {
+        host: "0.0.0.0",
+        authToken: "remote-secret",
+        devUrl: undefined,
+        publicUrl: undefined,
+      },
       legacyToken: "wrong-secret",
       request: {
         headers: {},
@@ -176,6 +260,7 @@ it.effect(
         config: {
           host: "127.0.0.1",
           authToken: "proxy-secret",
+          devUrl: undefined,
           publicUrl: new URL("https://synara.example.test/"),
         },
         legacyToken: "proxy-secret",

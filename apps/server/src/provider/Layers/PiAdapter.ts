@@ -231,7 +231,7 @@ export function makePiBashProcessSupervisor(
           cwd,
           detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
-            provider: "pi",
+            provider: "pi-shell",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],

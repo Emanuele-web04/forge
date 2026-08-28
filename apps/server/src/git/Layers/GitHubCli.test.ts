@@ -8,6 +8,7 @@ vi.mock("../../processRunner", () => ({
 }));
 
 import { runProcess } from "../../processRunner";
+import { GIT_HARDENED_CONFIG_ARGS } from "../gitInvocationSecurity.ts";
 import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import { GitHubCliLive } from "./GitHubCli.ts";
 
@@ -966,7 +967,12 @@ layer("GitHubCliLive", (it) => {
       ]);
       expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
         expect.objectContaining({
-          env: expect.objectContaining({ GH_HOST: "github.com" }),
+          env: expect.objectContaining({
+            GH_HOST: "github.com",
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "core.fsmonitor",
+            GIT_CONFIG_VALUE_0: "false",
+          }),
           signal: expect.any(AbortSignal),
         }),
       );
@@ -1430,6 +1436,7 @@ layer("GitHubCliLive", (it) => {
       ]);
       expect(mockedRunProcess.mock.calls[2]?.[0]).toBe("git");
       expect(mockedRunProcess.mock.calls[2]?.[1]).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
         "diff",
         "--no-color",
         "1111111111111111...2222222222222222",
@@ -1483,6 +1490,7 @@ layer("GitHubCliLive", (it) => {
       // Git resolves the validated remote name itself, preserving its transport and credentials
       // without putting a token-bearing remote URL in argv or process-runner errors.
       expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
         "fetch",
         "--quiet",
         "--",
@@ -1536,6 +1544,7 @@ layer("GitHubCliLive", (it) => {
 
       const fetchArgs = mockedRunProcess.mock.calls[5]?.[1];
       expect(fetchArgs).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
         "fetch",
         "--quiet",
         "--",
@@ -1592,8 +1601,13 @@ layer("GitHubCliLive", (it) => {
       });
 
       assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
-      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual(["rev-parse", "--is-shallow-repository"]);
+      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
+        "rev-parse",
+        "--is-shallow-repository",
+      ]);
       expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
         "fetch",
         "--quiet",
         "--deepen=64",
@@ -1603,6 +1617,7 @@ layer("GitHubCliLive", (it) => {
         "main",
       ]);
       expect(mockedRunProcess.mock.calls[7]?.[1]).toEqual([
+        ...GIT_HARDENED_CONFIG_ARGS,
         "fetch",
         "--quiet",
         "--deepen=256",

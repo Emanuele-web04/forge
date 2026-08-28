@@ -2,6 +2,7 @@
 // Purpose: Shared web-app view models for threads, projects, terminal layout, and sidebar rows.
 // Exports: Runtime UI types consumed across store, routes, and components.
 
+import { DEFAULT_RUNTIME_MODE as CONTRACT_DEFAULT_RUNTIME_MODE } from "@synara/contracts";
 import type {
   ModelSelection,
   MessageDispatchOrigin,
@@ -36,7 +37,7 @@ import type {
 } from "@synara/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = CONTRACT_DEFAULT_RUNTIME_MODE;
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;

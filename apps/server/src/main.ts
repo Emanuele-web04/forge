@@ -43,6 +43,7 @@ import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
+import { requiresWebSocketAuthentication } from "./trustedOrigins";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
@@ -328,7 +329,7 @@ export function makeServerStartupLogData(config: ServerConfigShape): Record<stri
   return {
     ...safeConfig,
     devUrl: config.devUrl?.toString(),
-    authEnabled: Boolean(config.authToken),
+    authEnabled: requiresWebSocketAuthentication(config),
   };
 }
 
@@ -362,7 +363,8 @@ const makeServerProgram = (input: CliInput) =>
         : localUrl;
     const pairingBaseUrl = config.publicUrl?.origin ?? bindUrl;
     const startupPairingUrl =
-      config.publicUrl || !isLoopbackHost(config.host)
+      requiresWebSocketAuthentication(config) &&
+      (config.mode === "web" || config.publicUrl || !isLoopbackHost(config.host))
         ? yield* serverAuth.issueStartupPairingUrl(pairingBaseUrl).pipe(
             Effect.mapError(
               (cause) =>
@@ -412,7 +414,9 @@ const makeServerProgram = (input: CliInput) =>
       yield* Effect.logInfo(
         config.publicUrl
           ? "Remote access requires an authenticated owner session"
-          : "Insecure remote pairing link created",
+          : isLoopbackHost(config.host)
+            ? "Local access requires an authenticated owner session"
+            : "Insecure remote pairing link created",
         {
           pairingUrl: startupPairingUrl,
           hint:

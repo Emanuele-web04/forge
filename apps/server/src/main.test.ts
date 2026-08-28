@@ -700,6 +700,18 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
+  it.effect("uses one-time pairing for the built loopback web app", () =>
+    Effect.gen(function* () {
+      yield* runCli([], { SYNARA_NO_BROWSER: "false" });
+
+      assert.equal(openBrowser.mock.calls.length, 1);
+      assert.match(
+        openBrowser.mock.calls[0]?.[0] ?? "",
+        /^http:\/\/127\.0\.0\.1:3773\/pair#token=/,
+      );
+    }),
+  );
+
   it.effect("supports the HTTPS public origin through environment configuration", () =>
     Effect.gen(function* () {
       yield* runCli([], {

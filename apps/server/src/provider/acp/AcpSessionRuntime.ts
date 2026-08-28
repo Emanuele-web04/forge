@@ -25,7 +25,10 @@ import * as AcpErrors from "./AcpErrors.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
-import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import {
+  buildProviderChildEnvironment,
+  isProviderCredentialKey,
+} from "../../providerChildEnvironment.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -801,9 +804,16 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
+    const suppliedEnv = options.spawn.env ? { ...options.spawn.env } : undefined;
     const env = buildProviderChildEnvironment({
       provider: "acp",
-      baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
+      baseEnv: suppliedEnv ?? process.env,
+      // Provider-specific ACP launchers already reduced this environment. Keep
+      // only credentials present in that exact capability set; the process.env
+      // fallback receives no provider credentials.
+      additionalCredentialKeys: suppliedEnv
+        ? Object.keys(suppliedEnv).filter(isProviderCredentialKey)
+        : [],
     });
     const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
       cwd: options.spawn.cwd,

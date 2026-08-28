@@ -714,15 +714,16 @@ export async function buildCodexProcessEnv(
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
       : baseEnv;
+  const providerEnvKey = readActiveCodexProviderEnvKey(configuredEnv);
+  if (providerEnvKey) {
+    registerProviderCredentialKey(providerEnvKey);
+  }
   const platform = input.platform ?? process.platform;
   const effectiveEnv = buildProviderChildEnvironment({
     provider: "codex",
     baseEnv: configuredEnv,
+    additionalCredentialKeys: [providerEnvKey ?? "OPENAI_API_KEY"],
   });
-  const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
-  if (providerEnvKey) {
-    registerProviderCredentialKey(providerEnvKey);
-  }
 
   if (platform === "darwin" || platform === "linux") {
     try {

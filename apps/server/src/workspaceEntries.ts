@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runProcess } from "./processRunner";
+import { GIT_HARDENED_CONFIG_ARGS } from "./git/gitInvocationSecurity";
 
 import {
   FilesystemBrowseInput,
@@ -41,9 +42,8 @@ const PROJECT_PACKAGE_JSON_MAX_BYTES = 1024 * 1024;
 const PROJECT_PACKAGE_SCAN_MAX_TARGETS = 80;
 const PROJECT_PACKAGE_SCAN_READDIR_CONCURRENCY = 16;
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
-const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
-  "-c",
-  "core.fsmonitor=false",
+const WORKSPACE_GIT_CONFIG_ARGS = [
+  ...GIT_HARDENED_CONFIG_ARGS,
   "-c",
   "core.untrackedCache=false",
 ] as const;
@@ -475,12 +475,16 @@ async function mapWithConcurrency<TInput, TOutput>(
 }
 
 async function isInsideGitWorkTree(cwd: string): Promise<boolean> {
-  const insideWorkTree = await runProcess("git", ["rev-parse", "--is-inside-work-tree"], {
-    cwd,
-    allowNonZeroExit: true,
-    timeoutMs: 5_000,
-    maxBufferBytes: 4_096,
-  }).catch(() => null);
+  const insideWorkTree = await runProcess(
+    "git",
+    [...GIT_HARDENED_CONFIG_ARGS, "rev-parse", "--is-inside-work-tree"],
+    {
+      cwd,
+      allowNonZeroExit: true,
+      timeoutMs: 5_000,
+      maxBufferBytes: 4_096,
+    },
+  ).catch(() => null);
   return Boolean(
     insideWorkTree && insideWorkTree.code === 0 && insideWorkTree.stdout.trim() === "true",
   );
@@ -502,7 +506,7 @@ async function filterGitIgnoredPaths(cwd: string, relativePaths: string[]): Prom
 
     const checkIgnore = await runProcess(
       "git",
-      [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "check-ignore", "--no-index", "-z", "--stdin"],
+      [...WORKSPACE_GIT_CONFIG_ARGS, "check-ignore", "--no-index", "-z", "--stdin"],
       {
         cwd,
         allowNonZeroExit: true,
@@ -571,7 +575,7 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
   const listedFiles = await runProcess(
     "git",
     [
-      ...WORKSPACE_GIT_HARDENED_CONFIG_ARGS,
+      ...WORKSPACE_GIT_CONFIG_ARGS,
       "ls-files",
       "--cached",
       "--others",

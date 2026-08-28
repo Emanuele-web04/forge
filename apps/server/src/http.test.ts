@@ -209,6 +209,18 @@ describe("production Effect HTTP routes", () => {
         url: new URL("http://127.0.0.1/attachments/id?token=desktop-secret"),
       }),
     ).toBe(false);
+    expect(
+      isLegacyTokenAuthorized({
+        config: makeConfig(),
+        url: new URL("http://127.0.0.1/attachments/id"),
+      }),
+    ).toBe(false);
+    expect(
+      isLegacyTokenAuthorized({
+        config: makeConfig({ devUrl: new URL("http://localhost:5173/") }),
+        url: new URL("http://127.0.0.1/attachments/id"),
+      }),
+    ).toBe(true);
   });
 
   it("serves readiness through the deployed health route", async () => {

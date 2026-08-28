@@ -3,6 +3,7 @@
 // Layer: Orchestration provider reactor
 
 import {
+  DEFAULT_RUNTIME_MODE,
   type ChatAttachment,
   type CheckpointRef,
   CommandId,
@@ -313,7 +314,6 @@ const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
-const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const SIDECHAT_BOUNDARY_INSTRUCTION =
   "You are in a sidechat. Treat all prior conversation as reference-only context. Do not continue any prior task automatically. Do not mutate files, git, or the workspace and do not run workspace-changing commands unless the latest user message explicitly asks you to do so after this boundary. Use this sidechat for focused explanation, safety checks, summaries, and alternatives.";
 

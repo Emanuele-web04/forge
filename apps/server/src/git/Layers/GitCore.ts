@@ -31,6 +31,7 @@ import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
+import { hardenGitInvocationArgs } from "../gitInvocationSecurity.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -76,6 +77,7 @@ const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
+const MANAGED_WORKTREE_DISABLED_HOOKS_DIRNAME = ".disabled-git-hooks";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
@@ -637,7 +639,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
           const child = yield* commandSpawner
             .spawn(
-              ChildProcess.make("git", commandInput.args, {
+              ChildProcess.make("git", hardenGitInvocationArgs(commandInput.args), {
                 cwd: commandInput.cwd,
                 env: {
                   ...process.env,
@@ -2772,6 +2774,21 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ),
             ),
           ));
+        const disabledHooksPath = path.join(
+          worktreesDir,
+          MANAGED_WORKTREE_DISABLED_HOOKS_DIRNAME,
+        );
+        yield* fileSystem.makeDirectory(disabledHooksPath, { recursive: true }).pipe(
+          Effect.mapError((cause: unknown) =>
+            createGitCommandError(
+              "GitCore.createDetachedWorktree",
+              input.cwd,
+              ["worktree", "add", "<path>", input.ref],
+              "failed to prepare the managed worktree hook policy.",
+              cause,
+            ),
+          ),
+        );
 
         // Branch-backed managed worktrees still pin to the resolved commit, so
         // ownership proofs and pruning behave exactly like the detached form.
@@ -2790,8 +2807,23 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           "GitCore.createDetachedWorktree",
           input.cwd,
           newBranch
-            ? ["worktree", "add", worktreePath, newBranch]
-            : ["worktree", "add", "--detach", worktreePath, resolvedRef],
+            ? [
+                "-c",
+                `core.hooksPath=${disabledHooksPath}`,
+                "worktree",
+                "add",
+                worktreePath,
+                newBranch,
+              ]
+            : [
+                "-c",
+                `core.hooksPath=${disabledHooksPath}`,
+                "worktree",
+                "add",
+                "--detach",
+                worktreePath,
+                resolvedRef,
+              ],
         );
         yield* newBranch
           ? addWorktree.pipe(

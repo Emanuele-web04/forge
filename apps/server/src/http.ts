@@ -65,8 +65,10 @@ import {
   staticEtag,
 } from "./staticAssets";
 import {
+  isLegacyLoopbackTokenAccepted,
   isTrustedAppOrigin,
   normalizeCorsOrigin,
+  requiresWebSocketAuthentication,
   shouldRejectAuthMutationOrigin,
 } from "./trustedOrigins";
 import {
@@ -331,8 +333,13 @@ export function isLegacyTokenAuthorized(input: {
   if (!isLoopbackHost(input.config.host) || input.config.publicUrl) {
     return false;
   }
-  const legacyToken = input.url.searchParams.get("token");
-  return !input.config.authToken || legacyToken === input.config.authToken;
+  if (!requiresWebSocketAuthentication(input.config)) {
+    return true;
+  }
+  return isLegacyLoopbackTokenAccepted({
+    config: input.config,
+    token: input.url.searchParams.get("token"),
+  });
 }
 
 function encodeCookie(input: {

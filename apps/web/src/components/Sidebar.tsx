@@ -169,7 +169,12 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
-import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
+import {
+  DEFAULT_RUNTIME_MODE,
+  DEFAULT_THREAD_TERMINAL_ID,
+  type SidebarThreadSummary,
+  type Thread,
+} from "../types";
 import {
   applyAutomationEvent,
   automationAttentionCount,
@@ -2765,7 +2770,7 @@ export default function Sidebar() {
           projectId: activeProject.id,
           title,
           modelSelection,
-          runtimeMode: "full-access",
+          runtimeMode: DEFAULT_RUNTIME_MODE,
           interactionMode: "default",
           envMode: resolveSidebarNewThreadEnvMode({
             defaultEnvMode: appSettings.defaultThreadEnvMode,
