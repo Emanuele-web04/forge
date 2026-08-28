@@ -50,6 +50,7 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "kilo",
   "opencode",
   "pi",
+  "devin",
 ];
 
 /** Warm results stay fresh for 30 minutes instead of the interactive 60s. */
