@@ -1,4 +1,4 @@
-import { DEFAULT_RUNTIME_MODE, ProviderKind, type ThreadId } from "@synara/contracts";
+import { ProviderKind, type ThreadId } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
@@ -104,7 +104,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         adapterKey:
           binding.adapterKey ??
           (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
-        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
         status: binding.status ?? compatibleRuntime?.status ?? "running",
         lifecycleGeneration:
           binding.lifecycleGeneration ?? compatibleRuntime?.lifecycleGeneration ?? "legacy",

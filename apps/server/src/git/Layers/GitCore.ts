@@ -31,7 +31,10 @@ import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
-import { hardenGitInvocationArgs } from "../gitInvocationSecurity.ts";
+import {
+  disableGitHooksForInvocationArgs,
+  hardenGitInvocationArgs,
+} from "../gitInvocationSecurity.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -2736,131 +2739,113 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input, options) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const onPhase = options?.onPhase ?? (() => Effect.void);
-          const newBranch = input.newBranch ?? null;
-          const refResult = yield* executeGit(
-            "GitCore.createDetachedWorktree.resolveRef",
-            input.cwd,
-            ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
-          );
-          const resolvedRef = refResult.stdout.trim();
-          if (input.copyChangesFrom) {
-            const sourceHead = yield* executeGit(
-              "GitCore.createDetachedWorktree.resolveCopySource",
-              input.copyChangesFrom,
-              ["rev-parse", "--verify", "HEAD^{commit}"],
-            ).pipe(Effect.map((result) => result.stdout.trim()));
-            if (sourceHead !== resolvedRef) {
-              return yield* createGitCommandError(
+      Effect.gen(function* () {
+        const onPhase = options?.onPhase ?? (() => Effect.void);
+        const newBranch = input.newBranch ?? null;
+        const refResult = yield* executeGit(
+          "GitCore.createDetachedWorktree.resolveRef",
+          input.cwd,
+          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        );
+        const resolvedRef = refResult.stdout.trim();
+        if (input.copyChangesFrom) {
+          const sourceHead = yield* executeGit(
+            "GitCore.createDetachedWorktree.resolveCopySource",
+            input.copyChangesFrom,
+            ["rev-parse", "--verify", "HEAD^{commit}"],
+          ).pipe(Effect.map((result) => result.stdout.trim()));
+          if (sourceHead !== resolvedRef) {
+            return yield* createGitCommandError(
+              "GitCore.createDetachedWorktree",
+              input.cwd,
+              ["worktree", "add", "--detach", "<path>", input.ref],
+              "Cannot copy checkout changes because the selected ref is not that checkout's HEAD.",
+            );
+          }
+        }
+        const worktreePath =
+          input.path ??
+          (yield* buildGeneratedDetachedWorktreePath().pipe(
+            Effect.mapError((cause: unknown) =>
+              createGitCommandError(
                 "GitCore.createDetachedWorktree",
                 input.cwd,
-                ["worktree", "add", "--detach", "<path>", input.ref],
-                "Cannot copy checkout changes because the selected ref is not that checkout's HEAD.",
-              );
-            }
-          }
-          const worktreePath =
-            input.path ??
-            (yield* buildGeneratedDetachedWorktreePath().pipe(
-              Effect.mapError((cause: unknown) =>
-                createGitCommandError(
-                  "GitCore.createDetachedWorktree",
-                  input.cwd,
-                  ["worktree", "add", "--detach", "<generated>", input.ref],
-                  "failed to prepare detached worktree path.",
-                  cause,
-                ),
+                ["worktree", "add", "--detach", "<generated>", input.ref],
+                "failed to prepare detached worktree path.",
+                cause,
               ),
-            ));
-          const disabledHooksPath = yield* fileSystem
-            .makeTempDirectoryScoped({ prefix: `synara-disabled-git-hooks-${process.pid}-` })
-            .pipe(
-              Effect.mapError((cause: unknown) =>
-                createGitCommandError(
-                  "GitCore.createDetachedWorktree",
-                  input.cwd,
-                  ["worktree", "add", "<path>", input.ref],
-                  "failed to prepare the managed worktree hook policy.",
-                  cause,
-                ),
-              ),
-            );
-          const withoutRepositoryHooks = (args: ReadonlyArray<string>) => [
-            "-c",
-            `core.hooksPath=${disabledHooksPath}`,
-            ...args,
-          ];
+            ),
+          ));
 
-          // Branch-backed managed worktrees still pin to the resolved commit, so
-          // ownership proofs and pruning behave exactly like the detached form.
-          // The branch is created before the (slow) checkout so progress phases
-          // reflect the real boundary between the two.
-          if (newBranch) {
-            yield* onPhase("branch");
-            yield* executeGit(
-              "GitCore.createDetachedWorktree.createBranch",
-              input.cwd,
-              withoutRepositoryHooks(["branch", newBranch, resolvedRef]),
-            );
-          }
-          yield* onPhase("worktree");
-          const addWorktree = executeGit(
-            "GitCore.createDetachedWorktree",
+        // Branch-backed managed worktrees still pin to the resolved commit, so
+        // ownership proofs and pruning behave exactly like the detached form.
+        // The branch is created before the (slow) checkout so progress phases
+        // reflect the real boundary between the two.
+        if (newBranch) {
+          yield* onPhase("branch");
+          yield* executeGit(
+            "GitCore.createDetachedWorktree.createBranch",
             input.cwd,
-            newBranch
-              ? withoutRepositoryHooks(["worktree", "add", worktreePath, newBranch])
-              : withoutRepositoryHooks(["worktree", "add", "--detach", worktreePath, resolvedRef]),
+            disableGitHooksForInvocationArgs(["branch", newBranch, resolvedRef]),
           );
-          yield* newBranch
-            ? addWorktree.pipe(
-                Effect.onError(() =>
-                  executeGit(
-                    "GitCore.createDetachedWorktree.rollbackBranch",
-                    input.cwd,
-                    withoutRepositoryHooks(["branch", "-D", newBranch]),
-                    { allowNonZeroExit: true },
-                  ).pipe(Effect.ignore),
-                ),
-              )
-            : addWorktree;
-
-          if (input.copyChangesFrom) {
-            yield* onPhase("copy-changes");
-            yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
+        }
+        yield* onPhase("worktree");
+        const addWorktree = executeGit(
+          "GitCore.createDetachedWorktree",
+          input.cwd,
+          disableGitHooksForInvocationArgs(
+            newBranch
+              ? ["worktree", "add", worktreePath, newBranch]
+              : ["worktree", "add", "--detach", worktreePath, resolvedRef],
+          ),
+        );
+        yield* newBranch
+          ? addWorktree.pipe(
               Effect.onError(() =>
                 executeGit(
-                  "GitCore.createDetachedWorktree.rollback",
+                  "GitCore.createDetachedWorktree.rollbackBranch",
                   input.cwd,
-                  ["worktree", "remove", "--force", worktreePath],
+                  disableGitHooksForInvocationArgs(["branch", "-D", newBranch]),
                   { allowNonZeroExit: true },
-                ).pipe(
-                  Effect.andThen(
-                    newBranch
-                      ? executeGit(
-                          "GitCore.createDetachedWorktree.rollbackBranch",
-                          input.cwd,
-                          withoutRepositoryHooks(["branch", "-D", newBranch]),
-                          { allowNonZeroExit: true },
-                        )
-                      : Effect.void,
-                  ),
-                  Effect.ignore,
-                ),
+                ).pipe(Effect.ignore),
               ),
-            );
-          }
+            )
+          : addWorktree;
 
-          return {
-            worktree: {
-              path: worktreePath,
-              ref: resolvedRef,
-              branch: newBranch,
-            },
-          };
-        }),
-      );
+        if (input.copyChangesFrom) {
+          yield* onPhase("copy-changes");
+          yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
+            Effect.onError(() =>
+              executeGit(
+                "GitCore.createDetachedWorktree.rollback",
+                input.cwd,
+                ["worktree", "remove", "--force", worktreePath],
+                { allowNonZeroExit: true },
+              ).pipe(
+                Effect.andThen(
+                  newBranch
+                    ? executeGit(
+                        "GitCore.createDetachedWorktree.rollbackBranch",
+                        input.cwd,
+                        disableGitHooksForInvocationArgs(["branch", "-D", newBranch]),
+                        { allowNonZeroExit: true },
+                      )
+                    : Effect.void,
+                ),
+                Effect.ignore,
+              ),
+            ),
+          );
+        }
+
+        return {
+          worktree: {
+            path: worktreePath,
+            ref: resolvedRef,
+            branch: newBranch,
+          },
+        };
+      });
 
     const fetchPullRequestBranch: GitCoreShape["fetchPullRequestBranch"] = (input) =>
       Effect.gen(function* () {

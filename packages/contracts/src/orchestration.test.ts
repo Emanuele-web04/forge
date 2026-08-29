@@ -44,10 +44,6 @@ const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPay
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 
-it("uses the supervised runtime as the default", () => {
-  assert.strictEqual(DEFAULT_RUNTIME_MODE, "approval-required");
-});
-
 it.effect("decodes the AI-reviewed auto runtime mode", () =>
   Effect.gen(function* () {
     assert.strictEqual(yield* decodeRuntimeMode("auto"), "auto");

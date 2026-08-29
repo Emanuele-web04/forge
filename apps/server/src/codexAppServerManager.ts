@@ -5,7 +5,6 @@ import { EventEmitter } from "node:events";
 import {
   ApprovalRequestId,
   BROWSER_TOOL_NAMES,
-  DEFAULT_RUNTIME_MODE,
   EventId,
   type ProviderComposerCapabilities,
   ProviderItemId,
@@ -576,7 +575,7 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 </collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 // Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
-export function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
+function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
   readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandbox: CodexSandboxMode;
@@ -1153,7 +1152,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
-        ...mapCodexRuntimeMode(input.runtimeMode ?? DEFAULT_RUNTIME_MODE),
+        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
       const resumeThreadId = readResumeThreadId(input);
@@ -2775,7 +2774,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       session: {
         provider: "codex",
         status: "connecting",
-        runtimeMode: DEFAULT_RUNTIME_MODE,
+        runtimeMode: "full-access",
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
         threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),

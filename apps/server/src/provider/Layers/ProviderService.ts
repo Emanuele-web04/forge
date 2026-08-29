@@ -10,7 +10,6 @@
  * @module ProviderServiceLive
  */
 import {
-  DEFAULT_RUNTIME_MODE,
   EventId,
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
@@ -1411,7 +1410,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* validateAutoRuntimeMode(
               input.operation,
               binding.provider,
-              binding.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+              binding.runtimeMode ?? "full-access",
             );
 
             const resumed = yield* adapter.startSession({
@@ -1422,7 +1421,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
               ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
-              runtimeMode: binding.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+              runtimeMode: binding.runtimeMode ?? "full-access",
             });
             if (resumed.provider !== adapter.provider) {
               return yield* toValidationError(
@@ -1766,7 +1765,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         threadId,
                         provider: persistedBinding.provider,
                         lifecycleGeneration: previousGeneration,
-                        runtimeMode: persistedBinding.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+                        runtimeMode: persistedBinding.runtimeMode ?? "full-access",
                         ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
                         ...(previousModelSelection !== undefined
                           ? { modelSelection: previousModelSelection }

@@ -27,11 +27,7 @@ const GitCoreTestLayer = GitCoreLive.pipe(
   Layer.provide(ServerConfigLayer),
   Layer.provide(NodeServices.layer),
 );
-const TestLayer = Layer.mergeAll(
-  NodeServices.layer,
-  GitCoreTestLayer,
-  ServerConfigLayer.pipe(Layer.provide(NodeServices.layer)),
-);
+const TestLayer = Layer.mergeAll(NodeServices.layer, GitCoreTestLayer);
 
 function makeTmpDir(
   prefix = "git-test-",
@@ -1223,21 +1219,18 @@ it.layer(TestLayer)("git integration", (it) => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "does not execute configured or poisoned hooks while creating a managed worktree",
+      "does not execute configured hooks while creating a managed worktree",
       () =>
         Effect.gen(function* () {
           const tmp = yield* makeTmpDir();
           yield* initRepoWithCommit(tmp);
-          const { worktreesDir } = yield* ServerConfig;
           const hooksPath = path.join(tmp, "repository-hooks");
           const branchHookPath = path.join(hooksPath, "reference-transaction");
+          const checkoutHookPath = path.join(hooksPath, "post-checkout");
           const branchMarkerPath = path.join(tmp, "reference-transaction-ran");
-          const poisonedHooksPath = path.join(worktreesDir, ".disabled-git-hooks");
-          const checkoutHookPath = path.join(poisonedHooksPath, "post-checkout");
-          const checkoutMarkerPath = path.join(tmp, "poisoned-post-checkout-ran");
+          const checkoutMarkerPath = path.join(tmp, "post-checkout-ran");
           const fileSystem = yield* FileSystem.FileSystem;
           yield* fileSystem.makeDirectory(hooksPath, { recursive: true });
-          yield* fileSystem.makeDirectory(poisonedHooksPath, { recursive: true });
           yield* writeTextFile(
             branchHookPath,
             `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(branchMarkerPath)}\n`,

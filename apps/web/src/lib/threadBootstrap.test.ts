@@ -253,7 +253,7 @@ describe("threadBootstrap", () => {
       worktreePath: "/repo/.worktrees/new-terminal",
       workingDirectory: null,
       envMode: "worktree",
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
       entryPoint: "terminal",
     });
   });
@@ -273,7 +273,7 @@ describe("threadBootstrap", () => {
       worktreePath: null,
       workingDirectory: null,
       envMode: "local",
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
       entryPoint: "chat",
       isTemporary: true,
     });

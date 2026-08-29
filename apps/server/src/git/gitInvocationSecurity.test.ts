@@ -5,7 +5,11 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { gitHardenedConfigEnvironment, hardenGitInvocationArgs } from "./gitInvocationSecurity.ts";
+import {
+  disableGitHooksForInvocationArgs,
+  gitHardenedConfigEnvironment,
+  hardenGitInvocationArgs,
+} from "./gitInvocationSecurity.ts";
 
 function readFsmonitor(cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv): string {
   const result = spawnSync("git", [...args, "config", "--get", "core.fsmonitor"], {
@@ -18,6 +22,16 @@ function readFsmonitor(cwd: string, args: ReadonlyArray<string>, env?: NodeJS.Pr
 }
 
 describe("Git invocation security", () => {
+  it("disables repository hooks for a single managed invocation", () => {
+    expect(disableGitHooksForInvocationArgs(["worktree", "add", "/tmp/example"])).toEqual([
+      "-c",
+      "core.hooksPath=/dev/null",
+      "worktree",
+      "add",
+      "/tmp/example",
+    ]);
+  });
+
   it("overrides a repository-configured fsmonitor for direct Git commands", () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-git-security-"));
     try {

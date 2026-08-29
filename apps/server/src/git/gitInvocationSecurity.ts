@@ -13,6 +13,12 @@ export function hardenGitInvocationArgs(args: ReadonlyArray<string>): ReadonlyAr
   return [...GIT_HARDENED_CONFIG_ARGS, ...args];
 }
 
+export function disableGitHooksForInvocationArgs(
+  args: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return ["-c", "core.hooksPath=/dev/null", ...args];
+}
+
 /**
  * Environment form for commands such as `gh` that launch Git as a descendant.
  * GIT_CONFIG_COUNT makes the same overrides apply without relying on argument

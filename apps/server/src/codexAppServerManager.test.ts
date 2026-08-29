@@ -16,7 +16,6 @@ import { PassThrough } from "node:stream";
 import {
   ApprovalRequestId,
   BROWSER_TOOL_NAMES,
-  DEFAULT_RUNTIME_MODE,
   ThreadId,
   TurnId,
   type RuntimeMode,
@@ -38,7 +37,6 @@ import {
   classifyCodexStderrLine,
   formatCodexThreadResumeError,
   isRecoverableThreadResumeError,
-  mapCodexRuntimeMode,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
@@ -72,14 +70,6 @@ const autoTurnOverrides = {
   approvalsReviewer: "auto_review",
   sandboxPolicy: { type: "workspaceWrite" },
 } as const;
-
-it("maps the default Codex runtime to the supervised read-only policy", () => {
-  expect(mapCodexRuntimeMode(DEFAULT_RUNTIME_MODE)).toEqual({
-    approvalPolicy: "untrusted",
-    approvalsReviewer: "user",
-    sandbox: "read-only",
-  });
-});
 
 describe("Codex Synara harness policy", () => {
   it("keeps the same host policy exactly once in default and plan instructions", () => {

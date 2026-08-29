@@ -31,7 +31,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
-  DEFAULT_RUNTIME_MODE,
   type CanonicalItemType,
   type ClaudeApiEffort,
   type CanonicalRequestType,
@@ -4948,7 +4947,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 } satisfies PermissionResult;
               }
 
-              const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+              const runtimeMode = input.runtimeMode ?? "full-access";
               if (runtimeMode === "full-access" || context.approvalsAlwaysAllowedForSession) {
                 return {
                   behavior: "allow",
