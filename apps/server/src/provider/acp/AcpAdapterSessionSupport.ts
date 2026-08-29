@@ -13,10 +13,11 @@ import type {
   RuntimeMode,
   TurnId,
 } from "@synara/contracts";
-import { Deferred, Effect, Option, Semaphore, SynchronizedRef } from "effect";
+import { Deferred, Effect, Option, Scope, Semaphore, SynchronizedRef } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import type { AcpSessionMode, AcpSessionModeState, AcpToolCallState } from "./AcpRuntimeModel.ts";
+import { forkAcpTurnIdleWatchdog } from "./AcpTurnIdleWatchdog.ts";
 
 export interface AcpSessionModeAliases {
   readonly plan: ReadonlyArray<string>;
@@ -205,6 +206,37 @@ export function waitForAcpQueuedTurnEventsDrained(input: {
     while (input.sessionUpdatesProcessed() < target && Date.now() - startedAt < input.maxWaitMs) {
       yield* Effect.sleep(input.pollMs);
     }
+  });
+}
+
+export function forkAcpAdapterTurnIdleWatchdog(input: {
+  readonly context: {
+    readonly scope: Scope.Closeable;
+    readonly pendingApprovals: { readonly size: number };
+    readonly pendingUserInputs: { readonly size: number };
+    activeTurnId: TurnId | undefined;
+    lastTurnActivityAt: number | undefined;
+    stopped: boolean;
+  };
+  readonly turnId: TurnId;
+  readonly idleTimeoutMs: number;
+  readonly currentIdleTimeoutMs?: () => number;
+  readonly checkIntervalMs: number;
+  readonly onIdleTimeout: (idleMs: number) => Effect.Effect<void>;
+}) {
+  const { context } = input;
+  return forkAcpTurnIdleWatchdog({
+    idleTimeoutMs: input.idleTimeoutMs,
+    ...(input.currentIdleTimeoutMs ? { currentIdleTimeoutMs: input.currentIdleTimeoutMs } : {}),
+    checkIntervalMs: input.checkIntervalMs,
+    scope: context.scope,
+    isTurnActive: () => context.activeTurnId === input.turnId && !context.stopped,
+    isAwaitingHuman: () => context.pendingApprovals.size > 0 || context.pendingUserInputs.size > 0,
+    lastActivityAt: () => context.lastTurnActivityAt ?? Date.now(),
+    touchActivity: () => {
+      context.lastTurnActivityAt = Date.now();
+    },
+    onIdleTimeout: input.onIdleTimeout,
   });
 }
 

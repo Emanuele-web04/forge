@@ -15,6 +15,8 @@ import {
   type ModelSelection,
   type ModelSlug,
   type OpenCodeModelOptions,
+  type ProviderModelDescriptor,
+  type ProviderModelVariantDescriptor,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type PiModelOptions,
@@ -146,6 +148,98 @@ export function hasContextWindowOption(caps: ModelCapabilities, value: string): 
 
 export function getDefaultContextWindow(caps: ModelCapabilities): string | null {
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
+}
+
+const DEVIN_STATIC_MODEL_VARIANTS: Readonly<
+  Record<string, ReadonlyArray<ProviderModelVariantDescriptor>>
+> = {
+  "swe-1-6": [
+    { model: "swe-1-6", fastMode: false },
+    { model: "swe-1-6-fast", fastMode: true },
+  ],
+  "swe-1-7": [
+    { model: "swe-1-7", fastMode: false },
+    { model: "swe-1-7-lightning", fastMode: true },
+  ],
+};
+
+export function getDevinStaticModelVariants(
+  model: string | null | undefined,
+): ReadonlyArray<ProviderModelVariantDescriptor> | undefined {
+  const normalizedModel = normalizeModelSlug(model, "devin");
+  return normalizedModel ? DEVIN_STATIC_MODEL_VARIANTS[normalizedModel] : undefined;
+}
+
+export function resolveDevinModelVariant(input: {
+  readonly model?: string | null | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly modelVariant?: string | null | undefined;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly fastMode?: boolean | undefined;
+  readonly thinking?: boolean | null | undefined;
+  readonly contextWindow?: string | null | undefined;
+}): string | undefined {
+  const variants = input.runtimeModel?.modelVariants ?? getDevinStaticModelVariants(input.model);
+  const explicitVariant = trimOrNull(input.modelVariant) ?? undefined;
+  if (!variants?.length) {
+    return explicitVariant;
+  }
+
+  const reasoningEffort = trimOrNull(input.reasoningEffort);
+  const contextWindow = trimOrNull(input.contextWindow);
+  const mapsReasoningEffort =
+    reasoningEffort !== null && variants.some((variant) => variant.reasoningEffort !== undefined);
+  const mapsFastMode =
+    input.fastMode !== undefined && variants.some((variant) => variant.fastMode !== undefined);
+  const mapsThinking =
+    input.thinking !== null &&
+    input.thinking !== undefined &&
+    variants.some((variant) => variant.thinking !== undefined);
+  const mapsContextWindow =
+    contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
+  if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
+    return explicitVariant;
+  }
+
+  const effectiveReasoningEffort =
+    reasoningEffort ?? trimOrNull(input.runtimeModel?.defaultReasoningEffort);
+  const effectiveContextWindow =
+    contextWindow ?? trimOrNull(input.runtimeModel?.defaultContextWindow);
+  // Thinking is on by default for Devin families that expose a thinking
+  // toggle. Keep the persisted option sparse, but use the effective
+  // default when resolving a non-default context window to its concrete
+  // process-start variant.
+  const effectiveThinking =
+    input.thinking ?? (input.runtimeModel?.supportsThinkingToggle === true ? true : undefined);
+  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
+    if (effectiveReasoningEffort && variant.reasoningEffort !== effectiveReasoningEffort) {
+      return false;
+    }
+    if (effectiveContextWindow && variant.contextWindow !== effectiveContextWindow) {
+      return false;
+    }
+    if (input.fastMode === true && variant.fastMode !== true) {
+      return false;
+    }
+    if (input.fastMode !== true && variant.fastMode === true) {
+      return false;
+    }
+    if (
+      effectiveThinking !== null &&
+      effectiveThinking !== undefined &&
+      variant.thinking !== undefined
+    ) {
+      return variant.thinking === effectiveThinking;
+    }
+    return true;
+  };
+
+  const preferred = variants.filter(matches);
+  const withDefaultContext =
+    !contextWindow && effectiveContextWindow
+      ? preferred.filter((variant) => variant.contextWindow === effectiveContextWindow)
+      : preferred;
+  return (withDefaultContext[0] ?? preferred[0])?.model;
 }
 
 export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {

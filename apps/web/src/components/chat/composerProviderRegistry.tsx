@@ -22,6 +22,7 @@ import {
   normalizeCursorModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
+  resolveDevinModelVariant,
   resolveLabeledOptionValue,
   trimOrNull,
 } from "@synara/shared/model";
@@ -29,10 +30,7 @@ import type { ReactNode } from "react";
 import { classifyCodexReasoningEffortSupport } from "../../lib/codexReasoningEffort";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
-import {
-  getRuntimeAwareModelCapabilities,
-  resolveDevinModelVariant,
-} from "./runtimeModelCapabilities";
+import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
@@ -238,20 +236,18 @@ function getProviderStateFromCapabilities(
         caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
           ? providerOptions.thinking
           : undefined;
-      // Thinking is on by default for Devin families that expose a thinking
-      // toggle. Keep the persisted option sparse, but use the effective
-      // default when resolving a non-default context window to its concrete
-      // process-start variant.
-      const thinking = requestedThinking ?? (caps.supportsThinkingToggle ? true : undefined);
-      const modelVariant =
-        trimOrNull(providerOptions?.modelVariant) ??
-        resolveDevinModelVariant({
-          runtimeModel,
-          reasoningEffort: rawEffort ?? defaultReasoningEffort,
-          fastMode: fastModeEnabled,
-          thinking,
-          contextWindow: rawContextWindow ?? defaultContextWindow,
-        });
+      const modelVariant = resolveDevinModelVariant({
+        model,
+        runtimeModel,
+        modelVariant: providerOptions?.modelVariant,
+        reasoningEffort: rawEffort && hasEffortLevel(caps, rawEffort) ? rawEffort : undefined,
+        fastMode: caps.supportsFastMode ? providerOptions?.fastMode : undefined,
+        thinking: requestedThinking,
+        contextWindow:
+          rawContextWindow && hasContextWindowOption(caps, rawContextWindow)
+            ? rawContextWindow
+            : undefined,
+      });
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(fastModeEnabled ? { fastMode: true } : {}),

@@ -209,6 +209,32 @@ describe("resolveDevinEffectiveModel", () => {
     ).toBe("default-model");
   });
 
+  it("resolves traits without a web-populated model variant", () => {
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: undefined,
+        selectionModel: "swe-1-7",
+        modelOptions: { fastMode: true },
+      }),
+    ).toBe("swe-1-7-lightning");
+    expect(
+      resolveDevinEffectiveModel({
+        explicitModel: undefined,
+        selectionModel: "gpt-5.6-sol",
+        modelOptions: { reasoningEffort: "high" },
+        runtimeModel: {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          defaultReasoningEffort: "medium",
+          modelVariants: [
+            { model: "gpt-5-6-sol-medium", reasoningEffort: "medium", fastMode: false },
+            { model: "gpt-5-6-sol-high", reasoningEffort: "high", fastMode: false },
+          ],
+        },
+      }),
+    ).toBe("gpt-5-6-sol-high");
+  });
+
   it("never substitutes a reasoning-effort label as the model", () => {
     // Regression: a runtime selection with only a reasoning effort (no
     // resolved variant) must keep the selection slug, never the effort label,
@@ -247,9 +273,22 @@ describe("buildDevinStaticModelDescriptors", () => {
     expect(descriptors.some((d) => d.slug === "adaptive")).toBe(true);
   });
 
-  it("does not advertise a fast toggle it cannot resolve to a variant", () => {
+  it("advertises SWE fast mode with concrete resolvable variants", () => {
     const descriptors = buildDevinStaticModelDescriptors();
-    expect(descriptors.every((d) => d.supportsFastMode !== true)).toBe(true);
+    expect(descriptors.find((descriptor) => descriptor.slug === "swe-1-6")).toMatchObject({
+      supportsFastMode: true,
+      modelVariants: [
+        { model: "swe-1-6", fastMode: false },
+        { model: "swe-1-6-fast", fastMode: true },
+      ],
+    });
+    expect(descriptors.find((descriptor) => descriptor.slug === "swe-1-7")).toMatchObject({
+      supportsFastMode: true,
+      modelVariants: [
+        { model: "swe-1-7", fastMode: false },
+        { model: "swe-1-7-lightning", fastMode: true },
+      ],
+    });
   });
 });
 
@@ -309,6 +348,35 @@ describe("Devin CLI model discovery", () => {
       reasoningEffort: "medium",
       contextWindow: "1m",
       fastMode: true,
+    });
+  });
+
+  it("recognizes SWE lightning as a fast variant", () => {
+    const [model] = mergeDevinModelDescriptors([
+      parseDevinCliModelList(
+        JSON.stringify({
+          families: [
+            {
+              family_uid: "swe-1-7",
+              family_label: "SWE 1.7",
+              slug: "swe-1-7",
+              variants: [
+                { model_uid: "swe-1-7", label: "SWE 1.7" },
+                { model_uid: "swe-1-7-lightning", label: "SWE 1.7 Lightning" },
+              ],
+            },
+          ],
+        }),
+      ),
+    ]);
+
+    expect(model).toMatchObject({
+      slug: "swe-1-7",
+      supportsFastMode: true,
+      modelVariants: [
+        { model: "swe-1-7", fastMode: false },
+        { model: "swe-1-7-lightning", fastMode: true },
+      ],
     });
   });
 

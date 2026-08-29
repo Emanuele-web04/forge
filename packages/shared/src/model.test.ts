@@ -36,6 +36,7 @@ import {
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
   resolveApiModelId,
+  resolveDevinModelVariant,
   resolveSelectableModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
@@ -66,6 +67,50 @@ describe("parseCursorCliReasoningEffort", () => {
     ["gpt-5.5-fast", undefined],
   ] as const)("parses %s as %s", (model, expected) => {
     expect(parseCursorCliReasoningEffort(model)).toBe(expected);
+  });
+});
+
+describe("resolveDevinModelVariant", () => {
+  it("resolves static SWE fast variants", () => {
+    expect(resolveDevinModelVariant({ model: "swe-1-6", fastMode: true })).toBe("swe-1-6-fast");
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: true })).toBe(
+      "swe-1-7-lightning",
+    );
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: false })).toBe("swe-1-7");
+  });
+
+  it("recomputes runtime variants from current traits instead of a stored variant", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "gpt-5.6-sol",
+        modelVariant: "gpt-5-6-sol-high",
+        reasoningEffort: "low",
+        runtimeModel: {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          defaultReasoningEffort: "medium",
+          modelVariants: [
+            { model: "gpt-5-6-sol-low", reasoningEffort: "low", fastMode: false },
+            { model: "gpt-5-6-sol-high", reasoningEffort: "high", fastMode: false },
+          ],
+        },
+      }),
+    ).toBe("gpt-5-6-sol-low");
+  });
+
+  it("preserves an explicit variant when no supplied trait maps to a variant dimension", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "custom-family",
+        modelVariant: "custom-concrete-model",
+        thinking: false,
+        runtimeModel: {
+          slug: "custom-family",
+          name: "Custom Family",
+          modelVariants: [{ model: "custom-concrete-model" }],
+        },
+      }),
+    ).toBe("custom-concrete-model");
   });
 });
 

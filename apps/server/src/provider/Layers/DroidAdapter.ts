@@ -77,6 +77,7 @@ import {
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
@@ -102,10 +103,7 @@ import {
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
-import {
-  forkAcpTurnIdleWatchdog,
-  resolveAcpTurnIdleTimeoutMs,
-} from "../acp/AcpTurnIdleWatchdog.ts";
+import { resolveAcpTurnIdleTimeoutMs } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
@@ -1766,20 +1764,15 @@ export function makeDroidAdapter(
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
-        yield* forkAcpTurnIdleWatchdog({
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context: ctx,
+          turnId,
           idleTimeoutMs: DROID_TURN_IDLE_TIMEOUT_MS,
           currentIdleTimeoutMs: () =>
             ctx.activeNestedTaskToolCallIds.size > 0
               ? DROID_NESTED_TASK_IDLE_TIMEOUT_MS
               : DROID_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: DROID_TURN_WATCHDOG_INTERVAL_MS,
-          scope: ctx.scope,
-          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
-          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
-          touchActivity: () => {
-            ctx.lastTurnActivityAt = Date.now();
-          },
           onIdleTimeout: (idleMs) => failDroidTurnAsTimedOut(ctx, turnId, idleMs),
         });
 

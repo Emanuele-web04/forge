@@ -9,6 +9,7 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  type DevinModelOptions,
   EventId,
   MODEL_OPTIONS_BY_PROVIDER,
   type ProviderApprovalDecision,
@@ -27,7 +28,12 @@ import {
   TurnId,
   type RuntimeMode,
 } from "@synara/contracts";
-import { getModelCapabilities, getProviderOptionDescriptors } from "@synara/shared/model";
+import {
+  getDevinStaticModelVariants,
+  getModelCapabilities,
+  getProviderOptionDescriptors,
+  resolveDevinModelVariant,
+} from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
@@ -83,6 +89,7 @@ import {
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
@@ -117,7 +124,6 @@ import {
   makeAcpNativeLoggers,
 } from "../acp/AcpNativeLogging.ts";
 import {
-  forkAcpTurnIdleWatchdog,
   isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
@@ -742,7 +748,9 @@ function inferDevinReasoningEffort(variant: DevinModelVariantSeed): string | und
 
 function isDevinFastVariant(variant: DevinModelVariantSeed): boolean {
   const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase();
-  return /\bfast\b/u.test(haystack) || /(?:^|[-_])priority(?:$|[-_])/u.test(variant.model);
+  return (
+    /\b(?:fast|lightning)\b/u.test(haystack) || /(?:^|[-_])priority(?:$|[-_])/u.test(variant.model)
+  );
 }
 
 function isDevinThinkingVariant(variant: DevinModelVariantSeed): boolean {
@@ -879,6 +887,7 @@ export function mergeDevinModelDescriptors(
 export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelDescriptor> {
   return MODEL_OPTIONS_BY_PROVIDER.devin.map((modelDefinition) => {
     const caps = getModelCapabilities(PROVIDER, modelDefinition.slug);
+    const modelVariants = getDevinStaticModelVariants(modelDefinition.slug);
     return {
       slug: modelDefinition.slug,
       name: modelDefinition.name,
@@ -891,6 +900,7 @@ export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelD
       contextWindowOptions: caps.contextWindowOptions,
       supportedReasoningEfforts: caps.reasoningEffortLevels,
       defaultReasoningEffort: caps.reasoningEffortLevels.find((o) => o.isDefault)?.value,
+      ...(modelVariants ? { modelVariants } : {}),
     };
   });
 }
@@ -959,17 +969,27 @@ function buildDevinPromptParts(input: {
 }
 
 // Devin's ACP process accepts a concrete model UID as its `--model` value, not
-// a separate effort/context flag. The web client resolves runtime selections to
-// a variant before dispatch, so only the variant, the selection slug, and the
-// explicit config are ever candidates; a reasoning-effort label must never be
+// a separate effort/context flag. The shared resolver maps current traits to a
+// concrete variant when possible; a reasoning-effort label must never be
 // substituted as the model identifier.
 export function resolveDevinEffectiveModel(input: {
   readonly explicitModel: string | undefined;
   readonly selectionModel: string | undefined;
-  readonly modelVariant: string | undefined;
+  readonly modelVariant?: string | undefined;
+  readonly modelOptions?: DevinModelOptions | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
 }): string | undefined {
-  if (input.modelVariant) {
-    return input.modelVariant;
+  const modelVariant = resolveDevinModelVariant({
+    model: input.selectionModel,
+    runtimeModel: input.runtimeModel,
+    modelVariant: input.modelOptions?.modelVariant ?? input.modelVariant,
+    reasoningEffort: input.modelOptions?.reasoningEffort,
+    fastMode: input.modelOptions?.fastMode,
+    thinking: input.modelOptions?.thinking,
+    contextWindow: input.modelOptions?.contextWindow,
+  });
+  if (modelVariant) {
+    return modelVariant;
   }
   if (input.selectionModel) {
     return input.selectionModel;
@@ -1412,7 +1432,7 @@ export function makeDevinAdapter(
           const effectiveModel = resolveDevinEffectiveModel({
             explicitModel: devinSettings.model,
             selectionModel: devinModelSelection?.model,
-            modelVariant: devinModelSelection?.options?.modelVariant,
+            modelOptions: devinModelSelection?.options,
           });
           const effectiveDevinSettings: DevinAcpRuntimeSettings = {
             ...(devinSettings.binaryPath !== undefined
@@ -2274,16 +2294,11 @@ export function makeDevinAdapter(
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
-        yield* forkAcpTurnIdleWatchdog({
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context: ctx,
+          turnId,
           idleTimeoutMs: DEVIN_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: DEVIN_TURN_WATCHDOG_INTERVAL_MS,
-          scope: ctx.scope,
-          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
-          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
-          touchActivity: () => {
-            ctx.lastTurnActivityAt = Date.now();
-          },
           onIdleTimeout: (idleMs) => failDevinTurnAsTimedOut(ctx, turnId, idleMs),
         });
 

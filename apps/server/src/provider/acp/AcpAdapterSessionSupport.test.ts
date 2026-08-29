@@ -1,10 +1,11 @@
 import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
-import { Effect } from "effect";
+import { Deferred, Effect, Exit, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
   resolveRequestedAcpSessionModeId,
@@ -213,6 +214,43 @@ describe("ACP adapter session support", () => {
         homeDir: "/home/test",
       }),
     ).toBe("/server");
+  });
+
+  it("runs the shared turn watchdog from adapter lifecycle state", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const timedOut = yield* Deferred.make<number>();
+        const turnId = TurnId.makeUnsafe("turn-watchdog");
+        const pendingApprovals = new Map<string, unknown>([["approval", {}]]);
+        const context = {
+          scope,
+          pendingApprovals,
+          pendingUserInputs: new Map<string, unknown>(),
+          activeTurnId: turnId as TurnId | undefined,
+          lastTurnActivityAt: 0 as number | undefined,
+          stopped: false,
+        };
+
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context,
+          turnId,
+          idleTimeoutMs: 1,
+          checkIntervalMs: 1,
+          onIdleTimeout: (idleMs) => Deferred.succeed(timedOut, idleMs).pipe(Effect.asVoid),
+        });
+        yield* Effect.sleep(5);
+        const touchedWhileAwaitingHuman = (context.lastTurnActivityAt ?? 0) > 0;
+        pendingApprovals.clear();
+        context.lastTurnActivityAt = 0;
+        const idleMs = yield* Deferred.await(timedOut).pipe(Effect.timeout(1_000));
+        yield* Scope.close(scope, Exit.void);
+        return { idleMs, touchedWhileAwaitingHuman };
+      }),
+    );
+
+    expect(result.touchedWhileAwaitingHuman).toBe(true);
+    expect(result.idleMs).toBeGreaterThanOrEqual(1);
   });
 
   it("waits until the consumer catches up with enqueued session updates", async () => {
