@@ -167,9 +167,9 @@ import {
   claimQueuedComposerAutoDispatch,
   clearQueuedComposerSteerGate,
   getQueuedComposerSteerGate,
+  isQueuedComposerAwaitingTurnStart,
   releaseQueuedComposerAutoDispatch,
   runLockedQueuedComposerAutoDispatch,
-  shouldAutoDispatchQueuedComposerTurn,
   tryBeginQueuedComposerAutoDispatch,
 } from "../lib/queuedComposerDrain";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
@@ -9389,6 +9389,7 @@ export default function ChatView({
 
   useEffect(() => {
     if (
+      isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
         phase,

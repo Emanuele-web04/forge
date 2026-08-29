@@ -8,12 +8,16 @@
 import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 
 import {
+  createLocalDispatchSnapshot,
+  hasLiveTurnTakenOver,
+  LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
+  type LocalDispatchSnapshot,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
 } from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
-import { useStore } from "../store";
+import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SessionPhase } from "../types";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
@@ -23,6 +27,7 @@ export interface QueuedComposerAutoDispatchGates {
   phase: SessionPhase;
   isSendBusy: boolean;
   isConnecting: boolean;
+  isAwaitingTurnStart: boolean;
   steerGate: QueuedSteerGate | null;
   hasPendingApproval: boolean;
   hasPendingProgress: boolean;
@@ -38,6 +43,7 @@ export function shouldAutoDispatchQueuedComposerTurn(
     gates.phase === "disconnected" ||
     gates.isSendBusy ||
     gates.isConnecting ||
+    gates.isAwaitingTurnStart ||
     gates.steerGate !== null ||
     gates.hasPendingApproval ||
     gates.hasPendingProgress ||
@@ -56,11 +62,24 @@ type QueuedComposerDispatchFn = (input: {
 const claimedThreadIds = new Set<ThreadId>();
 const autoDispatchLocks = new Set<ThreadId>();
 const steerGatesByThreadId = new Map<ThreadId, QueuedSteerGate>();
+const awaitingTurnStartsByThreadId = new Map<ThreadId, LocalDispatchSnapshot>();
+
+interface QueuedComposerRetryState {
+  readonly queuedTurnId: string;
+  readonly failureCount: number;
+  readonly retryAt: number | null;
+}
+
+// Three delayed retries cover transient RPC failures without turning a
+// persistent failure into an endless timer loop. Once exhausted, a queue-head
+// or relevant thread-state change gives the item a fresh budget.
+const QUEUED_COMPOSER_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const;
+const retryStateByThreadId = new Map<ThreadId, QueuedComposerRetryState>();
 
 let drainStartCount = 0;
 let stopDrainSubscriptions: (() => void) | null = null;
 let tickScheduled = false;
-let steerExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+let drainWakeTimer: ReturnType<typeof setTimeout> | null = null;
 let assistantDeliveryMode: AssistantDeliveryMode = "streaming";
 let dispatchQueuedTurn: QueuedComposerDispatchFn = dispatchQueuedComposerTurnHeadless;
 let nowMs: () => number = () => Date.now();
@@ -79,6 +98,10 @@ export function clearQueuedComposerSteerGate(threadId: ThreadId): void {
 
 export function getQueuedComposerSteerGate(threadId: ThreadId): QueuedSteerGate | null {
   return steerGatesByThreadId.get(threadId) ?? null;
+}
+
+export function isQueuedComposerAwaitingTurnStart(threadId: ThreadId): boolean {
+  return awaitingTurnStartsByThreadId.has(threadId);
 }
 
 export function tryBeginQueuedComposerAutoDispatch(threadId: ThreadId): boolean {
@@ -140,10 +163,18 @@ export function startQueuedComposerDrainWatcher(options?: {
     assistantDeliveryMode = options.assistantDeliveryMode;
   }
   if (drainStartCount === 1) {
-    const unsubscribeDrafts = useComposerDraftStore.subscribe(() => {
+    const unsubscribeDrafts = useComposerDraftStore.subscribe((current, previous) => {
+      if (!haveQueuedTurnsChanged(current.draftsByThreadId, previous.draftsByThreadId)) {
+        return;
+      }
+      resetRetriesForChangedQueueHeads(current.draftsByThreadId);
       requestQueuedComposerDrainPass();
     });
-    const unsubscribeStore = useStore.subscribe(() => {
+    const unsubscribeStore = useStore.subscribe((current, previous) => {
+      if (!hasRelevantThreadStateChanged(current, previous)) {
+        return;
+      }
+      resetRetriesForRelevantThreadChanges(current, previous);
       requestQueuedComposerDrainPass();
     });
     stopDrainSubscriptions = () => {
@@ -159,9 +190,9 @@ export function startQueuedComposerDrainWatcher(options?: {
     }
     stopDrainSubscriptions?.();
     stopDrainSubscriptions = null;
-    if (steerExpiryTimer !== null) {
-      clearTimeout(steerExpiryTimer);
-      steerExpiryTimer = null;
+    if (drainWakeTimer !== null) {
+      clearTimeout(drainWakeTimer);
+      drainWakeTimer = null;
     }
     tickScheduled = false;
     dispatchQueuedTurn = dispatchQueuedComposerTurnHeadless;
@@ -170,7 +201,7 @@ export function startQueuedComposerDrainWatcher(options?: {
 }
 
 function requestQueuedComposerDrainPass(): void {
-  if (tickScheduled) {
+  if (tickScheduled || !hasQueuedComposerDrainWork()) {
     return;
   }
   tickScheduled = true;
@@ -184,12 +215,14 @@ export function resetQueuedComposerDrainForTests(): void {
   claimedThreadIds.clear();
   autoDispatchLocks.clear();
   steerGatesByThreadId.clear();
+  awaitingTurnStartsByThreadId.clear();
+  retryStateByThreadId.clear();
   drainStartCount = 0;
   stopDrainSubscriptions?.();
   stopDrainSubscriptions = null;
-  if (steerExpiryTimer !== null) {
-    clearTimeout(steerExpiryTimer);
-    steerExpiryTimer = null;
+  if (drainWakeTimer !== null) {
+    clearTimeout(drainWakeTimer);
+    drainWakeTimer = null;
   }
   tickScheduled = false;
   assistantDeliveryMode = "streaming";
@@ -206,6 +239,97 @@ function collectThreadIdsWithQueuedTurns(): ThreadId[] {
     }
   }
   return threadIds;
+}
+
+function hasQueuedComposerDrainWork(): boolean {
+  return (
+    collectThreadIdsWithQueuedTurns().length > 0 ||
+    steerGatesByThreadId.size > 0 ||
+    awaitingTurnStartsByThreadId.size > 0
+  );
+}
+
+function haveQueuedTurnsChanged(
+  current: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
+  previous: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
+): boolean {
+  const threadIds = new Set([...Object.keys(current), ...Object.keys(previous)]);
+  for (const threadId of threadIds) {
+    if (current[threadId]?.queuedTurns !== previous[threadId]?.queuedTurns) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resetRetriesForChangedQueueHeads(
+  draftsByThreadId: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
+): void {
+  for (const [threadId, retryState] of retryStateByThreadId) {
+    const queuedTurnId = draftsByThreadId[threadId]?.queuedTurns[0]?.id;
+    if (queuedTurnId !== retryState.queuedTurnId) {
+      retryStateByThreadId.delete(threadId);
+    }
+  }
+}
+
+function collectTrackedThreadIds(): Set<ThreadId> {
+  return new Set([
+    ...collectThreadIdsWithQueuedTurns(),
+    ...steerGatesByThreadId.keys(),
+    ...awaitingTurnStartsByThreadId.keys(),
+  ]);
+}
+
+function threadDrainSignal(state: AppState, threadId: ThreadId): string {
+  const thread = getThreadFromState(state, threadId);
+  if (!thread) {
+    return "missing";
+  }
+  const pendingApprovalCount = derivePendingApprovals(
+    thread.activities,
+    thread.pendingInteractions,
+    {
+      authoritativeHasPending: thread.hasPendingApprovals,
+      latestTurnId: thread.latestTurn?.turnId,
+    },
+  ).length;
+  const pendingUserInputCount = derivePendingUserInputs(
+    thread.activities,
+    thread.pendingInteractions,
+    {
+      authoritativeHasPending: thread.hasPendingUserInput,
+      latestTurnId: thread.latestTurn?.turnId,
+    },
+  ).length;
+  return [
+    thread.session?.status ?? "",
+    thread.session?.orchestrationStatus ?? "",
+    thread.session?.activeTurnId ?? "",
+    thread.latestTurn?.turnId ?? "",
+    thread.latestTurn?.startedAt ?? "",
+    thread.latestTurn?.completedAt ?? "",
+    thread.error ?? "",
+    pendingApprovalCount,
+    pendingUserInputCount,
+  ].join("|");
+}
+
+function hasRelevantThreadStateChanged(current: AppState, previous: AppState): boolean {
+  for (const threadId of collectTrackedThreadIds()) {
+    if (threadDrainSignal(current, threadId) !== threadDrainSignal(previous, threadId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resetRetriesForRelevantThreadChanges(current: AppState, previous: AppState): void {
+  for (const threadId of retryStateByThreadId.keys()) {
+    if (threadDrainSignal(current, threadId) !== threadDrainSignal(previous, threadId)) {
+      retryStateByThreadId.delete(threadId);
+    }
+  }
 }
 
 function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposerAutoDispatchGates {
@@ -232,14 +356,63 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
   return {
     hasQueueableLiveTurn: hasLiveTurn && thread?.session?.activeTurnId != null,
     phase,
-    isSendBusy: false,
+    isSendBusy: autoDispatchLocks.has(threadId),
     isConnecting: phase === "connecting",
+    isAwaitingTurnStart: awaitingTurnStartsByThreadId.has(threadId),
     steerGate: getQueuedComposerSteerGate(threadId),
     hasPendingApproval: pendingApprovals.length > 0,
     hasPendingProgress: pendingUserInputs.length > 0,
     pendingUserInputCount: pendingUserInputs.length,
     queuedTurnCount: draft?.queuedTurns.length ?? 0,
   };
+}
+
+function advanceAwaitingTurnStarts(): number | null {
+  let earliestExpiryMs: number | null = null;
+  const now = nowMs();
+  for (const [threadId, localDispatch] of awaitingTurnStartsByThreadId) {
+    const thread = getThreadFromState(useStore.getState(), threadId);
+    const pendingApprovals = derivePendingApprovals(
+      thread?.activities ?? [],
+      thread?.pendingInteractions,
+      {
+        authoritativeHasPending: thread?.hasPendingApprovals,
+        latestTurnId: thread?.latestTurn?.turnId,
+      },
+    );
+    const pendingUserInputs = derivePendingUserInputs(
+      thread?.activities ?? [],
+      thread?.pendingInteractions,
+      {
+        authoritativeHasPending: thread?.hasPendingUserInput,
+        latestTurnId: thread?.latestTurn?.turnId,
+      },
+    );
+    if (
+      hasLiveTurnTakenOver({
+        localDispatch,
+        phase: derivePhase(thread?.session ?? null),
+        latestTurn: thread?.latestTurn ?? null,
+        session: thread?.session ?? null,
+        hasPendingApproval: pendingApprovals.length > 0,
+        hasPendingUserInput: pendingUserInputs.length > 0,
+        threadError: thread?.error,
+        now,
+      })
+    ) {
+      awaitingTurnStartsByThreadId.delete(threadId);
+      continue;
+    }
+    const startedAtMs = Date.parse(localDispatch.startedAt);
+    if (!Number.isFinite(startedAtMs)) {
+      awaitingTurnStartsByThreadId.delete(threadId);
+      continue;
+    }
+    const expiresInMs = LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS - (now - startedAtMs);
+    earliestExpiryMs =
+      earliestExpiryMs === null ? expiresInMs : Math.min(earliestExpiryMs, expiresInMs);
+  }
+  return earliestExpiryMs;
 }
 
 function advanceSteerGates(): number | null {
@@ -276,21 +449,58 @@ function advanceSteerGates(): number | null {
   return earliestExpiryMs;
 }
 
+function scheduleQueuedComposerDrainWake(expiresInMs: number | null): void {
+  if (drainWakeTimer !== null) {
+    clearTimeout(drainWakeTimer);
+    drainWakeTimer = null;
+  }
+  if (expiresInMs === null) {
+    return;
+  }
+  drainWakeTimer = setTimeout(
+    () => {
+      drainWakeTimer = null;
+      requestQueuedComposerDrainPass();
+    },
+    Math.max(0, expiresInMs),
+  );
+}
+
+function recordQueuedComposerDispatchFailure(
+  threadId: ThreadId,
+  queuedTurnId: string,
+): void {
+  const previous = retryStateByThreadId.get(threadId);
+  const failureCount =
+    previous?.queuedTurnId === queuedTurnId ? previous.failureCount + 1 : 1;
+  const retryDelay = QUEUED_COMPOSER_RETRY_DELAYS_MS[failureCount - 1];
+  retryStateByThreadId.set(threadId, {
+    queuedTurnId,
+    failureCount,
+    retryAt: retryDelay === undefined ? null : nowMs() + retryDelay,
+  });
+}
+
+function retryDelayForThread(threadId: ThreadId, queuedTurnId: string): number | null | undefined {
+  const retryState = retryStateByThreadId.get(threadId);
+  if (!retryState || retryState.queuedTurnId !== queuedTurnId) {
+    return undefined;
+  }
+  if (retryState.retryAt === null) {
+    return null;
+  }
+  return retryState.retryAt - nowMs();
+}
+
 function runQueuedComposerDrainPass(): void {
   const steerExpiryMs = advanceSteerGates();
-  if (steerExpiryTimer !== null) {
-    clearTimeout(steerExpiryTimer);
-    steerExpiryTimer = null;
-  }
-  if (steerExpiryMs !== null) {
-    steerExpiryTimer = setTimeout(
-      () => {
-        steerExpiryTimer = null;
-        requestQueuedComposerDrainPass();
-      },
-      Math.max(0, steerExpiryMs),
-    );
-  }
+  const awaitingStartExpiryMs = advanceAwaitingTurnStarts();
+  let earliestWakeMs =
+    steerExpiryMs === null
+      ? awaitingStartExpiryMs
+      : awaitingStartExpiryMs === null
+        ? steerExpiryMs
+        : Math.min(steerExpiryMs, awaitingStartExpiryMs);
 
   const threadIds = collectThreadIdsWithQueuedTurns();
   for (const threadId of threadIds) {
@@ -302,6 +512,14 @@ function runQueuedComposerDrainPass(): void {
     if (!nextQueuedTurn) {
       continue;
     }
+    const retryDelay = retryDelayForThread(threadId, nextQueuedTurn.id);
+    if (retryDelay === null) {
+      continue;
+    }
+    if (retryDelay !== undefined && retryDelay > 0) {
+      earliestWakeMs = earliestWakeMs === null ? retryDelay : Math.min(earliestWakeMs, retryDelay);
+      continue;
+    }
     const gates = readQueuedComposerAutoDispatchGates(threadId);
     if (!shouldAutoDispatchQueuedComposerTurn(gates)) {
       continue;
@@ -309,6 +527,11 @@ function runQueuedComposerDrainPass(): void {
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
       continue;
     }
+    const thread = getThreadFromState(useStore.getState(), threadId);
+    const localDispatch = {
+      ...createLocalDispatchSnapshot(thread),
+      startedAt: new Date(nowMs()).toISOString(),
+    };
     void runLockedQueuedComposerAutoDispatch({
       threadId,
       run: async () => {
@@ -319,9 +542,14 @@ function runQueuedComposerDrainPass(): void {
           assistantDeliveryMode,
         });
         if (succeeded) {
+          retryStateByThreadId.delete(threadId);
+          awaitingTurnStartsByThreadId.set(threadId, localDispatch);
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
+          return;
         }
+        recordQueuedComposerDispatchFailure(threadId, nextQueuedTurn.id);
       },
     });
   }
+  scheduleQueuedComposerDrainWake(earliestWakeMs);
 }

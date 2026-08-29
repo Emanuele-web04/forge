@@ -1,4 +1,4 @@
-import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
+import { ApprovalRequestId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerTurn } from "../composerDraftStore";
@@ -13,6 +13,7 @@ import {
   claimQueuedComposerAutoDispatch,
   endQueuedComposerAutoDispatch,
   getQueuedComposerSteerGate,
+  isQueuedComposerAwaitingTurnStart,
   releaseQueuedComposerAutoDispatch,
   resetQueuedComposerDrainForTests,
   shouldAutoDispatchQueuedComposerTurn,
@@ -29,6 +30,7 @@ const OPEN_GATES: QueuedComposerAutoDispatchGates = {
   phase: "ready",
   isSendBusy: false,
   isConnecting: false,
+  isAwaitingTurnStart: false,
   steerGate: null,
   hasPendingApproval: false,
   hasPendingProgress: false,
@@ -154,6 +156,7 @@ describe("queued composer drain watcher", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetQueuedComposerDrainForTests();
     resetComposerDraftStore();
     useStore.setState(initialState);
@@ -191,6 +194,119 @@ describe("queued composer drain watcher", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? []).toEqual(
       [],
     );
+  });
+
+  it("waits for the dispatched background turn to start before sending the next item", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-1"));
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-2"));
+
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(true);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns.map(({ id }) => id),
+    ).toEqual(["queued-2"]);
+
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+      }),
+    );
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(2);
+    });
+    expect(dispatch.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        queuedTurn: expect.objectContaining({ id: "queued-2" }),
+      }),
+    );
+  });
+
+  it("bounds retries when background dispatch keeps failing", async () => {
+    vi.useFakeTimers();
+    dispatch.mockResolvedValue(false);
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-failing"));
+
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(dispatch).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not schedule drain work for unrelated streaming message updates", async () => {
+    resetQueuedComposerDrainForTests();
+    const now = vi.fn(() => Date.now());
+    startQueuedComposerDrainWatcher({ dispatch, now });
+    const streamingMessage = {
+      id: MessageId.makeUnsafe("assistant-streaming"),
+      role: "assistant" as const,
+      text: "first chunk",
+      createdAt: "2026-02-13T00:00:01.000Z",
+      streaming: true,
+    };
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+        messages: [streamingMessage],
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-streaming"));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    now.mockClear();
+
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+        messages: [{ ...streamingMessage, text: "first chunk, second chunk" }],
+      }),
+    );
+    await flushDrain();
+
+    expect(now).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("does not drain a claimed thread, then drains after ChatView unmounts", async () => {
