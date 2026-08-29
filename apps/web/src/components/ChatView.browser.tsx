@@ -5716,9 +5716,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       useStore.setState({ projects: [], threadsHydrated: false });
       await waitForLayout();
       // Wait until Sidebar has committed the loading empty-state from the cleared store.
-      await expect
-        .element(page.getByLabelText("Loading projects"))
-        .toBeInTheDocument();
+      await expect.element(page.getByLabelText("Loading projects")).toBeInTheDocument();
       const initialPath = mounted.router.state.location.pathname;
       expect(initialPath).toBe(`/${THREAD_ID}`);
       const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
