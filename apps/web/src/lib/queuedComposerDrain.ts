@@ -466,13 +466,9 @@ function scheduleQueuedComposerDrainWake(expiresInMs: number | null): void {
   );
 }
 
-function recordQueuedComposerDispatchFailure(
-  threadId: ThreadId,
-  queuedTurnId: string,
-): void {
+function recordQueuedComposerDispatchFailure(threadId: ThreadId, queuedTurnId: string): void {
   const previous = retryStateByThreadId.get(threadId);
-  const failureCount =
-    previous?.queuedTurnId === queuedTurnId ? previous.failureCount + 1 : 1;
+  const failureCount = previous?.queuedTurnId === queuedTurnId ? previous.failureCount + 1 : 1;
   const retryDelay = QUEUED_COMPOSER_RETRY_DELAYS_MS[failureCount - 1];
   retryStateByThreadId.set(threadId, {
     queuedTurnId,
