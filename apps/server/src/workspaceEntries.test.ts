@@ -14,6 +14,7 @@ import {
   searchLocalEntries,
   searchWorkspaceContent,
   searchWorkspaceEntries,
+  resolveWorkspaceFileReferences,
 } from "./workspaceEntries";
 
 const tempDirs: string[] = [];
@@ -293,6 +294,27 @@ describe("searchWorkspaceEntries", () => {
     ]);
 
     assert.equal(rootReadCount, 1);
+  });
+
+  it("resolves exact and unique suffix references from one workspace index", async () => {
+    const cwd = makeTempDir("synara-workspace-reference-batch-");
+    writeFile(cwd, "src/index.ts");
+    writeFile(cwd, "apps/web/src/unique.ts");
+    writeFile(cwd, "apps/server/src/shared.ts");
+    writeFile(cwd, "apps/web/src/shared.ts");
+
+    const result = await resolveWorkspaceFileReferences({
+      cwd,
+      relativePaths: ["src/index.ts", "unique.ts", "shared.ts", "missing.ts", "../outside.ts"],
+    });
+
+    expect(result.relativePaths).toEqual([
+      "src/index.ts",
+      "apps/web/src/unique.ts",
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("limits concurrent directory reads while walking the filesystem", async () => {

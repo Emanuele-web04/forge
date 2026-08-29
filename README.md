@@ -44,13 +44,13 @@ Organize work around projects and threads. Projects define the workspace; thread
 
 The tools surrounding an agent session remain available from the same task surface, keeping execution and review connected.
 
-| Surface            | Purpose                                                  |
-| ------------------ | -------------------------------------------------------- |
-| **Changes**        | Inspect diffs, changed files, and review state.          |
-| **Terminal**       | Run commands in the project environment.                 |
-| **Browser**        | Keep local previews and browser work next to the thread. |
-| **Files / Editor** | Browse, inspect, and edit project files in context.      |
-| **Git**            | Work with branches, commits, pushes, and pull requests.  |
+| Surface            | Purpose                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| **Changes**        | Inspect diffs, changed files, and review state.                                                   |
+| **Terminal**       | Run commands in the project environment.                                                          |
+| **Browser**        | Keep local previews next to the thread and let agents use semantic or page-declared WebMCP tools. |
+| **Files / Editor** | Browse, inspect, and edit project files in context.                                               |
+| **Git**            | Work with branches, commits, pushes, and pull requests.                                           |
 
 ### 3. Split views and previews
 

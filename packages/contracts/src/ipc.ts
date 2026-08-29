@@ -117,6 +117,8 @@ import type {
   ProjectReadFileResult,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
+  ProjectResolveWorkspaceFileReferencesInput,
+  ProjectResolveWorkspaceFileReferencesResult,
   ProjectResolveOutOfRootFileReferenceInput,
   ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
@@ -685,7 +687,13 @@ export interface NativeApi {
     prewarmSearchIndex: (
       input: ProjectPrewarmSearchIndexInput,
     ) => Promise<ProjectPrewarmSearchIndexResult>;
-    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    readFile: (
+      input: ProjectReadFileInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ProjectReadFileResult>;
+    resolveWorkspaceFileReferences: (
+      input: ProjectResolveWorkspaceFileReferencesInput,
+    ) => Promise<ProjectResolveWorkspaceFileReferencesResult>;
     resolveOutOfRootFileReference: (
       input: ProjectResolveOutOfRootFileReferenceInput,
     ) => Promise<ProjectResolveOutOfRootFileReferenceResult>;

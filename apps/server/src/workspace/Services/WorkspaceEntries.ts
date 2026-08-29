@@ -9,6 +9,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
+  ProjectResolveWorkspaceFileReferencesInput,
+  ProjectResolveWorkspaceFileReferencesResult,
   ProjectSearchContentInput,
   ProjectSearchContentResult,
   ProjectSearchEntriesInput,
@@ -46,6 +48,9 @@ export interface WorkspaceEntriesShape {
     readonly cwd: string;
     readonly relativePath: string;
   }) => Effect.Effect<string | null, WorkspaceEntriesError>;
+  readonly resolveFileReferences: (
+    input: ProjectResolveWorkspaceFileReferencesInput,
+  ) => Effect.Effect<ProjectResolveWorkspaceFileReferencesResult, WorkspaceEntriesError>;
   readonly invalidate: (cwd: string) => Effect.Effect<void, never>;
 }
 

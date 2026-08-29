@@ -714,15 +714,28 @@ function mergeReadModelMessagesWithLiveHotPath(
     }
 
     const incomingCompletedAt = incomingMessage.streaming ? undefined : incomingMessage.updatedAt;
+    const localStreamingTextIsAhead =
+      previousMessage.streaming && previousMessage.text.length > incomingMessage.text.length;
     const shouldPreferLiveMessage =
       (authoritativeTurnId === null || incomingMessage.turnId !== authoritativeTurnId) &&
-      (previousMessage.text.length > incomingMessage.text.length ||
+      (localStreamingTextIsAhead ||
         (!previousMessage.streaming && incomingMessage.streaming) ||
         (previousMessage.completedAt !== undefined &&
           (incomingCompletedAt === undefined ||
             previousMessage.completedAt > incomingCompletedAt)));
 
     if (!shouldPreferLiveMessage) {
+      if (
+        import.meta.env.DEV &&
+        !previousMessage.streaming &&
+        previousMessage.text.length > incomingMessage.text.length
+      ) {
+        console.warn("[transcript] replacing longer completed local message with snapshot text", {
+          messageId: incomingMessage.id,
+          localLength: previousMessage.text.length,
+          snapshotLength: incomingMessage.text.length,
+        });
+      }
       mergedById.set(incomingMessage.id, {
         ...incomingMessage,
         ...(!incomingMessage.mentions || incomingMessage.mentions.length === 0

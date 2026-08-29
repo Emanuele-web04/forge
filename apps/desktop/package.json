@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "effect": "catalog:",
-    "electron": "40.10.6",
+    "electron": "43.4.1",
     "electron-updater": "^6.6.2"
   },
   "devDependencies": {

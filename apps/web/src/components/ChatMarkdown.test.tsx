@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,6 +19,13 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
 
+function renderWithQueryClient(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderToStaticMarkup(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
 async function renderMarkdown(
   text: string,
   cwd = "C:\\Users\\LENOVO\\synara",
@@ -24,7 +33,7 @@ async function renderMarkdown(
 ) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-  return renderToStaticMarkup(
+  return renderWithQueryClient(
     <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
   );
 }
@@ -32,7 +41,7 @@ async function renderMarkdown(
 async function renderUserMarkdown(text: string) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-  return renderToStaticMarkup(
+  return renderWithQueryClient(
     <ChatMarkdown text={text} cwd={undefined} isStreaming={false} variant="user" />,
   );
 }
@@ -270,6 +279,77 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain(">Highlight this phrase</span>");
     expect(markup).toContain("Cost is $5 here.");
     expect(markup).not.toContain('class="katex"');
+  });
+
+  it("keeps relative inline-code as code until a real file is known", async () => {
+    const markup = await renderMarkdown("See `src/index.ts`.", "/Users/tester/project");
+
+    expect(markup).toContain("<code>src/index.ts</code>");
+    expect(markup).not.toContain('href="/Users/tester/project/src/index.ts"');
+  });
+
+  it("joins a relative chip onto a directory declared in the same message", async () => {
+    const markup = await renderMarkdown(
+      [
+        "**Dir:** `/Users/tester/.agents/skills/annotate-pr`",
+        "",
+        "- `scripts/delete_uploadthing.py`",
+      ].join("\n"),
+      "/Users/tester/Documents/Synara/thread",
+    );
+
+    expect(markup).toContain(
+      'title="/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py"',
+    );
+    expect(markup).not.toContain(
+      'href="/Users/tester/Documents/Synara/thread/scripts/delete_uploadthing.py"',
+    );
+  });
+
+  it("prefers a unique same-turn absolute path over the workspace cwd join", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const absolutePath = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text="See `references/uploadthing.md`."
+        cwd="/Users/tester/chat-workspace"
+        isStreaming={false}
+        knownAbsoluteFilePaths={[absolutePath]}
+      />,
+    );
+
+    expect(markup).toContain(`title="${absolutePath}"`);
+    expect(markup).not.toContain('href="/Users/tester/chat-workspace/references/uploadthing.md"');
+  });
+
+  it("chips absolute inline-code paths and authored file URLs", async () => {
+    const absolutePath = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
+    const markup = await renderMarkdown(
+      [`See \`${absolutePath}\`.`, "", `[uploadthing.md](file://${absolutePath})`].join("\n"),
+      "/Users/tester/chat-workspace",
+    );
+
+    expect(markup).toContain(`title="${absolutePath}"`);
+    expect(markup).toContain(`href="${absolutePath}"`);
+    expect(markup).not.toContain(`<code>${absolutePath}</code>`);
+  });
+
+  it("chips an absolute directory path that has no file extension", async () => {
+    const absoluteDir = "/Users/tester/.agents/skills/annotate-pr";
+    const markup = await renderMarkdown(`Dir: \`${absoluteDir}\``, "/Users/tester/chat-workspace");
+
+    expect(markup).toContain(`title="${absoluteDir}"`);
+    expect(markup).not.toContain(`<code>${absoluteDir}</code>`);
+  });
+
+  it("chips a line-suffixed relative file against a directory declared in the same message", async () => {
+    const markup = await renderMarkdown(
+      ["**Dir:** `/Users/tester/.agents/skills/annotate-pr`", "", "- `SKILL.md:1`"].join("\n"),
+      "/Users/tester/Documents/Synara/thread",
+    );
+
+    expect(markup).toContain('title="/Users/tester/.agents/skills/annotate-pr/SKILL.md"');
+    expect(markup).not.toContain('href="/Users/tester/Documents/Synara/thread/SKILL.md"');
   });
 
   it("keeps plan, diff, and transcript surfaces routed through the shared renderer", () => {

@@ -1,7 +1,18 @@
 import { Schema } from "effect";
 
-import { BoundedUtf8String, utf8ByteLength } from "./browserAutomationBounds";
-import { BrowserElementRef, BrowserSnapshotId, BrowserTabId } from "./browserAutomationIds";
+import { BoundedUtf8String } from "./browserAutomationBounds";
+import {
+  BrowserElementRef,
+  BrowserSnapshotId,
+  BrowserTabId,
+  BrowserWebMcpDiscoveryId,
+  BrowserWebMcpToolId,
+} from "./browserAutomationIds";
+import {
+  BrowserBoundedJson,
+  BrowserBoundedJsonObject,
+  browserJsonBytes,
+} from "./browserAutomationJson";
 import { BrowserAriaRole, BrowserPoint } from "./browserAutomationTargets";
 import {
   BrowserLoadState,
@@ -22,29 +33,6 @@ export const BrowserDialogEvent = closedStruct({
 const optionalDialogFields = {
   dialogs: Schema.optional(Schema.Array(BrowserDialogEvent).check(Schema.isMaxLength(20))),
 };
-
-const jsonDepth = (value: unknown, depth = 0): number => {
-  if (value === null || typeof value !== "object") return depth;
-  if (depth > 20) return depth;
-  if (Array.isArray(value)) {
-    return value.reduce((maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)), depth);
-  }
-  return Object.values(value as Record<string, unknown>).reduce<number>(
-    (maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)),
-    depth,
-  );
-};
-const jsonBytes = (value: unknown): number => {
-  try {
-    return utf8ByteLength(JSON.stringify(value));
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-};
-
-export const BrowserBoundedJson = Schema.Json.check(
-  Schema.makeFilter((value: Schema.Json) => jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144),
-);
 
 export const BrowserViewport = closedStruct({
   width: boundedInt(1, 3_840),
@@ -150,7 +138,47 @@ export const BrowserSnapshotOutput = closedStruct({
   truncationReasons: Schema.Array(BoundedUtf8String(128, 1)).check(Schema.isMaxLength(16)),
   image: Schema.optional(BrowserImageMetadata),
   ...optionalDialogFields,
-}).check(Schema.makeFilter((value) => jsonBytes(value) <= 512 * 1024));
+}).check(Schema.makeFilter((value) => browserJsonBytes(value) <= 512 * 1024));
+
+const BrowserWebMcpTool = closedStruct({
+  toolId: BrowserWebMcpToolId,
+  name: BoundedUtf8String(128, 1),
+  title: Schema.optional(BoundedUtf8String(1_024, 1)),
+  description: BoundedUtf8String(4_096, 1),
+  inputSchema: BrowserBoundedJsonObject,
+  origin: BoundedUtf8String(8_192, 1),
+  annotations: closedStruct({
+    readOnlyHint: Schema.Boolean,
+    untrustedContentHint: Schema.Boolean,
+  }),
+});
+
+export const BrowserWebMcpToolsOutput = closedStruct({
+  tabId: BrowserTabId,
+  url: BoundedUrl,
+  contentTrust: Schema.Literal("untrusted-web-page"),
+  available: Schema.Boolean,
+  implementation: Schema.Literals(["native", "compatibility", "unavailable"]),
+  discoveryId: Schema.NullOr(BrowserWebMcpDiscoveryId),
+  tools: Schema.Array(BrowserWebMcpTool).check(Schema.isMaxLength(32)),
+  totalToolCount: boundedInt(0, 128),
+  skippedToolCount: boundedInt(0, 1_000_000),
+  truncated: Schema.Boolean,
+  ...optionalDialogFields,
+}).check(
+  Schema.makeFilter((value) => {
+    if (!value.available) {
+      return (
+        value.implementation === "unavailable" &&
+        value.discoveryId === null &&
+        value.tools.length === 0 &&
+        value.totalToolCount === 0
+      );
+    }
+    return value.implementation !== "unavailable" && value.discoveryId !== null;
+  }),
+  Schema.makeFilter((value) => browserJsonBytes(value) <= 512 * 1024),
+);
 
 const BrowserSnapshotImage = closedStruct({
   mimeType: Schema.Literal("image/png"),
@@ -223,7 +251,7 @@ export const BrowserLogsOutput = closedStruct({
   droppedCount: boundedInt(0, 1_000_000_000),
   truncated: Schema.Boolean,
   ...optionalDialogFields,
-}).check(Schema.makeFilter((value) => jsonBytes(value) <= 512 * 1024));
+}).check(Schema.makeFilter((value) => browserJsonBytes(value) <= 512 * 1024));
 
 const BrowserResolvedTarget = closedStruct({
   ref: Schema.optional(BrowserElementRef),
@@ -296,6 +324,33 @@ export const BrowserPressOutput = closedStruct({
   ...BrowserPopupCorrelationOutputFields,
   ...optionalDialogFields,
 });
+const BrowserWebMcpCallError = closedStruct({
+  name: BoundedUtf8String(256, 1),
+  message: BoundedUtf8String(4_096, 1),
+});
+export const BrowserWebMcpCallOutput = closedStruct({
+  tabId: BrowserTabId,
+  discoveryId: BrowserWebMcpDiscoveryId,
+  toolId: BrowserWebMcpToolId,
+  toolName: BoundedUtf8String(128, 1),
+  contentTrust: Schema.Literal("untrusted-web-page"),
+  status: Schema.Literals(["completed", "failed"]),
+  result: Schema.optional(BrowserBoundedJson),
+  error: Schema.optional(BrowserWebMcpCallError),
+  finalUrl: BoundedUrl,
+  navigated: Schema.Boolean,
+  redirects: Schema.Array(BoundedUrl).check(Schema.isMaxLength(20)),
+  loadState: Schema.optional(BrowserLoadState),
+  ...BrowserPopupCorrelationOutputFields,
+  ...optionalDialogFields,
+}).check(
+  Schema.makeFilter((value) =>
+    value.status === "completed"
+      ? value.result !== undefined && value.error === undefined
+      : value.result === undefined && value.error !== undefined,
+  ),
+  Schema.makeFilter((value) => browserJsonBytes(value) <= 512 * 1024),
+);
 const BrowserScrollPosition = closedStruct({ x: Schema.Finite, y: Schema.Finite });
 export const BrowserScrollOutput = closedStruct({
   tabId: BrowserTabId,
@@ -340,6 +395,8 @@ export type BrowserReloadOutput = typeof BrowserReloadOutput.Type;
 export type BrowserResizeOutput = typeof BrowserResizeOutput.Type;
 export type BrowserSnapshotOutput = typeof BrowserSnapshotOutput.Type;
 export type BrowserSnapshotHostOutput = typeof BrowserSnapshotHostOutput.Type;
+export type BrowserWebMcpToolsOutput = typeof BrowserWebMcpToolsOutput.Type;
+export type BrowserWebMcpCallOutput = typeof BrowserWebMcpCallOutput.Type;
 export type BrowserScreenshotOutput = typeof BrowserScreenshotOutput.Type;
 export type BrowserScreenshotHostOutput = typeof BrowserScreenshotHostOutput.Type;
 export type BrowserConsoleLogEntry = typeof BrowserConsoleLogEntry.Type;

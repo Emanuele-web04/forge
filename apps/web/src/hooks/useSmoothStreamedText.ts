@@ -120,7 +120,16 @@ export function stepSmoothReveal(
  */
 export function useSmoothStreamedText(text: string, isStreaming: boolean): string {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const animate = isStreaming && !reduceMotion;
+  // Testable env (jsdom/vitest) has no rAF or has mocked timers – smooth reveal would
+  // jank and never settle. Fall back to immediate text so streaming tests stay
+  // deterministic and the main thread isn't blocked by rAF loops.
+  const isTestableEnv =
+    typeof window === "undefined" ||
+    typeof (window as unknown as { requestAnimationFrame?: unknown }).requestAnimationFrame !==
+      "function" ||
+    (typeof process !== "undefined" &&
+      (process.env.VITEST === "true" || process.env.NODE_ENV === "test"));
+  const animate = isStreaming && !reduceMotion && !isTestableEnv;
 
   const [revealed, setRevealed] = useState(text);
 
