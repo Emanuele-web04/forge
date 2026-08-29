@@ -411,11 +411,11 @@ export interface AcpSessionRuntimeShape {
   /** Completes when the owned ACP process exits, regardless of its exit status. */
   readonly awaitExit: Effect.Effect<void>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
-  // Monotonic count of parsed session/update events enqueued for the
-  // getEvents() consumer. Adapters snapshot it and wait until their own
-  // processed count catches up, so turn attribution stays open until every
-  // event received during the turn has actually been handled — immune to
-  // stream chunk buffering and in-flight handlers, unlike a queue-size probe.
+  // Count of processed, in-flight, or deliverable parsed session/update
+  // events. Adapters snapshot it and wait until their own processed count
+  // catches up, so turn attribution stays open until every deliverable event
+  // received during the turn has actually been handled — immune to stream
+  // chunk buffering and in-flight handlers.
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
@@ -1062,10 +1062,11 @@ const makeAcpSessionRuntime = (
       Acp.CreateElicitationResponse
     >({ action: "decline" });
 
-    // Counts live-queue events and retained pre-consumer events (see
-    // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
-    // writer per offer, and readers only need a monotonic snapshot.
+    // Counts processed, in-flight, or deliverable events after cleanup drops.
+    // Plain mutable adjustments are fenced while session event offers are in
+    // flight; see sessionUpdatesEnqueuedCount on the shape.
     let sessionUpdatesEnqueued = 0;
+    let sessionEventOffersInFlight = 0;
 
     const appendPendingNotification = (
       map: Map<string, PendingSessionState>,
@@ -1107,15 +1108,16 @@ const makeAcpSessionRuntime = (
 
     const getSessionEpoch = (): Effect.Effect<SessionEpoch> => Ref.get(sessionEpochRef);
 
-    const clearSessionEpoch = (): Effect.Effect<void> =>
+    const clearSessionEpoch = (): Effect.Effect<number> =>
       Effect.gen(function* () {
-        yield* Ref.set(pendingSessionStateRef, new Map());
-        yield* Ref.set(pendingEventsRef, []);
         yield* Ref.update(sessionEpochRef, (epoch) => ({
           generation: epoch.generation + 1,
           activeSessionId: Option.none(),
         }));
+        yield* Ref.set(pendingSessionStateRef, new Map());
+        const pendingEvents = yield* Ref.getAndSet(pendingEventsRef, []);
         yield* Ref.set(acceptingSessionUpdatesRef, false);
+        return pendingEvents.length;
       });
 
     const setSessionEpoch = (
@@ -1205,27 +1207,38 @@ const makeAcpSessionRuntime = (
     const offerSessionEvent =
       (sessionId: string, epoch: SessionEpoch) =>
       (event: AcpParsedSessionEvent): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
-          const consumerAttached = yield* Ref.get(consumerAttachedRef);
-          if (consumerAttached) {
-            sessionUpdatesEnqueued += 1;
-            yield* Queue.offer(eventQueue, event);
-          } else {
-            const retainedCountIncreased = yield* Ref.modify(pendingEventsRef, (events) => {
-              const next = events.concat(event);
-              return [
-                events.length < ACP_MAX_PENDING_EVENTS,
-                next.length > ACP_MAX_PENDING_EVENTS
-                  ? next.slice(next.length - ACP_MAX_PENDING_EVENTS)
-                  : next,
-              ] as const;
-            });
-            if (retainedCountIncreased) {
-              sessionUpdatesEnqueued += 1;
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            sessionEventOffersInFlight += 1;
+            if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+            const consumerAttached = yield* Ref.get(consumerAttachedRef);
+            if (consumerAttached) {
+              const offered = yield* restore(Queue.offer(eventQueue, event));
+              if (offered) {
+                sessionUpdatesEnqueued += 1;
+              }
+            } else {
+              const retainedCountIncreased = yield* Ref.modify(pendingEventsRef, (events) => {
+                const next = events.concat(event);
+                return [
+                  events.length < ACP_MAX_PENDING_EVENTS,
+                  next.length > ACP_MAX_PENDING_EVENTS
+                    ? next.slice(next.length - ACP_MAX_PENDING_EVENTS)
+                    : next,
+                ] as const;
+              });
+              if (retainedCountIncreased) {
+                sessionUpdatesEnqueued += 1;
+              }
             }
-          }
-        });
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                sessionEventOffersInFlight -= 1;
+              }),
+            ),
+          ),
+        );
 
     // Closes the buffering-path TOCTOU: a session/update handler may read a
     // pre-transition epoch and buffer its notification after setSessionEpoch
@@ -1664,14 +1677,20 @@ const makeAcpSessionRuntime = (
             // any in-flight handlers that were admitted under the discarded epoch are
             // rejected before they can mutate state or enqueue events.
             yield* Ref.set(acceptingSessionUpdatesRef, false);
-            yield* clearSessionEpoch();
+            const pending = yield* clearSessionEpoch();
 
             // Drain any events that were already enqueued for the discarded session.
-            const queued = Queue.sizeUnsafe(eventQueue);
-            for (let i = 0; i < queued; i++) {
-              yield* Queue.take(eventQueue);
+            let queued = 0;
+            while (true) {
+              const event = yield* Queue.poll(eventQueue);
+              if (Option.isSome(event)) {
+                queued += 1;
+                continue;
+              }
+              if (sessionEventOffersInFlight === 0) break;
+              yield* Effect.yieldNow;
             }
-            yield* Ref.set(pendingEventsRef, []);
+            sessionUpdatesEnqueued -= pending + queued;
 
             // Reset bounded state derived from the discarded session so it cannot leak
             // into the final authenticated session.

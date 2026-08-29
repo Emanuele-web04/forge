@@ -17,6 +17,7 @@ import {
   AcpSessionRuntime,
   type AcpProtocolLogEvent,
   type AcpSessionRequestLogEvent,
+  type AcpSessionRuntimeShape,
 } from "./AcpSessionRuntime.ts";
 import { forkViaAcpRuntime } from "./acpFork.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
@@ -164,8 +165,11 @@ describe("AcpSessionRuntime", () => {
     "discards the first probe session and fences orphan updates for on-demand auth",
     async () => {
       const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+      let runtimeForProbe: AcpSessionRuntimeShape | undefined;
+      let probeEnqueuedCount = 0;
       const program = Effect.gen(function* () {
         const runtime = yield* AcpSessionRuntime;
+        runtimeForProbe = runtime;
         const started = yield* runtime.start().pipe(Effect.timeout("2 seconds"));
         expect(started.sessionId).toBe("mock-session-1");
 
@@ -174,6 +178,7 @@ describe("AcpSessionRuntime", () => {
         );
         expect(newSessionStarts.length).toBe(2);
         expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
+        expect(probeEnqueuedCount).toBeGreaterThan(0);
 
         // The final session's bounded state is present, but nothing from the
         // discarded probe session leaked through.
@@ -189,6 +194,7 @@ describe("AcpSessionRuntime", () => {
         expect(
           events.some((event) => event._tag === "ContentDelta" && event.text === "orphan"),
         ).toBe(false);
+        expect(yield* runtime.sessionUpdatesEnqueuedCount).toBe(events.length);
       }).pipe(
         Effect.provide(
           AcpSessionRuntime.layer({
@@ -216,8 +222,28 @@ describe("AcpSessionRuntime", () => {
               return allowedModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0;
             },
             requestLogger: (event) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 requestEvents.push(event);
+                const probeRuntime = runtimeForProbe;
+                if (
+                  event.method === "session/new" &&
+                  event.status === "succeeded" &&
+                  requestEvents.filter(
+                    (candidate) =>
+                      candidate.method === "session/new" && candidate.status === "succeeded",
+                  ).length === 1 &&
+                  probeRuntime
+                ) {
+                  const consumer = yield* Stream.runDrain(probeRuntime.getEvents()).pipe(
+                    Effect.forkChild,
+                  );
+                  yield* Effect.yieldNow;
+                  yield* Fiber.interrupt(consumer);
+                  const epoch = yield* probeRuntime.getSessionEpoch();
+                  Object.assign(epoch, { activeSessionId: Option.some("mock-session-probe") });
+                  yield* Effect.sleep("100 millis");
+                  probeEnqueuedCount = yield* probeRuntime.sessionUpdatesEnqueuedCount;
+                }
               }),
           }),
         ),
