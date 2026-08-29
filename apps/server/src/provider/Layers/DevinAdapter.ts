@@ -971,10 +971,10 @@ function buildDevinPromptParts(input: {
 }
 
 // Devin's ACP process accepts a concrete model UID as its `--model` value, not
-// a separate effort/context flag. The web client resolves runtime selections to
-// a variant before dispatch, so only the variant, the selection slug, and the
-// explicit config are ever candidates; a reasoning-effort label must never be
-// substituted as the model identifier.
+// a separate effort/context flag. Both web and server resolve current traits
+// through the shared resolver. Concrete variants, selection slugs, and explicit
+// config remain candidates; reasoning-effort labels are never used as model
+// identifiers.
 export function resolveDevinEffectiveModel(input: {
   readonly explicitModel: string | undefined;
   readonly selectionModel: string | undefined;
