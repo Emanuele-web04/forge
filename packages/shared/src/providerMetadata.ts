@@ -121,7 +121,14 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
       learnMoreHref: "https://pi.dev",
     },
   },
-] as const satisfies readonly ProviderDescriptor[]);
+  {
+    kind: "copilot",
+    displayName: PROVIDER_DISPLAY_NAMES.copilot,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
+] as const satisfies readonly ProviderDescriptor[];
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
   PROVIDER_DESCRIPTORS.map((descriptor) => [descriptor.kind, descriptor]),

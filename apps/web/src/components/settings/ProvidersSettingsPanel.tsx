@@ -84,7 +84,8 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir";
+  | "piAgentDir"
+  | "copilotBinaryPath";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"
@@ -375,6 +376,32 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "Pi agent directory",
         placeholder: "Pi agent directory",
         description: "Optional custom Pi agent directory for auth, models, skills, and commands.",
+      },
+    ],
+  },
+  {
+    provider: "copilot",
+    docs: [
+      {
+        label: "Install",
+        href: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+      },
+      {
+        label: "Reference",
+        href: "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference",
+      },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "copilotBinaryPath",
+        label: "GitHub Copilot binary path",
+        placeholder: "GitHub Copilot CLI binary path",
+        description: (
+          <>
+            Leave blank to use <code>copilot</code> from your PATH.
+          </>
+        ),
       },
     ],
   },

@@ -124,7 +124,8 @@ type CustomModelSettingsKey =
   | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
-  | "customPiModels";
+  | "customPiModels"
+  | "customCopilotModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -145,6 +146,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
+  copilot: new Set(getModelOptions("copilot").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -171,6 +173,7 @@ const PersistedProviderKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  "copilot",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,
@@ -207,6 +210,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  copilotBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -283,6 +287,7 @@ export const AppSettingsSchema = Schema.Struct({
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customCopilotModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
@@ -420,6 +425,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
+  copilot: {
+    provider: "copilot",
+    settingsKey: "customCopilotModels",
+    defaultSettingsKey: "customCopilotModels",
+    title: "GitHub Copilot",
+    description: "Save additional Copilot CLI model slugs alongside the live ACP catalog.",
+    placeholder: "model-slug",
+    example: "claude-sonnet-4.5",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
@@ -552,6 +566,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       settings.openCodeBinaryPath,
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
+    copilotBinaryPath: normalizeProviderBinaryPathOverride("copilot", settings.copilotBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
@@ -569,6 +584,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
+    customCopilotModels: normalizeCustomModelSlugs(settings.customCopilotModels, "copilot"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     hiddenModels: [],
@@ -597,6 +613,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
     piBinaryPath: settings.providers.pi.binaryPath,
+    copilotBinaryPath: settings.providers.copilot.binaryPath,
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
@@ -606,6 +623,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
+    customCopilotModels: settings.providers.copilot.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
@@ -635,7 +653,8 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
-    hasOwn(patch, "piAgentDir")
+    hasOwn(patch, "piAgentDir") ||
+    hasOwn(patch, "copilotBinaryPath")
   );
 }
 
@@ -772,6 +791,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
   }
+  if (hasOwn(patch, "copilotBinaryPath") || hasOwn(patch, "customCopilotModels")) {
+    providers.copilot = {
+      ...(hasOwn(patch, "copilotBinaryPath") ? { binaryPath: patch.copilotBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customCopilotModels")
+        ? { customModels: patch.customCopilotModels ?? [] }
+        : {}),
+    };
+  }
 
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
@@ -809,6 +836,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeServerUrl",
     "piAgentDir",
     "piBinaryPath",
+    "copilotBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {
@@ -836,6 +864,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
+    "customCopilotModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
       patch[key] = normalizedSettings[key] as never;
@@ -885,6 +914,7 @@ export function getCustomModelsByProvider(
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
+    copilot: getCustomModelsForProvider(settings, "copilot"),
   };
 }
 
@@ -1033,6 +1063,7 @@ export function getCustomModelOptionsByProvider(
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
+    copilot: getAppModelOptions("copilot", customModelsByProvider.copilot),
   };
 }
 
@@ -1054,6 +1085,7 @@ export function getProviderStartOptions(
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
+    | "copilotBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
@@ -1074,6 +1106,10 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const copilotBinaryPath = normalizeProviderBinaryPathOverride(
+    "copilot",
+    settings.copilotBinaryPath,
+  );
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
@@ -1147,6 +1183,7 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(copilotBinaryPath ? { copilot: { binaryPath: copilotBinaryPath } } : {}),
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
@@ -1192,6 +1229,7 @@ export function getCustomBinaryPathForProvider(
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
+    | "copilotBinaryPath"
   >,
   provider: ProviderKind,
 ): string {
@@ -1214,6 +1252,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
     case "pi":
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
+    case "copilot":
+      return normalizeProviderBinaryPathOverride(provider, settings.copilotBinaryPath);
   }
 }
 

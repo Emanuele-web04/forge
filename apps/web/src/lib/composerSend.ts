@@ -220,6 +220,7 @@ export function resolvePromptEffortFromModelSelection(
     case "cursor":
       return modelSelection.options?.reasoningEffort ?? null;
     case "grok":
+    case "copilot":
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":

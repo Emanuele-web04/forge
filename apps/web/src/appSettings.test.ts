@@ -277,6 +277,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          copilot: [],
         },
         "galapagos-alpha",
       ),
@@ -297,6 +298,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          copilot: [],
         },
         "",
       ),
@@ -317,6 +319,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          copilot: [],
         },
         "GPT-5.3 Codex",
       ),
@@ -337,6 +340,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          copilot: [],
         },
         "sonnet",
       ),
@@ -357,6 +361,7 @@ describe("resolveAppModelSelection", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          copilot: [],
         },
         "custom/selected-model",
       ),
@@ -473,6 +478,7 @@ describe("normalizeStoredAppSettings", () => {
         kiloBinaryPath: "kilo",
         openCodeBinaryPath: "opencode",
         piBinaryPath: "pi",
+        copilotBinaryPath: "copilot",
       }),
     );
     const normalized = normalizeStoredAppSettings(decodedSettings);
@@ -487,6 +493,7 @@ describe("normalizeStoredAppSettings", () => {
       kiloBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
+      copilotBinaryPath: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
@@ -519,6 +526,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        copilotBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -558,6 +566,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        copilotBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -580,6 +589,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        copilotBinaryPath: "copilot",
       }),
     ).toBeUndefined();
   });
@@ -596,6 +606,7 @@ describe("provider-indexed custom model settings", () => {
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customCopilotModels: ["copilot/custom-model"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -609,6 +620,7 @@ describe("provider-indexed custom model settings", () => {
       "kilo",
       "opencode",
       "pi",
+      "copilot",
     ]);
   });
 
@@ -627,6 +639,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+    expect(getCustomModelsForProvider(settings, "copilot")).toEqual(["copilot/custom-model"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -640,6 +653,7 @@ describe("provider-indexed custom model settings", () => {
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
+      customCopilotModels: ["copilot/default-model"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -655,6 +669,9 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "copilot")).toEqual([
+      "copilot/default-model",
+    ]);
   });
 
   it("patches custom models for codex", () => {
@@ -711,6 +728,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for copilot", () => {
+    expect(patchCustomModels("copilot", ["copilot/custom-model"])).toEqual({
+      customCopilotModels: ["copilot/custom-model"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -722,6 +745,7 @@ describe("provider-indexed custom model settings", () => {
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      copilot: ["copilot/custom-model"],
     });
   });
 
@@ -779,6 +803,7 @@ describe("provider-indexed custom model settings", () => {
         "anthropic/custom-pi",
         "anthropic/custom-pi",
       ],
+      customCopilotModels: [" default ", "copilot/custom-model", "copilot/custom-model"],
     });
 
     expect(
@@ -817,6 +842,9 @@ describe("provider-indexed custom model settings", () => {
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.copilot.filter((option) => option.slug === "copilot/custom-model"),
     ).toHaveLength(1);
   });
 });
@@ -900,6 +928,7 @@ describe("AppSettingsSchema", () => {
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],
+      customCopilotModels: [],
     });
   });
 

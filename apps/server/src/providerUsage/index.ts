@@ -26,7 +26,7 @@ import type { ProviderUsageContext } from "./types";
 const LOCAL_ARCHIVE_PROVIDERS: ReadonlySet<ProviderKind> = new Set(["codex", "claudeAgent"]);
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
-  provider === "claudeAgent" ? "claude" : provider;
+  provider === "claudeAgent" ? "claude" : provider === "copilot" ? "acp" : provider;
 
 function buildContext(): ProviderUsageContext {
   return {

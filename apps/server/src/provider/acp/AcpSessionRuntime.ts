@@ -229,7 +229,9 @@ export interface AcpSessionRuntimeOptions {
   readonly authMethodId?: string;
   readonly resolveAuthMethodId?: (
     initializeResult: Acp.InitializeResponse,
-  ) => Effect.Effect<string, AcpErrors.AcpError>;
+  ) => Effect.Effect<string | undefined, AcpErrors.AcpError>;
+  /** Existing concrete providers require auth; BYOK ACP agents may not advertise it. */
+  readonly authentication?: "required" | "when-advertised";
   /**
    * MCP servers to attach to the session. Invoked after `initialize` so the
    * builder can pick a transport based on the agent's advertised
@@ -1100,7 +1102,7 @@ const makeAcpSessionRuntime = (
           ? yield* options.resolveAuthMethodId(initializeResult)
           : options.authMethodId;
 
-      if (!authMethodId) {
+      if (!authMethodId && options.authentication !== "when-advertised") {
         return yield* new AcpErrors.AcpRequestError({
           code: -32602,
           errorMessage: "ACP agent did not provide an authentication method.",
@@ -1108,20 +1110,22 @@ const makeAcpSessionRuntime = (
         });
       }
 
-      const authenticatePayload = {
-        methodId: authMethodId,
-        ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
-      } satisfies Acp.AuthenticateRequest;
+      if (authMethodId) {
+        const authenticatePayload = {
+          methodId: authMethodId,
+          ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
+        } satisfies Acp.AuthenticateRequest;
 
-      yield* withStartupTimeout(
-        "authenticate",
-        startupTimeouts.authenticateMs,
-        runLoggedRequest(
+        yield* withStartupTimeout(
           "authenticate",
-          authenticatePayload,
-          acp.agent.authenticate(authenticatePayload),
-        ),
-      );
+          startupTimeouts.authenticateMs,
+          runLoggedRequest(
+            "authenticate",
+            authenticatePayload,
+            acp.agent.authenticate(authenticatePayload),
+          ),
+        );
+      }
 
       const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
       const sessionCwd = resolveAcpSessionCwd(options.cwd);

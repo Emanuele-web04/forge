@@ -3,6 +3,7 @@ import {
   AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
+  CopilotModelOptions,
   CursorModelOptions,
   DroidModelOptions,
   GrokModelOptions,
@@ -64,6 +65,7 @@ export const ProviderKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  "copilot",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -145,6 +147,13 @@ export const PiModelSelection = Schema.Struct({
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 
+export const CopilotModelSelection = Schema.Struct({
+  provider: Schema.Literal("copilot"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(CopilotModelOptions),
+});
+export type CopilotModelSelection = typeof CopilotModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
@@ -155,6 +164,7 @@ export const ModelSelection = Schema.Union([
   KiloModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
+  CopilotModelSelection,
 ]);
 export type ModelSelection = typeof ModelSelection.Type;
 
@@ -202,6 +212,10 @@ export const PiProviderStartOptions = Schema.Struct({
   agentDir: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const CopilotProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
@@ -212,6 +226,7 @@ export const ProviderStartOptions = Schema.Struct({
   kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
+  copilot: Schema.optional(CopilotProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

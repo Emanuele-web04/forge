@@ -114,6 +114,7 @@ export function useProviderModelCatalog(input: {
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
+  const copilotModelDiscoveryEnabled = shouldDiscoverProvider("copilot");
 
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
@@ -184,6 +185,14 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const copilotDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "copilot",
+      binaryPath: settings.copilotBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: copilotModelDiscoveryEnabled,
     }),
   );
 
@@ -260,6 +269,13 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const hasResolvedCopilotModelDiscovery =
+    copilotDynamicModelsQuery.data?.source === "copilot-acp" &&
+    (copilotDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const copilotModelDiscoveryPending =
+    copilotModelDiscoveryEnabled &&
+    !hasResolvedCopilotModelDiscovery &&
+    isInitialModelDiscoveryPending(copilotDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -295,6 +311,11 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.opencode,
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
+      copilot: getAppModelOptions(
+        "copilot",
+        customModelsByProvider.copilot,
+        modelHintByProvider?.copilot,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -313,6 +334,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
+      copilot: copilotDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -324,6 +346,7 @@ export function useProviderModelCatalog(input: {
       "kilo",
       "opencode",
       "pi",
+      "copilot",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -348,6 +371,7 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    copilotDynamicModelsQuery.data,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -358,6 +382,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
+      copilot: copilotModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -366,6 +391,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      copilotModelDiscoveryPending,
     ],
   );
 
@@ -382,6 +408,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
+      copilot: copilotDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -393,6 +420,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      copilotDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -443,7 +471,9 @@ export function useProviderModelCatalog(input: {
                   ? kiloDynamicModelsQuery
                   : selectedProvider === "opencode"
                     ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+                    : selectedProvider === "pi"
+                      ? piDynamicModelsQuery
+                      : copilotDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

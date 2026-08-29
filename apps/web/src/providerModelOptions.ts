@@ -12,6 +12,8 @@ import {
   type ClaudeModelSelection,
   type CodexModelOptions,
   type CodexModelSelection,
+  type CopilotModelOptions,
+  type CopilotModelSelection,
   type CursorModelOptions,
   type CursorModelSelection,
   type DroidModelOptions,
@@ -208,7 +210,8 @@ export function mergeDynamicModelOptions(input: {
       input.provider === "opencode" ||
       input.provider === "cursor" ||
       input.provider === "droid" ||
-      input.provider === "grok") &&
+      input.provider === "grok" ||
+      input.provider === "copilot") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -346,6 +349,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as DroidModelOptions;
   }
+  if (provider === "copilot") {
+    return {
+      ...(modelOptions as CopilotModelOptions | undefined),
+      ...patch,
+    } as CopilotModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -412,6 +421,11 @@ export function buildModelSelection(
   model: string,
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "copilot",
+  model: string,
+  options?: CopilotModelOptions | null | undefined,
+): CopilotModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -494,6 +508,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "copilot":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as CopilotModelOptions,
           }
         : { provider, model };
   }

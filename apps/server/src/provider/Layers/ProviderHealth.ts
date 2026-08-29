@@ -120,6 +120,7 @@ const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
+const COPILOT_PROVIDER = "copilot" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -134,10 +135,11 @@ const PROVIDERS = [
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
+  COPILOT_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
-  provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider;
+  provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider === COPILOT_PROVIDER ? "acp" : provider;
 
 const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
   buildProviderChildEnvironment({ provider: providerChildKind(provider) });
@@ -289,6 +291,18 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       executable: "pi",
       args: () => ["update"],
       lockKey: "pi-native",
+      strategy: "always",
+    },
+  },
+  copilot: {
+    provider: COPILOT_PROVIDER,
+    binaryName: "copilot",
+    npmPackageName: "@github/copilot",
+    homebrew: { name: "copilot-cli", kind: "cask" },
+    nativeUpdate: {
+      executable: "copilot",
+      args: () => ["update"],
+      lockKey: "copilot-native",
       strategy: "always",
     },
   },
@@ -839,6 +853,15 @@ function cursorModelsOutputHasNoModels(output: string): boolean {
 
 const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
   runProviderCommand(executable, args, providerCommandEnv(PI_PROVIDER)).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runCopilotCommand = (args: ReadonlyArray<string>, executable = "copilot") =>
+  runProviderCommand(executable, args, providerCommandEnv(COPILOT_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1624,6 +1647,74 @@ export const checkPiProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── GitHub Copilot CLI health check ─────────────────────────────
+
+export const checkCopilotProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "copilot";
+    const versionProbe = yield* probeProviderCliVersion(
+      runCopilotCommand(["--version"], executable),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: COPILOT_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "GitHub Copilot CLI is not installed or not available on PATH."
+            : `GitHub Copilot CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: COPILOT_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "GitHub Copilot CLI timed out while Synara checked its version.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const detail = detailFromResult(versionProbe.result);
+      return {
+        provider: COPILOT_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `GitHub Copilot CLI failed to run. ${detail}`
+          : "GitHub Copilot CLI failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = parseGenericCliVersion(
+      `${versionProbe.result.stdout}\n${versionProbe.result.stderr}`,
+    );
+    return {
+      provider: COPILOT_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version,
+      checkedAt,
+      message:
+        "GitHub Copilot CLI is installed. Authentication is negotiated when the ACP session starts.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Antigravity CLI health check ──────────────────────────────────
 
 export const checkAntigravityProviderStatus = (
@@ -2205,6 +2296,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.opencode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
+          case "copilot":
+            return settings.providers.copilot.binaryPath;
         }
       };
 
@@ -2417,6 +2510,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                     settings.providers.pi.agentDir,
                     settings.providers.pi.binaryPath,
                   ),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  COPILOT_PROVIDER,
+                  checkCopilotProviderStatus(settings.providers.copilot.binaryPath),
                 ),
               ],
               {
