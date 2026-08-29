@@ -580,6 +580,62 @@ describe("store event reducer", () => {
     }
   });
 
+  it("replaces duplicated local streamed text with the authoritative completion", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-message");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const serverText = "final text";
+    const initialState = makeState(
+      makeThread({
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: `${serverText}${serverText}`,
+            turnId,
+            createdAt: "2026-02-27T00:01:05.000Z",
+            streaming: true,
+            source: "native",
+          },
+        ],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+      }),
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.message-sent", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantId,
+          role: "assistant",
+          text: serverText,
+          turnId,
+          streaming: false,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:06.000Z",
+          attachments: [],
+          source: "native",
+        }),
+      ]);
+
+      expect(threadsOf(next)[0]?.messages[0]).toMatchObject({
+        id: assistantId,
+        text: serverText,
+        streaming: false,
+        completedAt: "2026-02-27T00:01:06.000Z",
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
     const userId = MessageId.makeUnsafe("user-active-edit");
     const initialState = makeState(

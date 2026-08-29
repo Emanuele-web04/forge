@@ -613,14 +613,15 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
     nextText = `${existingMessage.text}${incomingMessage.text}`;
-  } else if (incomingMessage.text.startsWith(existingMessage.text)) {
-    nextText = incomingMessage.text;
-  } else if (existingMessage.text.startsWith(incomingMessage.text)) {
-    nextText = existingMessage.text;
   } else {
-    // Completions carry the server's full accumulated text. If mid-stream drift
-    // broke the prefix invariant, concatenating would duplicate the bubble.
-    if (import.meta.env.DEV) {
+    // Non-streaming completions carry the server's authoritative accumulated
+    // text. Always prefer them so a duplicated or divergent local stream cannot
+    // survive after the turn settles.
+    if (
+      import.meta.env.DEV &&
+      incomingMessage.text !== existingMessage.text &&
+      !incomingMessage.text.startsWith(existingMessage.text)
+    ) {
       console.warn("[transcript] completion text diverged from local stream", {
         messageId: existingMessage.id,
         existing: describeStreamText(existingMessage.text),
