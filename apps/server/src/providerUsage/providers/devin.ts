@@ -9,6 +9,7 @@ import {
   getDevinApiKeyEnv,
   getDevinApiServerUrlEnv,
   readDevinStoredCredentials,
+  validateDevinApiServerUrl,
 } from "../../provider/acp/DevinAcpSupport";
 import { credentialFingerprint } from "../credentials";
 import { fetchJson, isAuthFailureStatus } from "../http";
@@ -46,19 +47,8 @@ function homeAwareEnv(ctx: ProviderUsageContext): NodeJS.ProcessEnv {
 }
 
 function normalizeDevinApiServerUrl(raw: string | undefined): string | null {
-  const candidate = raw?.trim() || DEFAULT_API_SERVER_URL;
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== "https:") {
-      return null;
-    }
-    parsed.hash = "";
-    parsed.search = "";
-    const normalized = parsed.toString().replace(/\/+$/u, "");
-    return normalized.length > 0 ? normalized : null;
-  } catch {
-    return null;
-  }
+  const validation = validateDevinApiServerUrl(raw?.trim() || DEFAULT_API_SERVER_URL);
+  return validation.kind === "url" ? validation.url : null;
 }
 
 async function resolveDevinUsageAuth(

@@ -218,16 +218,46 @@ describe("devinUsageFetcher", () => {
     expect(snapshot.status).toBe("error");
     expect(snapshot.detail).toContain("API server URL is invalid");
   });
-  it("rejects a plain http API server URL with no loopback exception", async () => {
+
+  it.each([
+    ["localhost", "http://localhost:3000"],
+    ["IPv4 loopback", "http://127.0.0.1:3000"],
+    ["IPv6 loopback", "http://[::1]:3000"],
+  ])("allows HTTP for %s", async (_hostKind, apiServerUrl) => {
+    stubOutboundFetch(async (url) => {
+      expect(String(url)).toBe(
+        `${apiServerUrl}/exa.seat_management_pb.SeatManagementService/GetUserStatus`,
+      );
+      return jsonResponse({ userStatus: { planStatus: { dailyQuotaRemainingPercent: 50 } } });
+    });
+
     const snapshot = await devinUsageFetcher.fetch({
       homeDir: "/nonexistent-home",
       env: {
         DEVIN_API_KEY: "env-key",
-        DEVIN_API_SERVER_URL: "http://localhost:3000",
+        DEVIN_API_SERVER_URL: apiServerUrl,
       },
       platform: "linux",
       nowMs: NOW_MS,
     });
+
+    expect(snapshot.status).toBe("ok");
+  });
+
+  it.each([
+    ["non-loopback HTTP", "http://api.example.com"],
+    ["an unsupported protocol", "ftp://localhost:3000"],
+  ])("rejects %s API server URLs", async (_case, apiServerUrl) => {
+    const snapshot = await devinUsageFetcher.fetch({
+      homeDir: "/nonexistent-home",
+      env: {
+        DEVIN_API_KEY: "env-key",
+        DEVIN_API_SERVER_URL: apiServerUrl,
+      },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+
     expect(snapshot.status).toBe("error");
     expect(snapshot.detail).toContain("API server URL is invalid");
   });
