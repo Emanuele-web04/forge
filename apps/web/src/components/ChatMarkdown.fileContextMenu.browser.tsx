@@ -114,9 +114,8 @@ describe("ChatMarkdown file context menu", () => {
     const openFile = vi.fn().mockReturnValue(true);
     restoreNativeApi = installNativeApi({
       projects: {
-        resolveOutOfRootFileReference: vi.fn().mockResolvedValue({
-          fullPath: null,
-          inRootExists: true,
+        resolveWorkspaceFileReferences: vi.fn().mockResolvedValue({
+          relativePaths: ["src/index.ts"],
         }),
       },
     } as unknown as NativeApi);
@@ -141,16 +140,13 @@ describe("ChatMarkdown file context menu", () => {
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith("/Users/tester/project/src/index.ts");
+    expect(openFile).toHaveBeenCalledWith("src/index.ts");
   });
 
   it("does not chip a relative file that cannot be found", async () => {
     restoreNativeApi = installNativeApi({
       projects: {
-        resolveOutOfRootFileReference: vi.fn().mockResolvedValue({
-          fullPath: null,
-          inRootExists: false,
-        }),
+        resolveWorkspaceFileReferences: vi.fn().mockResolvedValue({ relativePaths: [null] }),
       },
     } as unknown as NativeApi);
     await render(
@@ -167,6 +163,43 @@ describe("ChatMarkdown file context menu", () => {
       expect(document.querySelector("code")?.textContent).toBe("scripts/upsert_pr_proof.py");
     });
     expect(document.querySelector('a[href*="upsert_pr_proof.py"]')).toBeNull();
+  });
+
+  it("batches transcript file chips without using ancestor relocation scans", async () => {
+    const resolveWorkspaceFileReferences = vi.fn(
+      async (input: { relativePaths: ReadonlyArray<string> }) => ({
+        relativePaths: [...input.relativePaths],
+      }),
+    );
+    const resolveOutOfRootFileReference = vi.fn();
+    restoreNativeApi = installNativeApi({
+      projects: {
+        resolveWorkspaceFileReferences,
+        resolveOutOfRootFileReference,
+      },
+    } as unknown as NativeApi);
+
+    const screen = await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <ChatMarkdown
+          text="See `src/index.ts`, `docs/readme.md`, and `src/index.ts` again."
+          cwd="/Users/tester/project"
+          isStreaming={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    await vi.waitFor(() => {
+      screen.getByRole("link", { name: "readme.md" }).element();
+      expect(document.querySelectorAll('a[title="src/index.ts"]')).toHaveLength(2);
+    });
+    expect(resolveWorkspaceFileReferences).toHaveBeenCalledOnce();
+    const request = resolveWorkspaceFileReferences.mock.calls[0]?.[0];
+    expect(request?.relativePaths).toHaveLength(2);
+    expect(request?.relativePaths).toEqual(
+      expect.arrayContaining(["src/index.ts", "docs/readme.md"]),
+    );
+    expect(resolveOutOfRootFileReference).not.toHaveBeenCalled();
   });
 
   it("opens an absolute directory path from inline code", async () => {

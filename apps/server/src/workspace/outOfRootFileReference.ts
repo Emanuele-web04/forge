@@ -42,11 +42,6 @@ function isMissingPathError(cause: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-export type WorkspaceFileReferenceResolution = {
-  readonly inRootExists: boolean;
-  readonly fullPath: string | null;
-};
-
 /**
  * Resolves a workspace-relative reference that is missing under the workspace
  * root against the root's ancestor directories, nearest first, up to and
@@ -64,25 +59,16 @@ export async function resolveOutOfRootFileReference(input: {
   readonly relativePath: string;
   readonly homeDir: string;
 }): Promise<string | null> {
-  const resolved = await resolveWorkspaceFileReference(input);
-  return resolved.inRootExists ? null : resolved.fullPath;
-}
-
-export async function resolveWorkspaceFileReference(input: {
-  readonly workspaceRoot: string;
-  readonly relativePath: string;
-  readonly homeDir: string;
-}): Promise<WorkspaceFileReferenceResolution> {
   const relativePath = input.relativePath.trim();
   if (relativePath.includes("\0") || !isWorkspaceRelativePathSafe(relativePath)) {
-    return { inRootExists: false, fullPath: null };
+    return null;
   }
   const [realHome, realRoot] = await Promise.all([
     realpathOrNull(input.homeDir),
     realpathOrNull(input.workspaceRoot),
   ]);
   if (!realHome || !realRoot || !isContainedPath(realHome, realRoot)) {
-    return { inRootExists: false, fullPath: null };
+    return null;
   }
 
   const segments = relativePath.split(/[\\/]/);
@@ -97,10 +83,10 @@ export async function resolveWorkspaceFileReference(input: {
     return null;
   });
   if (inRootStat === false) {
-    return { inRootExists: false, fullPath: null };
+    return null;
   }
   if (inRootStat !== null) {
-    return { inRootExists: inRootStat.isFile(), fullPath: null };
+    return null;
   }
 
   let ancestor = path.dirname(realRoot);
@@ -116,7 +102,7 @@ export async function resolveWorkspaceFileReference(input: {
       isContainedPath(realHome, realCandidate) &&
       (await statIsFileOrNull(realCandidate))
     ) {
-      return { inRootExists: false, fullPath: realCandidate };
+      return realCandidate;
     }
     const parent = path.dirname(ancestor);
     if (parent === ancestor) {
@@ -124,5 +110,5 @@ export async function resolveWorkspaceFileReference(input: {
     }
     ancestor = parent;
   }
-  return { inRootExists: false, fullPath: null };
+  return null;
 }

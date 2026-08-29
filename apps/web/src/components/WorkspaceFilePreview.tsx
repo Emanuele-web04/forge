@@ -902,13 +902,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </div>
       ) : fileQuery.isLoading ? (
         <FilePreviewLoadingState />
-      ) : outOfRootResolutionAmbiguous ? (
-        <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
-            Multiple files from this assistant turn match this relative path. Use an absolute path
-            to choose one.
-          </p>
-        </PanelStateMessage>
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
           <p className="text-left text-[11px] text-destructive/85">

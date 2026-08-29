@@ -17,6 +17,7 @@ import {
   EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadErrorRefetchInterval,
 } from "./expensiveReadRetry";
+import { resolveWorkspaceFileReferenceBatched } from "./workspaceFileReferenceBatch";
 
 export const projectQueryKeys = {
   all: ["projects"] as const,
@@ -27,6 +28,8 @@ export const projectQueryKeys = {
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
   resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
     ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
+  resolveWorkspaceFileReference: (cwd: string | null, relativePath: string | null) =>
+    ["projects", "resolve-workspace-file-reference", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -55,6 +58,9 @@ export function invalidateProjectFileQueriesForCwds(
       queryClient.invalidateQueries({
         queryKey: ["projects", "resolve-out-of-root-file-reference", cwd] as const,
       }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "resolve-workspace-file-reference", cwd] as const,
+      }),
       queryClient.invalidateQueries({ queryKey: ["projects", "search-entries", cwd] as const }),
     ]),
   );
@@ -73,6 +79,7 @@ const DEFAULT_SEARCH_CONTENT_STALE_TIME = 10_000;
 // reject the request at decode time, so the query must stay disabled.
 export const SEARCH_CONTENT_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
+const DEFAULT_WORKSPACE_FILE_REFERENCE_STALE_TIME = 15_000;
 const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
 const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
 export const LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS = 30_000;
@@ -201,6 +208,32 @@ export function projectReadFileQueryOptions(input: {
     // Capacity is retried in-place by the transport; do not stack another budget.
     retry: false,
     refetchInterval: expensiveReadErrorRefetchInterval,
+  });
+}
+
+export function projectResolveWorkspaceFileReferenceQueryOptions(input: {
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions<string | null>({
+    queryKey: projectQueryKeys.resolveWorkspaceFileReference(input.cwd, input.relativePath),
+    queryFn: () => {
+      if (!input.cwd || !input.relativePath) {
+        throw new Error("Workspace file reference resolution is unavailable.");
+      }
+      return resolveWorkspaceFileReferenceBatched({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      input.relativePath !== null &&
+      typeof window !== "undefined",
+    staleTime: DEFAULT_WORKSPACE_FILE_REFERENCE_STALE_TIME,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 

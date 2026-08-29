@@ -4,10 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  resolveOutOfRootFileReference,
-  resolveWorkspaceFileReference,
-} from "./outOfRootFileReference";
+import { resolveOutOfRootFileReference } from "./outOfRootFileReference";
 
 describe("resolveOutOfRootFileReference", () => {
   let homeDir: string;
@@ -108,18 +105,6 @@ describe("resolveOutOfRootFileReference", () => {
     });
 
     expect(resolved).toBeNull();
-  });
-
-  it("reports when the in-root join already exists as a file", async () => {
-    writeFile(path.join(workspaceRoot, "src", "index.ts"));
-
-    await expect(
-      resolveWorkspaceFileReference({
-        workspaceRoot,
-        relativePath: "src/index.ts",
-        homeDir,
-      }),
-    ).resolves.toEqual({ inRootExists: true, fullPath: null });
   });
 
   it("skips ancestor candidates that are directories", async () => {

@@ -41,7 +41,7 @@ import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { useQuery } from "@tanstack/react-query";
-import { projectResolveOutOfRootFileReferenceQueryOptions } from "../lib/projectReactQuery";
+import { projectResolveWorkspaceFileReferenceQueryOptions } from "../lib/projectReactQuery";
 import {
   extractAbsoluteFilesystemPaths,
   resolveChatFileChipTarget,
@@ -780,14 +780,13 @@ function inlineCodeFilePath(raw: string): string | null {
 function VerifiedWorkspaceFileChip(props: {
   rawReference: string;
   cwd: string;
-  cwdTarget: string;
   theme: "light" | "dark";
   label?: ReactNode;
   href?: string;
 }) {
   const relativePath = props.rawReference.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
   const query = useQuery(
-    projectResolveOutOfRootFileReferenceQueryOptions({
+    projectResolveWorkspaceFileReferenceQueryOptions({
       cwd: props.cwd,
       relativePath,
     }),
@@ -796,12 +795,12 @@ function VerifiedWorkspaceFileChip(props: {
   if (query.isPending || query.isError || query.data === undefined) {
     return fallback;
   }
-  if (query.data.inRootExists !== true) {
+  if (query.data === null) {
     return fallback;
   }
   return (
     <OpenableFileChip
-      targetPath={props.cwdTarget}
+      targetPath={query.data}
       theme={props.theme}
       {...(props.label !== undefined ? { label: props.label } : {})}
       {...(props.href ? { href: props.href } : {})}
@@ -1291,13 +1290,11 @@ function ChatMarkdown({
             if (knownTarget) {
               return <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} />;
             }
-            const cwdTarget = resolveMarkdownFileLinkTarget(filePath, cwd);
-            if (cwdTarget && cwd) {
+            if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
               return (
                 <VerifiedWorkspaceFileChip
                   rawReference={filePath}
                   cwd={cwd}
-                  cwdTarget={cwdTarget}
                   theme={resolvedTheme}
                 />
               );

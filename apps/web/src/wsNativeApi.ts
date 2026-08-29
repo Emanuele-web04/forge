@@ -531,6 +531,8 @@ export function createWsNativeApi(): NativeApi {
         options?.signal
           ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
           : transport.request(WS_METHODS.projectsReadFile, input),
+      resolveWorkspaceFileReferences: (input) =>
+        transport.request(WS_METHODS.projectsResolveWorkspaceFileReferences, input),
       resolveOutOfRootFileReference: (input) =>
         transport.request(WS_METHODS.projectsResolveOutOfRootFileReference, input),
       createLocalFilePreviewGrant: (input) =>
