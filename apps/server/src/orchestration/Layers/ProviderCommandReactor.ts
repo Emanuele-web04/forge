@@ -3663,21 +3663,37 @@ const make = Effect.gen(function* () {
     if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
       // A stop that cannot finish must still settle the projection: the session
       // row below is the only thing that releases the turn in the UI.
-      const stopped = yield* runBoundedProviderCall({
-        label: "The provider session stop",
-        timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
-        call: providerService.stopSession({ threadId: providerThread.id }),
-      });
-      if (stopped._tag !== "ok") {
+      if (!providerService.stopRuntimeSession) {
+        yield* Effect.logWarning(
+          "provider command reactor skipped session stop: stopRuntimeSession is unavailable",
+          { threadId: thread.id },
+        );
         yield* appendProviderFailureActivity({
           threadId: thread.id,
           kind: "provider.session.stop.failed",
           summary: "Provider session stop failed",
-          detail: stopped._tag === "timeout" ? stopped.detail : stopped.outcome.detail,
+          detail: "The cursor-preserving runtime stop is unavailable.",
           turnId: null,
           createdAt: input.createdAt,
           settlementStatus: "uncertain",
         });
+      } else {
+        const stopped = yield* runBoundedProviderCall({
+          label: "The provider session stop",
+          timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
+          call: providerService.stopRuntimeSession({ threadId: providerThread.id }),
+        });
+        if (stopped._tag !== "ok") {
+          yield* appendProviderFailureActivity({
+            threadId: thread.id,
+            kind: "provider.session.stop.failed",
+            summary: "Provider session stop failed",
+            detail: stopped._tag === "timeout" ? stopped.detail : stopped.outcome.detail,
+            turnId: null,
+            createdAt: input.createdAt,
+            settlementStatus: "uncertain",
+          });
+        }
       }
     }
 

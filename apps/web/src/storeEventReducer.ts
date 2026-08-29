@@ -586,6 +586,20 @@ function applyTurnDiffSummaryToThread(
   };
 }
 
+const STREAM_TEXT_AFFIX_LENGTH = 48;
+
+function describeStreamText(text: string): {
+  length: number;
+  prefix: string;
+  suffix: string;
+} {
+  return {
+    length: text.length,
+    prefix: text.slice(0, STREAM_TEXT_AFFIX_LENGTH),
+    suffix: text.slice(-STREAM_TEXT_AFFIX_LENGTH),
+  };
+}
+
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
@@ -599,12 +613,22 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
     nextText = `${existingMessage.text}${incomingMessage.text}`;
-  } else if (incomingMessage.text.startsWith(existingMessage.text)) {
-    nextText = incomingMessage.text;
-  } else if (existingMessage.text.startsWith(incomingMessage.text)) {
-    nextText = existingMessage.text;
   } else {
-    nextText = `${existingMessage.text}${incomingMessage.text}`;
+    // Non-streaming completions carry the server's authoritative accumulated
+    // text. Always prefer them so a duplicated or divergent local stream cannot
+    // survive after the turn settles.
+    if (
+      import.meta.env.DEV &&
+      incomingMessage.text !== existingMessage.text &&
+      !incomingMessage.text.startsWith(existingMessage.text)
+    ) {
+      console.warn("[transcript] completion text diverged from local stream", {
+        messageId: existingMessage.id,
+        existing: describeStreamText(existingMessage.text),
+        incoming: describeStreamText(incomingMessage.text),
+      });
+    }
+    nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
   const nextSkills =

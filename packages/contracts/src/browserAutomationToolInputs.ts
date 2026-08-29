@@ -1,7 +1,13 @@
 import { Schema } from "effect";
 
 import { BoundedUtf8String } from "./browserAutomationBounds";
-import { BrowserIdempotencyKey, BrowserTabId } from "./browserAutomationIds";
+import {
+  BrowserIdempotencyKey,
+  BrowserTabId,
+  BrowserWebMcpDiscoveryId,
+  BrowserWebMcpToolId,
+} from "./browserAutomationIds";
+import { BrowserBoundedJsonObject } from "./browserAutomationJson";
 import { BrowserNodeTarget, BrowserPointerTarget } from "./browserAutomationTargets";
 import {
   BrowserLoadState,
@@ -181,6 +187,38 @@ export const BrowserSnapshotInput = closedStruct({
       "Include bounded semantic collection and truncation diagnostics; defaults true.",
     ),
     defaultTrue,
+  ),
+});
+export const BrowserWebMcpToolsInput = closedStruct({
+  ...readOnlyInvocationFields,
+  ...optionalTabField,
+  query: Schema.optional(
+    described(
+      BoundedUtf8String(512, 1),
+      "Optional current user goal used to rank page-declared WebMCP tools before returning them.",
+    ),
+  ),
+  limit: optionalDefault(
+    described(
+      boundedInt(1, 32),
+      "Maximum page-declared WebMCP tools to return after ranking; defaults to 8.",
+    ),
+    () => 8,
+  ),
+});
+export const BrowserWebMcpCallInput = closedStruct({
+  ...effectingInvocationFields,
+  ...optionalTabField,
+  discoveryId: described(
+    BrowserWebMcpDiscoveryId,
+    "Opaque discovery id returned by browser_webmcp_tools for the current document.",
+  ),
+  toolId: described(
+    BrowserWebMcpToolId,
+    "Opaque tool id returned by browser_webmcp_tools; never substitute the page tool name.",
+  ),
+  arguments: Schema.optional(BrowserBoundedJsonObject).pipe(
+    Schema.withDecodingDefault<Schema.optional<typeof BrowserBoundedJsonObject>>(() => ({})),
   ),
 });
 export const BrowserScreenshotInput = closedStruct({
@@ -410,6 +448,8 @@ export type BrowserForwardInput = typeof BrowserForwardInput.Type;
 export type BrowserReloadInput = typeof BrowserReloadInput.Type;
 export type BrowserResizeInput = typeof BrowserResizeInput.Type;
 export type BrowserSnapshotInput = typeof BrowserSnapshotInput.Type;
+export type BrowserWebMcpToolsInput = typeof BrowserWebMcpToolsInput.Type;
+export type BrowserWebMcpCallInput = typeof BrowserWebMcpCallInput.Type;
 export type BrowserScreenshotInput = typeof BrowserScreenshotInput.Type;
 export type BrowserLogsInput = typeof BrowserLogsInput.Type;
 export type BrowserClickInput = typeof BrowserClickInput.Type;

@@ -14,6 +14,7 @@ const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
+export const PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS = 128;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectFileEncoding = Schema.Literals(["utf8", "utf8-bom"]);
@@ -208,6 +209,24 @@ export const ProjectReadFileResult = Schema.Struct({
   lineEnding: Schema.NullOr(ProjectFileLineEnding),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+export const ProjectResolveWorkspaceFileReferencesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePaths: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  ).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS),
+  ),
+});
+export type ProjectResolveWorkspaceFileReferencesInput =
+  typeof ProjectResolveWorkspaceFileReferencesInput.Type;
+
+export const ProjectResolveWorkspaceFileReferencesResult = Schema.Struct({
+  relativePaths: Schema.Array(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type ProjectResolveWorkspaceFileReferencesResult =
+  typeof ProjectResolveWorkspaceFileReferencesResult.Type;
 
 // Locates a chat file reference that failed to read inside the workspace root:
 // the server retries the workspace-relative path against ancestor directories

@@ -11,6 +11,7 @@ import {
   type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -1825,6 +1826,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
+          const knownAbsoluteFilePaths =
+            collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2021,6 +2024,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                 />
               </div>
             );
@@ -2131,6 +2135,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
+                      knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                     />
                   </div>
                 ) : null}
@@ -2955,6 +2960,20 @@ function applySettledTurnCollapseTransitions(params: {
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
   return items.map((item) => `${item.kind}:${item.id}`).join("|");
+}
+
+function collectAbsoluteFilePathsFromWorkEntries(entries: ReadonlyArray<WorkLogEntry>): string[] {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    for (const path of entry.changedFiles ?? []) {
+      if (isLocalAbsolutePath(path)) paths.add(path);
+    }
+    const detail = entry.detail?.trim();
+    if (detail && isLocalAbsolutePath(detail)) paths.add(detail);
+    const command = entry.command?.trim();
+    if (command && isLocalAbsolutePath(command)) paths.add(command);
+  }
+  return [...paths];
 }
 
 // Keep the live clock scoped to tiny leaf components so active Claude turns do

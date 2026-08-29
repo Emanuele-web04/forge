@@ -462,6 +462,37 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps session/started to a canonical session.started runtime event", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-started"),
+        kind: "session",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "session/started",
+        threadId: asThreadId("thread-1"),
+        message: "Codex session ready for thread native-thread-1",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.started");
+      if (firstEvent.value.type !== "session.started") {
+        return;
+      }
+      assert.equal(
+        firstEvent.value.payload.message,
+        "Codex session ready for thread native-thread-1",
+      );
+    }),
+  );
+
   it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

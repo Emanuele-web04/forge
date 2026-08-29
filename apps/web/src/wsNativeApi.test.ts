@@ -597,6 +597,37 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards an abort signal on projects.readFile to the transport", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      contents: "export {};\n",
+      truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+    const api = createWsNativeApi();
+
+    await api.projects.readFile(
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
+
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.projectsReadFile,
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
+  });
+
   it("forwards local preview grant creation to the websocket project method", async () => {
     requestMock.mockResolvedValue({
       grant: "grant-token",

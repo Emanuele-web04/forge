@@ -37,6 +37,21 @@ describe("Synara harness policy", () => {
     assert.include(policy, "Never call this tool for a manual follow-up turn");
   });
 
+  it("asks agents to emit known absolute file URLs instead of invented relative links", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, "[config.ts](file:///absolute/path/config.ts)");
+      assert.include(
+        policy,
+        "Relative links are only for files inside the session working directory",
+      );
+      assert.include(policy, "If the absolute path is unknown, keep the name as plain text");
+      assert.include(policy, "Do not invent a path");
+    }
+  });
+
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");

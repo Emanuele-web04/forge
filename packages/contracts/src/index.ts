@@ -2,6 +2,7 @@ export * from "./auth";
 export * from "./automation";
 export * from "./baseSchemas";
 export * from "./browserAutomationBounds";
+export * from "./browserAutomationJson";
 export * from "./browserAutomationIds";
 export * from "./browserAutomationErrors";
 export * from "./browserAutomationCssSelector";

@@ -909,19 +909,21 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual([
       {
         startedAt: "2026-07-14T00:10:00.000Z",
-        // Buffered turns flush all segments at the terminal event, so the
-        // emit-time is the completion's time; only startedAt drives the
-        // interleaved timeline position.
-        endedAt: "2026-07-14T00:10:45.000Z",
+        // Live (streaming) delivery stamps each segment with its own last
+        // delta's emit time, so endedAt reflects when that slice actually
+        // finished arriving rather than the terminal event's time.
+        endedAt: "2026-07-14T00:10:01.000Z",
         text: "Plan: scan files.",
       },
       {
         startedAt: "2026-07-14T00:10:01.000Z",
-        endedAt: "2026-07-14T00:10:45.000Z",
+        endedAt: "2026-07-14T00:10:21.000Z",
         text: "Found the file: a.test.ts",
       },
       {
         startedAt: "2026-07-14T00:10:40.000Z",
+        // The trailing segment closes when the message completes rather than
+        // at its last delta, since no later boundary exists to stamp it.
         endedAt: "2026-07-14T00:10:45.000Z",
         text: "Done.",
       },
@@ -3441,9 +3443,29 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas by default until completion", async () => {
+  it("buffers assistant deltas until completion when buffered delivery is requested", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+
+    // Unbound turns default to streaming; buffered requires an explicit request.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-buffered"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-buffered-request"),
+          role: "user",
+          text: "hold my text",
+          attachments: [],
+        },
+        assistantDeliveryMode: "buffered",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
 
     harness.emit({
       type: "turn.started",
@@ -3511,9 +3533,29 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("ignores whitespace-only buffered assistant deltas on completion", async () => {
+  it("ignores whitespace-only assistant deltas on completion in buffered delivery", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+
+    // Unbound turns default to streaming; buffered requires an explicit request.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-buffered-whitespace"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-buffered-whitespace-request"),
+          role: "user",
+          text: "hold whitespace",
+          attachments: [],
+        },
+        assistantDeliveryMode: "buffered",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
 
     harness.emit({
       type: "turn.started",

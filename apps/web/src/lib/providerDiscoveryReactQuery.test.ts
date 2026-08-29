@@ -79,6 +79,28 @@ describe("providerModelsQueryOptions", () => {
     expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(0);
   });
 
+  it("keeps Droid discovery cached for five minutes and ignores focus", () => {
+    const options = providerModelsQueryOptions({ provider: "droid" });
+
+    expect(options.staleTime).toBe(5 * 60_000);
+    expect(options.refetchOnWindowFocus).toBe(false);
+  });
+
+  it("deduplicates concurrent catalog requests for the same provider key", async () => {
+    const catalog = {
+      models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
+      source: "codex",
+      cached: false,
+    };
+    const listModels = mockListModels(vi.fn().mockResolvedValue(catalog));
+    const options = providerModelsQueryOptions({ provider: "codex", enabled: true });
+    const queryClient = new QueryClient();
+
+    await Promise.all([queryClient.fetchQuery(options), queryClient.fetchQuery(options)]);
+
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces real errors instead of masking them as empty catalogs", async () => {
     mockListModels(vi.fn().mockRejectedValue(new Error("discovery exploded")));
     const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });

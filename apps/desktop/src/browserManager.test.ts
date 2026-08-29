@@ -9,7 +9,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = v
   return {
     browserSession: {
       setUserAgent: vi.fn(),
-      webRequest: { onBeforeSendHeaders: vi.fn() },
+      webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     },
     rendererWebContentsById,

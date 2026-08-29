@@ -52,6 +52,7 @@ export const DESKTOP_IPC_CHANNELS = {
     state: "desktop:appsnap-state",
   },
   browser: {
+    webMcpCompatibilityPolicy: "desktop:browser-webmcp-compatibility-policy",
     state: "desktop:browser-state",
     open: "desktop:browser-open",
     close: "desktop:browser-close",

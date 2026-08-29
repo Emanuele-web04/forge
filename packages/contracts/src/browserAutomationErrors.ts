@@ -28,6 +28,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserDebuggerConflict",
   "BrowserReconciliationRequired",
   "BrowserStaleReference",
+  "BrowserWebMcpDiscoveryStale",
   "BrowserTargetNotFound",
   "BrowserTargetAmbiguous",
   "BrowserTargetNotVisible",
@@ -76,6 +77,7 @@ export type BrowserAutomationErrorPhase = typeof BrowserAutomationErrorPhase.Typ
 
 type BrowserFixedAutomationErrorCode =
   | "BrowserReconciliationRequired"
+  | "BrowserWebMcpDiscoveryStale"
   | "BrowserTargetAmbiguous"
   | "BrowserTargetNotEnabled"
   | "BrowserTargetObscured"
@@ -128,6 +130,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserReconciliationRequired:
     "The accepted browser routing inventory changed before the operation was admitted. Refresh browser tabs and retry.",
   BrowserStaleReference: "The snapshot reference is stale.",
+  BrowserWebMcpDiscoveryStale:
+    "The WebMCP discovery is stale. Discover the page's tools again before calling one.",
   BrowserTargetNotFound: "No browser element matched the locator.",
   BrowserTargetAmbiguous:
     "The locator matched more than one browser element. Use a unique locator.",
@@ -167,6 +171,7 @@ export const BrowserAutomationErrorMessages = Object.freeze({
 
 export const BrowserFixedAutomationErrorInvariants = Object.freeze({
   BrowserReconciliationRequired: fixedBrowserErrorInvariant(true, "routing", false),
+  BrowserWebMcpDiscoveryStale: fixedBrowserErrorInvariant(true, "input", false),
   BrowserTargetAmbiguous: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetNotEnabled: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetObscured: fixedBrowserErrorInvariant(true, "target", false),

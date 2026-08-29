@@ -8,6 +8,7 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import { EXPENSIVE_READ_RETRY_OPTIONS } from "./expensiveReadRetry";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
@@ -263,6 +264,7 @@ export function studioThreadOutputsQueryOptions(input: {
     staleTime: STUDIO_THREAD_OUTPUTS_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 

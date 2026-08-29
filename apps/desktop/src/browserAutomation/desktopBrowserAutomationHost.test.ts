@@ -40,6 +40,7 @@ const createWebContents = () => {
   const history = ["https://example.test/", "https://example.test/next"];
   let historyIndex = 0;
   const debuggerEvents = new EventEmitter();
+  const webContentsEvents = new EventEmitter();
   const emitNavigation = (nextUrl: string) => {
     const loaderId = `loader-${crypto.randomUUID()}`;
     queueMicrotask(() => {
@@ -110,6 +111,9 @@ const createWebContents = () => {
     }
     if (method === "Runtime.evaluate") {
       const expression = String(params?.expression ?? "");
+      if (expression === "globalThis.__synaraWebMcpBridgeV1") {
+        return { result: { objectId: "webmcp-bridge", type: "object" } };
+      }
       if (expression.includes("performance.getEntriesByType")) return { result: { value: 0 } };
       if (
         expression.includes('const key = "__synaraBrowserAutomationV1"') &&
@@ -172,6 +176,31 @@ const createWebContents = () => {
     if (method === "Page.createIsolatedWorld") return { executionContextId: 12 };
     if (method === "Runtime.callFunctionOn") {
       const declaration = String(params?.functionDeclaration ?? "");
+      if (declaration.includes("return await this.list()")) {
+        return {
+          result: {
+            value: {
+              available: true,
+              implementation: "compatibility",
+              skippedToolCount: 0,
+              tools: [
+                {
+                  index: 0,
+                  signature: "a".repeat(64),
+                  name: "search",
+                  description: "Search this page.",
+                  inputSchema: { type: "object", properties: {} },
+                  origin: "https://example.test",
+                  annotations: { readOnlyHint: true, untrustedContentHint: true },
+                },
+              ],
+            },
+          },
+        };
+      }
+      if (declaration.includes("return await this.invoke")) {
+        return { result: { value: { status: "completed", result: { ok: true } } } };
+      }
       if (declaration.includes("const timeoutMs =") && declaration.includes("receivesEvents")) {
         const actionOptions = (
           params?.arguments as
@@ -240,6 +269,8 @@ const createWebContents = () => {
     return {};
   });
   return {
+    once: webContentsEvents.once.bind(webContentsEvents),
+    removeListener: webContentsEvents.removeListener.bind(webContentsEvents),
     isDestroyed: () => false,
     id: 101,
     focus: vi.fn(),
@@ -353,6 +384,210 @@ const createManager = () => {
 };
 
 describe("DesktopBrowserAutomationHost", () => {
+  it("releases another session's WebMCP discovery before navigating the shared tab", async () => {
+    const { manager, webContents } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+
+    await host.executeTool({
+      sessionId: "session-webmcp-owner",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_webmcp_tools",
+      arguments: {},
+    });
+    await host.executeTool({
+      sessionId: "session-shared-navigation",
+      provider: "claude",
+      threadId: THREAD_ID,
+      name: "browser_navigate",
+      arguments: { url: "https://example.test/next" },
+    });
+
+    expect(webContents.debugger.sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "webmcp-bridge",
+    });
+  });
+
+  it("invalidates WebMCP discovery when the page navigates outside a browser tool", async () => {
+    const { manager, webContents } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    const discovery = (await host.executeTool({
+      sessionId: "session-webmcp-spontaneous-navigation",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_webmcp_tools",
+      arguments: {},
+    })) as {
+      readonly discoveryId: string;
+      readonly tools: readonly [{ readonly toolId: string }];
+    };
+
+    webContents.emitDebuggerMessage("Page.frameNavigated", {
+      frame: { id: "main-frame", url: "https://example.test/delayed" },
+    });
+    await Promise.resolve();
+
+    await expect(
+      host.executeTool({
+        sessionId: "session-webmcp-spontaneous-navigation",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_webmcp_call",
+        arguments: {
+          discoveryId: discovery.discoveryId,
+          toolId: discovery.tools[0].toolId,
+          arguments: {},
+        },
+      }),
+    ).rejects.toMatchObject({ browserError: { code: "BrowserWebMcpDiscoveryStale" } });
+  });
+
+  it("preserves the current WebMCP discovery after mismatched caller tokens", async () => {
+    const { manager, webContents } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    const discovery = (await host.executeTool({
+      sessionId: "session-webmcp-mismatch",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_webmcp_tools",
+      arguments: {},
+    })) as {
+      readonly discoveryId: string;
+      readonly tools: readonly [{ readonly toolId: string }];
+    };
+    const call = (discoveryId: string, toolId: string) =>
+      host.executeTool({
+        sessionId: "session-webmcp-mismatch",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_webmcp_call",
+        arguments: { discoveryId, toolId, arguments: {} },
+      });
+
+    await expect(call(crypto.randomUUID(), discovery.tools[0].toolId)).rejects.toMatchObject({
+      browserError: { code: "BrowserWebMcpDiscoveryStale" },
+    });
+    await expect(call(discovery.discoveryId, "w2")).rejects.toMatchObject({
+      browserError: { code: "BrowserWebMcpDiscoveryStale" },
+    });
+    expect(webContents.debugger.sendCommand).not.toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "webmcp-bridge",
+    });
+    await expect(call(discovery.discoveryId, discovery.tools[0].toolId)).resolves.toMatchObject({
+      status: "completed",
+      result: { ok: true },
+    });
+  });
+
+  it("preserves an ambiguous WebMCP invocation error after navigation starts", async () => {
+    const { manager, webContents } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    const discovery = (await host.executeTool({
+      sessionId: "session-webmcp-ambiguous",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_webmcp_tools",
+      arguments: {},
+    })) as {
+      readonly discoveryId: string;
+      readonly tools: readonly [{ readonly toolId: string }];
+    };
+    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    const original = sendCommand.getMockImplementation() as SendCommand;
+    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      const declaration = String(params?.functionDeclaration ?? "");
+      if (method === "Runtime.callFunctionOn" && declaration.includes("return await this.invoke")) {
+        webContents.reload();
+        await Promise.resolve();
+        throw new Error("execution context was destroyed");
+      }
+      return original(method, params);
+    });
+
+    await expect(
+      host.executeTool({
+        sessionId: "session-webmcp-ambiguous",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_webmcp_call",
+        arguments: {
+          discoveryId: discovery.discoveryId,
+          toolId: discovery.tools[0].toolId,
+          arguments: {},
+        },
+      }),
+    ).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserAmbiguousResult",
+        retryable: false,
+        effectMayHaveCommitted: true,
+      },
+    });
+  });
+
+  it("waits for draining CDP work before releasing WebMCP discoveries on disposal", async () => {
+    const { manager, webContents } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    await host.executeTool({
+      sessionId: "session-webmcp-dispose",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_webmcp_tools",
+      arguments: {},
+    });
+
+    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    const original = sendCommand.getMockImplementation() as SendCommand;
+    const evaluation = deferred<unknown>();
+    sendCommand.mockImplementation((method: string, params?: Record<string, unknown>) => {
+      if (method === "Runtime.evaluate" && params?.expression === "({answer: 42})") {
+        return evaluation.promise;
+      }
+      return original(method, params);
+    });
+    const controller = new AbortController();
+    const operation = host.executeTool({
+      sessionId: "session-webmcp-dispose",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_evaluate",
+      arguments: { expression: "({answer: 42})" },
+      signal: controller.signal,
+    });
+    await vi.waitFor(() =>
+      expect(sendCommand).toHaveBeenCalledWith(
+        "Runtime.evaluate",
+        expect.objectContaining({ expression: "({answer: 42})" }),
+      ),
+    );
+    controller.abort();
+    await expect(operation).rejects.toMatchObject({
+      browserError: { code: "BrowserCancelled" },
+    });
+
+    const disposed = host.dispose();
+    await Promise.resolve();
+    expect(disposed).not.toBe(undefined);
+    expect(sendCommand).not.toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "webmcp-bridge",
+    });
+
+    evaluation.resolve({ result: { value: { answer: 42 } } });
+    await disposed;
+    expect(sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "webmcp-bridge",
+    });
+    await expect(
+      host.executeTool({
+        sessionId: "session-after-dispose",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_status",
+        arguments: {},
+      }),
+    ).rejects.toMatchObject({ browserError: { code: "BrowserHostUnavailable" } });
+  });
+
   it("blocks new DOM tools while a human annotation picker is interactive", async () => {
     const { manager, raw } = createManager();
     raw.isAnnotationInteractive.mockReturnValue(true);
