@@ -1,11 +1,18 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  AcpSessionRuntime,
+  type AcpSessionRuntimeOptions,
+  type AcpSessionRuntimeShape,
+} from "./AcpSessionRuntime.ts";
 import {
   buildDevinAcpAuthenticateMeta,
   buildDevinAcpSpawnInput,
+  makeDevinAcpRuntime,
   mapDevinAcpCommands,
   parseDevinCredentialsToml,
   resolveDevinAcpAuthMethodId,
@@ -70,6 +77,43 @@ describe("buildDevinAcpSpawnInput", () => {
       args: ["acp", "--model", "opus"],
       cwd: "/tmp/project",
     });
+  });
+});
+
+describe("makeDevinAcpRuntime", () => {
+  it("selects on-demand authentication for the production runtime path", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+    vi.stubEnv("HOME", "/tmp/synara-devin-acp-runtime-options-test");
+    vi.stubEnv("XDG_DATA_HOME", "/tmp/synara-devin-acp-runtime-options-test");
+    vi.stubEnv("APPDATA", "/tmp/synara-devin-acp-runtime-options-test");
+    vi.stubEnv("WINDSURF_API_KEY", "");
+    vi.stubEnv("DEVIN_API_KEY", "");
+    vi.stubEnv("windsurf_api_key", "");
+    vi.stubEnv("WINDSURF_API_SERVER_URL", "");
+    vi.stubEnv("DEVIN_API_SERVER_URL", "");
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeDevinAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          devinSettings: undefined,
+          runtimeMode: "approval-required",
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+    } finally {
+      layerSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });
 

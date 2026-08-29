@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 
 const FINAL_SESSION_ID = "session-epoch-final";
+const PENDING_EVENT_CAPACITY = 2_048;
 
 /**
  * Bridges an in-memory OfficialAcp.agent() to the runtime through a fake
@@ -153,4 +154,63 @@ describe("AcpSessionRuntime session epoch transition", () => {
 
     await Effect.runPromise(program);
   }, 15_000);
+
+  it("counts only retained pending events when the pre-consumer buffer overflows", async () => {
+    const { spawnerLayer, getAgentConnection } = makeInMemoryAgentSpawner();
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "synara-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+
+    const program = Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      yield* Effect.promise(async () => {
+        for (let index = 0; index < PENDING_EVENT_CAPACITY + 2; index++) {
+          await getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
+            sessionId: FINAL_SESSION_ID,
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              messageId: `pending-${String(index)}`,
+              content: { type: "text", text: `pending-${String(index)}` },
+            },
+          });
+        }
+        await getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
+          sessionId: FINAL_SESSION_ID,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [{ name: "overflow-settled", description: "sentinel" }],
+          },
+        });
+      });
+
+      yield* Effect.gen(function* () {
+        for (let attempt = 0; attempt < 10_000; attempt++) {
+          const commands = yield* runtime.getAvailableCommands;
+          if (commands.some((command) => command.name === "overflow-settled")) return;
+          yield* Effect.sleep(1);
+        }
+        return yield* Effect.die("Timed out waiting for pending events to settle");
+      });
+
+      expect(yield* runtime.sessionUpdatesEnqueuedCount).toBe(PENDING_EVENT_CAPACITY);
+
+      const events = Array.from(
+        yield* runtime.getEvents().pipe(Stream.take(PENDING_EVENT_CAPACITY), Stream.runCollect),
+      );
+      expect(events).toHaveLength(PENDING_EVENT_CAPACITY);
+      expect(events[0]).toMatchObject({ _tag: "ContentDelta", text: "pending-2" });
+      expect(events[PENDING_EVENT_CAPACITY - 1]).toMatchObject({
+        _tag: "ContentDelta",
+        text: `pending-${String(PENDING_EVENT_CAPACITY + 1)}`,
+      });
+    }).pipe(Effect.provide(runtimeLayer), Effect.scoped);
+
+    await Effect.runPromise(program);
+  }, 30_000);
 });

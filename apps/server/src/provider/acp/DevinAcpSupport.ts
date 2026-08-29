@@ -386,6 +386,7 @@ export const makeDevinAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDevinAcpSpawnInput(input.devinSettings, input.cwd, input.runtimeMode),
+        authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
           resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
         authenticateMeta,

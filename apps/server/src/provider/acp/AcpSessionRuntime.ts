@@ -1062,9 +1062,10 @@ const makeAcpSessionRuntime = (
       Acp.CreateElicitationResponse
     >({ action: "decline" });
 
-    // Counts every parsed event offered into eventQueue (see
-    // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
-    // writer per offer, and readers only need a monotonic snapshot.
+    // Counts delivery obligations accepted by the live queue or retained in the
+    // bounded pre-consumer buffer (see sessionUpdatesEnqueuedCount on the shape).
+    // Plain mutable state: single writer per offer, and readers only need a
+    // monotonic snapshot.
     let sessionUpdatesEnqueued = 0;
 
     const appendPendingNotification = (
@@ -1207,18 +1208,23 @@ const makeAcpSessionRuntime = (
       (event: AcpParsedSessionEvent): Effect.Effect<void> =>
         Effect.gen(function* () {
           if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
-          sessionUpdatesEnqueued += 1;
           const consumerAttached = yield* Ref.get(consumerAttachedRef);
           if (consumerAttached) {
+            sessionUpdatesEnqueued += 1;
             yield* Queue.offer(eventQueue, event);
           } else {
-            yield* Ref.update(pendingEventsRef, (events) => {
+            const retainedCountIncreased = yield* Ref.modify(pendingEventsRef, (events) => {
               const next = events.concat(event);
-              if (next.length > ACP_MAX_PENDING_EVENTS) {
-                return next.slice(next.length - ACP_MAX_PENDING_EVENTS);
-              }
-              return next;
+              return [
+                events.length < ACP_MAX_PENDING_EVENTS,
+                next.length > ACP_MAX_PENDING_EVENTS
+                  ? next.slice(next.length - ACP_MAX_PENDING_EVENTS)
+                  : next,
+              ] as const;
             });
+            if (retainedCountIncreased) {
+              sessionUpdatesEnqueued += 1;
+            }
           }
         });
 
