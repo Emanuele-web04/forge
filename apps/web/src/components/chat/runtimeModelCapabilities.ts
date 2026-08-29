@@ -8,7 +8,6 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
-  ProviderModelVariantDescriptor,
 } from "@synara/contracts";
 import {
   getDefaultEffort,
@@ -72,55 +71,6 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
-}
-
-/**
- * Resolves Devin's friendly composer selections to the concrete model UID
- * accepted by `devin acp --model`. Devin publishes this matrix at the family
- * level, so keeping the resolver next to the runtime capability bridge avoids
- * duplicating suffix heuristics in the UI and server.
- */
-export function resolveDevinModelVariant(input: {
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  reasoningEffort?: string | null | undefined;
-  fastMode?: boolean | undefined;
-  thinking?: boolean | null | undefined;
-  contextWindow?: string | null | undefined;
-}): string | undefined {
-  const variants = input.runtimeModel?.modelVariants;
-  if (!variants?.length) {
-    return undefined;
-  }
-
-  const reasoningEffort = trimOrNull(input.reasoningEffort);
-  const contextWindow = trimOrNull(input.contextWindow);
-  const defaultContextWindow = trimOrNull(input.runtimeModel?.defaultContextWindow);
-  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
-    if (reasoningEffort && variant.reasoningEffort !== reasoningEffort) {
-      return false;
-    }
-    if (contextWindow && variant.contextWindow !== contextWindow) {
-      return false;
-    }
-    if (input.fastMode === true && variant.fastMode !== true) {
-      return false;
-    }
-    if (input.fastMode !== true && variant.fastMode === true) {
-      return false;
-    }
-    if (input.thinking !== null && input.thinking !== undefined && variant.thinking !== undefined) {
-      return variant.thinking === input.thinking;
-    }
-    return true;
-  };
-
-  const preferred = variants.filter(matches);
-  const withDefaultContext =
-    !contextWindow && defaultContextWindow
-      ? preferred.filter((variant) => variant.contextWindow === defaultContextWindow)
-      : preferred;
-  // No match: return undefined so the server picks the family default.
-  return (withDefaultContext[0] ?? preferred[0])?.model;
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.

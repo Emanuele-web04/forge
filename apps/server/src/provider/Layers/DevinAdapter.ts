@@ -160,6 +160,7 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
 });
 const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+const DEVIN_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DEVIN_COMMAND_DISCOVERY_TIMEOUT_MS = 15_000;
 const DEVIN_COMMAND_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DEVIN_DISCOVERY_CACHE_MAX_ENTRIES = 16;
@@ -517,10 +518,10 @@ export function scopeDevinToolCallStateForTurn(
   return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
 }
 
-function setDevinDiscoveryCacheEntry(
-  cache: Map<string, { readonly expiresAt: number; readonly result: ProviderListCommandsResult }>,
+function setDevinDiscoveryCacheEntry<Result>(
+  cache: Map<string, { readonly expiresAt: number; readonly result: Result }>,
   key: string,
-  value: { readonly expiresAt: number; readonly result: ProviderListCommandsResult },
+  value: { readonly expiresAt: number; readonly result: Result },
 ): void {
   cache.delete(key);
   cache.set(key, value);
@@ -531,6 +532,37 @@ function setDevinDiscoveryCacheEntry(
     }
     cache.delete(oldestKey);
   }
+}
+
+export function makeCachedDevinModelDiscovery<E, R>(input: {
+  readonly discoveryLock: Semaphore.Semaphore;
+  readonly discover: (binaryPath: string) => Effect.Effect<ProviderListModelsResult, E, R>;
+}) {
+  const cache = new Map<
+    string,
+    { readonly expiresAt: number; readonly result: ProviderListModelsResult }
+  >();
+  return (binaryPath: string, options?: { readonly forceReload?: boolean }) => {
+    const resolvedBinaryPath = resolveDevinBinaryPath(binaryPath);
+    const cached = cache.get(resolvedBinaryPath);
+    if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
+      return Effect.succeed({ ...cached.result, cached: true });
+    }
+    return input.discoveryLock.withPermits(1)(
+      Effect.gen(function* () {
+        const cached = cache.get(resolvedBinaryPath);
+        if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
+          return { ...cached.result, cached: true };
+        }
+        const result = yield* input.discover(resolvedBinaryPath);
+        setDevinDiscoveryCacheEntry(cache, resolvedBinaryPath, {
+          expiresAt: Date.now() + DEVIN_MODEL_DISCOVERY_CACHE_MS,
+          result,
+        });
+        return result;
+      }),
+    );
+  };
 }
 
 function collectStreamAsString<E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> {
@@ -1141,7 +1173,7 @@ export function makeDevinAdapter(
         clientInfo: { name: "Synara Command Discovery", version: "0.0.0" },
       });
 
-    const discoverDevinModels = (binaryPath: string) => {
+    const discoverDevinModelsUncached = (binaryPath: string) => {
       const fallbackResult = {
         models: buildDevinStaticModelDescriptors(),
         source: "devin.static",
@@ -1217,6 +1249,10 @@ export function makeDevinAdapter(
         ),
       );
     };
+    const discoverDevinModels = makeCachedDevinModelDiscovery({
+      discoveryLock,
+      discover: discoverDevinModelsUncached,
+    });
 
     const offerRuntimeEvent = (
       lifecycleGeneration: string | undefined,

@@ -3,7 +3,7 @@
 // model discovery, and plan-mode fail-closed behavior.
 // Layer: Provider adapter tests
 
-import { Effect } from "effect";
+import { Effect, Semaphore } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   applyDevinSessionConfiguration,
   buildDevinPromptMeta,
   buildDevinStaticModelDescriptors,
+  makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
   parseDevinCliModelList,
   pruneDevinToolCallTurnIds,
@@ -242,8 +243,9 @@ describe("resolveDevinEffectiveModel", () => {
 });
 
 describe("resolveDevinStartModel", () => {
-  it("discovers the authoritative model matrix for a first non-web trait selection", async () => {
+  it("discovers once and caches the next non-web trait selection", async () => {
     let discoveryCalls = 0;
+    const cachedFlags: Array<boolean | undefined> = [];
     const models = mergeDevinModelDescriptors([
       parseDevinCliModelList(
         JSON.stringify({
@@ -262,23 +264,64 @@ describe("resolveDevinStartModel", () => {
       ),
     ]);
 
-    const effectiveModel = await Effect.runPromise(
-      resolveDevinStartModel({
-        explicitModel: undefined,
-        modelSelection: {
-          model: "gpt-5.6-sol",
-          options: { reasoningEffort: "high" },
-        },
-        discoverModels: () =>
-          Effect.sync(() => {
-            discoveryCalls += 1;
-            return { models, source: "devin-cli", cached: false };
-          }),
+    const effectiveModels = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discoveryLock = yield* Semaphore.make(1);
+        const discoverModels = makeCachedDevinModelDiscovery({
+          discoveryLock,
+          discover: () =>
+            Effect.sync(() => {
+              discoveryCalls += 1;
+              return { models, source: "devin-cli", cached: false };
+            }),
+        });
+        const resolve = () =>
+          resolveDevinStartModel({
+            explicitModel: undefined,
+            modelSelection: {
+              model: "gpt-5.6-sol",
+              options: { reasoningEffort: "high" },
+            },
+            discoverModels: () =>
+              discoverModels(" /usr/local/bin/devin ").pipe(
+                Effect.tap((result) =>
+                  Effect.sync(() => {
+                    cachedFlags.push(result.cached);
+                  }),
+                ),
+              ),
+          });
+        return [yield* resolve(), yield* resolve()];
       }),
     );
 
     expect(discoveryCalls).toBe(1);
-    expect(effectiveModel).toBe("gpt-5-6-sol-high");
+    expect(cachedFlags).toEqual([false, true]);
+    expect(effectiveModels).toEqual(["gpt-5-6-sol-high", "gpt-5-6-sol-high"]);
+  });
+
+  it("coalesces concurrent model discovery through the shared lock", async () => {
+    let discoveryCalls = 0;
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discoveryLock = yield* Semaphore.make(1);
+        const discoverModels = makeCachedDevinModelDiscovery({
+          discoveryLock,
+          discover: () =>
+            Effect.gen(function* () {
+              discoveryCalls += 1;
+              yield* Effect.sleep(10);
+              return { models: [], source: "devin-cli", cached: false };
+            }),
+        });
+        return yield* Effect.all([discoverModels("devin"), discoverModels("devin")], {
+          concurrency: "unbounded",
+        });
+      }),
+    );
+
+    expect(discoveryCalls).toBe(1);
+    expect(results.map((result) => result.cached)).toEqual([false, true]);
   });
 
   it("does not discover models when no trait needs resolution", async () => {

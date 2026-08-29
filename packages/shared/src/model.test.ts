@@ -112,6 +112,23 @@ describe("resolveDevinModelVariant", () => {
       }),
     ).toBe("custom-concrete-model");
   });
+
+  it("returns undefined when no variant matches an all-fast matrix", () => {
+    expect(
+      resolveDevinModelVariant({
+        runtimeModel: {
+          slug: "devin",
+          name: "Devin",
+          supportsFastMode: true,
+          modelVariants: [
+            { model: "devin-fast-1", reasoningEffort: "medium", fastMode: true },
+            { model: "devin-fast-2", reasoningEffort: "high", fastMode: true },
+          ],
+        },
+        fastMode: false,
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("normalizeModelSlug", () => {
