@@ -17,6 +17,8 @@ export const BROWSER_AUTOMATION_VIEWPORT_WIDTH = 1_280;
 export const BROWSER_AUTOMATION_VIEWPORT_HEIGHT = 800;
 /** Matches the environment overlay's `p-3` edge gutter. */
 export const BROWSER_FLOATING_PANEL_MARGIN_PX = 12;
+/** Isolated guest used only for floating-card chrome stacked above the page webview. */
+export const FLOATING_BROWSER_CHROME_PARTITION = "synara-floating-browser-chrome";
 
 export function resolveBrowserFloatingZoomFactor(physicalViewportWidth: number): number {
   if (!Number.isFinite(physicalViewportWidth) || physicalViewportWidth <= 0) {

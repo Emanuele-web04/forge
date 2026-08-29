@@ -10,6 +10,7 @@ import {
   createBrowserPanelHideScheduler,
   createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
+  createFloatingBrowserChromePark,
   formatBrowserAnnotationActionError,
   hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
@@ -17,8 +18,13 @@ import {
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
+  applyFloatingBrowserChromeSlotStyle,
   applyBrowserWebviewPresentation,
+  handoffBrowserGuestToDockedSurface,
+  isBrowserRendererGuestHitTarget,
   isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRendererGuestSlotStyle,
+  shouldAssignBrowserWebviewSrc,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -314,6 +320,278 @@ describe("createBrowserPanelRendererHandoff", () => {
 
     await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
   });
+
+  it("rehomes a parked renderer guest instead of destroying it", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+      const guest = {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      };
+
+      handoff.parkGuest("thread-a", guest);
+      expect(handoff.takeParkedGuest("thread-a")).toBe(guest);
+      vi.runAllTimers();
+      expect(dispose).not.toHaveBeenCalled();
+      expect(handoff.takeParkedGuest("thread-a")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disposes a parked renderer guest when no successor claims it", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+      handoff.parkGuest("thread-a", {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      });
+      vi.advanceTimersByTime(1_000);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a parked renderer guest immediately on close", () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+      handoff.parkGuest("thread-a", {
+        tabId: "tab-a",
+        webContentsId: 41,
+        stage: {} as HTMLElement,
+        webview: {} as HTMLElement,
+        dispose,
+      });
+      handoff.flushParkedGuest("thread-a");
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(handoff.takeParkedGuest("thread-a")).toBeNull();
+      vi.runAllTimers();
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushing without a parked guest is a no-op", () => {
+    const dispose = vi.fn();
+    const handoff = createBrowserPanelRendererHandoff({ parkUntilMs: 1_000 });
+
+    expect(() => handoff.flushParkedGuest("thread-a")).not.toThrow();
+    expect(dispose).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFloatingBrowserChromePark", () => {
+  type FakeChromeSlot = HTMLElement & { removed: boolean };
+
+  function fakeChromeSlot(): FakeChromeSlot {
+    const slot: {
+      removed: boolean;
+      style: CSSStyleDeclaration;
+      getAttribute: (name: string) => string | null;
+      setAttribute: (name: string, value: string) => void;
+      querySelectorAll: (selector: string) => NodeListOf<Element>;
+      remove: () => void;
+    } = {
+      removed: false,
+      style: {} as CSSStyleDeclaration,
+      getAttribute: () => null,
+      setAttribute: () => {},
+      querySelectorAll: () => [] as unknown as NodeListOf<Element>,
+      remove: () => {
+        slot.removed = true;
+      },
+    };
+    return slot as unknown as FakeChromeSlot;
+  }
+
+  it("parks the chrome slot hidden and disposes it after the park window", () => {
+    vi.useFakeTimers();
+    try {
+      const slots = new Map<string, FakeChromeSlot>([["thread-a", fakeChromeSlot()]]);
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 1_000,
+        findSlot: (threadId) => slots.get(threadId) ?? null,
+        ensureSlot: (threadId) => {
+          let slot = slots.get(threadId);
+          if (!slot) {
+            slot = fakeChromeSlot();
+            slots.set(threadId, slot);
+          }
+          return slot;
+        },
+      });
+
+      park.park("thread-a");
+      expect(slots.get("thread-a")?.style.pointerEvents).toBe("none");
+      vi.advanceTimersByTime(1_000);
+      expect(slots.get("thread-a")?.removed).toBe(true);
+
+      park.park("missing-thread");
+      vi.runAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("take cancels a pending chrome disposal and reuses the same slot", () => {
+    vi.useFakeTimers();
+    try {
+      const slot = fakeChromeSlot();
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 1_000,
+        findSlot: () => slot,
+        ensureSlot: () => slot,
+      });
+
+      park.park("thread-a");
+      expect(park.take("thread-a")).toBe(slot);
+      vi.advanceTimersByTime(5_000);
+      expect(slot.removed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flush destroys the parked chrome webview immediately", () => {
+    vi.useFakeTimers();
+    try {
+      const slot = fakeChromeSlot();
+      const park = createFloatingBrowserChromePark({
+        parkUntilMs: 60_000,
+        findSlot: () => slot,
+        ensureSlot: () => slot,
+      });
+
+      park.park("thread-a");
+      park.flush("thread-a");
+      expect(slot.removed).toBe(true);
+      vi.runAllTimers();
+      expect(slot.removed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flush destroys a live chrome slot that was never parked", () => {
+    const slot = fakeChromeSlot();
+    const park = createFloatingBrowserChromePark({
+      parkUntilMs: 60_000,
+      findSlot: () => (slot.removed ? null : slot),
+      ensureSlot: () => slot,
+    });
+
+    expect(park.take("thread-a")).toBe(slot);
+    park.flush("thread-a");
+    expect(slot.removed).toBe(true);
+  });
+});
+
+describe("browser renderer guest slot layout", () => {
+  it("does not assign src when the same guest is rebound to the same tab", () => {
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-a",
+        boundTabId: null,
+        guestTabId: "tab-a",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-b",
+        boundTabId: "tab-a",
+        guestTabId: "tab-a",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAssignBrowserWebviewSrc({
+        activeTabId: "tab-a",
+        boundTabId: null,
+        guestTabId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("moves a guest slot by rectangle instead of changing its parent", () => {
+    expect(resolveBrowserRendererGuestSlotStyle(null)).toEqual({
+      left: "-10000px",
+      top: "0px",
+      width: "1280px",
+      height: "800px",
+      pointerEvents: "none",
+      borderRadius: "0px",
+      clipPath: "none",
+    });
+    expect(
+      resolveBrowserRendererGuestSlotStyle(
+        { left: 24, top: 48, width: 640, height: 400 },
+        { borderRadius: "12px" },
+      ),
+    ).toEqual({
+      left: "24px",
+      top: "48px",
+      width: "640px",
+      height: "400px",
+      pointerEvents: "auto",
+      borderRadius: "12px",
+      clipPath: "inset(0 round 12px)",
+    });
+  });
+});
+
+describe("floating browser chrome slot", () => {
+  it("pins the native chrome overlay to the card's top-right", () => {
+    const attributes: Record<string, string> = {};
+    const slot = {
+      style: {},
+      getAttribute(name: string) {
+        return attributes[name] ?? null;
+      },
+      setAttribute(name: string, value: string) {
+        attributes[name] = value;
+      },
+    } as HTMLElement;
+    applyFloatingBrowserChromeSlotStyle(slot, {
+      left: 100,
+      top: 200,
+      width: 320,
+      height: 200,
+    });
+    expect(slot.style.left).toBe("380px");
+    expect(slot.style.width).toBe("32px");
+    expect(slot.style.top).toBe("208px");
+    expect(slot.style.pointerEvents).toBe("auto");
+    applyFloatingBrowserChromeSlotStyle(
+      slot,
+      {
+        left: 100,
+        top: 200,
+        width: 320,
+        height: 200,
+      },
+      { expanded: true },
+    );
+    expect(slot.style.left).toBe("326px");
+    expect(slot.style.width).toBe("86px");
+    applyFloatingBrowserChromeSlotStyle(slot, null);
+    expect(slot.style.left).toBe("-10000px");
+    expect(slot.style.pointerEvents).toBe("none");
+  });
 });
 
 describe("shouldOccludeBrowserWebview", () => {
@@ -383,6 +661,25 @@ describe("hasObscuringHitStackElementAboveSurface", () => {
         isSurfaceBoundary,
         isNonObscuring,
         isVisible,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isBrowserRendererGuestHitTarget", () => {
+  it("treats the parked renderer guest as the live surface, not an overlay", () => {
+    expect(isBrowserRendererGuestHitTarget({ tagName: "WEBVIEW" })).toBe(true);
+    expect(
+      isBrowserRendererGuestHitTarget({
+        tagName: "DIV",
+        closest: (selector: string) =>
+          selector.includes("data-browser-guest-thread") ? ({} as Element) : null,
+      }),
+    ).toBe(true);
+    expect(
+      isBrowserRendererGuestHitTarget({
+        tagName: "DIV",
+        closest: () => null,
       }),
     ).toBe(false);
   });
@@ -565,18 +862,72 @@ describe("resolveBrowserChromeStatus", () => {
 });
 
 describe("floating browser webview presentation", () => {
-  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
-    const stage = { style: {} } as HTMLElement;
+  it("fills the slot and clips to the card radius, then restores docked layout", () => {
+    const webview = { style: {} } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as unknown as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: true,
       slotWidth: 320,
       slotHeight: 220,
+      borderRadius: "12px",
     });
-    expect(stage.style.width).toBe("1280px");
-    expect(stage.style.height).toBe("800px");
-    expect(stage.style.transform).toBe("scale(0.25)");
-    expect(stage.style.top).toBe("10px");
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
+    expect(stage.style.borderRadius).toBe("12px");
+    expect(stage.style.clipPath).toBe("inset(0 round 12px)");
+    expect(webview.style.clipPath).toBe("inset(0 round 12px)");
+  });
 
+  it("resets miniature zoom and clipping when the guest is handed to the sidebar", () => {
+    const attributes: Record<string, string> = {};
+    const webview = {
+      style: {
+        overflow: "hidden",
+        clipPath: "inset(0 round 12px)",
+        width: "100%",
+        height: "100%",
+      },
+      setZoomFactor: vi.fn(),
+    } as HTMLElement & { setZoomFactor: ReturnType<typeof vi.fn> };
+    const stage = {
+      style: {},
+      firstElementChild: webview,
+      querySelector: () => webview,
+    } as unknown as HTMLElement;
+    const slot = {
+      style: {},
+      querySelector(selector: string) {
+        return selector === "webview" ? webview : stage;
+      },
+      getAttribute(name: string) {
+        return attributes[name] ?? null;
+      },
+      setAttribute(name: string, value: string) {
+        attributes[name] = value;
+      },
+    } as unknown as HTMLElement;
+    handoffBrowserGuestToDockedSurface({
+      slot,
+      host: { left: 40, top: 80, width: 480, height: 640 },
+      stage,
+      webview,
+    });
+    expect(webview.setZoomFactor).toHaveBeenCalledWith(1);
+    expect(webview.style.overflow).toBe("");
+    expect(webview.style.clipPath).toBe("");
+    expect(slot.style.left).toBe("40px");
+    expect(slot.style.width).toBe("480px");
+    expect(slot.style.height).toBe("640px");
+  });
+});
+
+describe("floating browser webview presentation restore", () => {
+  it("restores docked layout", () => {
+    const webview = {
+      style: { overflow: "hidden", clipPath: "inset(0 round 12px)" },
+    } as HTMLElement;
+    const stage = { style: {}, firstElementChild: webview } as unknown as HTMLElement;
     applyBrowserWebviewPresentation(stage, {
       floating: false,
       slotWidth: 320,
@@ -584,7 +935,10 @@ describe("floating browser webview presentation", () => {
     });
     expect(stage.style.width).toBe("100%");
     expect(stage.style.height).toBe("100%");
-    expect(stage.style.transform).toBe("");
+    expect(stage.style.borderRadius).toBe("");
+    expect(stage.style.clipPath).toBe("");
+    expect(webview.style.overflow).toBe("");
+    expect(webview.style.clipPath).toBe("");
   });
 });
 

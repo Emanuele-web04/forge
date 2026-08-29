@@ -249,7 +249,8 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
-import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
+import { FLOATING_BROWSER_CHROME_PARTITION } from "@synara/shared/browserSession";
+import { hardenIsolatedWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
   registerAppSnapIpcHandlers,
@@ -383,6 +384,7 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+const floatingChromePreload = Path.join(__dirname, "floatingBrowserChromePreload.js");
 const browserManager = new DesktopBrowserManager({
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
@@ -4475,9 +4477,24 @@ function createWindow(): BrowserWindow {
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
+    if (partition === FLOATING_BROWSER_CHROME_PARTITION) {
+      if (
+        !hardenIsolatedWebviewPreferences({
+          partition,
+          expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
+          preloadPath: floatingChromePreload,
+          webPreferences,
+        })
+      ) {
+        event.preventDefault();
+        return;
+      }
+      webPreferences.backgroundThrottling = false;
+      return;
+    }
     if (
       partition === undefined ||
-      !hardenBrowserAnnotationWebviewPreferences({
+      !hardenIsolatedWebviewPreferences({
         partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationGuestPreload,

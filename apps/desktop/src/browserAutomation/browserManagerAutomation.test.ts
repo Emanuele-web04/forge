@@ -75,7 +75,11 @@ class FakeWebContents extends EventEmitter {
   canGoForward = () => false;
   close = vi.fn();
   loadURL = vi.fn(() => Promise.resolve());
-  setZoomFactor = vi.fn();
+  zoomFactor = 1;
+  setZoomFactor = vi.fn((value: number) => {
+    this.zoomFactor = value;
+  });
+  getZoomFactor = () => this.zoomFactor;
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
@@ -170,6 +174,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       threadId: THREAD_ID,
       surface: "renderer",
       bounds: { x: 40, y: 80, width: 320, height: 220 },
+      pageZoomFactor: 0.25,
     });
     expect(nativeWebContents.close).not.toHaveBeenCalled();
     expect(nativeView.setVisible).toHaveBeenCalledWith(false);
@@ -186,6 +191,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       { threadId: THREAD_ID, tabId: opened.activeTabId!, webContentsId: 202 },
       41,
     );
+    expect(guest.setZoomFactor).toHaveBeenLastCalledWith(0.25);
     expect(nativeWebContents.close).toHaveBeenCalled();
     expect(
       manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: opened.activeTabId! })
@@ -779,6 +785,62 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     );
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(2);
     releaseUnmatched();
+  });
+
+  it("does not classify a zoomed agent click as human when Electron reports widget DIPs", () => {
+    const manager = new DesktopBrowserManager();
+    const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const tabId = prepared.activeTabId!;
+    const webContents = new FakeWebContents();
+    webContents.zoomFactor = 0.25;
+    const runtime = {
+      key: `${THREAD_ID}:${tabId}`,
+      threadId: THREAD_ID,
+      tabId,
+      webContents: webContents as unknown as WebContents,
+      view: null,
+      ownsWebContents: false as const,
+      listenerDisposers: [] as Array<() => void>,
+    };
+    const access = manager as unknown as {
+      runtimes: Map<string, typeof runtime>;
+      configureRuntimeWebContents(value: typeof runtime): void;
+    };
+    access.runtimes.set(runtime.key, runtime);
+    access.configureRuntimeWebContents(runtime);
+    const visible = manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId });
+
+    const releasePointer = visible.expectAgentInput!({
+      kind: "mouse",
+      type: "mouseDown",
+      button: "left",
+      x: 640,
+      y: 400,
+    });
+    webContents.emit(
+      "before-mouse-event",
+      {},
+      {
+        type: "mouseDown",
+        button: "left",
+        x: 160,
+        y: 100,
+      },
+    );
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
+    releasePointer();
+
+    webContents.emit(
+      "before-mouse-event",
+      {},
+      {
+        type: "mouseDown",
+        button: "left",
+        x: 40,
+        y: 40,
+      },
+    );
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
   });
 
   it("keeps an agent-owned native runtime when its tab is reselected", async () => {

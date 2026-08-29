@@ -591,6 +591,13 @@ input {
   -webkit-app-region: no-drag;
 }
 
+/* Portaled menus/selects sit over drag-region chrome. Subtract their rects so
+   Electron does not treat the overlapping rows as a title-bar drag. */
+[data-slot="menu-positioner"],
+[data-slot="select-positioner"] {
+  -webkit-app-region: no-drag;
+}
+
 /* Scrollbar styling.
    The 2px transparent border + `background-clip: padding-box` insets the thumb so
    it floats with a small gap from the track edges instead of hugging them. Use

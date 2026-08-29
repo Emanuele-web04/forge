@@ -517,4 +517,96 @@ describe("BrowserAnnotationCoordinator", () => {
       restartedHarness.coordinator.resolveNavigationTarget(THREAD_ID, "annotation-private", TAB_ID),
     ).toEqual({ tabId: TAB_ID, liveUrl: firstLiveUrl });
   });
+
+  it("replays a guest ready that arrived before the webview was bound", () => {
+    let bound = false;
+    const sent: Array<{ channel: string; payload: Record<string, unknown> }> = [];
+    const webContents = {
+      id: 77,
+      isDestroyed: () => false,
+      getURL: () => "https://example.test/app",
+      send: (channel: string, payload: Record<string, unknown>) => {
+        sent.push({ channel, payload });
+      },
+    } as unknown as WebContents;
+    const runtime = { threadId: THREAD_ID, tabId: TAB_ID, webContents };
+    const coordinator = new BrowserAnnotationCoordinator({
+      resolveVisibleRuntime: () => runtime,
+      resolveRuntimeByWebContentsId: (id) => (bound && id === webContents.id ? runtime : null),
+      markHumanControl: vi.fn(),
+    });
+
+    coordinator.handleGuestMessage(webContents, {
+      version: 1,
+      kind: "ready",
+      documentToken: "early-document",
+      source: { url: "https://example.test/app", pageTitle: "Page" },
+    });
+    expect(() =>
+      coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).toThrow(/not ready/i);
+
+    bound = true;
+    coordinator.adoptAttachedWebContents(webContents);
+    expect(() =>
+      coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).not.toThrow();
+  });
+
+  it("asks the guest to announce after a same-guest runtime replace", () => {
+    const harness = createHarness();
+    harness.ready("document-a");
+    harness.coordinator.handleRuntimeDetached(
+      THREAD_ID,
+      TAB_ID,
+      harness.webContents.id,
+      "replaced",
+    );
+    expect(() =>
+      harness.coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).toThrow(/not ready/i);
+
+    harness.coordinator.requestDocumentReady(THREAD_ID, TAB_ID, harness.webContents.id);
+    expect(harness.sent.at(-1)?.payload).toMatchObject({ kind: "announce-ready" });
+    harness.ready("document-a");
+    expect(() =>
+      harness.coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).not.toThrow();
+  });
+
+  it("refreshes an already-ready overlay when the same guest rebinds", () => {
+    const harness = createHarness();
+    harness.ready("document-a");
+    harness.sent.length = 0;
+
+    harness.coordinator.requestDocumentReady(THREAD_ID, TAB_ID, harness.webContents.id);
+
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "refresh-document",
+      documentToken: "document-a",
+    });
+    expect(() =>
+      harness.coordinator.start({
+        threadId: THREAD_ID,
+        tabId: TAB_ID,
+        theme: LIGHT_ANNOTATION_THEME,
+      }),
+    ).not.toThrow();
+  });
 });
