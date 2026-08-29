@@ -1062,10 +1062,9 @@ const makeAcpSessionRuntime = (
       Acp.CreateElicitationResponse
     >({ action: "decline" });
 
-    // Counts delivery obligations accepted by the live queue or retained in the
-    // bounded pre-consumer buffer (see sessionUpdatesEnqueuedCount on the shape).
-    // Plain mutable state: single writer per offer, and readers only need a
-    // monotonic snapshot.
+    // Counts live-queue events and retained pre-consumer events (see
+    // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
+    // writer per offer, and readers only need a monotonic snapshot.
     let sessionUpdatesEnqueued = 0;
 
     const appendPendingNotification = (
