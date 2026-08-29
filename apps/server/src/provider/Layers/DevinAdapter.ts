@@ -32,7 +32,9 @@ import {
   getDevinStaticModelVariants,
   getModelCapabilities,
   getProviderOptionDescriptors,
+  normalizeModelSlug,
   resolveDevinModelVariant,
+  trimOrNull,
 } from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
@@ -969,8 +971,9 @@ function buildDevinPromptParts(input: {
 }
 
 // Devin's ACP process accepts a concrete model UID as its `--model` value, not
-// a separate effort/context flag. The shared resolver maps current traits to a
-// concrete variant when possible; a reasoning-effort label must never be
+// a separate effort/context flag. The web client resolves runtime selections to
+// a variant before dispatch, so only the variant, the selection slug, and the
+// explicit config are ever candidates; a reasoning-effort label must never be
 // substituted as the model identifier.
 export function resolveDevinEffectiveModel(input: {
   readonly explicitModel: string | undefined;
@@ -995,6 +998,46 @@ export function resolveDevinEffectiveModel(input: {
     return input.selectionModel;
   }
   return input.explicitModel;
+}
+
+export function resolveDevinStartModel<E, R>(input: {
+  readonly explicitModel: string | undefined;
+  readonly modelSelection:
+    | {
+        readonly model: string;
+        readonly options?: DevinModelOptions | undefined;
+      }
+    | undefined;
+  readonly discoverModels: () => Effect.Effect<ProviderListModelsResult, E, R>;
+}): Effect.Effect<string | undefined, E, R> {
+  const options = input.modelSelection?.options;
+  const traitsNeedResolution =
+    trimOrNull(options?.reasoningEffort) !== null ||
+    options?.fastMode !== undefined ||
+    options?.thinking !== undefined ||
+    trimOrNull(options?.contextWindow) !== null;
+  const resolve = (runtimeModel?: ProviderModelDescriptor) =>
+    resolveDevinEffectiveModel({
+      explicitModel: input.explicitModel,
+      selectionModel: input.modelSelection?.model,
+      modelOptions: options,
+      ...(runtimeModel ? { runtimeModel } : {}),
+    });
+  if (!input.modelSelection || !traitsNeedResolution) {
+    return Effect.succeed(resolve());
+  }
+
+  return input.discoverModels().pipe(
+    Effect.map((result) => {
+      const normalizedSelection =
+        normalizeModelSlug(input.modelSelection?.model, PROVIDER) ?? input.modelSelection?.model;
+      const runtimeModel = result.models.find((candidate) => {
+        const normalizedCandidate = normalizeModelSlug(candidate.slug, PROVIDER) ?? candidate.slug;
+        return normalizedCandidate === normalizedSelection;
+      });
+      return resolve(runtimeModel);
+    }),
+  );
 }
 
 // Which turn a ToolCallUpdated belongs to. A tool call already mapped to a
@@ -1097,6 +1140,83 @@ export function makeDevinAdapter(
         runtimeMode: "approval-required",
         clientInfo: { name: "Synara Command Discovery", version: "0.0.0" },
       });
+
+    const discoverDevinModels = (binaryPath: string) => {
+      const fallbackResult = {
+        models: buildDevinStaticModelDescriptors(),
+        source: "devin.static",
+        cached: false,
+      } satisfies ProviderListModelsResult;
+
+      return Effect.gen(function* () {
+        let discoveryError: string | undefined;
+        const cliModels = yield* Effect.gen(function* () {
+          const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
+          const prepared = prepareWindowsSafeProcess(
+            binaryPath,
+            ["models", "list", "--format", "json"],
+            { env: childEnv },
+          );
+          const child = yield* childProcessSpawner.spawn(
+            ChildProcess.make(prepared.command, prepared.args, {
+              shell: prepared.shell,
+              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+              env: childEnv,
+            }),
+          );
+          const [stdout, stderr, exitCode] = yield* Effect.all(
+            [
+              collectStreamAsString(child.stdout),
+              collectStreamAsString(child.stderr),
+              child.exitCode.pipe(Effect.map(Number)),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (exitCode !== 0) {
+            discoveryError = redactDevinDiscoveryError(
+              stderr.trim() ||
+                `Devin model discovery failed because '${binaryPath} models list' exited with code ${exitCode}.`,
+            );
+            return [];
+          }
+          return parseDevinCliModelList(stdout);
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              discoveryError = redactDevinDiscoveryError(error);
+              return [];
+            }),
+          ),
+        );
+
+        if (cliModels.length === 0 && discoveryError === undefined) {
+          discoveryError = `'${binaryPath} models list' returned no models.`;
+        }
+
+        const models =
+          cliModels.length > 0 ? mergeDevinModelDescriptors([cliModels]) : fallbackResult.models;
+
+        return {
+          models,
+          source: cliModels.length > 0 ? "devin-cli" : fallbackResult.source,
+          cached: false,
+          ...(discoveryError !== undefined ? { error: discoveryError } : {}),
+        } satisfies ProviderListModelsResult;
+      }).pipe(
+        Effect.scoped,
+        Effect.timeoutOption(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.succeed({
+                ...fallbackResult,
+                error: `Timed out after ${Math.round(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s while discovering Devin models via CLI.`,
+              } satisfies ProviderListModelsResult),
+            onSome: (result) => Effect.succeed(result),
+          }),
+        ),
+      );
+    };
 
     const offerRuntimeEvent = (
       lifecycleGeneration: string | undefined,
@@ -1429,10 +1549,13 @@ export function makeDevinAdapter(
             shouldMirrorIncomingRaw: (payload) => payload.includes("devinShell"),
           });
           const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
-          const effectiveModel = resolveDevinEffectiveModel({
+          const discoveryBinaryPath = resolveDevinBinaryPath(
+            providerDevinOptions?.binaryPath?.trim() || devinSettings.binaryPath,
+          );
+          const effectiveModel = yield* resolveDevinStartModel({
             explicitModel: devinSettings.model,
-            selectionModel: devinModelSelection?.model,
-            modelOptions: devinModelSelection?.options,
+            modelSelection: devinModelSelection,
+            discoverModels: () => discoverDevinModels(discoveryBinaryPath),
           });
           const effectiveDevinSettings: DevinAcpRuntimeSettings = {
             ...(devinSettings.binaryPath !== undefined
@@ -2711,85 +2834,10 @@ export function makeDevinAdapter(
         });
       });
 
-    const listModels: NonNullable<DevinAdapterShape["listModels"]> = (input) => {
-      const binaryPath = resolveDevinBinaryPath(
-        input.binaryPath?.trim() || devinSettings.binaryPath,
+    const listModels: NonNullable<DevinAdapterShape["listModels"]> = (input) =>
+      discoverDevinModels(
+        resolveDevinBinaryPath(input.binaryPath?.trim() || devinSettings.binaryPath),
       );
-      const fallbackResult = {
-        models: buildDevinStaticModelDescriptors(),
-        source: "devin.static",
-        cached: false,
-      } satisfies ProviderListModelsResult;
-
-      return Effect.gen(function* () {
-        let discoveryError: string | undefined;
-        const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
-          const prepared = prepareWindowsSafeProcess(
-            binaryPath,
-            ["models", "list", "--format", "json"],
-            { env: childEnv },
-          );
-          const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-              env: childEnv,
-            }),
-          );
-          const [stdout, stderr, exitCode] = yield* Effect.all(
-            [
-              collectStreamAsString(child.stdout),
-              collectStreamAsString(child.stderr),
-              child.exitCode.pipe(Effect.map(Number)),
-            ],
-            { concurrency: "unbounded" },
-          );
-          if (exitCode !== 0) {
-            discoveryError = redactDevinDiscoveryError(
-              stderr.trim() ||
-                `Devin model discovery failed because '${binaryPath} models list' exited with code ${exitCode}.`,
-            );
-            return [];
-          }
-          return parseDevinCliModelList(stdout);
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              discoveryError = redactDevinDiscoveryError(error);
-              return [];
-            }),
-          ),
-        );
-
-        if (cliModels.length === 0 && discoveryError === undefined) {
-          discoveryError = `'${binaryPath} models list' returned no models.`;
-        }
-
-        const models =
-          cliModels.length > 0 ? mergeDevinModelDescriptors([cliModels]) : fallbackResult.models;
-
-        return {
-          models,
-          source: cliModels.length > 0 ? "devin-cli" : fallbackResult.source,
-          cached: false,
-          ...(discoveryError !== undefined ? { error: discoveryError } : {}),
-        } satisfies ProviderListModelsResult;
-      }).pipe(
-        Effect.scoped,
-        Effect.timeoutOption(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS),
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
-              Effect.succeed({
-                ...fallbackResult,
-                error: `Timed out after ${Math.round(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s while discovering Devin models via CLI.`,
-              } satisfies ProviderListModelsResult),
-            onSome: (result) => Effect.succeed(result),
-          }),
-        ),
-      );
-    };
 
     const stopAll: DevinAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });

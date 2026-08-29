@@ -17,6 +17,7 @@ import {
   parseDevinCliModelList,
   pruneDevinToolCallTurnIds,
   resolveDevinEffectiveModel,
+  resolveDevinStartModel,
   resolveDevinToolCallUpdatedTurnId,
   resolveRequestedModeId,
 } from "./DevinAdapter.ts";
@@ -209,7 +210,7 @@ describe("resolveDevinEffectiveModel", () => {
     ).toBe("default-model");
   });
 
-  it("resolves traits without a web-populated model variant", () => {
+  it("resolves static traits without a web-populated model variant", () => {
     expect(
       resolveDevinEffectiveModel({
         explicitModel: undefined,
@@ -217,22 +218,6 @@ describe("resolveDevinEffectiveModel", () => {
         modelOptions: { fastMode: true },
       }),
     ).toBe("swe-1-7-lightning");
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: undefined,
-        selectionModel: "gpt-5.6-sol",
-        modelOptions: { reasoningEffort: "high" },
-        runtimeModel: {
-          slug: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          defaultReasoningEffort: "medium",
-          modelVariants: [
-            { model: "gpt-5-6-sol-medium", reasoningEffort: "medium", fastMode: false },
-            { model: "gpt-5-6-sol-high", reasoningEffort: "high", fastMode: false },
-          ],
-        },
-      }),
-    ).toBe("gpt-5-6-sol-high");
   });
 
   it("never substitutes a reasoning-effort label as the model", () => {
@@ -253,6 +238,64 @@ describe("resolveDevinEffectiveModel", () => {
         modelVariant: undefined,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveDevinStartModel", () => {
+  it("discovers the authoritative model matrix for a first non-web trait selection", async () => {
+    let discoveryCalls = 0;
+    const models = mergeDevinModelDescriptors([
+      parseDevinCliModelList(
+        JSON.stringify({
+          families: [
+            {
+              family_uid: "gpt-5.6-sol",
+              family_label: "GPT-5.6 Sol",
+              slug: "gpt-5.6-sol",
+              variants: [
+                { model_uid: "gpt-5-6-sol-medium", label: "GPT-5.6 Sol Medium" },
+                { model_uid: "gpt-5-6-sol-high", label: "GPT-5.6 Sol High" },
+              ],
+            },
+          ],
+        }),
+      ),
+    ]);
+
+    const effectiveModel = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel: undefined,
+        modelSelection: {
+          model: "gpt-5.6-sol",
+          options: { reasoningEffort: "high" },
+        },
+        discoverModels: () =>
+          Effect.sync(() => {
+            discoveryCalls += 1;
+            return { models, source: "devin-cli", cached: false };
+          }),
+      }),
+    );
+
+    expect(discoveryCalls).toBe(1);
+    expect(effectiveModel).toBe("gpt-5-6-sol-high");
+  });
+
+  it("does not discover models when no trait needs resolution", async () => {
+    let discoveryCalls = 0;
+    const effectiveModel = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel: undefined,
+        modelSelection: { model: "gpt-5.6-sol" },
+        discoverModels: () => {
+          discoveryCalls += 1;
+          return Effect.succeed({ models: [], source: "devin-cli", cached: false });
+        },
+      }),
+    );
+
+    expect(discoveryCalls).toBe(0);
+    expect(effectiveModel).toBe("gpt-5.6-sol");
   });
 });
 
