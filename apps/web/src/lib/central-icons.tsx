@@ -4,14 +4,7 @@
 // Exports: CentralIcon, getCentralIconUrl, createCentralIconElement, createCentralIconComponent
 // Depends on: Vite public asset serving and app className merging utilities.
 
-import {
-  forwardRef,
-  useEffect,
-  useState,
-  type CSSProperties,
-  type HTMLAttributes,
-  type ReactElement,
-} from "react";
+import { forwardRef, type CSSProperties, type HTMLAttributes, type ReactElement } from "react";
 import { cn } from "./utils";
 
 // Central icons ship in two visual sets served as static assets: the default
@@ -60,25 +53,8 @@ const CENTRAL_ICON_BASE_CLASS = "inline-block size-4 shrink-0 bg-current";
 export const CENTRAL_ICON_SLOT = "central-icon";
 
 // CSS-mask shorthand value that paints the icon as a solid `bg-current` fill.
-export function centralIconMaskValue(iconUrl: string): string {
+function centralIconMaskValue(iconUrl: string): string {
   return `url("${iconUrl}") center / contain no-repeat`;
-}
-
-// A failed mask-image URL paints NOTHING in Chromium — the element is fully
-// masked out, so an unreachable/404'd icon asset silently vanishes (seen as
-// "the sidebar toggle disappeared"). Probe the asset once and degrade to an
-// inline data-URI panel glyph (same visual family, zero network) so a failed
-// icon is always still a visible control.
-const FALLBACK_PANEL_GLYPH_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">' +
-  '<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="2" stroke="black" stroke-width="1.5"/>' +
-  '<path d="M8.25 4.75v14.5" stroke="black" stroke-width="1.5"/></svg>';
-export const FALLBACK_CENTRAL_ICON_MASK = `url("data:image/svg+xml,${encodeURIComponent(
-  FALLBACK_PANEL_GLYPH_SVG,
-)}") center / contain no-repeat`;
-
-export function resolveCentralIconMask(iconUrl: string, sourceFailed: boolean): string {
-  return sourceFailed ? FALLBACK_CENTRAL_ICON_MASK : centralIconMaskValue(iconUrl);
 }
 
 /** Mirror Button/Toggle `[&_svg:*]` child rules for masked Central icons. */
@@ -112,30 +88,12 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
   ref,
 ) {
   const iconUrl = getCentralIconUrl(name, variant);
-  const [sourceFailed, setSourceFailed] = useState(false);
-
-  useEffect(() => {
-    if (!iconUrl) return;
-    setSourceFailed(false);
-    let active = true;
-    const probe = new Image();
-    probe.onload = () => {
-      if (active) setSourceFailed(false);
-    };
-    probe.onerror = () => {
-      if (active) setSourceFailed(true);
-    };
-    probe.src = iconUrl;
-    return () => {
-      active = false;
-    };
-  }, [iconUrl]);
 
   if (!iconUrl) {
     return null;
   }
 
-  const maskValue = resolveCentralIconMask(iconUrl, sourceFailed);
+  const maskValue = centralIconMaskValue(iconUrl);
   const maskStyle = {
     WebkitMask: maskValue,
     mask: maskValue,
@@ -150,7 +108,6 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
       aria-label={label}
       aria-hidden={label ? undefined : true}
       data-slot={CENTRAL_ICON_SLOT}
-      data-icon-fallback={sourceFailed ? "true" : undefined}
       className={cn(CENTRAL_ICON_BASE_CLASS, className)}
       style={maskStyle}
     />

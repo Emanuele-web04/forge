@@ -1,9 +1,9 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
+import { IconLayoutSidebar } from "@tabler/icons-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { cn } from "~/lib/utils";
-import { CentralIcon } from "~/lib/central-icons";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -404,7 +404,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      <CentralIcon name="sidebar-simple-left-wide" />
+      <IconLayoutSidebar aria-hidden className="size-4" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
