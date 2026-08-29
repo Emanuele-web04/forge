@@ -77,17 +77,38 @@ export function assertPublicIpAddress(address: string): void {
   }
 }
 
-export function normalizeOutboundOrigin(value: string | URL): string {
+export function assertExactLoopbackIpAddress(address: string): void {
+  if (address !== "127.0.0.1" && address.toLowerCase() !== "::1") {
+    throw new OutboundPolicyError(
+      "private-address",
+      "Outbound loopback destination resolved to a non-loopback address.",
+    );
+  }
+}
+
+function isExactLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+export function normalizeOutboundOrigin(
+  value: string | URL,
+  options: { readonly allowLoopbackHttp?: boolean } = {},
+): string {
   let url: URL;
   try {
     url = value instanceof URL ? value : new URL(value);
   } catch {
     throw new OutboundPolicyError("invalid-url", "Outbound destination is not a valid URL.");
   }
-  if (url.protocol !== "https:" || url.username || url.password) {
+  const allowedProtocol =
+    url.protocol === "https:" ||
+    (options.allowLoopbackHttp === true &&
+      url.protocol === "http:" &&
+      isExactLoopbackHostname(url.hostname));
+  if (!allowedProtocol || url.username || url.password) {
     throw new OutboundPolicyError(
       "invalid-url",
-      "Credential-bearing outbound destinations must use HTTPS without URL credentials.",
+      "Outbound destinations must use HTTPS without URL credentials unless loopback HTTP is explicitly allowed.",
     );
   }
   return url.origin;
@@ -96,6 +117,7 @@ export function normalizeOutboundOrigin(value: string | URL): string {
 export function assertOutboundUrlAllowed(input: {
   readonly url: string | URL;
   readonly allowedOrigins: ReadonlySet<string> | ReadonlyArray<string>;
+  readonly allowLoopbackHttp?: boolean;
 }): URL {
   let url: URL;
   try {
@@ -103,9 +125,12 @@ export function assertOutboundUrlAllowed(input: {
   } catch {
     throw new OutboundPolicyError("invalid-url", "Outbound destination is not a valid URL.");
   }
-  const origin = normalizeOutboundOrigin(url);
+  const options = input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {};
+  const origin = normalizeOutboundOrigin(url, options);
   const allowedOrigins = new Set(
-    Array.from(input.allowedOrigins, (allowedOrigin) => normalizeOutboundOrigin(allowedOrigin)),
+    Array.from(input.allowedOrigins, (allowedOrigin) =>
+      normalizeOutboundOrigin(allowedOrigin, options),
+    ),
   );
   if (!allowedOrigins.has(origin)) {
     throw new OutboundPolicyError(

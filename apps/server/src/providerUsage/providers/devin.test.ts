@@ -8,7 +8,7 @@ import nodePath from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { outboundHttp } from "@synara/shared/outboundHttp";
+import { outboundHttp, type OutboundHttpPolicy } from "@synara/shared/outboundHttp";
 import { devinUsageFetcher, parseDevinUsage } from "./devin";
 
 const NOW_MS = 1_780_000_000_000;
@@ -22,7 +22,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function stubOutboundFetch(
-  fetchMock: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  fetchMock: (
+    url: string | URL | Request,
+    init?: RequestInit,
+    policy?: OutboundHttpPolicy,
+  ) => Promise<Response>,
 ): void {
   vi.spyOn(outboundHttp, "request").mockImplementation(async (input) => {
     const init: RequestInit = {
@@ -34,7 +38,7 @@ function stubOutboundFetch(
     if (input.body !== undefined) {
       init.body = input.body;
     }
-    const response = await fetchMock(input.url, init);
+    const response = await fetchMock(input.url, init, input.policy);
     return {
       status: response.status,
       headers: response.headers,
@@ -155,6 +159,8 @@ describe("devinUsageFetcher", () => {
         "https://api.example.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
       );
       expect(input.policy.allowedOrigins).toEqual(["https://api.example.com"]);
+      expect(input.policy.requirePublicAddress).toBe(true);
+      expect(input.policy.allowLoopbackHttp).toBeUndefined();
       const response = jsonResponse({
         userStatus: { planStatus: { dailyQuotaRemainingPercent: 50 } },
       });
@@ -224,10 +230,12 @@ describe("devinUsageFetcher", () => {
     ["IPv4 loopback", "http://127.0.0.1:3000"],
     ["IPv6 loopback", "http://[::1]:3000"],
   ])("allows HTTP for %s", async (_hostKind, apiServerUrl) => {
-    stubOutboundFetch(async (url) => {
+    stubOutboundFetch(async (url, _init, policy) => {
       expect(String(url)).toBe(
         `${apiServerUrl}/exa.seat_management_pb.SeatManagementService/GetUserStatus`,
       );
+      expect(policy?.allowLoopbackHttp).toBe(true);
+      expect(policy?.requirePublicAddress).toBe(true);
       return jsonResponse({ userStatus: { planStatus: { dailyQuotaRemainingPercent: 50 } } });
     });
 
@@ -248,6 +256,7 @@ describe("devinUsageFetcher", () => {
     ["non-loopback HTTP", "http://api.example.com"],
     ["an unsupported protocol", "ftp://localhost:3000"],
   ])("rejects %s API server URLs", async (_case, apiServerUrl) => {
+    const request = vi.spyOn(outboundHttp, "request");
     const snapshot = await devinUsageFetcher.fetch({
       homeDir: "/nonexistent-home",
       env: {
@@ -258,6 +267,7 @@ describe("devinUsageFetcher", () => {
       nowMs: NOW_MS,
     });
 
+    expect(request).not.toHaveBeenCalled();
     expect(snapshot.status).toBe("error");
     expect(snapshot.detail).toContain("API server URL is invalid");
   });

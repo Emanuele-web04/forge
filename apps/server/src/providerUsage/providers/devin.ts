@@ -36,6 +36,7 @@ const GET_USER_STATUS_PATH = "/exa.seat_management_pb.SeatManagementService/GetU
 interface DevinUsageAuth {
   apiKey: string;
   apiServerUrl: string;
+  allowLoopbackHttp: boolean;
 }
 
 function homeAwareEnv(ctx: ProviderUsageContext): NodeJS.ProcessEnv {
@@ -66,7 +67,11 @@ async function resolveDevinUsageAuth(
   if (!apiServerUrl) {
     return "invalid-server";
   }
-  return { apiKey, apiServerUrl };
+  return {
+    apiKey,
+    apiServerUrl,
+    allowLoopbackHttp: new URL(apiServerUrl).protocol === "http:",
+  };
 }
 
 function remainingPercentToUsed(remainingPercent: number | undefined): number | undefined {
@@ -297,6 +302,7 @@ export const devinUsageFetcher: ProviderUsageFetcher = {
         url,
         allowedOrigins: [new URL(auth.apiServerUrl).origin],
         method: "POST",
+        ...(auth.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
         headers: {
           Authorization: `Bearer ${auth.apiKey}`,
           Accept: "application/json",
