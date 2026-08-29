@@ -73,6 +73,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults chat.find to mod+F outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "chat.find"),
+        {
+          key: "mod+f",
+          command: "chat.find",
+          when: "!terminalFocus",
+        },
+      );
+    }),
+  );
+
   it.effect("defaults sidebar.search to Cmd+K on macOS and Ctrl+K elsewhere", () =>
     Effect.sync(() => {
       const searchDefaults = DEFAULT_KEYBINDINGS.filter(

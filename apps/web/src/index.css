@@ -820,6 +820,30 @@ label:has(> select#reasoning-effort) select {
   padding: 0.02em 0.12em;
 }
 
+.chat-markdown .chat-find-match {
+  border-radius: 0.16em;
+  padding: 0.02em 0.08em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  background-color: color-mix(in srgb, var(--color-text-accent) 22%, transparent);
+}
+
+.chat-markdown .chat-find-match-active {
+  background-color: color-mix(in srgb, var(--color-text-accent) 46%, transparent);
+}
+
+.chat-markdown .chat-find-match-continues-before {
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.chat-markdown .chat-find-match-continues-after {
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 /* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
 .chat-markdown .thread-marker-highlight.thread-marker-continues-before {
   padding-left: 0;

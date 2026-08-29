@@ -16,6 +16,7 @@ import React, {
   use,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -65,6 +66,14 @@ import {
   parseComposerChipSegment,
 } from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
+import {
+  applyActiveChatFindMatch,
+  collectCaseInsensitiveSubstringRanges,
+  normalizeFindQuery,
+  splitTextWithFindMatches,
+  wrapFindQueryInHtml,
+  type ThreadFindRange,
+} from "./chat/threadFind.logic";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -107,6 +116,10 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
+  /** Case-insensitive substring to wrap while in-thread find is open. */
+  findQuery?: string | undefined;
+  /** Active occurrence in this markdown body; other hits stay dimmer. */
+  findActiveRange?: ThreadFindRange | null | undefined;
   /**
    * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
    * survive the way they were typed), no math/KaTeX and no literal-dollar
@@ -227,11 +240,20 @@ type MarkdownParentNode = {
   children?: MarkdownNode[];
 };
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
-type RenderableThreadMarker = ThreadMarker & { className: string };
-type ThreadMarkerFragmentContinuity = {
+type TextRangeFragmentContinuity = {
   readonly continuesBefore: boolean;
   readonly continuesAfter: boolean;
 };
+
+type MarkdownRangeDecoration = {
+  startOffset: number;
+  endOffset: number;
+  nodeType: string;
+  classNameFor: (continuity: TextRangeFragmentContinuity) => string;
+  properties: Record<string, string>;
+};
+
+type RenderableThreadMarker = ThreadMarker & { className: string };
 
 // The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
 // it never re-parses the markdown tree; this className is the stable, parse-time-only part.
@@ -246,15 +268,16 @@ function markerClassNameFor(marker: ThreadMarker) {
     .join(" ");
 }
 
-// Joins marker fragments split by markdown nodes so bold/code boundaries still read as one mark.
-function markerFragmentClassNameFor(
-  marker: RenderableThreadMarker,
-  continuity: ThreadMarkerFragmentContinuity,
+function rangeFragmentClassName(
+  className: string,
+  continuity: TextRangeFragmentContinuity,
+  continuesBeforeClass: string,
+  continuesAfterClass: string,
 ): string {
   return [
-    marker.className,
-    continuity.continuesBefore ? "thread-marker-continues-before" : "",
-    continuity.continuesAfter ? "thread-marker-continues-after" : "",
+    className,
+    continuity.continuesBefore ? continuesBeforeClass : "",
+    continuity.continuesAfter ? continuesAfterClass : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -286,20 +309,89 @@ function normalizeRenderableMarkers(input: {
   return result;
 }
 
-function createThreadMarkerRemarkPlugin(input: {
+function threadMarkerDecorations(input: {
   text: string;
   markers: readonly ThreadMarker[] | undefined;
-}) {
-  const markers = normalizeRenderableMarkers(input);
+}): MarkdownRangeDecoration[] {
+  return normalizeRenderableMarkers(input).map((marker) => ({
+    startOffset: marker.startOffset,
+    endOffset: marker.endOffset,
+    nodeType: "threadMarker",
+    classNameFor: (continuity) =>
+      rangeFragmentClassName(
+        marker.className,
+        continuity,
+        "thread-marker-continues-before",
+        "thread-marker-continues-after",
+      ),
+    properties: {
+      "data-thread-marker-id": marker.id,
+      "data-thread-marker-style": marker.style,
+      "data-thread-marker-color": marker.color,
+    },
+  }));
+}
+
+function findHighlightDecorations(input: {
+  text: string;
+  query: string | undefined;
+}): MarkdownRangeDecoration[] {
+  const query = normalizeFindQuery(input.query ?? "");
+  if (query.length === 0) {
+    return [];
+  }
+  return collectCaseInsensitiveSubstringRanges(input.text, query).map((range) => ({
+    startOffset: range.startOffset,
+    endOffset: range.endOffset,
+    nodeType: "chatFindMatch",
+    classNameFor: (continuity) =>
+      rangeFragmentClassName(
+        "chat-find-match",
+        continuity,
+        "chat-find-match-continues-before",
+        "chat-find-match-continues-after",
+      ),
+    properties: {
+      "data-chat-find-match": "true",
+      "data-chat-find-start": String(range.startOffset),
+    },
+  }));
+}
+
+function collapseOverlappingDecorations(
+  decorations: readonly MarkdownRangeDecoration[],
+): MarkdownRangeDecoration[] {
+  const result: MarkdownRangeDecoration[] = [];
+  let previousEnd = -1;
+  for (const decoration of decorations.toSorted(
+    (left, right) => left.startOffset - right.startOffset || right.endOffset - left.endOffset,
+  )) {
+    if (decoration.startOffset < previousEnd) {
+      continue;
+    }
+    if (decoration.endOffset <= decoration.startOffset) {
+      continue;
+    }
+    result.push(decoration);
+    previousEnd = decoration.endOffset;
+  }
+  return result;
+}
+
+function createTextRangeRemarkPlugin(decorations: readonly MarkdownRangeDecoration[]) {
+  const usable = collapseOverlappingDecorations(decorations);
   return () => (tree: MarkdownNode) => {
-    if (markers.length === 0) {
+    if (usable.length === 0) {
       return;
     }
-    applyThreadMarkersToNode(tree, markers);
+    applyRangeDecorationsToNode(tree, usable);
   };
 }
 
-function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly RenderableThreadMarker[]) {
+function applyRangeDecorationsToNode(
+  node: MarkdownNode,
+  decorations: readonly MarkdownRangeDecoration[],
+) {
   if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
     return;
   }
@@ -308,66 +400,64 @@ function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly Renderab
   // The guard above already proved `children` is an array; `?? []` only satisfies the optional type.
   parent.children = (parent.children ?? []).flatMap((child) => {
     if (child && typeof child === "object" && "type" in child && child.type === "text") {
-      return splitTextNodeWithMarkers(child as MarkdownTextNode, markers);
+      return splitTextNodeWithRangeDecorations(child as MarkdownTextNode, decorations);
     }
-    applyThreadMarkersToNode(child, markers);
+    applyRangeDecorationsToNode(child, decorations);
     return [child];
   });
 }
 
-function splitTextNodeWithMarkers(
+function splitTextNodeWithRangeDecorations(
   node: MarkdownTextNode,
-  markers: readonly RenderableThreadMarker[],
+  decorations: readonly MarkdownRangeDecoration[],
 ): MarkdownNode[] {
   const startOffset = node.position?.start?.offset;
   const endOffset = node.position?.end?.offset;
   if (startOffset === undefined || endOffset === undefined) {
     return [node];
   }
-  const overlappingMarkers: RenderableThreadMarker[] = [];
-  for (const marker of markers) {
-    if (marker.endOffset <= startOffset) {
+  const overlapping: MarkdownRangeDecoration[] = [];
+  for (const decoration of decorations) {
+    if (decoration.endOffset <= startOffset) {
       continue;
     }
-    if (marker.startOffset >= endOffset) {
+    if (decoration.startOffset >= endOffset) {
       break;
     }
-    overlappingMarkers.push(marker);
+    overlapping.push(decoration);
   }
-  if (overlappingMarkers.length === 0) {
+  if (overlapping.length === 0) {
     return [node];
   }
 
   const nodes: MarkdownNode[] = [];
   let cursor = 0;
-  for (const marker of overlappingMarkers) {
-    const markerStart = Math.max(0, marker.startOffset - startOffset);
-    const markerEnd = Math.min(node.value.length, marker.endOffset - startOffset);
-    if (markerStart < cursor || markerEnd > node.value.length) {
+  for (const decoration of overlapping) {
+    const rangeStart = Math.max(0, decoration.startOffset - startOffset);
+    const rangeEnd = Math.min(node.value.length, decoration.endOffset - startOffset);
+    if (rangeStart < cursor || rangeEnd > node.value.length) {
       continue;
     }
-    const absoluteFragmentStart = startOffset + markerStart;
-    const absoluteFragmentEnd = startOffset + markerEnd;
-    if (markerStart > cursor) {
-      nodes.push({ type: "text", value: node.value.slice(cursor, markerStart) });
+    const absoluteFragmentStart = startOffset + rangeStart;
+    const absoluteFragmentEnd = startOffset + rangeEnd;
+    if (rangeStart > cursor) {
+      nodes.push({ type: "text", value: node.value.slice(cursor, rangeStart) });
     }
     nodes.push({
-      type: "threadMarker",
+      type: decoration.nodeType,
       data: {
         hName: "span",
         hProperties: {
-          className: markerFragmentClassNameFor(marker, {
-            continuesBefore: absoluteFragmentStart > marker.startOffset,
-            continuesAfter: absoluteFragmentEnd < marker.endOffset,
+          className: decoration.classNameFor({
+            continuesBefore: absoluteFragmentStart > decoration.startOffset,
+            continuesAfter: absoluteFragmentEnd < decoration.endOffset,
           }),
-          "data-thread-marker-id": marker.id,
-          "data-thread-marker-style": marker.style,
-          "data-thread-marker-color": marker.color,
+          ...decoration.properties,
         },
       },
-      children: [{ type: "text", value: node.value.slice(markerStart, markerEnd) }],
+      children: [{ type: "text", value: node.value.slice(rangeStart, rangeEnd) }],
     });
-    cursor = markerEnd;
+    cursor = rangeEnd;
   }
   if (cursor < node.value.length) {
     nodes.push({ type: "text", value: node.value.slice(cursor) });
@@ -766,6 +856,45 @@ function inlineCodeFilePath(raw: string): string | null {
 // meta/ctrl-click — or a surface without a viewer — opens the preferred
 // external editor. `targetPath` may carry a `:line` suffix (used to open); the
 // chip icon and title use the position-free path.
+function renderFindWrappedText(
+  text: string,
+  query: string,
+  activeRange: ThreadFindRange | null,
+  sourceOffset: number,
+): ReactNode {
+  const parts = splitTextWithFindMatches(text, query, activeRange, sourceOffset);
+  if (parts.length === 1 && !parts[0]!.match) {
+    return text;
+  }
+  return parts.map((part, index) =>
+    part.match ? (
+      <span
+        key={`${part.startOffset ?? index}:${index}`}
+        className={part.active ? "chat-find-match chat-find-match-active" : "chat-find-match"}
+        data-chat-find-match={part.active ? "active" : "true"}
+        data-chat-find-start={part.startOffset}
+      >
+        {part.text}
+      </span>
+    ) : (
+      <span key={`text:${index}`}>{part.text}</span>
+    ),
+  );
+}
+
+function ShikiHtml(props: {
+  html: string;
+  findQuery: string;
+  sourceOffset: number;
+  activeRange: ThreadFindRange | null;
+}) {
+  const html =
+    normalizeFindQuery(props.findQuery).length > 0
+      ? wrapFindQueryInHtml(props.html, props.findQuery, props.sourceOffset, props.activeRange)
+      : props.html;
+  return <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 function OpenableFileChip(props: {
   targetPath: string;
   theme: "light" | "dark";
@@ -936,6 +1065,9 @@ interface SuspenseShikiCodeBlockProps {
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
+  findQuery: string;
+  sourceOffset: number;
+  findActiveRange: ThreadFindRange | null;
 }
 
 type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
@@ -980,6 +1112,9 @@ function SuspenseShikiCodeBlock({
   code: liveCode,
   themeName,
   isStreaming,
+  findQuery,
+  sourceOffset,
+  findActiveRange,
 }: SuspenseShikiCodeBlockProps) {
   const code = useThrottledStreamingValue(
     liveCode,
@@ -994,6 +1129,9 @@ function SuspenseShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
+      findQuery={findQuery}
+      sourceOffset={sourceOffset}
+      findActiveRange={findActiveRange}
     />
   );
 }
@@ -1004,6 +1142,9 @@ function LoadedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  findQuery,
+  sourceOffset,
+  findActiveRange,
 }: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
   const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
   const cachedHighlightedHtml = !isStreaming
@@ -1012,9 +1153,11 @@ function LoadedShikiCodeBlock({
 
   if (cachedHighlightedHtml != null) {
     return (
-      <div
-        className="chat-markdown-shiki"
-        dangerouslySetInnerHTML={{ __html: cachedHighlightedHtml }}
+      <ShikiHtml
+        html={cachedHighlightedHtml}
+        findQuery={findQuery}
+        sourceOffset={sourceOffset}
+        activeRange={findActiveRange}
       />
     );
   }
@@ -1029,6 +1172,9 @@ function LoadedShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
+      findQuery={findQuery}
+      sourceOffset={sourceOffset}
+      findActiveRange={findActiveRange}
     />
   );
 }
@@ -1040,6 +1186,9 @@ function UncachedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  findQuery,
+  sourceOffset,
+  findActiveRange,
 }: SuspenseShikiCodeBlockProps & {
   syntaxHighlighting: SyntaxHighlightingModule;
   cacheKey: string;
@@ -1059,7 +1208,12 @@ function UncachedShikiCodeBlock({
   }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
 
   return (
-    <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+    <ShikiHtml
+      html={highlightedHtml}
+      findQuery={findQuery}
+      sourceOffset={sourceOffset}
+      activeRange={findActiveRange}
+    />
   );
 }
 
@@ -1071,6 +1225,8 @@ function ChatMarkdown({
   style,
   onImageExpand,
   markers,
+  findQuery: findQueryProp,
+  findActiveRange: findActiveRangeProp,
   onTaskToggle,
   variant: variantProp,
   mentionReferences,
@@ -1082,6 +1238,8 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const findQuery = findQueryProp ?? "";
+  const findActiveRange = findActiveRangeProp ?? null;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1111,13 +1269,20 @@ function ChatMarkdown({
   // repaired text — validate them against the same string. A marker recorded
   // after a repaired delimiter row fails its `selectedText` check and is
   // dropped instead of highlighting a shifted range.
-  const threadMarkerRemarkPlugin = useMemo(
-    () =>
-      markers && markers.length > 0
-        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers })
-        : null,
-    [markers, text],
-  );
+  const rangeDecorationRemarkPlugin = useMemo(() => {
+    const sourceText = isUserVariant ? text : repairMarkdownTableDelimiters(text);
+    const decorations = [
+      ...findHighlightDecorations({
+        text: sourceText,
+        query: findQuery,
+      }),
+      ...threadMarkerDecorations({ text: sourceText, markers }),
+    ];
+    if (decorations.length === 0) {
+      return null;
+    }
+    return createTextRangeRemarkPlugin(decorations);
+  }, [findQuery, isUserVariant, markers, text]);
   const composerChipsRemarkPlugin = useMemo(
     () =>
       isUserVariant
@@ -1133,13 +1298,19 @@ function ChatMarkdown({
   );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
     if (composerChipsRemarkPlugin) {
-      return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
+      return rangeDecorationRemarkPlugin
+        ? [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]
+        : [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
     }
-    return threadMarkerRemarkPlugin
-      ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
+    return rangeDecorationRemarkPlugin
+      ? [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin]
       : MARKDOWN_REMARK_PLUGINS;
-  }, [composerChipsRemarkPlugin, threadMarkerRemarkPlugin]);
+  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    applyActiveChatFindMatch(rootRef.current, findActiveRange);
+  }, [findActiveRange, findQuery, renderedText]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, children, ...props }) {
@@ -1192,7 +1363,7 @@ function ChatMarkdown({
           />
         );
       },
-      pre({ node: _node, children, ...props }) {
+      pre({ node, children, ...props }) {
         const codeBlock = extractCodeBlock(children);
         if (!codeBlock) {
           return <pre {...props}>{children}</pre>;
@@ -1200,23 +1371,38 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
+        const sourceText = isUserVariant ? text : repairMarkdownTableDelimiters(text);
+        const blockStart = node?.position?.start?.offset ?? 0;
+        const codeOffsetInSource = sourceText.indexOf(code, blockStart);
+        const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
+        const highlightedFallback =
+          normalizeFindQuery(findQuery).length > 0 ? (
+            <pre {...props}>
+              <code>{renderFindWrappedText(code, findQuery, findActiveRange, sourceOffset)}</code>
+            </pre>
+          ) : (
+            <pre {...props}>{children}</pre>
+          );
 
         return (
           <MarkdownCodeBlock code={code} fence={fence}>
-            <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-              <Suspense fallback={<pre {...props}>{children}</pre>}>
+            <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+              <Suspense fallback={highlightedFallback}>
                 <SuspenseShikiCodeBlock
                   language={fence.language}
                   code={code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
+                  findQuery={findQuery}
+                  sourceOffset={sourceOffset}
+                  findActiveRange={findActiveRange}
                 />
               </Suspense>
             </CodeHighlightErrorBoundary>
           </MarkdownCodeBlock>
         );
       },
-      code({ node: _node, className, children, ...props }) {
+      code({ node, className, children, ...props }) {
         // Fenced blocks carry a `language-*` class and are rendered by `pre`;
         // only inline code (no class) that names a file becomes an openable
         // mention chip. The target is resolved against cwd so it opens like a
@@ -1225,7 +1411,23 @@ function ChatMarkdown({
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
             const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
-            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            const sourceOffset = node?.position?.start?.offset ?? 0;
+            return (
+              <OpenableFileChip
+                targetPath={targetPath}
+                theme={resolvedTheme}
+                {...(normalizeFindQuery(findQuery).length > 0
+                  ? {
+                      label: renderFindWrappedText(
+                        filePath,
+                        findQuery,
+                        findActiveRange,
+                        sourceOffset,
+                      ),
+                    }
+                  : {})}
+              />
+            );
           }
         }
         return (
@@ -1306,6 +1508,8 @@ function ChatMarkdown({
     [
       cwd,
       diffThemeName,
+      findActiveRange,
+      findQuery,
       isStreaming,
       isUserVariant,
       mentionReferences,
@@ -1313,11 +1517,13 @@ function ChatMarkdown({
       onTaskToggle,
       resolvedTheme,
       terminalContexts,
+      text,
     ],
   );
 
   return (
     <div
+      ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >

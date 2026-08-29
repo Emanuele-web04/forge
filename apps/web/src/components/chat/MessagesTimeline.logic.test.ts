@@ -15,6 +15,7 @@ import {
   planWorkEntryRenderChunks,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  resolveThreadFindJumpTarget,
   type CollapsedTurnItem,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
@@ -968,6 +969,43 @@ describe("deriveMessagesTimelineRows", () => {
     // Timed from the user message, not from the last intermediate narration.
     expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("resolves a folded assistant match to the terminal row that now owns it", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into the error",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminalIndex = rows.findIndex(
+      (row) => row.kind === "message" && row.message.id === MessageId.makeUnsafe("a2"),
+    );
+    expect(
+      rows.some((row) => row.kind === "message" && row.message.id === MessageId.makeUnsafe("a1")),
+    ).toBe(false);
+    expect(resolveThreadFindJumpTarget(rows, { messageId: MessageId.makeUnsafe("a1") })).toEqual({
+      rowIndex: terminalIndex,
+      visibleMessageId: MessageId.makeUnsafe("a2"),
+      expandCollapsedWorkMessageId: MessageId.makeUnsafe("a2"),
+      collapsedNarrationMessageId: MessageId.makeUnsafe("a1"),
+    });
+    expect(resolveThreadFindJumpTarget(rows, { messageId: MessageId.makeUnsafe("a2") })).toEqual({
+      rowIndex: terminalIndex,
+      visibleMessageId: MessageId.makeUnsafe("a2"),
+    });
   });
 
   it("folds settled reasoning traces into the terminal turn disclosure", () => {

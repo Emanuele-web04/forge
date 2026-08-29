@@ -478,6 +478,13 @@ import {
   type AutomationFormState,
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
+import { ChatThreadFindHost } from "./chat/ThreadFindBar";
+import {
+  createThreadFindHighlightStore,
+  eventTargetsInAppBrowser,
+  shouldCaptureChatFindShortcut,
+  type ThreadFindMatch,
+} from "./chat/threadFind.logic";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
@@ -1559,6 +1566,15 @@ export default function ChatView({
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
+  const [threadFindOpen, setThreadFindOpen] = useState(false);
+  const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
+  const [threadFindHighlightStore] = useState(() => createThreadFindHighlightStore());
+  const handleThreadFindJump = (match: ThreadFindMatch) => {
+    timelineControllerRef.current?.scrollToMessage(match.messageId, {
+      ...(match.segmentIndex === undefined ? {} : { segmentIndex: match.segmentIndex }),
+      fineScrollFind: true,
+    });
+  };
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
@@ -1577,9 +1593,11 @@ export default function ChatView({
       setComposerCommandPicker(null);
       setIsModelPickerOpen(false);
       setIsTraitsPickerOpen(false);
+      setThreadFindOpen(false);
+      threadFindHighlightStore.set(null);
     }, 0);
     return () => window.clearTimeout(settle);
-  }, [threadId]);
+  }, [threadId, threadFindHighlightStore]);
   useEffect(() => {
     const scrollDebouncer = showScrollDebouncer.current;
     return () => {
@@ -6397,6 +6415,23 @@ export default function ChatView({
         return;
       }
 
+      if (command === "chat.find") {
+        if (
+          !shouldCaptureChatFindShortcut({
+            shouldRenderChatPaneContent,
+            terminalWorkspaceTerminalTabActive,
+            inAppBrowserFocused: eventTargetsInAppBrowser(event.target),
+          })
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        setThreadFindOpen(true);
+        setThreadFindFocusNonce((current) => current + 1);
+        return;
+      }
+
       if (command === "modelPicker.toggle") {
         if (!composerPickerShortcutActive) return;
         event.preventDefault();
@@ -6631,6 +6666,7 @@ export default function ChatView({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
@@ -12069,6 +12105,20 @@ export default function ChatView({
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
           >
+            {shouldRenderChatPaneContent ? (
+              <ChatThreadFindHost
+                open={threadFindOpen}
+                focusNonce={threadFindFocusNonce}
+                timelineEntries={timelineEntries}
+                threadId={threadId}
+                {...(environmentAppliesContentInset
+                  ? { contentInsetRightPx: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
+                  : {})}
+                onClose={() => setThreadFindOpen(false)}
+                onJump={handleThreadFindJump}
+                onHighlightChange={threadFindHighlightStore.set}
+              />
+            ) : null}
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
                 className={cn(
@@ -12161,6 +12211,7 @@ export default function ChatView({
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
+                    findHighlightStore={threadFindHighlightStore}
                     pinnedMessageIds={pinnedMessageIds}
                     canPinMessage={canPinMessage}
                     onTogglePinMessage={handleTogglePinMessageGuarded}

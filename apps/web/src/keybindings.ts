@@ -179,6 +179,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "chat.find",
+    shortcut: commandShortcut("f"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "settings.usage",
     shortcut: commandShortcut("u", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
