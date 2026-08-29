@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isInitialModelDiscoveryPending,
   providerModelsQueryOptions,
+  withProviderModelDiscoveryClientDeadline,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
 
@@ -55,6 +56,18 @@ describe("isInitialModelDiscoveryPending", () => {
         isPlaceholderData: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("withProviderModelDiscoveryClientDeadline", () => {
+  it("settles a stalled desktop bridge request to the static-model fallback", async () => {
+    const stalled = new Promise<never>(() => undefined);
+
+    await expect(withProviderModelDiscoveryClientDeadline(stalled, 5)).resolves.toEqual({
+      models: [],
+      source: "timeout",
+      cached: false,
+    });
   });
 });
 
