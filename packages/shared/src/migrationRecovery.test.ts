@@ -4,6 +4,7 @@ import {
   createMigrationDivergenceConsentToken,
   MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+  MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX,
   findMigrationRuntimeIdentityMismatch,
   migrationBackupDirectory,
   migrationBackupProvenancePath,
@@ -11,8 +12,11 @@ import {
   migrationRuntimeSourceDigest,
   parseMigrationDivergenceConsentChallenge,
   parseMigrationRecoveryResumeState,
+  parseMigrationSchemaTooNewStartupBlock,
   serializeMigrationDivergenceConsentChallenge,
+  serializeMigrationSchemaTooNewStartupBlock,
   type MigrationDivergenceConsentChallenge,
+  type MigrationSchemaTooNewStartupBlock,
 } from "./migrationRecovery";
 
 const divergenceChallengeWithoutToken: Omit<MigrationDivergenceConsentChallenge, "consentToken"> = {
@@ -30,6 +34,19 @@ const divergenceChallengeWithoutToken: Omit<MigrationDivergenceConsentChallenge,
 const divergenceChallenge: MigrationDivergenceConsentChallenge = {
   ...divergenceChallengeWithoutToken,
   consentToken: createMigrationDivergenceConsentToken(divergenceChallengeWithoutToken),
+};
+
+const schemaTooNewBlock: MigrationSchemaTooNewStartupBlock = {
+  version: 1,
+  databasePath: "/data/state.sqlite",
+  databaseMigrationId: 97,
+  latestSupportedMigrationId: 96,
+  recovery: {
+    kind: "restore-available",
+    backupPath: "/data/state.sqlite.backups/state.sqlite.pre-migration.sqlite",
+    provenancePath: "/data/state.sqlite.migration-backup.json",
+    backupMigrationId: 90,
+  },
 };
 
 describe("migration recovery paths", () => {
@@ -142,6 +159,49 @@ describe("migration divergence consent challenge", () => {
           ...divergenceChallenge,
           databasePath: "/substituted/state.sqlite",
         }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("migration schema-too-new startup block", () => {
+  it("round-trips an exact compatible restore candidate", () => {
+    const serialized = serializeMigrationSchemaTooNewStartupBlock(schemaTooNewBlock);
+
+    expect(serialized.startsWith(MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX)).toBe(true);
+    expect(parseMigrationSchemaTooNewStartupBlock(`startup failed\n${serialized}\nstack`)).toEqual(
+      schemaTooNewBlock,
+    );
+  });
+
+  it("round-trips a fail-closed block without a restore candidate", () => {
+    const block: MigrationSchemaTooNewStartupBlock = {
+      ...schemaTooNewBlock,
+      recovery: { kind: "restore-unavailable", reason: "missing-provenance" },
+    };
+
+    expect(
+      parseMigrationSchemaTooNewStartupBlock(serializeMigrationSchemaTooNewStartupBlock(block)),
+    ).toEqual(block);
+  });
+
+  it("rejects malformed and incomplete recovery payloads", () => {
+    expect(
+      parseMigrationSchemaTooNewStartupBlock(
+        `${MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX}{"version":1}`,
+      ),
+    ).toBeNull();
+    expect(
+      parseMigrationSchemaTooNewStartupBlock(
+        `${MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX}${JSON.stringify({
+          ...schemaTooNewBlock,
+          recovery: {
+            kind: "restore-available",
+            backupPath: "",
+            provenancePath: "/data/state.sqlite.migration-backup.json",
+            backupMigrationId: 90,
+          },
+        })}`,
       ),
     ).toBeNull();
   });

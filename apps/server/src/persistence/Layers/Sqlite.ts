@@ -2,6 +2,7 @@ import { Effect, Layer, FileSystem, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
+import { MigrationSchemaTooNewError } from "../Errors.ts";
 import {
   inspectPendingMigrationRecovery,
   reclaimOrphanedMigrationArtifacts,
@@ -9,6 +10,7 @@ import {
   runWithPreMigrationBackup,
   type MigrationRecoveryMarker,
 } from "../MigrationBackup.ts";
+import { createMigrationSchemaTooNewStartupBlockError } from "../MigrationSchemaTooNewStartupBlock.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -138,7 +140,15 @@ const makeSetup = ({
           ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
           : runWithPreMigrationBackup(dbPath, runMigrations(), { divergenceConsent })
         : runMigrations();
-      yield* migrations;
+      yield* migrations.pipe(
+        Effect.catch((cause) =>
+          cause instanceof MigrationSchemaTooNewError && dbPath
+            ? Effect.promise(() =>
+                createMigrationSchemaTooNewStartupBlockError(dbPath, cause),
+              ).pipe(Effect.flatMap(Effect.fail))
+            : Effect.fail(cause),
+        ),
+      );
     }),
   );
 

@@ -69,6 +69,7 @@ export const MIGRATION_RUNTIME_SOURCE_DIGEST_ENV = "SYNARA_MIGRATION_RUNTIME_SOU
 export const MIGRATION_RUNTIME_SOURCE_RELATIVE_PATH = "apps/server/src/persistence/Migrations.ts";
 export const MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX =
   "SYNARA_MIGRATION_DIVERGENCE_CONSENT_REQUIRED=";
+export const MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX = "SYNARA_MIGRATION_SCHEMA_TOO_NEW=";
 
 export interface MigrationDivergenceConsentChallenge {
   readonly version: 1;
@@ -112,6 +113,30 @@ export interface MigrationRuntimeIdentityMismatch {
   readonly actualDigest: string;
 }
 
+export type MigrationSchemaTooNewRecovery =
+  | {
+      readonly kind: "restore-available";
+      readonly backupPath: string;
+      readonly provenancePath: string;
+      readonly backupMigrationId: number;
+    }
+  | {
+      readonly kind: "restore-unavailable";
+      readonly reason:
+        | "missing-provenance"
+        | "invalid-provenance"
+        | "invalid-backup"
+        | "incompatible-backup";
+    };
+
+export interface MigrationSchemaTooNewStartupBlock {
+  readonly version: 1;
+  readonly databasePath: string;
+  readonly databaseMigrationId: number;
+  readonly latestSupportedMigrationId: number;
+  readonly recovery: MigrationSchemaTooNewRecovery;
+}
+
 export function migrationRuntimeSourceDigest(source: string): string {
   return createHash("sha256").update(source, "utf8").digest("hex");
 }
@@ -150,13 +175,43 @@ export function serializeMigrationDivergenceConsentChallenge(
 export function parseMigrationDivergenceConsentChallenge(
   output: string,
 ): MigrationDivergenceConsentChallenge | null {
-  let searchFrom = 0;
-  let authoritativeChallenge: MigrationDivergenceConsentChallenge | null = null;
-  for (;;) {
-    const prefixIndex = output.indexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX, searchFrom);
-    if (prefixIndex === -1) return authoritativeChallenge;
+  return parsePrefixedJsonLine(
+    output,
+    MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
+    (value): value is MigrationDivergenceConsentChallenge =>
+      isMigrationDivergenceConsentChallenge(value) &&
+      value.consentToken === createMigrationDivergenceConsentToken(value),
+  );
+}
 
-    const payloadStart = prefixIndex + MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX.length;
+export function serializeMigrationSchemaTooNewStartupBlock(
+  block: MigrationSchemaTooNewStartupBlock,
+): string {
+  return `${MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX}${JSON.stringify(block)}`;
+}
+
+export function parseMigrationSchemaTooNewStartupBlock(
+  output: string,
+): MigrationSchemaTooNewStartupBlock | null {
+  return parsePrefixedJsonLine(
+    output,
+    MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX,
+    isMigrationSchemaTooNewStartupBlock,
+  );
+}
+
+function parsePrefixedJsonLine<A>(
+  output: string,
+  prefix: string,
+  isValid: (value: unknown) => value is A,
+): A | null {
+  let searchFrom = 0;
+  let authoritativeRecord: A | null = null;
+  for (;;) {
+    const prefixIndex = output.indexOf(prefix, searchFrom);
+    if (prefixIndex === -1) return authoritativeRecord;
+
+    const payloadStart = prefixIndex + prefix.length;
     if (prefixIndex > 0 && output[prefixIndex - 1] !== "\n") {
       searchFrom = payloadStart;
       continue;
@@ -165,15 +220,12 @@ export function parseMigrationDivergenceConsentChallenge(
     const payload = output.slice(payloadStart, lineEnd === -1 ? undefined : lineEnd).trim();
     try {
       const parsed: unknown = JSON.parse(payload);
-      if (
-        isMigrationDivergenceConsentChallenge(parsed) &&
-        parsed.consentToken === createMigrationDivergenceConsentToken(parsed)
-      ) {
+      if (isValid(parsed)) {
         // The server emits its authoritative machine record after the human
         // error text. Migration names come from the database and may contain
         // an earlier lookalike prefix, so only the final valid record is safe
         // to present to the user.
-        authoritativeChallenge = parsed;
+        authoritativeRecord = parsed;
       }
     } catch {
       // Continue to a later machine-readable line if untrusted error text
@@ -181,6 +233,39 @@ export function parseMigrationDivergenceConsentChallenge(
     }
     searchFrom = payloadStart;
   }
+}
+
+function isMigrationSchemaTooNewStartupBlock(
+  value: unknown,
+): value is MigrationSchemaTooNewStartupBlock {
+  if (typeof value !== "object" || value === null) return false;
+  const block = value as Record<string, unknown>;
+  return (
+    block.version === 1 &&
+    isNonEmptyString(block.databasePath) &&
+    isNonNegativeInteger(block.databaseMigrationId) &&
+    isNonNegativeInteger(block.latestSupportedMigrationId) &&
+    isMigrationSchemaTooNewRecovery(block.recovery)
+  );
+}
+
+function isMigrationSchemaTooNewRecovery(value: unknown): value is MigrationSchemaTooNewRecovery {
+  if (typeof value !== "object" || value === null) return false;
+  const recovery = value as Record<string, unknown>;
+  if (recovery.kind === "restore-available") {
+    return (
+      isNonEmptyString(recovery.backupPath) &&
+      isNonEmptyString(recovery.provenancePath) &&
+      isNonNegativeInteger(recovery.backupMigrationId)
+    );
+  }
+  return (
+    recovery.kind === "restore-unavailable" &&
+    (recovery.reason === "missing-provenance" ||
+      recovery.reason === "invalid-provenance" ||
+      recovery.reason === "invalid-backup" ||
+      recovery.reason === "incompatible-backup")
+  );
 }
 
 function isMigrationDivergenceConsentChallenge(

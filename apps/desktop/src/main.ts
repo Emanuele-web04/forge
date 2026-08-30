@@ -67,6 +67,7 @@ import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
   MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
   type MigrationRuntimeIdentityMismatch,
+  type MigrationSchemaTooNewStartupBlock,
 } from "@synara/shared/migrationRecovery";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
@@ -123,10 +124,12 @@ import {
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
 import {
+  hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
   resolveDesktopMigrationRecoveryPaths,
+  resolveDesktopMigrationRestoreCandidate,
   restoreDesktopMigrationBackup,
   type DesktopMigrationRecoveryDecision,
   type DesktopMigrationRecoveryOutcome,
@@ -398,7 +401,7 @@ const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
-let desktopStartupBlockedForMigrationRecovery = false;
+let desktopStartupBlockedForDatabaseRestore = false;
 const migrationConsentHandoff = new MigrationConsentHandoff();
 let desktopShutdownComplete = false;
 let desktopProtocolRegistered = false;
@@ -1216,7 +1219,7 @@ function formatRecoveryOptionList(options: ReadonlyArray<string>): string {
 
 async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecoveryOutcome> {
   const paths = desktopMigrationRecoveryPaths();
-  desktopStartupBlockedForMigrationRecovery = true;
+  desktopStartupBlockedForDatabaseRestore = true;
   const outcome = await recoverDesktopMigrationIfRequired({
     // The gate opens only once the backend has spent its resume budget, while
     // the post-restore verification checks the marker file itself.
@@ -1310,7 +1313,7 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
     log: writeDesktopLogHeader,
   });
   if (outcome === "continue") {
-    desktopStartupBlockedForMigrationRecovery = false;
+    desktopStartupBlockedForDatabaseRestore = false;
   }
   return outcome;
 }
@@ -3662,10 +3665,158 @@ function presentBackendStartupGiveUp(reason: string): void {
   backendLifecycleDialogInFlight = task;
 }
 
+function schemaTooNewRestoreDetail(
+  block: MigrationSchemaTooNewStartupBlock,
+  restoreCandidate: ReturnType<typeof resolveDesktopMigrationRestoreCandidate>,
+): string {
+  if (restoreCandidate) {
+    return (
+      `Synara verified the exact pre-migration backup at:\n${restoreCandidate.backupPath}\n\n` +
+      `Its schema is migration ${restoreCandidate.backupMigrationId}, which is within this build's supported range, ` +
+      "and it passed SQLite integrity checking."
+    );
+  }
+
+  if (block.recovery.kind === "restore-available") {
+    return "The recorded backup does not match this desktop database exactly, so Synara will not restore it.";
+  }
+
+  switch (block.recovery.reason) {
+    case "missing-provenance":
+      return "No completed migration backup record exists for this database, so Synara cannot choose a backup safely.";
+    case "invalid-provenance":
+      return "The completed migration backup record does not describe this exact database state.";
+    case "invalid-backup":
+      return "The exact recorded backup is missing, unreadable, or failed SQLite integrity checking.";
+    case "incompatible-backup":
+      return "The exact recorded backup has a schema or migration lineage this Synara build cannot open safely.";
+  }
+}
+
+async function handleDesktopSchemaTooNewRecovery(
+  block: MigrationSchemaTooNewStartupBlock,
+): Promise<void> {
+  const paths = desktopMigrationRecoveryPaths();
+  const restoreCandidate = resolveDesktopMigrationRestoreCandidate(paths, block);
+  desktopStartupBlockedForDatabaseRestore = true;
+
+  await recoverDesktopMigrationIfRequired({
+    requiresRecovery: () => true,
+    markerRemains: () =>
+      restoreCandidate === null ||
+      !hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
+    choose: async ({ previousFailure }) => {
+      const restoreFailed = previousFailure?.attempt === "restore";
+      const canInstallUpdate = canInstallUpdateFromRecovery();
+      const releaseUrl = updateState.releaseUrl;
+      const choices: Array<{
+        readonly label: string;
+        readonly decision: DesktopMigrationRecoveryDecision;
+      }> = [];
+
+      if (restoreCandidate) {
+        choices.push({
+          label: restoreFailed ? "Try restore again" : "Restore backup and restart",
+          decision: "restore",
+        });
+      }
+      if (canInstallUpdate) {
+        choices.push({ label: "Update Synara and restart", decision: "install-update" });
+      }
+      if (releaseUrl !== null) {
+        choices.push({ label: "Download latest release", decision: "open-release-page" });
+      }
+      choices.push(
+        { label: "Open logs", decision: "open-logs" },
+        { label: "Quit", decision: "quit" },
+      );
+
+      const result = await dialog.showMessageBox({
+        type: previousFailure === null ? "warning" : "error",
+        title:
+          previousFailure === null
+            ? "This database is newer than Synara"
+            : restoreFailed
+              ? "Database restore failed"
+              : "Synara could not update itself",
+        message:
+          previousFailure === null
+            ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+            : restoreFailed
+              ? "The verified database backup could not be restored."
+              : "The newest Synara release could not be installed.",
+        detail:
+          `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+          `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
+          "The backend and provider processes will remain stopped until you update, restore, or quit.",
+        buttons: choices.map((choice) => choice.label),
+        defaultId: 0,
+        cancelId: choices.length - 1,
+        noLink: true,
+      });
+      return choices[result.response]?.decision ?? "quit";
+    },
+    installUpdate: installLatestUpdateForMigrationRecovery,
+    openReleasePage: () => {
+      const releaseUrl = updateState.releaseUrl;
+      if (releaseUrl !== null) void shell.openExternal(releaseUrl);
+    },
+    openLogs: openDesktopLogDirectory,
+    restore: async () => {
+      if (!restoreCandidate) {
+        throw new Error("No exact compatible migration backup is available.");
+      }
+      await restoreDesktopMigrationBackup({
+        executablePath: process.execPath,
+        nodeArgs: backendNodeArgs(),
+        paths,
+        cwd: resolveBackendCwd(),
+        env: process.env,
+        verifyRestore: () => hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
+        restoreVerificationFailure:
+          "Migration restore completed without exact completed-provenance verification.",
+      });
+    },
+    requestRestart: () => app.relaunch(),
+    requestQuit: (reason) => requestGracefulAppQuit(reason),
+    formatError: formatErrorMessage,
+    log: writeDesktopLogHeader,
+  });
+}
+
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
   const task = (async () => {
+    if (block.kind === "migration-schema-too-new") {
+      await handleDesktopSchemaTooNewRecovery(block.block);
+      return;
+    }
+
+    if (block.kind === "migration-startup-block-invalid") {
+      desktopStartupBlockedForDatabaseRestore = true;
+      for (;;) {
+        const result = await dialog.showMessageBox({
+          type: "error",
+          title: "Synara could not verify migration recovery",
+          message:
+            "The backend stopped for database safety, but its recovery details were invalid.",
+          detail:
+            "Synara will keep the backend and provider processes stopped. Open the logs for the original error, then update or reinstall Synara before trying again.",
+          buttons: ["Open logs", "Quit"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (result.response === 0) {
+          await openDesktopLogDirectory();
+          continue;
+        }
+        requestGracefulAppQuit("invalid migration startup block");
+        return;
+      }
+    }
+
     if (block.kind === "migration-divergence-consent-required") {
       const challenge = block.challenge;
       const result = await dialog.showMessageBox({
@@ -3804,7 +3955,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   // Recovery owns the database until it clears the marker. Callers that restart
   // the backend after an unrelated failure — a given-up update install, say —
   // must not hand it a database the user is being asked how to repair.
-  if (desktopStartupBlockedForMigrationRecovery) {
+  if (desktopStartupBlockedForDatabaseRestore) {
     writeDesktopLogHeader("backend start suppressed while migration recovery is pending");
     return;
   }
@@ -5100,7 +5251,7 @@ if (hasSingleInstanceLock) {
       });
 
       app.on("activate", () => {
-        if (desktopStartupBlockedForMigrationRecovery || isQuitting) {
+        if (desktopStartupBlockedForDatabaseRestore || isQuitting) {
           return;
         }
         handleDesktopAppForegrounded();

@@ -5,11 +5,19 @@ import { StringDecoder } from "node:string_decoder";
 
 import {
   MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
+  MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX,
   parseMigrationDivergenceConsentChallenge,
+  parseMigrationSchemaTooNewStartupBlock,
   type MigrationDivergenceConsentChallenge,
+  type MigrationSchemaTooNewStartupBlock,
 } from "@synara/shared/migrationRecovery";
 
-const MAX_STARTUP_OUTPUT_CHARS = 16_384;
+const MAX_GENERIC_STARTUP_OUTPUT_CHARS = 16_384;
+const MAX_STRUCTURED_STARTUP_BLOCK_CHARS = 1_048_576;
+const STRUCTURED_STARTUP_BLOCK_PREFIXES = [
+  MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
+  MIGRATION_SCHEMA_TOO_NEW_BLOCK_PREFIX,
+] as const;
 
 export type BackendStartupBlock =
   | {
@@ -25,6 +33,13 @@ export type BackendStartupBlock =
     }
   | {
       readonly kind: "migration-runtime-identity-mismatch";
+    }
+  | {
+      readonly kind: "migration-schema-too-new";
+      readonly block: MigrationSchemaTooNewStartupBlock;
+    }
+  | {
+      readonly kind: "migration-startup-block-invalid";
     };
 
 export class BackendStartupBlockDetector {
@@ -45,10 +60,12 @@ export class BackendStartupBlockDetector {
   }
 
   private append(text: string): void {
-    if (text.length === 0) return;
-    this.output = `${this.output}${text.replace(/\r/g, "")}`;
-
-    this.output = retainRelevantStartupOutput(this.output);
+    if (text.length === 0 || this.block?.kind === "migration-startup-block-invalid") return;
+    this.output = retainRelevantStartupOutput(`${this.output}${text.replace(/\r/g, "")}`);
+    if (this.output.length > MAX_STRUCTURED_STARTUP_BLOCK_CHARS) {
+      this.block = { kind: "migration-startup-block-invalid" };
+      return;
+    }
 
     if (this.block) return;
 
@@ -63,14 +80,10 @@ export class BackendStartupBlockDetector {
     }
 
     const lockErrorIndex = this.output.indexOf("DatabaseLifecycleLockedError:");
-    if (lockErrorIndex === -1) {
-      return;
-    }
+    if (lockErrorIndex === -1) return;
     const lockErrorOutput = this.output.slice(lockErrorIndex);
     const ownerPidMatch = lockErrorOutput.match(/owner pid (\d+) is live/);
-    if (!ownerPidMatch && !lockErrorOutput.includes("\n")) {
-      return;
-    }
+    if (!ownerPidMatch && !lockErrorOutput.includes("\n")) return;
     const parsedOwnerPid = ownerPidMatch?.[1] ? Number.parseInt(ownerPidMatch[1], 10) : Number.NaN;
     this.block = {
       kind: "database-locked",
@@ -86,20 +99,36 @@ export class BackendStartupBlockDetector {
         challenge: divergenceChallenge,
       };
     }
-    return this.block;
+    const schemaTooNewBlock = parseMigrationSchemaTooNewStartupBlock(this.output);
+    if (schemaTooNewBlock) {
+      return { kind: "migration-schema-too-new", block: schemaTooNewBlock };
+    }
+    if (this.block) return this.block;
+    return containsStructuredStartupBlock(this.output)
+      ? { kind: "migration-startup-block-invalid" }
+      : null;
   }
 }
 
 function retainRelevantStartupOutput(output: string): string {
-  let challengeStart = output.lastIndexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX);
-  while (challengeStart > 0 && output[challengeStart - 1] !== "\n") {
-    challengeStart = output.lastIndexOf(
-      MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
-      challengeStart - 1,
-    );
+  const structuredBlockIndex = earliestStructuredStartupBlockIndex(output);
+  return structuredBlockIndex === -1
+    ? output.slice(-MAX_GENERIC_STARTUP_OUTPUT_CHARS)
+    : output.slice(structuredBlockIndex);
+}
+
+function earliestStructuredStartupBlockIndex(output: string): number {
+  let earliest = -1;
+  for (const prefix of STRUCTURED_STARTUP_BLOCK_PREFIXES) {
+    let index = output.indexOf(prefix);
+    while (index > 0 && output[index - 1] !== "\n") {
+      index = output.indexOf(prefix, index + prefix.length);
+    }
+    if (index !== -1 && (earliest === -1 || index < earliest)) earliest = index;
   }
-  if (challengeStart !== -1) return output.slice(challengeStart);
-  return output.length > MAX_STARTUP_OUTPUT_CHARS
-    ? output.slice(-MAX_STARTUP_OUTPUT_CHARS)
-    : output;
+  return earliest;
+}
+
+function containsStructuredStartupBlock(output: string): boolean {
+  return earliestStructuredStartupBlockIndex(output) !== -1;
 }

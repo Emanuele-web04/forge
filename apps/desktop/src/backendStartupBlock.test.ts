@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   createMigrationDivergenceConsentToken,
   serializeMigrationDivergenceConsentChallenge,
+  serializeMigrationSchemaTooNewStartupBlock,
   type MigrationDivergenceConsentChallenge,
+  type MigrationSchemaTooNewStartupBlock,
 } from "@synara/shared/migrationRecovery";
 
 import { BackendStartupBlockDetector } from "./backendStartupBlock";
@@ -22,6 +24,19 @@ const divergenceChallengeWithoutToken: Omit<MigrationDivergenceConsentChallenge,
 const divergenceChallenge: MigrationDivergenceConsentChallenge = {
   ...divergenceChallengeWithoutToken,
   consentToken: createMigrationDivergenceConsentToken(divergenceChallengeWithoutToken),
+};
+
+const schemaTooNewBlock: MigrationSchemaTooNewStartupBlock = {
+  version: 1,
+  databasePath: "/data/state.sqlite",
+  databaseMigrationId: 97,
+  latestSupportedMigrationId: 96,
+  recovery: {
+    kind: "restore-available",
+    backupPath: "/data/state.sqlite.backups/exact.sqlite",
+    provenancePath: "/data/state.sqlite.migration-backup.json",
+    backupMigrationId: 90,
+  },
 };
 
 describe("BackendStartupBlockDetector", () => {
@@ -142,6 +157,24 @@ describe("BackendStartupBlockDetector", () => {
     );
 
     expect(detector.read()).toEqual({ kind: "migration-runtime-identity-mismatch" });
+  });
+
+  it("extracts schema-too-new recovery before crash supervision retries", () => {
+    const detector = new BackendStartupBlockDetector();
+    const serialized = serializeMigrationSchemaTooNewStartupBlock(schemaTooNewBlock);
+
+    detector.push(`MigrationSchemaTooNewError: blocked\n${serialized.slice(0, 70)}`);
+    detector.push(`${serialized.slice(70)}\n    at migrate`);
+
+    expect(detector.read()).toEqual({ kind: "migration-schema-too-new", block: schemaTooNewBlock });
+  });
+
+  it("fails closed instead of retrying a malformed structured block", () => {
+    const detector = new BackendStartupBlockDetector();
+
+    detector.push("SYNARA_MIGRATION_SCHEMA_TOO_NEW={not-json}\n");
+
+    expect(detector.read()).toEqual({ kind: "migration-startup-block-invalid" });
   });
 
   it("ignores unrelated startup failures", () => {
