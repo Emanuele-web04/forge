@@ -5215,6 +5215,15 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  // User wheel/touch/pointer gestures take scroll ownership from streaming
+  // auto-follow. A ref mirrors state so the gesture funnel can write without
+  // waiting for the next render, while the render path projects it into the
+  // `followLiveOutput` prop.
+  const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
+  const isUserScrollDetachedRef = useRef(isUserScrollDetached);
+  useLayoutEffect(() => {
+    isUserScrollDetachedRef.current = isUserScrollDetached;
+  }, [isUserScrollDetached]);
   // The arrow's smooth jump is followed by one exact settle after LegendList
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
@@ -5229,6 +5238,8 @@ export default function ChatView({
     autoFollowThreadIdRef.current = targetThreadId;
     animateNextAutoFollowScrollRef.current = animated;
     isAtEndRef.current = true;
+    isUserScrollDetachedRef.current = false;
+    setIsUserScrollDetached(false);
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
   }, []);
@@ -5241,6 +5252,8 @@ export default function ChatView({
     programmaticScrollUntilRef.current = 0;
     // A user scroll gesture takes over from any in-flight tail-anchor slide.
     tailAnchorScrollInFlightRef.current = false;
+    isUserScrollDetachedRef.current = true;
+    setIsUserScrollDetached(true);
     if (settledScrollTarget) {
       void stopTranscriptScrollAtCurrentOffset(settledScrollTarget);
     }
@@ -5275,6 +5288,8 @@ export default function ChatView({
     if (isAtEnd) {
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
+      isUserScrollDetachedRef.current = false;
+      setIsUserScrollDetached(false);
     } else {
       showScrollDebouncer.current.maybeExecute();
     }
@@ -5604,6 +5619,8 @@ export default function ChatView({
     settledScrollRequestRef.current += 1;
     settledScrollInFlightRef.current = false;
     programmaticScrollUntilRef.current = 0;
+    isUserScrollDetachedRef.current = false;
+    setIsUserScrollDetached(false);
     showScrollDebouncer.current.cancel();
     // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
     // in render->commit order); defer only the setState so this thread-change reset
@@ -12402,7 +12419,7 @@ export default function ChatView({
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
-                    followLiveOutput={hasStreamingAssistantText}
+                    followLiveOutput={hasStreamingAssistantText && !isUserScrollDetached}
                     onIsAtEndChange={onIsAtEndChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}
