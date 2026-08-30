@@ -16,6 +16,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./kanban": {
+      "types": "./src/kanban.ts",
+      "import": "./src/kanban.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
