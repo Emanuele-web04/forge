@@ -1,7 +1,12 @@
 import { ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { hasThreadDragType, parseThreadDragPayload, THREAD_DRAG_MIME } from "./threadDrag";
+import {
+  hasThreadDragType,
+  parseThreadDragPayload,
+  resolveSidebarFolderDropTarget,
+  THREAD_DRAG_MIME,
+} from "./threadDrag";
 
 function dataTransfer(input: { types?: string[]; payload?: string }) {
   return {
@@ -29,5 +34,14 @@ describe("threadDrag", () => {
     expect(
       parseThreadDragPayload(dataTransfer({ payload: JSON.stringify({ threadId: "" }) })),
     ).toBeNull();
+  });
+
+  it("treats the folder's left gutter as the project root", () => {
+    expect(
+      resolveSidebarFolderDropTarget({ clientX: 118, containerLeft: 100, folderId: "folder-a" }),
+    ).toBeNull();
+    expect(
+      resolveSidebarFolderDropTarget({ clientX: 121, containerLeft: 100, folderId: "folder-a" }),
+    ).toBe("folder-a");
   });
 });
