@@ -592,7 +592,9 @@ export function makeDroidAdapter(
             yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
             ctx.gatewaySessionLease?.release();
             sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
-            sessions.delete(ctx.threadId);
+            if (sessions.get(ctx.threadId) === ctx) {
+              sessions.delete(ctx.threadId);
+            }
             yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
             if (ctx.sessionConfigReady !== undefined) {
