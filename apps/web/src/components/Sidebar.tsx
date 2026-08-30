@@ -12,6 +12,7 @@ import {
   CopyIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
+  FoldersIcon,
   GiftIcon,
   KanbanIcon,
   KeyboardIcon,
@@ -181,7 +182,7 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
-import { FolderClosed, FolderOpen } from "./FolderClosed";
+import { FolderClosed } from "./FolderClosed";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
 import {
@@ -5181,7 +5182,6 @@ export default function Sidebar() {
       (entry) => entry.thread.id === activeSidebarThreadId,
     );
     const open = collapsedThreadFolderIds[folder.id] !== true || containsActiveThread;
-    const FolderIcon = open ? FolderOpen : FolderClosed;
     const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
     const dropActive = threadFolderDropTargetKey === dropTargetKey;
     return (
@@ -5203,7 +5203,7 @@ export default function Sidebar() {
             size="sm"
             aria-expanded={open}
             className={cn(
-              "-ml-1.5 h-7 w-[calc(100%+0.375rem)] translate-x-0 gap-1.5 rounded-md border border-border/35 bg-muted/20 pr-2 pl-2 text-left",
+              "ml-3 h-6 w-[calc(100%-0.75rem)] translate-x-0 gap-1.5 rounded-md border border-transparent pr-2 pl-1.5 text-left",
               SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
               SIDEBAR_ROW_HOVER_CLASS_NAME,
               dropActive && "border-info/65 bg-info/14 text-foreground ring-1 ring-info/45",
@@ -5218,8 +5218,8 @@ export default function Sidebar() {
               });
             }}
           >
-            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/85" aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/82">
+            <FoldersIcon className="size-3 shrink-0 text-muted-foreground/65" aria-hidden />
+            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-xs,11px)] font-normal text-muted-foreground/82">
               {folder.name}
             </span>
             <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42">
@@ -5230,7 +5230,7 @@ export default function Sidebar() {
         </SidebarMenuSubItem>
         <div className={disclosureShellClassName(open)}>
           <div className={DISCLOSURE_INNER_CLASS}>
-            <div className={cn("pl-4", disclosureContentClassName(open))}>
+            <div className={cn("pl-5", disclosureContentClassName(open))}>
               {entries.map((entry) =>
                 renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
               )}
