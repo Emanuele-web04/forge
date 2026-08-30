@@ -147,6 +147,7 @@ export interface CodexAdapterLiveOptions {
   readonly makeManager?: (services?: ServiceMap.ServiceMap<never>) => CodexAppServerManager;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly resolveHomePath?: () => Promise<string | undefined>;
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -1768,6 +1769,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           options?.makeManager?.(services) ??
           new CodexAppServerManager(services, {
             synaraSkillsDir: synaraSkillsDir(serverConfig.baseDir),
+            ...(options?.resolveHomePath
+              ? { resolveDefaultHomePath: options.resolveHomePath }
+              : {}),
             ...(agentGatewayCredentials
               ? {
                   agentGatewayMcp: {
@@ -1918,25 +1922,42 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
-      const managerInput: CodexAppServerStartSessionInput = {
-        threadId: input.threadId,
-        provider: "codex",
-        ...(input.lifecycleGeneration !== undefined
-          ? { lifecycleGeneration: input.lifecycleGeneration }
-          : {}),
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-        ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        ...(input.forkSourceResumeCursor !== undefined
-          ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
-          : {}),
-        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        ...(input.additionalRoots !== undefined ? { additionalRoots: input.additionalRoots } : {}),
-        runtimeMode: input.runtimeMode,
-        ...codexModelSelectionOverrides(input.modelSelection),
-      };
-
       return Effect.tryPromise({
-        try: () => manager.startSession(managerInput),
+        try: async () => {
+          const activeHomePath = options?.resolveHomePath
+            ? await options.resolveHomePath()
+            : input.providerOptions?.codex?.homePath;
+          const { homePath: _ignoredClientHomePath, ...codexOptions } =
+            input.providerOptions?.codex ?? {};
+          const providerOptions = {
+            ...input.providerOptions,
+            codex: {
+              ...codexOptions,
+              ...(activeHomePath ? { homePath: activeHomePath } : {}),
+            },
+          };
+          const managerInput: CodexAppServerStartSessionInput = {
+            threadId: input.threadId,
+            provider: "codex",
+            ...(input.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: input.lifecycleGeneration }
+              : {}),
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+            ...(input.forkSourceResumeCursor !== undefined
+              ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
+              : {}),
+             ...(input.providerOptions !== undefined || activeHomePath
+               ? { providerOptions }
+               : {}),
+             ...(input.additionalRoots !== undefined
+               ? { additionalRoots: input.additionalRoots }
+               : {}),
+             runtimeMode: input.runtimeMode,
+            ...codexModelSelectionOverrides(input.modelSelection),
+          };
+          return manager.startSession(managerInput);
+        },
         catch: (cause) =>
           new ProviderAdapterProcessError({
             provider: PROVIDER,

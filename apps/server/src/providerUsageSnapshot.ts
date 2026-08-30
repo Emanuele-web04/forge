@@ -15,6 +15,7 @@ import type {
 import { Effect } from "effect";
 
 import { ServerConfig } from "./config";
+import { ProviderAccountService } from "./providerAccounts";
 
 const LOOKBACK_DAYS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -487,8 +488,8 @@ function readClaudeToolResultSample(input: {
 // Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
 // `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
 // the active Claude provider does (the adapter inherits `process.env`).
-function resolveClaudeProjectsRoot(homeDir: string): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+function resolveClaudeProjectsRoot(homeDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
 }
 
@@ -674,8 +675,11 @@ async function loadCodexUsageSnapshot(input: {
   };
 }
 
-async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir);
+async function loadClaudeUsageSnapshot(input: {
+  homeDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<UsageSnapshot | null> {
+  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir, input.env);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
   if (transcriptFiles.length === 0) {
     return null;
@@ -724,6 +728,7 @@ async function loadProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   switch (input.provider) {
     case "codex":
@@ -732,7 +737,10 @@ async function loadProviderUsageSnapshot(input: {
         ...(input.homePath ? { homePath: input.homePath } : {}),
       });
     case "claudeAgent":
-      return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
+      return loadClaudeUsageSnapshot({
+        homeDir: input.homeDir,
+        ...(input.env ? { env: input.env } : {}),
+      });
     default:
       return null;
   }
@@ -742,8 +750,9 @@ async function getCachedProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
-  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
+  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${input.env?.CLAUDE_CONFIG_DIR?.trim() ?? process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
   const nowMs = Date.now();
   const existing = usageSnapshotCache.get(cacheKey);
 
@@ -778,12 +787,21 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
   input: ServerGetProviderUsageSnapshotInput,
 ) {
   const serverConfig = yield* ServerConfig;
+  const providerAccounts = yield* Effect.serviceOption(ProviderAccountService);
+  const account =
+    providerAccounts._tag === "Some" &&
+    (input.provider === "codex" || input.provider === "claudeAgent")
+      ? yield* providerAccounts.value.resolveEnvironment(input.provider)
+      : null;
   return yield* Effect.tryPromise({
     try: () =>
       getCachedProviderUsageSnapshot({
         provider: input.provider,
         homeDir: serverConfig.homeDir,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
+        ...(account?.homePath || input.homePath
+          ? { homePath: account?.homePath ?? input.homePath }
+          : {}),
+        ...(account ? { env: account.env } : {}),
       }),
     catch: () => null,
   });
@@ -795,6 +813,7 @@ export async function loadLocalProviderUsageLines(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ReadonlyArray<ServerProviderUsageLine>> {
   try {
     const snapshot = await getCachedProviderUsageSnapshot(input);

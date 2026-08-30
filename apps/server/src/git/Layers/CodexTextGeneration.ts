@@ -16,6 +16,7 @@ import { resolveProviderAttachmentPath } from "../../provider/providerAttachment
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProviderAccountService } from "../../providerAccounts.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   CodexTextGeneration,
@@ -124,6 +125,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const providerAccounts = Option.getOrUndefined(
+    yield* Effect.serviceOption(ProviderAccountService),
+  );
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -296,7 +300,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
-      const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
+      // Managed account selection is server-authoritative. In layers that do not
+      // install the account service (focused unit tests), retain the historical
+      // explicit-home behavior.
+      const resolvedCodexHomePath = providerAccounts
+        ? (yield* providerAccounts.resolveEnvironment("codex")).homePath
+        : resolveCodexHomePath(codexHomePath, providerOptions);
       const schemaPath = yield* writeTempFile(
         operation,
         "codex-schema",

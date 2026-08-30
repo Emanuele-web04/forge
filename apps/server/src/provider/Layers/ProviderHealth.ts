@@ -103,6 +103,7 @@ import {
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { ProviderAccountService } from "../../providerAccounts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -481,7 +482,7 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
-const probeClaudeSubscription = () => {
+const probeClaudeSubscription = (env: NodeJS.ProcessEnv = process.env) => {
   const abort = new AbortController();
   return Effect.tryPromise(async () => {
     const { query: claudeQuery } = await loadClaudeAgentSdk();
@@ -496,6 +497,7 @@ const probeClaudeSubscription = () => {
         settingSources: ["user", "project", "local"],
         allowedTools: [],
         stderr: () => {},
+        env,
       },
     });
     const init = await q.initializationResult();
@@ -1068,13 +1070,17 @@ export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
   homeDir?: string,
-  options?: { readonly falseNegativeRetryDelayMs?: number },
+  options?: {
+    readonly falseNegativeRetryDelayMs?: number;
+    readonly processEnv?: NodeJS.ProcessEnv;
+  },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
+    const baseEnv = options?.processEnv ?? process.env;
     const claudeEnv = buildClaudeProcessEnv(
-      homeDir ? { env: process.env, homeDir } : { env: process.env },
+      homeDir ? { env: baseEnv, homeDir } : { env: baseEnv },
     );
 
     // Probe 1: `claude --version` — is the CLI reachable?
@@ -2124,6 +2130,9 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
+      const providerAccounts = Option.getOrUndefined(
+        yield* Effect.serviceOption(ProviderAccountService),
+      );
       const changesPubSub = yield* Effect.acquireRelease(
         PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
         PubSub.shutdown,
@@ -2183,7 +2192,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const claudeSubscriptionCache = yield* Cache.make({
         capacity: 1,
         timeToLive: Duration.minutes(5),
-        lookup: (_: "claude") => probeClaudeSubscription(),
+        lookup: (_: "claude") =>
+          providerAccounts
+            ? providerAccounts
+                .resolveEnvironment("claudeAgent")
+                .pipe(Effect.flatMap((account) => probeClaudeSubscription(account.env)))
+            : probeClaudeSubscription(),
       });
       const resolveClaudeSubscription = Cache.get(claudeSubscriptionCache, "claude").pipe(
         Effect.map((probe) => probe?.subscriptionType),
@@ -2365,14 +2379,21 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         .pipe(
           Effect.flatMap(() => serverSettings.getSettings),
           Effect.flatMap((settings) =>
-            Effect.all(
+            Effect.gen(function* () {
+              const codexAccount = providerAccounts
+                ? yield* providerAccounts.resolveEnvironment("codex")
+                : { accountId: "system", env: process.env, homePath: settings.providers.codex.homePath };
+              const claudeAccount = providerAccounts
+                ? yield* providerAccounts.resolveEnvironment("claudeAgent")
+                : { accountId: "system", env: process.env };
+              return yield* Effect.all(
               [
                 checkProviderWhenEnabled(
                   settings,
                   CODEX_PROVIDER,
                   makeCheckCodexProviderStatus(
                     settings.providers.codex.binaryPath,
-                    settings.providers.codex.homePath,
+                    codexAccount.homePath,
                   ),
                 ),
                 checkProviderWhenEnabled(
@@ -2382,6 +2403,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                     resolveClaudeSubscription,
                     settings.providers.claudeAgent.binaryPath,
                     serverConfig.homeDir,
+                    { processEnv: claudeAccount.env },
                   ),
                 ),
                 checkProviderWhenEnabled(
@@ -2426,7 +2448,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               {
                 concurrency: "unbounded",
               },
-            ),
+              );
+            }),
           ),
         )
         .pipe(

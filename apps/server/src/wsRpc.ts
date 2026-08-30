@@ -103,7 +103,8 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
-import { listProviderUsage } from "./providerUsage";
+import { ProviderAccountService } from "./providerAccounts";
+import { invalidateProviderUsageSnapshots, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
@@ -361,6 +362,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
       const providerService = yield* ProviderService;
+      const providerAccounts = yield* ProviderAccountService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
@@ -1652,6 +1654,79 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(serverEnvironment.getDescriptor, "Failed to load server environment"),
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
+        [WS_METHODS.serverListProviderAccounts]: () =>
+          rpcEffect(
+            providerAccounts.list().pipe(Effect.map((providers) => ({ providers }))),
+            "Failed to load provider accounts",
+          ),
+        [WS_METHODS.serverCreateProviderAccount]: (input) =>
+          rpcEffect(providerAccounts.create(input), "Failed to create provider account"),
+        [WS_METHODS.serverSetActiveProviderAccount]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const accounts = yield* providerAccounts.list();
+              const collection = accounts.find((entry) => entry.provider === input.provider);
+              const requestedAccount = collection?.accounts.find(
+                (account) => account.id === input.accountId,
+              );
+              if (!requestedAccount) {
+                return yield* Effect.fail(new Error("Provider account was not found."));
+              }
+              if (requestedAccount.active) return collection!;
+              if (
+                requestedAccount.kind === "managed" &&
+                requestedAccount.authStatus !== "authenticated"
+              ) {
+                return yield* Effect.fail(
+                  new Error("Authenticate this provider account before selecting it."),
+                );
+              }
+              const sessions = yield* providerService.listSessions();
+              yield* Effect.forEach(
+                sessions.filter((session) => session.provider === input.provider),
+                (session) => providerService.stopSession({ threadId: session.threadId }),
+                { concurrency: "unbounded", discard: true },
+              );
+              const adapter = yield* providerAdapterRegistry.getByProvider(input.provider);
+              yield* adapter.stopAll();
+              const result = yield* providerAccounts.setActive(input);
+              invalidateProviderUsageSnapshots([input.provider]);
+              yield* providerHealth.refresh;
+              return result;
+            }),
+            "Failed to switch provider account",
+          ),
+        [WS_METHODS.serverReauthenticateProviderAccount]: (input) =>
+          rpcEffect(
+            providerAccounts.reauthenticate(input),
+            "Failed to reauthenticate provider account",
+          ),
+        [WS_METHODS.serverDeleteProviderAccount]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const accounts = yield* providerAccounts.list();
+              const active = accounts
+                .find((entry) => entry.provider === input.provider)
+                ?.accounts.find((account) => account.id === input.accountId)?.active;
+              if (active) {
+                const sessions = yield* providerService.listSessions();
+                yield* Effect.forEach(
+                  sessions.filter((session) => session.provider === input.provider),
+                  (session) => providerService.stopSession({ threadId: session.threadId }),
+                  { concurrency: "unbounded", discard: true },
+                );
+                const adapter = yield* providerAdapterRegistry.getByProvider(input.provider);
+                yield* adapter.stopAll();
+              }
+              const result = yield* providerAccounts.delete(input);
+              if (active) {
+                invalidateProviderUsageSnapshots([input.provider]);
+                yield* providerHealth.refresh;
+              }
+              return result;
+            }),
+            "Failed to delete provider account",
+          ),
         [WS_METHODS.serverUpdateSettings]: (input) =>
           rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
         [WS_METHODS.serverRefreshProviders]: () =>

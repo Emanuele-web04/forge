@@ -69,6 +69,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
 import { SettingResetButton, useSettingsRestoreSignal } from "./SettingControls";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { ProviderAccountsSettingsPanel } from "./ProviderAccountsSettingsPanel";
 
 type ProviderInstallTextKey =
   | "claudeBinaryPath"
@@ -972,6 +973,8 @@ export function ProvidersSettingsPanel({
 
   return (
     <div className="space-y-6">
+      <ProviderAccountsSettingsPanel />
+
       <SettingsSection title="Provider activity">
         <SettingsRow
           title="Enabled providers"
