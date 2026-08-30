@@ -356,6 +356,90 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("keeps durable session-context evidence when its turn is outside the visibility filter", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "context-restart",
+        turnId: "turn-hidden",
+        kind: "provider.context.changed",
+        summary: "Native session history was unavailable.",
+        tone: "error",
+        payload: {
+          provider: "opencode",
+          nativeHistory: "unavailable",
+          sessionRestarted: true,
+          restartReason: "native-resume-failed",
+          recapInjected: true,
+          recapCharacters: 12_000,
+          recapPreview: "x".repeat(1_000),
+          recapPreviewTruncated: false,
+        },
+      }),
+      makeActivity({
+        id: "hidden-tool",
+        turnId: "turn-hidden",
+        kind: "tool.completed",
+        summary: "Hidden tool",
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-visible"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]),
+    });
+
+    expect(entry).toMatchObject({
+      id: "context-restart",
+      turnId: TurnId.makeUnsafe("turn-hidden"),
+      tone: "error",
+      providerContextLifecycle: {
+        provider: "opencode",
+        nativeHistory: "unavailable",
+        sessionRestarted: true,
+        restartReason: "native-resume-failed",
+        recapInjected: true,
+        recapCharacters: 12_000,
+        recapPreviewTruncated: true,
+      },
+    });
+    expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
+  });
+
+  it("keeps native-history loss visible when the provider sent no recap", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "context-restart-without-recap",
+          turnId: "turn-2",
+          kind: "provider.context.changed",
+          summary: "The session restarted without its native history.",
+          tone: "error",
+          payload: {
+            provider: "codex",
+            nativeHistory: "unavailable",
+            sessionRestarted: true,
+            restartReason: "native-history-unavailable",
+            recapInjected: false,
+            recapCharacters: 0,
+            recapPreview: null,
+            recapPreviewTruncated: false,
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-2"),
+    );
+
+    expect(entry?.providerContextLifecycle).toEqual({
+      provider: "codex",
+      nativeHistory: "unavailable",
+      sessionRestarted: true,
+      restartReason: "native-history-unavailable",
+      recapInjected: false,
+      recapCharacters: 0,
+      recapPreview: null,
+      recapPreviewTruncated: false,
+    });
+  });
+
   it("falls back to the latest-turn filter when visible turn ids are empty", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "First tool", kind: "tool.started" }),

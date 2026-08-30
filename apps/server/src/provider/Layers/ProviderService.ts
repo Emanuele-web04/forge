@@ -1768,7 +1768,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }
               const session = started.value;
               replacementStarted = true;
-              const nativeResumeSucceeded = hasResumeCursor(effectiveResumeCursor)
+              const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
+              const nativeResumeSucceeded = nativeResumeAttempted
                 ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
                 : false;
               const priorTranscriptBootstrapPending =
@@ -1805,6 +1806,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
               return {
                 session,
+                nativeResumeAttempted,
                 nativeResumeSucceeded,
                 priorTranscriptBootstrapPending,
               };

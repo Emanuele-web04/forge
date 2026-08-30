@@ -54,6 +54,7 @@ export interface ProviderRuntimeEventPumpHealth {
 
 export interface ProviderSessionStartOutcome {
   readonly session: ProviderSession;
+  readonly nativeResumeAttempted: boolean;
   readonly nativeResumeSucceeded: boolean;
   readonly priorTranscriptBootstrapPending: boolean;
 }
