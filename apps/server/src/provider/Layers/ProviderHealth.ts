@@ -145,6 +145,7 @@ const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const MAX_REFRESH_REVISION_RETRIES = 1;
 const REFRESH_REVISION_RESCHEDULE_DELAY_MS = 100;
+const PROVIDER_UPDATE_ENABLEMENT_POLL_MS = 100;
 export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
 
 function formatProviderUpdateTimeout(timeoutMs: number): string {
@@ -2694,17 +2695,39 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             }),
           );
 
-          const commandResult = yield* runUpdateCommand({
-            provider,
-            command: update.executable,
-            args: update.args,
-            ...(update.pathPrepend ? { pathPrepend: update.pathPrepend } : {}),
-          }).pipe(
-            Effect.scoped,
-            Effect.timeoutOption(Duration.millis(providerUpdateTimeoutMs)),
-            Effect.result,
+          const waitForProviderDisablement = Effect.gen(function* () {
+            while (yield* providerIsEnabled.pipe(Effect.catch(() => Effect.succeed(true)))) {
+              yield* Effect.sleep(Duration.millis(PROVIDER_UPDATE_ENABLEMENT_POLL_MS));
+            }
+          });
+          const commandOutcome = yield* Effect.raceFirst(
+            runUpdateCommand({
+              provider,
+              command: update.executable,
+              args: update.args,
+              ...(update.pathPrepend ? { pathPrepend: update.pathPrepend } : {}),
+            }).pipe(
+              Effect.scoped,
+              Effect.timeoutOption(Duration.millis(providerUpdateTimeoutMs)),
+              Effect.result,
+              Effect.map((result) => ({ _tag: "completed" as const, result })),
+            ),
+            waitForProviderDisablement.pipe(Effect.as({ _tag: "disabled" as const })),
           );
           const finishedAt = yield* nowIso;
+          if (commandOutcome._tag === "disabled") {
+            const providers = yield* setProviderUpdateState(
+              provider,
+              makeUpdateState({
+                status: "failed",
+                startedAt,
+                finishedAt,
+                message: "Update stopped because the provider was disabled.",
+              }),
+            );
+            return { providers };
+          }
+          const commandResult = commandOutcome.result;
           if (Result.isFailure(commandResult)) {
             const providers = yield* setProviderUpdateState(
               provider,

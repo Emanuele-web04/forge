@@ -102,6 +102,18 @@ describe("server-backed provider enablement", () => {
     expect(patch.providers).toEqual({ pi: { enabled: false } });
   });
 
+  it("omits unchanged provider defaults from a reset patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch(
+      {
+        disabledProviders: [],
+        openCodeBinaryPath: DEFAULT_SERVER_SETTINGS_VIEW.providers.opencode.binaryPath,
+      },
+      DEFAULT_SERVER_SETTINGS_VIEW,
+    );
+
+    expect(patch.providers).toBeUndefined();
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,

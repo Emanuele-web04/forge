@@ -120,6 +120,7 @@ function failingSpawnerLayer(description: string) {
 
 function hangingSpawnerLayer(input: {
   readonly onKill: () => void;
+  readonly onHang?: () => void;
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
@@ -141,9 +142,11 @@ function hangingSpawnerLayer(input: {
         command: string;
         args: ReadonlyArray<string>;
       };
-      return input.shouldHang(cmd.args, cmd.command)
-        ? Effect.succeed(handle)
-        : Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+      if (!input.shouldHang(cmd.args, cmd.command)) {
+        return Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+      }
+      input.onHang?.();
+      return Effect.succeed(handle);
     }),
   );
 }
@@ -396,6 +399,84 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(
           kilo?.updateState?.message,
           "Update timed out after 20 milliseconds. The provider process was stopped.",
+        );
+      }),
+    );
+
+    it.effect("stops a running provider update when the provider is disabled", () =>
+      Effect.gen(function* () {
+        let killed = false;
+        let markStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-update-disable-",
+        });
+        yield* writeProviderStatusCache({
+          filePath: resolveProviderStatusCachePath({
+            stateDir: path.join(baseDir, "userdata"),
+            provider: "kilo",
+          }),
+          provider: {
+            provider: "kilo",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-07-15T12:00:00.000Z",
+            message: "Kilo CLI is installed and authenticated.",
+            version: "7.3.46",
+          },
+        });
+        const settings = {
+          ...allProvidersDisabledServerSettings,
+          providers: {
+            ...allProvidersDisabledServerSettings.providers,
+            kilo: {
+              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+              enabled: true,
+              binaryPath:
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+            },
+          },
+        } satisfies typeof DEFAULT_SERVER_SETTINGS;
+        const serverSettingsLayer = ServerSettingsService.layerTest(settings);
+        const layer = makeProviderHealthLive({ providerUpdateTimeoutMs: 10_000 }).pipe(
+          Layer.provideMerge(serverSettingsLayer),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            hangingSpawnerLayer({
+              onKill: () => (killed = true),
+              onHang: markStarted,
+              shouldHang: (args, command) =>
+                command === "npm" &&
+                args.join(" ") ===
+                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
+            }),
+          ),
+        );
+
+        const result = yield* TestClock.withLive(
+          Effect.gen(function* () {
+            const providerHealth = yield* ProviderHealth;
+            const serverSettings = yield* ServerSettingsService;
+            const updateFiber = yield* providerHealth
+              .updateProvider({ provider: "kilo" })
+              .pipe(Effect.forkChild);
+            yield* Effect.promise(() => started);
+            yield* serverSettings.updateSettings({ providers: { kilo: { enabled: false } } });
+            return yield* Fiber.join(updateFiber);
+          }).pipe(Effect.provide(layer)),
+        );
+        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+
+        assert.strictEqual(killed, true);
+        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(
+          kilo?.updateState?.message,
+          "Update stopped because the provider was disabled.",
         );
       }),
     );

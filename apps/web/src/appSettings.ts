@@ -667,6 +667,38 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
+function serverSettingValuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+  return left === right;
+}
+
+function pruneProviderPatchAgainstCurrentSettings(
+  providers: MutableServerSettingsProvidersPatch,
+  currentSettings: Pick<ServerSettingsView, "providers">,
+): void {
+  for (const provider of DEFAULT_PROVIDER_ORDER) {
+    const providerPatch = providers[provider];
+    if (!providerPatch) continue;
+
+    const patchRecord = providerPatch as Record<string, unknown>;
+    const currentRecord = currentSettings.providers[provider] as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patchRecord)) {
+      const matchesCurrent =
+        key === "serverPassword"
+          ? value === "" && currentRecord.serverPasswordConfigured === false
+          : serverSettingValuesEqual(value, currentRecord[key]);
+      if (matchesCurrent) {
+        delete patchRecord[key];
+      }
+    }
+    if (Object.keys(patchRecord).length === 0) {
+      delete providers[provider];
+    }
+  }
+}
+
 export function appSettingsPatchToServerSettingsPatch(
   patch: Partial<AppSettings>,
   currentSettings?: Pick<ServerSettingsView, "providers">,
@@ -814,6 +846,10 @@ export function appSettingsPatchToServerSettingsPatch(
         enabled,
       };
     }
+  }
+
+  if (currentSettings) {
+    pruneProviderPatchAgainstCurrentSettings(providers, currentSettings);
   }
 
   if (Object.keys(providers).length > 0) {
@@ -1269,6 +1305,7 @@ export function useAppSettings() {
     AppSettingsSchema,
   );
   const normalizedStoredSettingsRef = useRef(false);
+  const serverSettingsMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const defaults = normalizeAppSettings({
     ...DEFAULT_APP_SETTINGS,
@@ -1329,6 +1366,20 @@ export function useAppSettings() {
       .catch(() => undefined);
   };
 
+  const enqueueServerSettingsMutation = <Result>(
+    mutation: () => Promise<Result>,
+  ): Promise<Result> => {
+    const queued = serverSettingsMutationQueueRef.current.then(
+      () => mutation(),
+      () => mutation(),
+    );
+    serverSettingsMutationQueueRef.current = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  };
+
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     setSettings((prev) =>
       normalizeAppSettings({
@@ -1342,32 +1393,37 @@ export function useAppSettings() {
           : {}),
       }),
     );
-    const serverPatch = appSettingsPatchToServerSettingsPatch(patch, serverSettingsQuery.data);
-    if (isServerSettingsPatchEmpty(serverPatch)) {
-      return;
-    }
+    await enqueueServerSettingsMutation(async () => {
+      const currentServerSettings =
+        queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
+        serverSettingsQuery.data;
+      const serverPatch = appSettingsPatchToServerSettingsPatch(patch, currentServerSettings);
+      if (isServerSettingsPatchEmpty(serverPatch)) {
+        return;
+      }
 
-    const api = ensureNativeApi();
-    try {
-      const nextSettings = await api.server.updateSettings(serverPatch);
-      queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
-      if (hasOwn(patch, "disabledProviders")) {
-        await refreshProvidersAfterEnablementChange();
-      } else if (touchesProviderDiscoverySettings(patch)) {
+      const api = ensureNativeApi();
+      try {
+        const nextSettings = await api.server.updateSettings(serverPatch);
+        queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+        if (hasOwn(patch, "disabledProviders")) {
+          await refreshProvidersAfterEnablementChange();
+        } else if (touchesProviderDiscoverySettings(patch)) {
+          await queryClient
+            .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+            .catch(() => undefined);
+        }
+      } catch {
         await queryClient
-          .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+          .invalidateQueries({ queryKey: serverQueryKeys.settings() })
           .catch(() => undefined);
+        if (touchesProviderDiscoverySettings(patch)) {
+          await queryClient
+            .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+            .catch(() => undefined);
+        }
       }
-    } catch {
-      await queryClient
-        .invalidateQueries({ queryKey: serverQueryKeys.settings() })
-        .catch(() => undefined);
-      if (touchesProviderDiscoverySettings(patch)) {
-        await queryClient
-          .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
-          .catch(() => undefined);
-      }
-    }
+    });
   };
 
   const updateSettings = (patch: Partial<AppSettings>): void => {
@@ -1376,19 +1432,34 @@ export function useAppSettings() {
 
   const resetSettings = async (): Promise<void> => {
     setSettings(DEFAULT_APP_SETTINGS);
-    const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, serverSettingsQuery.data);
-    try {
-      const nextSettings = await ensureNativeApi().server.updateSettings(serverPatch);
-      queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
-      await refreshProvidersAfterEnablementChange();
-    } catch {
-      await queryClient
-        .invalidateQueries({ queryKey: serverQueryKeys.settings() })
-        .catch(() => undefined);
-      await queryClient
-        .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
-        .catch(() => undefined);
-    }
+    await enqueueServerSettingsMutation(async () => {
+      const currentServerSettings =
+        queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
+        serverSettingsQuery.data;
+      const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, currentServerSettings);
+      const providerSettingsChanged = Boolean(
+        serverPatch.providers && Object.keys(serverPatch.providers).length > 0,
+      );
+      if (isServerSettingsPatchEmpty(serverPatch)) {
+        return;
+      }
+      try {
+        const nextSettings = await ensureNativeApi().server.updateSettings(serverPatch);
+        queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+        if (providerSettingsChanged) {
+          await refreshProvidersAfterEnablementChange();
+        }
+      } catch {
+        await queryClient
+          .invalidateQueries({ queryKey: serverQueryKeys.settings() })
+          .catch(() => undefined);
+        if (providerSettingsChanged) {
+          await queryClient
+            .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+            .catch(() => undefined);
+        }
+      }
+    });
   };
 
   return {
