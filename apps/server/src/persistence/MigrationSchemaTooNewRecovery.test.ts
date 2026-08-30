@@ -430,7 +430,7 @@ describe("completed migration backup recovery", () => {
     });
   });
 
-  it("keeps an exhausted exact restore marker when completed-provenance restore fails", async () => {
+  it("keeps the live database usable when completed-provenance validation fails", async () => {
     const databasePath = await makeDatabasePath();
     const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
     const databaseMigrationId = latestMigrationId + 1;
@@ -453,12 +453,14 @@ describe("completed migration backup recovery", () => {
       ),
     ).rejects.toThrow();
 
+    await expect(fs.stat(migrationRecoveryMarkerPath(databasePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(
-      fs.readFile(migrationRecoveryMarkerPath(databasePath), "utf8").then(JSON.parse),
+      fs.readFile(migrationBackupProvenancePath(databasePath), "utf8").then(JSON.parse),
     ).resolves.toMatchObject({
       backupPath,
-      phase: "migration-restore-in-progress",
-      resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+      phase: "migration-completed",
     });
     const live = new DatabaseSync(databasePath, { readOnly: true });
     try {
