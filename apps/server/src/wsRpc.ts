@@ -329,6 +329,7 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
     event.type === "space.deleted" ||
     event.type === "project.created" ||
     event.type === "project.meta-updated" ||
+    event.type === "project.sources-updated" ||
     event.type === "project.deleted" ||
     event.type === "thread.deleted" ||
     (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event))
@@ -773,6 +774,7 @@ const makeWsRpcHandlersLayer = () =>
             );
           case "project.created":
           case "project.meta-updated":
+          case "project.sources-updated":
             return projectionReadModelQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({

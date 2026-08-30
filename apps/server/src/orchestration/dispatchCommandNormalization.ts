@@ -151,14 +151,42 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
       );
+      const sources = input.command.sources
+        ? yield* Effect.forEach(
+            input.command.sources,
+            (source) =>
+              options
+                .canonicalizeProjectWorkspaceRoot(source.path, {
+                  createIfMissing: input.command.createWorkspaceRootIfMissing === true,
+                })
+                .pipe(Effect.map((path) => ({ ...source, path }))),
+            { concurrency: 1 },
+          )
+        : undefined;
       const command = {
         ...input.command,
         workspaceRoot,
+        ...(sources !== undefined ? { sources } : {}),
         createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
       return {
         command,
         prepareWorkspaceRoot: deferredPrepareWorkspaceRoot(input.command, workspaceRoot),
+      };
+    }
+
+    if (input.command.type === "project.sources.update") {
+      const sources = yield* Effect.forEach(
+        input.command.sources,
+        (source) =>
+          options
+            .canonicalizeProjectWorkspaceRoot(source.path)
+            .pipe(Effect.map((path) => ({ ...source, path }))),
+        { concurrency: 1 },
+      );
+      return {
+        command: { ...input.command, sources } satisfies OrchestrationCommand,
+        prepareWorkspaceRoot: null,
       };
     }
 

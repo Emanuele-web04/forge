@@ -144,6 +144,7 @@ type CodexApprovalsReviewer = "user" | "auto_review";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
+  readonly writableRoots?: ReadonlyArray<string>;
 };
 type CodexSessionApprovalOverride = {
   readonly approvalPolicy: "never";
@@ -168,6 +169,7 @@ interface CodexSessionContext {
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   sessionApprovalOverride?: CodexSessionApprovalOverride;
+  readonly additionalRoots?: ReadonlyArray<string>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
@@ -274,6 +276,7 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly additionalRoots?: ProviderSessionStartInput["additionalRoots"];
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -697,10 +700,23 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
   readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
-  return (
+  const overrides =
     context.sessionApprovalOverride ??
-    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
-  );
+    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode);
+  if (
+    overrides.sandboxPolicy.type === "workspaceWrite" &&
+    context.additionalRoots &&
+    context.additionalRoots.length > 0
+  ) {
+    return {
+      ...overrides,
+      sandboxPolicy: {
+        ...overrides.sandboxPolicy,
+        writableRoots: [...context.additionalRoots],
+      },
+    };
+  }
+  return overrides;
 }
 
 export function resolveCodexModelForAccount(
@@ -1117,6 +1133,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        ...(input.additionalRoots?.length
+          ? { additionalRoots: input.additionalRoots.map((root) => root.path) }
+          : {}),
       };
 
       this.sessions.set(threadId, context);

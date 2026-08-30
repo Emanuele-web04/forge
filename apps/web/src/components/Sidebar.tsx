@@ -2504,7 +2504,12 @@ export default function Sidebar() {
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
-      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+      options: {
+        title?: string;
+        createIfMissing?: boolean;
+        spaceId?: SpaceId | null;
+        additionalSourcePaths?: ReadonlyArray<string>;
+      } = {},
     ) => {
       const cwd = rawCwd.trim();
       if (!cwd) {
@@ -2526,6 +2531,9 @@ export default function Sidebar() {
         const existingRecovery = await recoverExistingAddProjectTarget({
           existingProjectId: existing?.id,
           workspaceRoot: cwd,
+          ...(options.additionalSourcePaths === undefined
+            ? {}
+            : { sourcePaths: options.additionalSourcePaths }),
           recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
           recoverByWorkspaceRoot: (workspaceRoot) =>
             recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
@@ -2540,7 +2548,11 @@ export default function Sidebar() {
 
         const creationResult = await createOrRecoverProjectFromPath({
           api,
+          ...(options.title === undefined ? {} : { title: options.title }),
           workspaceRoot: cwd,
+          ...(options.additionalSourcePaths === undefined
+            ? {}
+            : { sourcePaths: options.additionalSourcePaths }),
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
@@ -3412,8 +3424,10 @@ export default function Sidebar() {
         } else {
           handleSelectSpaceForIncomingProject(destinationSpaceId);
           await addProjectFromPath(value.workspaceRoot, {
+            title: value.title,
             createIfMissing: value.createIfMissing,
             spaceId: value.spaceId,
+            additionalSourcePaths: value.additionalSourcePaths,
           });
         }
       };

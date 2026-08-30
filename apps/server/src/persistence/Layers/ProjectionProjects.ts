@@ -3,7 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import { ModelSelection, ProjectSource, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearProjectionProjectSpaceAssignmentsInput,
@@ -25,6 +25,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    sources: Schema.fromJsonString(Schema.Array(ProjectSource)),
     isPinned: SqliteBoolean,
   }),
 );
@@ -46,6 +47,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           scripts_json,
           is_pinned,
           space_id,
+          sources_json,
+          primary_source_id,
           created_at,
           updated_at,
           deleted_at
@@ -59,6 +62,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
           ${row.spaceId},
+          ${JSON.stringify(row.sources)},
+          ${row.primarySourceId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -72,6 +77,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           scripts_json = excluded.scripts_json,
           is_pinned = excluded.is_pinned,
           space_id = excluded.space_id,
+          sources_json = excluded.sources_json,
+          primary_source_id = excluded.primary_source_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -92,6 +99,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          sources_json AS "sources",
+          primary_source_id AS "primarySourceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -114,6 +123,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          sources_json AS "sources",
+          primary_source_id AS "primarySourceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

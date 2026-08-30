@@ -18,6 +18,8 @@ import type {
   OrchestrationThreadActivity,
   ThreadHandoff,
   ProjectScript as ContractProjectScript,
+  ProjectSource as ContractProjectSource,
+  ProjectSourceId,
   ThreadId,
   ProjectId,
   SpaceId,
@@ -47,6 +49,7 @@ export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
 export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ThreadPrimarySurface = "chat" | "terminal";
 export type ProjectScript = ContractProjectScript;
+export type ProjectSourceFolder = ContractProjectSource;
 
 export type ThreadTerminalSplitDirection = "horizontal" | "vertical";
 export type ThreadTerminalSplitPosition = "top" | "right" | "bottom" | "left";
@@ -196,6 +199,8 @@ export interface Project {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  sources: ProjectSourceFolder[];
+  primarySourceId: ProjectSourceId | null;
 }
 
 export interface Space {
