@@ -966,22 +966,6 @@ export function makeCursorAdapter(
             ),
           );
 
-          yield* applyRequestedSessionConfiguration({
-            runtime: acp,
-            runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
-            modelSelection: cursorModelSelection,
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-            onModelSelectionNotice: (notice) =>
-              emitCursorModelSelectionNotice({
-                threadId: input.threadId,
-                lifecycleGeneration: input.lifecycleGeneration,
-                turnId: undefined,
-                notice,
-              }),
-          });
-
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -1153,6 +1137,26 @@ export function makeCursorAdapter(
           ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = nf;
+
+          // Fork the event drain before configuration can activate the shared
+          // load-replay gate. Keep the session unregistered until configuration
+          // settles so an immediate turn cannot race these state-dependent reads.
+          yield* applyRequestedSessionConfiguration({
+            runtime: acp,
+            runtimeMode: input.runtimeMode,
+            interactionMode: undefined,
+            modelSelection: cursorModelSelection,
+            mapError: ({ cause, method }) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+            onModelSelectionNotice: (notice) =>
+              emitCursorModelSelectionNotice({
+                threadId: input.threadId,
+                lifecycleGeneration: input.lifecycleGeneration,
+                turnId: undefined,
+                notice,
+              }),
+          });
+
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
