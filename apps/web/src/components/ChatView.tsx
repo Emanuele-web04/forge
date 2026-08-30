@@ -4068,6 +4068,7 @@ export default function ChatView({
             status,
             customBinaryPath,
             confirmedCustomBinaryPath: confirmedCustomBinaryPathsByProvider[status.provider],
+            disabled: settings.disabledProviders.includes(status.provider),
           });
         })
         .flatMap((status) => (status ? [status] : [])),

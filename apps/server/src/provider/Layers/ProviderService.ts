@@ -30,6 +30,7 @@ import {
   ProviderStartOptions,
   TurnId,
   type ProviderRuntimeEvent,
+  type ProviderKind,
   type ProviderSession,
 } from "@synara/contracts";
 import {
@@ -101,6 +102,10 @@ export interface ProviderServiceLiveOptions {
   /** Test override for supervised event retry timing. */
   readonly runtimeEventRetryBaseDelayMs?: number;
   readonly runtimeEventRetryMaxDelayMs?: number;
+  /** Server-authoritative start gate. Omit only in isolated tests and embedded callers. */
+  readonly providerIsEnabled?: (
+    provider: ProviderKind,
+  ) => Effect.Effect<boolean, ProviderValidationError>;
 }
 
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
@@ -1621,6 +1626,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           threadId,
           provider: parsed.provider ?? "codex",
         };
+        if (options?.providerIsEnabled && !(yield* options.providerIsEnabled(input.provider))) {
+          return yield* Effect.fail(
+            new ProviderValidationError({
+              operation: "ProviderService.startSession",
+              issue: `${input.provider} is disabled in Settings > Providers.`,
+            }),
+          );
+        }
         yield* validateAutoRuntimeMode(
           "ProviderService.startSession",
           input.provider,

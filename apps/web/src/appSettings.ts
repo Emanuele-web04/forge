@@ -669,6 +669,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
 
 export function appSettingsPatchToServerSettingsPatch(
   patch: Partial<AppSettings>,
+  currentSettings?: Pick<ServerSettingsView, "providers">,
 ): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
@@ -803,16 +804,16 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
-    const enabledPatches = Object.fromEntries(
-      DEFAULT_PROVIDER_ORDER.map((provider) => [
-        provider,
-        {
-          ...providers[provider],
-          enabled: !disabledProviders.has(provider),
-        },
-      ]),
-    ) as MutableServerSettingsProvidersPatch;
-    Object.assign(providers, enabledPatches);
+    for (const provider of DEFAULT_PROVIDER_ORDER) {
+      const enabled = !disabledProviders.has(provider);
+      if (currentSettings?.providers[provider].enabled === enabled) {
+        continue;
+      }
+      providers[provider] = {
+        ...providers[provider],
+        enabled,
+      };
+    }
   }
 
   if (Object.keys(providers).length > 0) {
@@ -1341,7 +1342,7 @@ export function useAppSettings() {
           : {}),
       }),
     );
-    const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
+    const serverPatch = appSettingsPatchToServerSettingsPatch(patch, serverSettingsQuery.data);
     if (isServerSettingsPatchEmpty(serverPatch)) {
       return;
     }
@@ -1375,7 +1376,7 @@ export function useAppSettings() {
 
   const resetSettings = async (): Promise<void> => {
     setSettings(DEFAULT_APP_SETTINGS);
-    const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
+    const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, serverSettingsQuery.data);
     try {
       const nextSettings = await ensureNativeApi().server.updateSettings(serverPatch);
       queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);

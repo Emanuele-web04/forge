@@ -7,7 +7,8 @@ import {
   ProviderCredentials,
   ProviderCredentialsLive,
 } from "../providerCredentials";
-import { ServerSettingsLive } from "../serverSettings";
+import { ServerSettingsLive, ServerSettingsService } from "../serverSettings";
+import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
@@ -31,6 +32,7 @@ export function makeServerProviderLayer(
 ) {
   return Effect.gen(function* () {
     const credentials = yield* ProviderCredentials;
+    const serverSettings = yield* ServerSettingsService;
     const resolveProviderServerPassword = makeProviderServerPasswordResolver(credentials);
     const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
     const nativeEventLogger = logProviderEvents
@@ -95,9 +97,21 @@ export function makeServerProviderLayer(
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    const providerServiceLayer = makeDurableProviderServiceLive(
-      canonicalEventLogger ? { canonicalEventLogger } : undefined,
-    ).pipe(
+    const providerServiceLayer = makeDurableProviderServiceLive({
+      ...(canonicalEventLogger ? { canonicalEventLogger } : {}),
+      providerIsEnabled: (provider) =>
+        serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providers[provider].enabled),
+          Effect.mapError(
+            (cause) =>
+              new ProviderValidationError({
+                operation: "ProviderService.startSession",
+                issue: "Failed to read provider enablement settings.",
+                cause,
+              }),
+          ),
+        ),
+    }).pipe(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(ProviderRuntimeEventRepositoryLive),
@@ -114,5 +128,9 @@ export function makeServerProviderLayer(
       adapterRegistryLayer,
       providerSessionDirectoryLayer,
     );
-  }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
+  }).pipe(
+    Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)),
+    Effect.provide(ServerSettingsLive),
+    Layer.unwrap,
+  );
 }

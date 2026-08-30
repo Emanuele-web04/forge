@@ -12,6 +12,7 @@ import {
 } from "./Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
+import { ServerSettingsLive } from "../serverSettings";
 import {
   makeProviderServerPasswordResolver,
   ProviderCredentials,
@@ -35,6 +36,7 @@ export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
   Layer.provide(CodexTextGenerationServiceLive),
   Layer.provide(CursorTextGenerationServiceLive),
   Layer.provide(textGenerationProviderLayers),
+  Layer.provide(ServerSettingsLive),
 );
 
 export const GitManagerLayerLive = GitManagerLive.pipe(

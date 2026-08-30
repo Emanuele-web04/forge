@@ -1021,7 +1021,7 @@ export function ProvidersSettingsPanel({
                   actions={
                     <Switch
                       checked={enabled}
-                      disabled={serverSettingsQuery.isPending || providerEnablementMutationPending}
+                      disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
                       onCheckedChange={(checked) =>
                         void updateProviderEnablement(
                           setProviderDisabled(

@@ -63,6 +63,21 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("keeps a disabled custom-path provider unavailable", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "opencode",
+        status: { ...BASE_STATUS, provider: "opencode", message: "OpenCode is disabled." },
+        customBinaryPath: "/custom/bin/opencode",
+        disabled: true,
+      }),
+    ).toEqual({
+      ...BASE_STATUS,
+      provider: "opencode",
+      message: "OpenCode is disabled.",
+    });
+  });
+
   it("marks a custom-path provider ready after a successful session confirms it", () => {
     expect(
       normalizeProviderStatusForLocalConfig({

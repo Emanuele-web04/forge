@@ -83,6 +83,25 @@ describe("server-backed provider enablement", () => {
     });
   });
 
+  it("sends sparse enablement patches against the latest server view", () => {
+    const currentSettings = {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+        opencode: {
+          ...DEFAULT_SERVER_SETTINGS_VIEW.providers.opencode,
+          enabled: false,
+        },
+      },
+    };
+    const patch = appSettingsPatchToServerSettingsPatch(
+      { disabledProviders: ["opencode", "pi"] },
+      currentSettings,
+    );
+
+    expect(patch.providers).toEqual({ pi: { enabled: false } });
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,

@@ -5139,6 +5139,30 @@ validation.layer("ProviderServiceLive validation", (it) => {
   );
 });
 
+const disabledProviderStart = makeProviderServiceLayer({
+  providerIsEnabled: (provider) => Effect.succeed(provider !== "codex"),
+});
+disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
+  it.effect("rejects session starts for disabled providers before reaching the adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const failure = yield* Effect.result(
+        provider.startSession(asThreadId("thread-disabled-provider"), {
+          provider: "codex",
+          threadId: asThreadId("thread-disabled-provider"),
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      assert.equal(failure.failure.message.includes("disabled"), true);
+      assert.equal(disabledProviderStart.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+});
+
 const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });
 it.effect("ProviderServiceLive backpressures slow subscribers and completes fanout shutdown", () =>
   Effect.gen(function* () {
