@@ -29,6 +29,12 @@ const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === 
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
+const loadReplayDelaysMs = (process.env.SYNARA_ACP_LOAD_REPLAY_DELAYS_MS ?? "")
+  .split(",")
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isFinite(value) && value >= 0);
+const rejectPromptDuringLoadReplay =
+  process.env.SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const sessionId = "mock-session-1";
 
@@ -39,6 +45,7 @@ let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
 let sessionNewAttempts = 0;
+let pendingLoadReplayUpdates = 0;
 const cancelledSessions = new Set<string>();
 
 function logExit(reason: string): void {
@@ -235,6 +242,28 @@ function makeClient(context: OfficialAcp.AgentContext) {
   };
 }
 
+function scheduleLoadReplayUpdates(
+  client: ReturnType<typeof makeClient>,
+  requestedSessionId: string,
+): void {
+  pendingLoadReplayUpdates += loadReplayDelaysMs.length;
+  loadReplayDelaysMs.forEach((delayMs, index) => {
+    setTimeout(() => {
+      void runEffect(
+        client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `late replay ${index + 1}` },
+          },
+        }),
+      ).finally(() => {
+        pendingLoadReplayUpdates -= 1;
+      });
+    }, delayMs);
+  });
+}
+
 function requestInput(): ReadableStream<Uint8Array> {
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   if (!requestLogPath) return input;
@@ -320,16 +349,20 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
 
 app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params: request }) => {
   const client = makeClient(context);
+  const requestedSessionId = String(request.sessionId ?? sessionId);
   return runEffect(
     client
       .sessionUpdate({
-        sessionId: String(request.sessionId ?? sessionId),
+        sessionId: requestedSessionId,
         update: {
           sessionUpdate: "user_message_chunk",
           content: { type: "text", text: "replay" },
         },
       })
       .pipe(
+        Effect.tap(() =>
+          Effect.sync(() => scheduleLoadReplayUpdates(client, requestedSessionId)),
+        ),
         Effect.as({
           modes: modeState(),
           configOptions: configOptions(),
@@ -393,6 +426,12 @@ app.onNotification(OfficialAcp.methods.agent.session.cancel, ({ params: { sessio
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.prompt, ({ client: context, params: request }) => {
+  if (rejectPromptDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw OfficialAcp.RequestError.invalidParams(
+      { method: "session/prompt", params: request },
+      "Prompt arrived before session/load replay settled",
+    );
+  }
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {

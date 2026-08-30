@@ -143,22 +143,14 @@ export const takeGrokSynaraHarnessPolicyTextPart = (
   });
 const GROK_RESUME_VERSION = 1 as const;
 const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
-// Forking a dead source session must first resume it, which replays history,
-// so the fork exchange shares the resume-replay budget.
+// Forking a dead source session must first reopen it, so leave enough time for
+// the shared ACP load-replay gate and the fork exchange.
 const GROK_ACP_FORK_TIMEOUT_MS = 30_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
 const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const SYNARA_GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
-const GROK_RESUME_REPLAY_QUIET_MS = 200;
-// Longest that startSession blocks waiting for the resume replay to settle.
-// Suppression stays active past this point; only the startup path is unblocked.
-const GROK_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
-// Absolute cap on replay suppression. A replay still streaming after this long
-// is treated as pathological: give up, warn, and unblock turns rather than
-// gating the thread forever.
-const GROK_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
 // Backstop for an alive-but-silent grok child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
 // Generous by design so legitimate long, quiet tool runs are not killed;
@@ -378,21 +370,18 @@ interface GrokSessionContext {
   // in-flight handlers and stream chunk buffering included.
   sessionUpdatesProcessed: number;
   // Pending until startSession has completed its post-registration setup.
-  // The session is registered first so replay keeps draining, which means
-  // sendTurn/compactThread can route to it mid-startup; they await this gate
-  // until the remaining startup work has settled. Resolved by
-  // stopSessionInternal too, like
-  // resumeReplayReady, so a failed startup never strands waiters.
+  // The session is registered first, so sendTurn/compactThread can route to it
+  // mid-startup; they await this gate until the remaining startup work has
+  // settled. Resolved by stopSessionInternal too, so a failed startup never
+  // strands waiters.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
-  resumeReplayReady: Deferred.Deferred<void> | undefined;
-  resumeReplayLastSuppressedAt: number | undefined;
   // True while sendTurn is between its compaction check and settling the turn;
   // compactThread reads it so a compaction prompt cannot slip into the gap
   // before ctx.activeTurnId is assigned.
   turnStarting: boolean;
   // Set by interruptTurn while a turn is still starting (no prompt fiber to
-  // interrupt yet, e.g. gated on resume replay); startGrokTurn re-checks it
-  // before dispatching so a cancelled turn is never prompted.
+  // interrupt yet); startGrokTurn re-checks it before dispatching so a
+  // cancelled turn is never prompted.
   pendingTurnInterrupted: boolean;
   compactingThread: boolean;
   // Failed compaction tool-call detail recorded while compactingThread is set;
@@ -821,11 +810,6 @@ export function makeGrokAdapter(
           yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
           ctx.sessionConfigReady = undefined;
         }
-        if (ctx.resumeReplayReady !== undefined) {
-          yield* Deferred.succeed(ctx.resumeReplayReady, undefined);
-          ctx.resumeReplayReady = undefined;
-          ctx.resumeReplayLastSuppressedAt = undefined;
-        }
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -873,12 +857,8 @@ export function makeGrokAdapter(
     const noteSuppressedGrokRuntimeEvent = (
       ctx: GrokSessionContext,
       eventTag: string,
-      reason: "resume-replay" | "orphan-turn-event",
     ) =>
       Effect.gen(function* () {
-        if (reason === "resume-replay") {
-          ctx.resumeReplayLastSuppressedAt = Date.now();
-        }
         if (!isGrokAcpDebugEnabled()) {
           return;
         }
@@ -886,21 +866,17 @@ export function makeGrokAdapter(
           threadId: ctx.threadId,
           turnId: ctx.activeTurnId,
           eventTag,
-          reason,
+          reason: "orphan-turn-event",
         });
       });
 
     const activeTurnIdForGrokRuntimeEvent = (ctx: GrokSessionContext, eventTag: string) =>
       Effect.gen(function* () {
-        if (ctx.resumeReplayReady !== undefined) {
-          yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "resume-replay");
-          return undefined;
-        }
         if (ctx.compactingThread) {
           return undefined;
         }
         if (ctx.activeTurnId === undefined) {
-          yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "orphan-turn-event");
+          yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag);
           return undefined;
         }
         return ctx.activeTurnId;
@@ -1012,44 +988,6 @@ export function makeGrokAdapter(
           }
           ctx.compactionQuietUntil = undefined;
         }
-      });
-
-    // On session/load, Grok can replay old ACP updates after the session is "ready".
-    // Keep suppression active until that stream actually goes quiet — clearing it
-    // on a fixed timeout lets late historical deltas leak into the first turn as
-    // its content. The hard cap only guards against a replay that never settles.
-    const settleGrokResumeReplayWhenQuiet = (ctx: GrokSessionContext) =>
-      Effect.gen(function* () {
-        const ready = ctx.resumeReplayReady;
-        if (ready === undefined) {
-          return;
-        }
-        const startedAt = Date.now();
-        ctx.resumeReplayLastSuppressedAt = startedAt;
-        while (ctx.resumeReplayReady !== undefined) {
-          const now = Date.now();
-          const lastSuppressedAt = ctx.resumeReplayLastSuppressedAt ?? startedAt;
-          const quietForMs = now - lastSuppressedAt;
-          const elapsedMs = now - startedAt;
-          if (
-            quietForMs >= GROK_RESUME_REPLAY_QUIET_MS ||
-            elapsedMs >= GROK_RESUME_REPLAY_HARD_TIMEOUT_MS
-          ) {
-            const timedOut = elapsedMs >= GROK_RESUME_REPLAY_HARD_TIMEOUT_MS;
-            ctx.resumeReplayReady = undefined;
-            ctx.resumeReplayLastSuppressedAt = undefined;
-            if (timedOut) {
-              yield* Effect.logWarning("grok.acp.resume_replay_quiet_wait_timeout", {
-                threadId: ctx.threadId,
-                elapsedMs,
-              });
-            }
-            yield* Deferred.succeed(ready, undefined);
-            return;
-          }
-          yield* Effect.sleep(Math.min(GROK_RESUME_REPLAY_QUIET_MS - quietForMs, 50));
-        }
-        yield* Deferred.succeed(ready, undefined);
       });
 
     const startSession: GrokAdapterShape["startSession"] = (input) =>
@@ -1349,8 +1287,6 @@ export function makeGrokAdapter(
           );
           yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
 
-          const resumeReplayReady =
-            resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
           const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
@@ -1393,8 +1329,6 @@ export function makeGrokAdapter(
             turnToolCallIds: new Map(),
             sessionUpdatesProcessed: 0,
             sessionConfigReady,
-            resumeReplayReady,
-            resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             turnStarting: false,
             pendingTurnInterrupted: false,
             compactingThread: false,
@@ -1484,19 +1418,16 @@ export function makeGrokAdapter(
                       // title mentions "compact"/"summarize" — a backlogged
                       // consumer must not reclassify it as auto-compaction.
                       const lateTurnId =
-                        ctx.resumeReplayReady === undefined &&
-                        ctx.activeTurnId === undefined &&
-                        !ctx.compactingThread
+                        ctx.activeTurnId === undefined && !ctx.compactingThread
                           ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
                           : undefined;
                       // The title heuristic only applies between turns (grok-initiated
                       // auto-compaction); a live turn's tool call may legitimately
                       // mention "compact"/"summarize" and must render normally, and
-                      // resume replay stays suppressed like every other event.
+                      // replay is already suppressed by the shared ACP runtime.
                       const treatAsCompaction =
                         ctx.compactingThread ||
-                        (ctx.resumeReplayReady === undefined &&
-                          ctx.activeTurnId === undefined &&
+                        (ctx.activeTurnId === undefined &&
                           lateTurnId === undefined &&
                           isGrokContextCompactionToolCall(event.toolCall));
                       if (treatAsCompaction) {
@@ -1668,18 +1599,6 @@ export function makeGrokAdapter(
             yield* Deferred.succeed(sessionConfigReady, undefined);
             ctx.sessionConfigReady = undefined;
 
-            if (resumeReplayReady !== undefined) {
-              // Settle the replay in the background: suppression stays active until
-              // the stream is genuinely quiet, while startup only blocks briefly so
-              // a long replay cannot hold session startup hostage. sendTurn and
-              // compactThread await the deferred, so the first turn stays gated
-              // until the replay has actually finished.
-              yield* settleGrokResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
-              yield* Deferred.await(resumeReplayReady).pipe(
-                Effect.timeoutOption(GROK_RESUME_REPLAY_MAX_WAIT_MS),
-              );
-            }
-
             yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "session.started",
               ...(yield* makeEventStamp()),
@@ -1812,14 +1731,10 @@ export function makeGrokAdapter(
         if (ctx.sessionConfigReady !== undefined) {
           yield* Deferred.await(ctx.sessionConfigReady);
         }
-        if (ctx.resumeReplayReady !== undefined) {
-          yield* Deferred.await(ctx.resumeReplayReady);
-        }
         yield* waitForAbandonedGrokCompaction(ctx);
-        // The gates above are resolved by stopSessionInternal too (a failed or
-        // stopped startup must not strand waiters); a turn that was blocked on
-        // them must fail here instead of emitting lifecycle events for a dead
-        // session.
+        // The setup gate above is resolved by stopSessionInternal too; a turn
+        // unblocked by a failed or stopped startup must fail here instead of
+        // emitting lifecycle events for a dead session.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
@@ -1893,10 +1808,10 @@ export function makeGrokAdapter(
             threadId: input.threadId,
           });
         }
-        // Interrupts that landed during the pre-prompt waits (resume replay,
-        // model selection, attachment reads) are honored by the prompt fiber's
-        // dispatch guard below, so the turn completes through the normal
-        // cancelled path instead of surfacing as a provider turn-start failure.
+        // Interrupts that landed during model selection or attachment reads are
+        // honored by the prompt fiber's dispatch guard below, so the turn completes
+        // through the normal cancelled path instead of surfacing as a provider
+        // turn-start failure.
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
@@ -1926,10 +1841,10 @@ export function makeGrokAdapter(
         });
 
         const runPrompt = Effect.suspend(() =>
-          // interruptTurn during the pre-prompt waits (resume replay, model
-          // selection, attachment reads) or between turn.started publishing and this
-          // fiber being registered sets pendingTurnInterrupted; honor it (and a
-          // concurrent stop) here so a cancelled turn is never prompted.
+          // interruptTurn during model selection or attachment reads, or between
+          // turn.started publishing and this fiber being registered, sets
+          // pendingTurnInterrupted; honor it (and a concurrent stop) here so a
+          // cancelled turn is never prompted.
           // Self-interrupting routes through the onInterrupt branch below, which
           // completes the turn as cancelled rather than as a provider failure.
           ctx.pendingTurnInterrupted || ctx.stopped
@@ -2125,9 +2040,9 @@ export function makeGrokAdapter(
           return;
         }
         const activeTurnId = turnId ?? ctx.activeTurnId;
-        // A turn that is still starting has no prompt fiber to interrupt yet
-        // (it may be gated on resume replay); flag it so startGrokTurn aborts
-        // before prompting instead of running the cancelled turn anyway.
+        // A turn that is still starting has no prompt fiber to interrupt yet;
+        // flag it so startGrokTurn aborts before prompting instead of running
+        // the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
@@ -2243,16 +2158,11 @@ export function makeGrokAdapter(
 
     const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {
-        // Wait for a settling resume replay before taking the thread lock:
-        // stopSession/startSession need that lock, and stopping the session is
-        // what resolves the deferred early, so awaiting under the lock would
-        // stall stop/restart until the replay quiets or the hard timeout fires.
+        // Startup registers the session before its configuration settles, so
+        // compaction must wait before taking the thread lock.
         const preLockCtx = yield* requireSession(threadId);
         if (preLockCtx.sessionConfigReady !== undefined) {
           yield* Deferred.await(preLockCtx.sessionConfigReady);
-        }
-        if (preLockCtx.resumeReplayReady !== undefined) {
-          yield* Deferred.await(preLockCtx.resumeReplayReady);
         }
         // Claim the compaction slot under the thread lock, but run the
         // (potentially long) /compact prompt outside it: stopSession/restart
@@ -2275,7 +2185,7 @@ export function makeGrokAdapter(
     const claimGrokCompactionSlot = (threadId: ThreadId, preLockCtx: GrokSessionContext) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        // The pre-lock replay wait resolves early when the session is stopped;
+        // The pre-lock setup wait resolves early when the session is stopped;
         // if a restart won the lock first, this thread id now maps to a fresh
         // session that the original compaction request never targeted.
         if (ctx !== preLockCtx) {
@@ -2284,15 +2194,6 @@ export function makeGrokAdapter(
             operation: "compactThread",
             issue:
               "The Grok session was restarted while waiting to compact; retry once it settles.",
-          });
-        }
-        if (ctx.resumeReplayReady !== undefined) {
-          // The session was restarted while waiting above and its new replay
-          // window is still settling; reject instead of blocking the lock.
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "compactThread",
-            issue: "Cannot compact while the resumed Grok thread is still replaying history.",
           });
         }
         // The prompt runs outside the thread lock, so a concurrent /compact can
