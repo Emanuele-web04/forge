@@ -3,18 +3,23 @@
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import {
+  buildProviderUsageMenuModel,
   ProviderUsageMenuPopup,
-  useProviderUsageMenuModel,
 } from "~/components/ProviderUsageMenuControl";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { MenuTrigger } from "~/components/ui/menu";
+import { resolveProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimits";
 import {
   serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { useStore } from "~/store";
+import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
 
 import { resolveEnvironmentProviderUsageSummary } from "./EnvironmentUsageSection.logic";
 import {
@@ -25,20 +30,41 @@ import {
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
 
-function EnvironmentProviderUsageRow({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
+const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
+
+function EnvironmentProviderUsageRow({
+  snapshot,
+  threadRateLimits,
+}: {
+  snapshot: ServerProviderUsageSnapshot;
+  threadRateLimits: ReadonlyArray<ProviderRateLimit>;
+}) {
   const provider = snapshot.provider;
   const providerName = providerUsageDisplayName(provider);
-  // The parent owns the one batch query. Supplying its snapshot prevents every row from
-  // starting another batch plus provider-scoped request while retaining thread-derived fallback.
-  const model = useProviderUsageMenuModel(provider, { providerSnapshot: snapshot });
+  const usageSummary = resolveProviderUsageSummary({
+    provider,
+    accountRateLimits: threadRateLimits,
+    authoritativeLiveSnapshot: snapshot,
+  });
+  const model = buildProviderUsageMenuModel({
+    provider,
+    providerSnapshot: snapshot,
+    usageSummary: { ...usageSummary, isLoading: false },
+  });
   const summary = resolveEnvironmentProviderUsageSummary({
     providerName,
     rows: model.rows,
     snapshot,
+    hasUsageLines: model.usageLines.length > 0,
   });
 
   return (
-    <ProviderUsageMenuPopup provider={provider} model={model} align="start">
+    <ProviderUsageMenuPopup
+      provider={provider}
+      model={model}
+      align="start"
+      showUsageLines={true}
+    >
       <MenuTrigger
         render={
           <button
@@ -89,6 +115,8 @@ function EnvironmentProviderUsageRow({ snapshot }: { snapshot: ServerProviderUsa
 export function EnvironmentUsageSection() {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
+  const threads = useStore(selectAccountRateLimitThreads);
+  const threadRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
   // The server already filters the batch. Rechecking the live settings projection prevents a
   // just-disabled provider from lingering while React Query refreshes the previous batch.
   const snapshots = (usageQuery.data ?? []).filter(
@@ -102,7 +130,11 @@ export function EnvironmentUsageSection() {
   return (
     <EnvironmentLabeledSection label="Usage">
       {snapshots.map((snapshot) => (
-        <EnvironmentProviderUsageRow key={snapshot.provider} snapshot={snapshot} />
+        <EnvironmentProviderUsageRow
+          key={snapshot.provider}
+          snapshot={snapshot}
+          threadRateLimits={threadRateLimits}
+        />
       ))}
     </EnvironmentLabeledSection>
   );

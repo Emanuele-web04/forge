@@ -10,7 +10,10 @@ export interface EnvironmentProviderUsageSummary {
   readonly ariaLabel: string;
 }
 
-function providerUsageStatusLabel(snapshot: ServerProviderUsageSnapshot): string {
+function providerUsageStatusLabel(
+  snapshot: ServerProviderUsageSnapshot,
+  hasUsageLines: boolean,
+): string {
   switch (snapshot.status) {
     case "needs-auth":
       return "Sign in";
@@ -19,7 +22,7 @@ function providerUsageStatusLabel(snapshot: ServerProviderUsageSnapshot): string
     case "error":
       return "Unavailable";
     default:
-      return "No data";
+      return hasUsageLines ? "Connected" : "No data";
   }
 }
 
@@ -27,8 +30,9 @@ export function resolveEnvironmentProviderUsageSummary(input: {
   readonly providerName: string;
   readonly rows: ReadonlyArray<ProviderUsageDisplayRow>;
   readonly snapshot: ServerProviderUsageSnapshot;
+  readonly hasUsageLines: boolean;
 }): EnvironmentProviderUsageSummary {
-  const statusLabel = providerUsageStatusLabel(input.snapshot);
+  const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines);
   const rowSummary = input.rows
     .map((row) => `${row.label} ${row.remainingLabel} remaining`)
     .join(", ");
