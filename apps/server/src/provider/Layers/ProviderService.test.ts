@@ -5407,7 +5407,7 @@ it.effect("ProviderServiceLive starts adapter teardown when a queued session ref
     shutdown.codex.listSessions.mockImplementation(() => {
       shutdownListCalls += 1;
       return shutdownListCalls === 2
-        ? Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: "codex", threadId }))
+        ? Effect.die(new Error("injected queued listSessions failure"))
         : listSessions();
     });
     shutdown.codex.stopAll.mockImplementation(() =>
