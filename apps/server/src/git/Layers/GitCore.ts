@@ -56,19 +56,30 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 // with a longer TTL so a dead remote settles into occasional retries.
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL = Duration.seconds(30);
+const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX = Duration.seconds(300);
 // 5s was below realistic authenticated-fetch cost on Windows (credential helper
 // latency). Align with the success refresh interval.
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
+// Per-remote consecutive failure count. Exported for unit testing the TTL policy.
+export const consecutiveUpstreamRefreshFailures = new Map<string, number>();
+
 /** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
 export function statusUpstreamRefreshCacheTimeToLive(
   exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
+  key?: { readonly remoteName: string },
 ): Duration.Duration {
-  return Exit.isSuccess(exit) && exit.value === "refreshed"
-    ? STATUS_UPSTREAM_REFRESH_INTERVAL
-    : STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL;
+  if (Exit.isSuccess(exit) && exit.value === "refreshed") {
+    return STATUS_UPSTREAM_REFRESH_INTERVAL;
+  }
+  const failures = key ? (consecutiveUpstreamRefreshFailures.get(key.remoteName) ?? 0) : 0;
+  const backoff = Math.min(
+    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
+    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
+  );
+  return Duration.millis(backoff);
 }
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -1024,17 +1035,36 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           upstreamBranch: cacheKey.upstreamBranch,
         }).pipe(
           Effect.as("refreshed" as const),
-          Effect.catch((cause) =>
-            Effect.logWarning("Git status upstream refresh failed; retry is temporarily paused", {
+          Effect.tap(() =>
+            Effect.sync(() => {
+              consecutiveUpstreamRefreshFailures.delete(cacheKey.remoteName);
+            }),
+          ),
+          Effect.catch((cause) => {
+            const failures = consecutiveUpstreamRefreshFailures.get(cacheKey.remoteName) ?? 0;
+            consecutiveUpstreamRefreshFailures.set(cacheKey.remoteName, failures + 1);
+            const logFields = {
               cause,
               cwd: cacheKey.cwd,
               remoteName: cacheKey.remoteName,
               upstreamBranch: cacheKey.upstreamBranch,
-            }).pipe(Effect.as("failed" as const)),
-          ),
+            };
+            const log =
+              failures === 0
+                ? Effect.logWarning(
+                    "Git status upstream refresh failed; retry is temporarily paused",
+                    logFields,
+                  )
+                : Effect.logDebug(
+                    "Git status upstream refresh failed again; backing off",
+                    logFields,
+                  );
+            return log.pipe(Effect.as("failed" as const));
+          }),
         ),
-      // Keep successful refreshes warm; also cache failures so unreachable
-      // remotes neither re-fetch nor re-log on every git.status (#515).
+      // Keep successful refreshes warm; cache failures with exponential backoff
+      // per remote so unreachable remotes neither re-fetch nor re-log every
+      // git.status (#515, quick noise wins).
       timeToLive: statusUpstreamRefreshCacheTimeToLive,
     });
 

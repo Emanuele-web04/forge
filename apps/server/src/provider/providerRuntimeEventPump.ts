@@ -82,6 +82,26 @@ function shouldLogRetry(attempt: number): boolean {
   return attempt === 1 || (attempt & (attempt - 1)) === 0;
 }
 
+function trimRuntimeEventDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function sanitizeRuntimeEvent(event: ProviderRuntimeEvent): ProviderRuntimeEvent {
+  if (event.type === "request.opened") {
+    const trimmed = trimRuntimeEventDetail(event.payload.detail);
+    if (event.payload.detail === trimmed) return event;
+    return { ...event, payload: { ...event.payload, detail: trimmed } };
+  }
+  if (event.type === "event.unmapped") {
+    const trimmed = trimRuntimeEventDetail(event.payload.detail);
+    if (event.payload.detail === trimmed) return event;
+    return { ...event, payload: { ...event.payload, detail: trimmed } };
+  }
+  return event;
+}
+
 function health(input: {
   readonly provider: ProviderKind;
   readonly status: ProviderRuntimeEventPumpStatus;
@@ -204,11 +224,12 @@ export function runProviderRuntimeEventPump<R>(
     });
 
   const processEventReliably = (
-    event: ProviderRuntimeEvent,
+    rawEvent: ProviderRuntimeEvent,
     attempt = 1,
   ): Effect.Effect<void, never, R> =>
-    Effect.suspend(() =>
-      options.processEvent(event).pipe(
+    Effect.suspend(() => {
+      const event = sanitizeRuntimeEvent(rawEvent);
+      return options.processEvent(event).pipe(
         Effect.tap(() =>
           Effect.suspend(() => {
             lastEventAt = event.createdAt;
@@ -272,8 +293,8 @@ export function runProviderRuntimeEventPump<R>(
             Effect.andThen(processEventReliably(event, attempt + 1)),
           );
         }),
-      ),
-    );
+      );
+    });
 
   const runStreamOnce = () => Stream.runForEach(options.stream, processEventReliably);
 

@@ -22,6 +22,30 @@ function completedEvent(eventId: string): ProviderRuntimeEvent {
   };
 }
 
+function requestOpenedEvent(eventId: string, detail: string): ProviderRuntimeEvent {
+  return {
+    type: "request.opened",
+    eventId: EventId.makeUnsafe(eventId),
+    provider: "codex",
+    createdAt: "2026-07-23T20:00:00.000Z",
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    payload: { requestType: "command_execution_approval", detail },
+  };
+}
+
+function unmappedEvent(eventId: string, detail: string): ProviderRuntimeEvent {
+  return {
+    type: "event.unmapped",
+    eventId: EventId.makeUnsafe(eventId),
+    provider: "codex",
+    createdAt: "2026-07-23T20:00:00.000Z",
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    payload: { nativeType: "item/future/outputDelta", detail },
+  };
+}
+
 describe("providerRuntimeEventPump", () => {
   it("retries the current event before consuming the next queue item", async () => {
     await Effect.runPromise(
@@ -156,6 +180,50 @@ describe("providerRuntimeEventPump", () => {
             quarantinedEvents: 1,
             lastQuarantinedEventId: "event-poison",
           });
+        }),
+      ),
+    );
+  });
+
+  it("trims request.opened and event.unmapped detail before processing", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const queue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+          const health = makeProviderRuntimeEventPumpHealthRegistry(["codex"]);
+          const processed: ProviderRuntimeEvent[] = [];
+
+          const fiber = yield* runProviderRuntimeEventPump({
+            provider: "codex",
+            stream: Stream.fromQueue(queue),
+            processEvent: (event) =>
+              Effect.sync(() => {
+                processed.push(event);
+              }),
+            updateHealth: health.update,
+            retryBaseDelayMs: 1,
+            retryMaxDelayMs: 2,
+          }).pipe(Effect.forkScoped);
+
+          yield* Queue.offerAll(queue, [
+            requestOpenedEvent("request-trim", "  rm -rf *  \n"),
+            unmappedEvent("unmapped-trim", "  raw tool output\n"),
+            requestOpenedEvent("request-empty", "   \n"),
+          ]);
+          yield* Effect.sleep(10);
+          yield* Fiber.interrupt(fiber);
+
+          expect(processed).toHaveLength(3);
+          expect(processed[0]?.type).toBe("request.opened");
+          expect((processed[0] as { payload: { detail?: string } }).payload.detail).toBe(
+            "rm -rf *",
+          );
+          expect(processed[1]?.type).toBe("event.unmapped");
+          expect((processed[1] as { payload: { detail?: string } }).payload.detail).toBe(
+            "raw tool output",
+          );
+          expect(processed[2]?.type).toBe("request.opened");
+          expect((processed[2] as { payload: { detail?: string } }).payload.detail).toBeUndefined();
         }),
       ),
     );
