@@ -294,6 +294,44 @@ describe("withProviderUpdateTimeout", () => {
 });
 
 describe("shouldOfferProviderUpdateAction", () => {
+  it("does not offer updates without a confirmed CLI version", () => {
+    const uninstalledPi = providerStatus("pi", {
+      status: "warning",
+      available: true,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "pi update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+    const uninstalledDroid = providerStatus("droid", {
+      status: "error",
+      available: false,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "droid update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(shouldOfferProviderUpdateAction(uninstalledPi)).toBe(false);
+    expect(shouldOfferProviderUpdateAction(uninstalledDroid)).toBe(false);
+  });
+
+  it("offers updates for installed outdated CLIs", () => {
+    expect(shouldOfferProviderUpdateAction(providerStatus("codex"))).toBe(true);
+  });
+
   it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {
     expect(
       shouldOfferProviderUpdateAction(

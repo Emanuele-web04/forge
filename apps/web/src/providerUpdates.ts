@@ -87,6 +87,7 @@ export function shouldOfferProviderUpdateAction(provider: ServerProviderStatus):
   const advisory = provider.versionAdvisory;
   return (
     advisory?.canUpdate === true &&
+    advisory.currentVersion !== null &&
     advisory.updateCommand !== null &&
     (advisory.status === "behind_latest" || advisory.status === "unknown")
   );
