@@ -68,11 +68,11 @@ describe("buildShortcutSheetSections", () => {
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });
 
-  it("switches to workspace shortcuts when the workspace is open", () => {
+  it("separates macOS workspace tabs from thread jumps while the workspace is open", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [],
       projectScripts: [],
-      platform: "Linux",
+      platform: "MacIntel",
       context: {
         terminalFocus: false,
         terminalOpen: true,
@@ -82,13 +82,13 @@ describe("buildShortcutSheetSections", () => {
 
     expect(
       sections[0]?.entries.some(
-        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "⌃1",
       ),
     ).toBe(true);
     expect(sections[1]?.title).toBe("Outside workspace mode");
     expect(
       sections[1]?.entries.some(
-        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "⌘1",
       ),
     ).toBe(true);
   });
