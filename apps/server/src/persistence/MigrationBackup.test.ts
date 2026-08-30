@@ -897,8 +897,17 @@ describe("migration backups", () => {
     await fs.mkdir(provenancePath);
 
     await expect(Effect.runPromise(restoreMarkedMigrationBackup(dbPath))).rejects.toThrow();
-    expect((await fs.stat(markerPath)).isFile()).toBe(true);
-    expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
+    const strandedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
+      readonly phase: string;
+      readonly resumeAttempts: number;
+    };
+    expect(strandedMarker).toMatchObject({
+      phase: "migration-restore-in-progress",
+      resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+    });
+    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).rejects.toThrow(
+      MigrationRecoveryRequiredError,
+    );
   });
 
   it("prunes versioned snapshots to the bounded retention count", async () => {

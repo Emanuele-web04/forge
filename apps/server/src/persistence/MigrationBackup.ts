@@ -1177,6 +1177,17 @@ export const restoreMarkedMigrationBackup = (dbPath: string) =>
           `No migration recovery marker or completed backup provenance exists for ${dbPath}.`,
         );
       }
+      if (record.markerPath === migrationRecoveryMarkerPath(dbPath)) {
+        // A restore is not a migration resume. Exhaust the automatic resume
+        // budget before replacing the live database so a crash or provenance
+        // write failure can only return to the explicit restore path.
+        await writePrivateJsonFile(record.markerPath, {
+          ...record.payload,
+          phase: "migration-restore-in-progress",
+          restoreStartedAt: new Date().toISOString(),
+          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+        });
+      }
       await Effect.runPromise(
         restoreSqliteMigrationBackup({ dbPath, backupPath: record.backupPath }),
       );
