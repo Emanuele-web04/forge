@@ -3772,6 +3772,8 @@ async function handleDesktopSchemaTooNewRecovery(
         paths,
         cwd: resolveBackendCwd(),
         env: process.env,
+        expectedBackupPath: restoreCandidate.backupPath,
+        expectedProvenancePath: restoreCandidate.provenancePath,
         verifyRestore: () => hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
         restoreVerificationFailure:
           "Migration restore completed without exact completed-provenance verification.",

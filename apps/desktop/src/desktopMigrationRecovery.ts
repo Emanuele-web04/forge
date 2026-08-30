@@ -221,6 +221,8 @@ export async function restoreDesktopMigrationBackup(input: {
   readonly paths: DesktopMigrationRecoveryPaths;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly expectedBackupPath?: string | undefined;
+  readonly expectedProvenancePath?: string | undefined;
   readonly verifyRestore?: (() => boolean) | undefined;
   readonly restoreVerificationFailure?: string | undefined;
 }): Promise<string> {
@@ -228,9 +230,21 @@ export async function restoreDesktopMigrationBackup(input: {
     throw new Error(`Migration recovery command is missing: ${input.paths.restoreEntryPath}`);
   }
 
+  if ((input.expectedBackupPath === undefined) !== (input.expectedProvenancePath === undefined)) {
+    throw new Error("Both expected migration backup and provenance paths are required.");
+  }
+  const restoreSelection =
+    input.expectedBackupPath && input.expectedProvenancePath
+      ? [
+          "--backup-path",
+          input.expectedBackupPath,
+          "--provenance-path",
+          input.expectedProvenancePath,
+        ]
+      : [];
   const { stdout, stderr } = await execFile(
     input.executablePath,
-    [...input.nodeArgs, input.paths.restoreEntryPath, input.paths.dbPath],
+    [...input.nodeArgs, input.paths.restoreEntryPath, input.paths.dbPath, ...restoreSelection],
     {
       cwd: input.cwd,
       env: {

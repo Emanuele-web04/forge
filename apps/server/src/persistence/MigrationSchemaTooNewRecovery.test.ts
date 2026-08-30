@@ -8,6 +8,7 @@ import { Effect, Layer } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
   migrationBackupDirectory,
   migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
@@ -109,6 +110,27 @@ async function writeCompletedProvenance(input: {
       createdAt: "2026-08-30T12:00:00.000Z",
       completedAt: "2026-08-30T12:01:00.000Z",
       resumeAttempts: 0,
+    })}\n`,
+  );
+}
+
+async function writeActiveRecoveryMarker(input: {
+  readonly databasePath: string;
+  readonly backupPath: string;
+  readonly targetVersion: number;
+  readonly phase?: string;
+}): Promise<void> {
+  await fs.writeFile(
+    migrationRecoveryMarkerPath(input.databasePath),
+    `${JSON.stringify({
+      version: 1,
+      databasePath: input.databasePath,
+      backupPath: input.backupPath,
+      sourceVersion: "v1",
+      targetVersion: input.targetVersion,
+      phase: input.phase ?? "migration-in-progress",
+      createdAt: "2026-08-30T12:02:00.000Z",
+      resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
     })}\n`,
   );
 }
@@ -287,5 +309,134 @@ describe("completed migration backup recovery", () => {
     } finally {
       liveDatabase.close();
     }
+  });
+
+  it("restores the explicitly selected completed backup instead of a leftover active marker", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
+    const databaseMigrationId = latestMigrationId + 1;
+    const selectedBackupMigrationId = Math.max(latestMigrationId - 5, 0);
+    writeTrackedDatabase(databasePath, databaseMigrationId);
+    await fs.mkdir(migrationBackupDirectory(databasePath));
+    const selectedBackupPath = generatedBackupPath(databasePath, firstUuid, databaseMigrationId);
+    const activeBackupPath = generatedBackupPath(databasePath, secondUuid, databaseMigrationId);
+    writeTrackedDatabase(selectedBackupPath, selectedBackupMigrationId);
+    writeTrackedDatabase(activeBackupPath, latestMigrationId);
+    await writeCompletedProvenance({
+      databasePath,
+      backupPath: selectedBackupPath,
+      targetVersion: databaseMigrationId,
+    });
+    await writeActiveRecoveryMarker({
+      databasePath,
+      backupPath: activeBackupPath,
+      targetVersion: databaseMigrationId,
+    });
+
+    await Effect.runPromise(
+      restoreMarkedMigrationBackup(databasePath, {
+        expectedBackupPath: selectedBackupPath,
+        expectedProvenancePath: migrationBackupProvenancePath(databasePath),
+      }),
+    );
+
+    const restored = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        restored
+          .prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations")
+          .get(),
+      ).toMatchObject({ migrationId: selectedBackupMigrationId });
+    } finally {
+      restored.close();
+    }
+    await expect(fs.stat(migrationRecoveryMarkerPath(databasePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fs.readFile(migrationBackupProvenancePath(databasePath), "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      backupPath: selectedBackupPath,
+      phase: "migration-restored",
+    });
+  });
+
+  it("keeps an exhausted exact restore marker when completed-provenance restore fails", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
+    const databaseMigrationId = latestMigrationId + 1;
+    writeTrackedDatabase(databasePath, databaseMigrationId);
+    await fs.mkdir(migrationBackupDirectory(databasePath));
+    const backupPath = generatedBackupPath(databasePath, firstUuid, databaseMigrationId);
+    await fs.writeFile(backupPath, "not sqlite");
+    await writeCompletedProvenance({
+      databasePath,
+      backupPath,
+      targetVersion: databaseMigrationId,
+    });
+
+    await expect(
+      Effect.runPromise(
+        restoreMarkedMigrationBackup(databasePath, {
+          expectedBackupPath: backupPath,
+          expectedProvenancePath: migrationBackupProvenancePath(databasePath),
+        }),
+      ),
+    ).rejects.toThrow();
+
+    await expect(
+      fs.readFile(migrationRecoveryMarkerPath(databasePath), "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      backupPath,
+      phase: "migration-restore-in-progress",
+      resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+    });
+    const live = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        live.prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations").get(),
+      ).toMatchObject({ migrationId: databaseMigrationId });
+    } finally {
+      live.close();
+    }
+  });
+
+  it("recovers an exact restore after a crash strands the live database mid-swap", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
+    const databaseMigrationId = latestMigrationId + 1;
+    const backupMigrationId = Math.max(latestMigrationId - 5, 0);
+    writeTrackedDatabase(databasePath, databaseMigrationId);
+    await fs.mkdir(migrationBackupDirectory(databasePath));
+    const backupPath = generatedBackupPath(databasePath, firstUuid, databaseMigrationId);
+    writeTrackedDatabase(backupPath, backupMigrationId);
+    await writeCompletedProvenance({
+      databasePath,
+      backupPath,
+      targetVersion: databaseMigrationId,
+    });
+    await writeActiveRecoveryMarker({
+      databasePath,
+      backupPath,
+      targetVersion: databaseMigrationId,
+      phase: "migration-restore-in-progress",
+    });
+    await fs.rename(databasePath, `${databasePath}.stranded-after-restore-crash`);
+
+    await Effect.runPromise(restoreMarkedMigrationBackup(databasePath));
+
+    const restored = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        restored
+          .prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations")
+          .get(),
+      ).toMatchObject({ migrationId: backupMigrationId });
+    } finally {
+      restored.close();
+    }
+    await expect(fs.stat(migrationRecoveryMarkerPath(databasePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });

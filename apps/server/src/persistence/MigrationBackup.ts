@@ -896,9 +896,9 @@ const restoreSqliteMigrationBackup = (input: {
       throw cause;
     }
 
-    // Make the database/WAL/SHM swap durable. The caller retains the active
-    // recovery marker until restored provenance is durably recorded, so a
-    // crash between these two phases still has a recoverable pointer.
+    // Make the database/WAL/SHM swap durable before the caller records the
+    // completed restore and clears the marker. Until both happen, a crash or
+    // cleanup failure remains an explicit, retryable recovery state.
     await syncDirectory(path.dirname(input.dbPath));
     await pruneFailedMigrationBundles(input.dbPath);
     await syncDirectory(path.dirname(input.dbPath));
@@ -1310,28 +1310,52 @@ export const resumeMarkedMigration = <A, E, R>(
  * completed migration provenance. The operator must stop every Synara process
  * before invoking it; startup itself deliberately never calls this function.
  */
-export const restoreMarkedMigrationBackup = (dbPath: string) =>
+export interface RestoreMarkedMigrationBackupOptions {
+  readonly expectedBackupPath?: string | undefined;
+  readonly expectedProvenancePath?: string | undefined;
+}
+
+export const restoreMarkedMigrationBackup = (
+  dbPath: string,
+  options: RestoreMarkedMigrationBackupOptions = {},
+) =>
   withDatabaseLifecycleLock(
     dbPath,
     attemptPromise(async () => {
-      const activeMarker = await readMigrationRecoveryMarker(dbPath);
-      const record = activeMarker ?? (await readCompletedMigrationProvenance(dbPath));
+      const hasExpectedCompletedBackup =
+        options.expectedBackupPath !== undefined || options.expectedProvenancePath !== undefined;
+      if (
+        hasExpectedCompletedBackup &&
+        (options.expectedBackupPath === undefined || options.expectedProvenancePath === undefined)
+      ) {
+        throw new Error("Both expected migration backup and provenance paths are required.");
+      }
+      const activeMarker = hasExpectedCompletedBackup
+        ? null
+        : await readMigrationRecoveryMarker(dbPath);
+      const completedProvenance =
+        hasExpectedCompletedBackup || !activeMarker
+          ? await readCompletedMigrationProvenance(dbPath)
+          : null;
+      const record = hasExpectedCompletedBackup
+        ? completedProvenance
+        : (activeMarker ?? completedProvenance);
       if (!record) {
         throw new Error(
           `No migration recovery marker or completed backup provenance exists for ${dbPath}.`,
         );
       }
-      if (activeMarker) {
-        // A restore is not a migration resume. Exhaust the automatic resume
-        // budget before replacing the live database so a crash or provenance
-        // write failure can only return to the explicit restore path.
-        await writePrivateJsonFile(record.markerPath, {
-          ...record.payload,
-          phase: "migration-restore-in-progress",
-          restoreStartedAt: new Date().toISOString(),
-          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
-        });
-      } else {
+      if (hasExpectedCompletedBackup) {
+        if (
+          record.backupPath !== options.expectedBackupPath ||
+          record.markerPath !== options.expectedProvenancePath
+        ) {
+          throw new Error("Completed migration provenance no longer matches the selected backup.");
+        }
+      }
+
+      const restoringCompletedProvenance = record === completedProvenance;
+      if (restoringCompletedProvenance) {
         if (record.payload.phase !== "migration-completed") {
           throw new Error(`Migration backup provenance is not restorable: ${record.markerPath}`);
         }
@@ -1341,6 +1365,25 @@ export const restoreMarkedMigrationBackup = (dbPath: string) =>
             `Migration backup provenance does not describe the current database: ${record.markerPath}`,
           );
         }
+        await writePrivateJsonFile(migrationRecoveryMarkerPath(dbPath), {
+          ...record.payload,
+          version: 1,
+          databasePath: dbPath,
+          backupPath: record.backupPath,
+          phase: "migration-restore-in-progress",
+          restoreStartedAt: new Date().toISOString(),
+          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+        });
+      } else {
+        // A restore is not a migration resume. Exhaust the automatic resume
+        // budget before replacing the live database so a crash or provenance
+        // write failure can only return to the explicit restore path.
+        await writePrivateJsonFile(record.markerPath, {
+          ...record.payload,
+          phase: "migration-restore-in-progress",
+          restoreStartedAt: new Date().toISOString(),
+          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+        });
       }
       await Effect.runPromise(
         restoreSqliteMigrationBackup({
@@ -1356,11 +1399,9 @@ export const restoreMarkedMigrationBackup = (dbPath: string) =>
         phase: "migration-restored",
         restoredAt: new Date().toISOString(),
       });
-      if (record.markerPath === migrationRecoveryMarkerPath(dbPath)) {
-        await fs.unlink(record.markerPath).catch((cause) => {
-          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-        });
-        await syncDirectory(path.dirname(dbPath));
-      }
+      await fs.unlink(migrationRecoveryMarkerPath(dbPath)).catch((cause) => {
+        if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+      });
+      await syncDirectory(path.dirname(dbPath));
     }),
   );

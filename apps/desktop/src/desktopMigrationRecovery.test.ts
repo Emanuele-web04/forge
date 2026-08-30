@@ -74,9 +74,10 @@ describe("desktop migration recovery", () => {
     await FS.writeFile(paths.markerPath, "pending", "utf8");
     await FS.writeFile(
       paths.restoreEntryPath,
-      'import fs from "node:fs/promises"; await fs.unlink(`${process.argv[2]}.migration-recovery.json`); console.log("restored");',
+      'import fs from "node:fs/promises"; await fs.writeFile(`${process.argv[2]}.restore-args.json`, JSON.stringify(process.argv.slice(3))); await fs.unlink(`${process.argv[2]}.migration-recovery.json`); console.log("restored");',
       "utf8",
     );
+    const expectedBackupPath = `${dbPath}.backups/exact.sqlite`;
 
     await expect(
       restoreDesktopMigrationBackup({
@@ -85,9 +86,19 @@ describe("desktop migration recovery", () => {
         paths,
         cwd: directory,
         env: process.env,
+        expectedBackupPath,
+        expectedProvenancePath: paths.provenancePath,
       }),
     ).resolves.toBe("restored");
     await expect(FS.access(paths.markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      FS.readFile(`${dbPath}.restore-args.json`, "utf8").then(JSON.parse),
+    ).resolves.toEqual([
+      "--backup-path",
+      expectedBackupPath,
+      "--provenance-path",
+      paths.provenancePath,
+    ]);
   });
 
   it("fails closed when a successful command leaves the recovery marker behind", async () => {
