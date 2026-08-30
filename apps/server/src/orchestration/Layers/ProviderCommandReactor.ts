@@ -834,39 +834,54 @@ const make = Effect.gen(function* () {
   ) {
     const activityKey = providerContextLifecycleActivityKey(input);
     pendingProviderContextLifecycleActivities.set(activityKey, input);
-    yield* Effect.gen(function* () {
-      yield* appendProviderContextLifecycleActivity(input);
-      if (
-        input.completeDurablePriorTranscript &&
-        providerService.completePriorTranscriptBootstrap
-      ) {
-        // The durable bootstrap marker is the process-restart recovery path
-        // for this evidence. Retire it only after the idempotent activity has
-        // committed; if either write fails, retry both in order.
-        yield* providerService.completePriorTranscriptBootstrap({ threadId: input.threadId });
-      }
-    }).pipe(
-      Effect.tap(() =>
-        Effect.sync(() => {
-          if (pendingProviderContextLifecycleActivities.get(activityKey) === input) {
-            pendingProviderContextLifecycleActivities.delete(activityKey);
-          }
-        }),
-      ),
+    const activityAppended = yield* appendProviderContextLifecycleActivity(input).pipe(
+      Effect.as(true),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
-          : scheduleProviderContextLifecycleActivityRetry(activityKey).pipe(
-              Effect.andThen(
-                Effect.logWarning("queued provider context lifecycle activity for retry", {
-                  threadId: input.threadId,
-                  turnId: input.turnId,
-                  cause: Cause.pretty(cause),
-                }),
-              ),
-            ),
+          : scheduleProviderContextLifecycleActivityRetry(activityKey)
+              .pipe(
+                Effect.andThen(
+                  Effect.logWarning("queued provider context lifecycle activity for retry", {
+                    threadId: input.threadId,
+                    turnId: input.turnId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              )
+              .pipe(Effect.as(false)),
       ),
     );
+    if (!activityAppended) {
+      return "activity-pending" as const;
+    }
+    if (pendingProviderContextLifecycleActivities.get(activityKey) === input) {
+      pendingProviderContextLifecycleActivities.delete(activityKey);
+    }
+    if (input.completeDurablePriorTranscript && providerService.completePriorTranscriptBootstrap) {
+      // The durable bootstrap marker is the process-restart recovery path for
+      // this evidence. Retire it only after the idempotent activity committed.
+      // A failed marker write deliberately keeps the recap pending for the next
+      // accepted turn instead of completing it later without another delivery.
+      return yield* providerService
+        .completePriorTranscriptBootstrap({ threadId: input.threadId })
+        .pipe(
+          Effect.as("completed" as const),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning(
+                  "provider context lifecycle activity could not retire transcript bootstrap",
+                  {
+                    threadId: input.threadId,
+                    turnId: input.turnId,
+                    cause: Cause.pretty(cause),
+                  },
+                ).pipe(Effect.as("durable-pending" as const)),
+          ),
+        );
+    }
+    return "completed" as const;
   });
   const runProviderContextLifecycleActivityRetries = Stream.fromQueue(
     providerContextLifecycleActivityRetryQueue,
@@ -880,7 +895,22 @@ const make = Effect.gen(function* () {
             if (!pending) {
               return;
             }
-            yield* retainAndAppendProviderContextLifecycleActivity(pending);
+            // The provider already accepted this recap turn. Once its
+            // idempotent activity append succeeds, the same attempt may safely
+            // retire the durable marker. A marker failure itself is not queued:
+            // that keeps the recap pending for the next accepted turn.
+            const persistence = yield* retainAndAppendProviderContextLifecycleActivity(pending);
+            if (persistence === "completed") {
+              const attempt = pendingContextBootstrapAttempts.get(pending.threadId);
+              if (attempt?.turnId === pending.turnId) {
+                retirePendingContextBootstrapAttempt(pending.threadId, attempt);
+              }
+            } else if (persistence === "durable-pending") {
+              const attempt = pendingContextBootstrapAttempts.get(pending.threadId);
+              if (attempt?.turnId === pending.turnId) {
+                pendingContextBootstrapAttempts.delete(pending.threadId);
+              }
+            }
           }),
         ),
       ),
@@ -905,6 +935,32 @@ const make = Effect.gen(function* () {
     sidechatContextBootstrapThreadIds.delete(threadId);
     freshSessionContextBootstrapThreadIds.delete(threadId);
     rollbackContextBootstrapThreadIds.delete(threadId);
+    pendingContextBootstrapAttempts.delete(threadId);
+  };
+
+  const clearPendingContextBootstrapAttemptFlags = (
+    threadId: string,
+    attempt: PendingContextBootstrapAttempt,
+  ) => {
+    if (attempt.clearSidechat) {
+      sidechatContextBootstrapThreadIds.delete(threadId);
+    }
+    if (attempt.clearFreshSessionTranscript) {
+      freshSessionContextBootstrapThreadIds.delete(threadId);
+    }
+    if (attempt.clearRollbackTranscript) {
+      rollbackContextBootstrapThreadIds.delete(threadId);
+    }
+  };
+
+  const retirePendingContextBootstrapAttempt = (
+    threadId: string,
+    attempt: PendingContextBootstrapAttempt,
+  ) => {
+    if (pendingContextBootstrapAttempts.get(threadId) !== attempt) {
+      return;
+    }
+    clearPendingContextBootstrapAttemptFlags(threadId, attempt);
     pendingContextBootstrapAttempts.delete(threadId);
   };
 
@@ -944,7 +1000,7 @@ const make = Effect.gen(function* () {
     let lifecyclePersistenceOwnsDurableBootstrap = false;
     if (attempt.lifecycleEvidence !== null && attempt.turnId !== undefined) {
       lifecyclePersistenceOwnsDurableBootstrap = true;
-      yield* retainAndAppendProviderContextLifecycleActivity(
+      const lifecyclePersistence = yield* retainAndAppendProviderContextLifecycleActivity(
         toProviderContextLifecycleActivityRecord({
           threadId,
           turnId: attempt.turnId,
@@ -954,6 +1010,16 @@ const make = Effect.gen(function* () {
           completeDurablePriorTranscript: attempt.completeDurablePriorTranscript,
         }),
       );
+      if (lifecyclePersistence === "activity-pending") {
+        // The accepted provider turn already received this recap, so current
+        // in-memory state can advance while the durable marker remains as the
+        // crash-recovery source until the idempotent activity retry succeeds.
+        clearPendingContextBootstrapAttemptFlags(threadId, attempt);
+        return;
+      }
+      if (lifecyclePersistence === "durable-pending") {
+        return;
+      }
     }
     if (pendingContextBootstrapAttempts.get(threadId) !== attempt) {
       return;
@@ -971,15 +1037,7 @@ const make = Effect.gen(function* () {
     if (pendingContextBootstrapAttempts.get(threadId) !== attempt) {
       return;
     }
-    if (attempt.clearSidechat) {
-      sidechatContextBootstrapThreadIds.delete(threadId);
-    }
-    if (attempt.clearFreshSessionTranscript) {
-      freshSessionContextBootstrapThreadIds.delete(threadId);
-    }
-    if (attempt.clearRollbackTranscript) {
-      rollbackContextBootstrapThreadIds.delete(threadId);
-    }
+    retirePendingContextBootstrapAttempt(threadId, attempt);
   });
 
   const observePendingContextBootstrapTerminalEvent = Effect.fnUntraced(function* (
@@ -996,10 +1054,13 @@ const make = Effect.gen(function* () {
     if (attempt.turnId !== event.turnId) {
       return;
     }
-    yield* completePendingContextBootstrapAttempt(event.threadId, attempt, event);
-    if (pendingContextBootstrapAttempts.get(event.threadId) === attempt) {
-      pendingContextBootstrapAttempts.delete(event.threadId);
+    if (event.type !== "turn.completed" || event.payload.state !== "completed") {
+      if (pendingContextBootstrapAttempts.get(event.threadId) === attempt) {
+        pendingContextBootstrapAttempts.delete(event.threadId);
+      }
+      return;
     }
+    yield* completePendingContextBootstrapAttempt(event.threadId, attempt, event);
   });
 
   const resolveConfiguredTextGenerationInput = Effect.fnUntraced(function* () {
@@ -2387,15 +2448,17 @@ const make = Effect.gen(function* () {
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
         if (terminalEvent?.turnId === sentTurn.turnId) {
-          yield* completePendingContextBootstrapAttempt(
-            input.threadId,
-            pendingContextBootstrapAttempt,
-            terminalEvent,
-          );
           if (
-            pendingContextBootstrapAttempts.get(input.threadId) === pendingContextBootstrapAttempt
+            terminalEvent.type !== "turn.completed" ||
+            terminalEvent.payload.state !== "completed"
           ) {
             pendingContextBootstrapAttempts.delete(input.threadId);
+          } else {
+            yield* completePendingContextBootstrapAttempt(
+              input.threadId,
+              pendingContextBootstrapAttempt,
+              terminalEvent,
+            );
           }
         }
       }

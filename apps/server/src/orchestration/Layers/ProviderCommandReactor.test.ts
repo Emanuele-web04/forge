@@ -9127,6 +9127,11 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+    const firstBootstrapTurnId = asTurnId("opencode-completion-failure-first-turn");
+    const retryBootstrapTurnId = asTurnId("opencode-completion-failure-retry-turn");
+    harness.sendTurn
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: firstBootstrapTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryBootstrapTurnId }));
 
     await dispatchHarnessUserTurn(harness, {
       messageId: "opencode-completion-failure-first",
@@ -9146,6 +9151,7 @@ describe("ProviderCommandReactor", () => {
       eventId: "opencode-completion-failure-terminal",
       provider: "opencode",
       type: "completed",
+      turnId: firstBootstrapTurnId,
     });
     await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
 
@@ -9163,6 +9169,7 @@ describe("ProviderCommandReactor", () => {
       eventId: "opencode-completion-retry-terminal",
       provider: "opencode",
       type: "completed",
+      turnId: retryBootstrapTurnId,
     });
     await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 2);
     expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
