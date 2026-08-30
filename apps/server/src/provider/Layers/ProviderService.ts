@@ -325,6 +325,10 @@ function hasResumeCursor(value: unknown): boolean {
  * or item-level events). Terminal events are the only stale-generation events
  * that may still be processed: they are the sole signal that can settle a
  * thread whose runtime died after its lifecycle generation was rotated away.
+ *
+ * Keep this predicate strictly about lifecycle: it also drives
+ * `runtimeStatusForEvent` and resume-cursor decisions, so interaction
+ * resolutions must never be folded in here (see `isStaleSettlingRuntimeEvent`).
  */
 function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return (
@@ -333,6 +337,25 @@ function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     event.type === "session.exited" ||
     event.type === "runtime.error"
   );
+}
+
+/**
+ * True for events that settle a durable pending interaction (an approval or an
+ * AskUserQuestion user-input request). These are not lifecycle events, but
+ * like terminal events they are the only signal that can cleanly close a row
+ * the projection would otherwise leave `pending` forever.
+ */
+function isInteractionResolutionRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return event.type === "user-input.resolved" || event.type === "request.resolved";
+}
+
+/**
+ * Events allowed through the stale-generation gate. Terminal events settle the
+ * turn/session; interaction resolutions settle the pending approval/user-input
+ * rows that a dying runtime cancels during teardown.
+ */
+function isStaleSettlingRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return isTerminalRuntimeEvent(event) || isInteractionResolutionRuntimeEvent(event);
 }
 
 function runtimeStatusForEvent(
@@ -1000,6 +1023,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           if (getDispatchState(input.threadId).latestGeneration !== input.generation) {
             return;
           }
+          const existingBinding = yield* directory.getBinding(input.threadId);
           const completedBeforePersistence = consumeRecentlyCompletedTurn(
             input.threadId,
             input.turnId,
@@ -1013,7 +1037,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // the delayed result must not overwrite any of its metadata. With
             // no row, preserve the live-fallback behavior by creating an
             // explicitly stopped binding from the settled dispatch result.
-            if (Option.isSome(yield* directory.getBinding(input.threadId))) {
+            if (Option.isSome(existingBinding)) {
               markPersistenceSucceeded(false);
               return;
             }
@@ -1323,23 +1347,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ) {
             const currentGeneration = lifecycle.currentGeneration(event.threadId);
             // A stale-generation event is normally noise from a superseded
-            // session, but terminal events are the exception: they are the
-            // only signal that can settle a turn whose runtime died after its
-            // generation was rotated or retired (a stop, a recovery, or an
-            // idle retire). Dropping them strands the thread "working" with a
-            // dead runtime until the reconciler or an app restart intervenes,
-            // and silently discards the very error that explains the death.
+            // session, but settling events are the exception: they are the
+            // only signal that can close out state whose runtime died after
+            // its generation was rotated or retired (a stop, a recovery, or an
+            // idle retire).
             //
-            // A stale terminal event is safe to let through when either:
+            // Terminal events settle the turn/session. Dropping them strands
+            // the thread "working" with a dead runtime until the reconciler or
+            // an app restart intervenes, and silently discards the very error
+            // that explains the death.
+            //
+            // Interaction resolutions (`user-input.resolved`,
+            // `request.resolved`) settle a durable pending approval/user-input
+            // row. A runtime that is torn down mid-turn (a Stop) cancels its
+            // outstanding requests during teardown, and the generation has
+            // already rotated by then — so this event is the only chance to
+            // close the row. Dropping it left `projection_pending_interactions`
+            // 'pending' forever: the sidebar showed "Awaiting Input" on an idle
+            // thread and every answer failed with no session bound. This is
+            // safe because the projection's resolved branch only applies a
+            // resolution when the existing row's lifecycleGeneration matches
+            // the event's, so a stale resolution can never clobber a newer
+            // generation's row.
+            //
+            // A stale settling event is let through when either:
             //  - no current generation exists (nothing newer can be corrupted
             //    by settling the old session's state), or
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
-            const staleTerminalIsSettling =
-              isTerminalRuntimeEvent(event) &&
+            const staleEventIsSettling =
+              isStaleSettlingRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
-            if (!staleTerminalIsSettling) {
+            if (!staleEventIsSettling) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
               // nothing, and the runtime reconciler later settles the turn as
@@ -1353,7 +1393,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               });
             }
             if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale terminal event
+              // A newer generation exists: only accept the stale settling event
               // when it still names the turn the binding has active. If the
               // binding already moved on (or is gone), keep dropping it.
               return directory.getBinding(event.threadId).pipe(
@@ -1384,8 +1424,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
             }
-            // No current generation and the event is terminal: fall through so
-            // the stale session's exit/error settles the binding and projection.
+            // No current generation and the event settles state: fall through
+            // so the stale session's exit/error/resolution settles the binding
+            // and projection.
           }
           return journalAndPublish(canonicalEvent);
         }),

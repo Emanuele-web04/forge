@@ -37,7 +37,11 @@ export interface AgentGatewayWriteAuthority {
 }
 
 export interface AgentGatewaySessionRegistryShape {
-  readonly issue: (threadId: ThreadId, provider: ProviderKind) => AgentGatewayIssuedSession;
+  readonly issue: (
+    threadId: ThreadId,
+    provider: ProviderKind,
+    options?: { readonly additionalCapabilities?: readonly AgentGatewayCapability[] },
+  ) => AgentGatewayIssuedSession;
   readonly verify: (token: string) => AgentGatewaySessionIdentity | null;
   readonly bindWriteAuthority: (token: string, turnId: string) => AgentGatewayWriteAuthority | null;
   readonly verifyWriteAuthority: (authority: AgentGatewayWriteAuthority) => boolean;

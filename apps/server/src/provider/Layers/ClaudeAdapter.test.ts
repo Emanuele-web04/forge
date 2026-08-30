@@ -7576,7 +7576,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (agentRequested._tag !== "Some" || agentRequested.value.type !== "request.opened") {
         return;
       }
-      assert.equal(agentRequested.value.payload.requestType, "dynamic_tool_call");
+      assert.equal(agentRequested.value.payload.requestType, "tool_approval");
       assert.equal(
         (agentRequested.value.payload.args as Record<string, unknown>).sessionApprovalAvailable,
         false,
@@ -7614,6 +7614,78 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
       yield* Stream.runHead(adapter.streamEvents);
       yield* Effect.promise(() => grepPermissionPromise);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("classifies generic and MCP tool approvals as canonical tool approvals", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const requestTypeFor = (toolName: string, input: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          const permissionPromise = canUseTool(toolName, input, {
+            signal: new AbortController().signal,
+            toolUseID: `tool-use-${toolName}`,
+            requestId: `request-${toolName}`,
+          });
+          const requested = yield* Stream.runHead(adapter.streamEvents);
+          assert.equal(requested._tag, "Some");
+          if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+            return undefined;
+          }
+          const opened = requested.value;
+          yield* adapter.respondToRequest(
+            session.threadId,
+            ApprovalRequestId.makeUnsafe(String(opened.requestId)),
+            "accept",
+          );
+          yield* Stream.runHead(adapter.streamEvents);
+          yield* Effect.promise(() => permissionPromise);
+          return opened;
+        });
+
+      // MCP tools are the case that regressed: they classify as `mcp_tool_call`
+      // item-wise, and the approval must still carry the canonical request type.
+      const mcpOpened = yield* requestTypeFor("mcp__synara__tool", {
+        app: "kcalc",
+      });
+      assert.equal(mcpOpened?.payload.requestType, "tool_approval");
+      assert.deepEqual(mcpOpened?.payload.args as Record<string, unknown> | undefined, {
+        toolName: "mcp__synara__tool",
+        input: { app: "kcalc" },
+        sessionApprovalAvailable: false,
+        toolUseId: "tool-use-mcp__synara__tool",
+      });
+
+      const genericOpened = yield* requestTypeFor("WebFetch", { url: "https://example.com" });
+      assert.equal(genericOpened?.payload.requestType, "tool_approval");
+
+      const bashOpened = yield* requestTypeFor("Bash", { command: "ls" });
+      assert.equal(bashOpened?.payload.requestType, "command_execution_approval");
+
+      const editOpened = yield* requestTypeFor("Edit", { file_path: "/tmp/a.ts" });
+      assert.equal(editOpened?.payload.requestType, "file_change_approval");
+
+      const readOpened = yield* requestTypeFor("Read", { file_path: "/tmp/a.ts" });
+      assert.equal(readOpened?.payload.requestType, "file_read_approval");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

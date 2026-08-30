@@ -126,7 +126,10 @@ export function resolveRuntimeModeAfterApprovalDecision(
   // Permission-profile grants are narrower than a runtime-mode override.
   // Their acceptForSession decision is persisted by the provider for only
   // that permission set and must not silently broaden the whole thread.
-  if (requestKind === "permissions") {
+  // Tool approvals keep their own, properly scoped channel too (the provider
+  // remembers the specific tool); widening them here would un-supervise
+  // commands and file changes the user never saw.
+  if (requestKind === "permissions" || requestKind === "tool") {
     return null;
   }
   if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {

@@ -7,6 +7,7 @@ import { DeviceBackendError } from "../device/DeviceBackend.ts";
 import { DeviceManager } from "../device/DeviceManager.ts";
 import { FakeDeviceBackend } from "../device/FakeDeviceBackend.ts";
 import { makeAgentGatewayDeviceTools } from "./deviceTools.ts";
+import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext, ToolEntry } from "./toolRuntime.ts";
 
@@ -334,29 +335,32 @@ describe("agent gateway device tool handlers", () => {
 });
 
 describe("agent gateway device tools without an approval gate", () => {
-  it("refuses input and open_url for Antigravity before the action runs", async () => {
-    const { backend, call } = await setup();
+  it.each([...PROVIDERS_WITHOUT_APPROVAL_GATE])(
+    "refuses input and open_url for %s before the action runs",
+    async (provider) => {
+      const { backend, call } = await setup();
 
-    for (const [name, args] of [
-      ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
-      ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
-      ["device_type", { udid: DEVICE, text: "hello" }],
-      ["device_press_button", { udid: DEVICE, button: "home" }],
-      ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
-      ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
-      ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
-      ["device_boot", { udid: "FAKE-0002" }],
-    ] as const) {
-      const result = await call(name, args, "antigravity");
-      expect(result.isError, `${name} should be refused`).toBe(true);
-      const text = result.content.find((entry) => entry.type === "text");
-      expect(text && text.type === "text" ? text.text : "").toContain("DeviceApprovalRequired");
-    }
+      for (const [name, args] of [
+        ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
+        ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+        ["device_type", { udid: DEVICE, text: "hello" }],
+        ["device_press_button", { udid: DEVICE, button: "home" }],
+        ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
+        ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
+        ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
+        ["device_boot", { udid: "FAKE-0002" }],
+      ] as const) {
+        const result = await call(name, args, provider);
+        expect(result.isError, `${name} should be refused`).toBe(true);
+        const text = result.content.find((entry) => entry.type === "text");
+        expect(text && text.type === "text" ? text.text : "").toContain("DeviceApprovalRequired");
+      }
 
-    expect(backend.calls.filter((entry) => entry.kind !== "attachStream")).toEqual([
-      { kind: "boot", udid: DEVICE },
-    ]);
-  });
+      expect(backend.calls.filter((entry) => entry.kind !== "attachStream")).toEqual([
+        { kind: "boot", udid: DEVICE },
+      ]);
+    },
+  );
 
   it("still allows the read tools for Antigravity", async () => {
     const { call } = await setup();

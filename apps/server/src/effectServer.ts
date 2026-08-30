@@ -30,6 +30,7 @@ import {
 } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import {
   claimQuitResumeRecordAtStartup,
@@ -70,6 +71,7 @@ export interface ServerShape {
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
@@ -213,9 +215,10 @@ export const createEffectServer = Effect.fn(function* (
   yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
-  // Heal turns orphaned by the previous process exit (their in-memory runtimes
-  // died, so they can never complete on their own) before clients can observe
-  // the stale "Working" state.
+  // Heal turns and human requests orphaned by the previous process exit (their
+  // in-memory runtimes died, so they can never complete or be answered on their
+  // own) before clients can observe the stale "Working" state or an
+  // unanswerable question card.
   yield* reconcileRestartStuckTurns;
   // The reconciliation above terminalizes durable turn projections without a
   // provider terminal event. Remove their replay-ledger rows now so the next

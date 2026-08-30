@@ -510,6 +510,35 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    const toolApproval = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "tool-approval-request",
+        requestId: ApprovalRequestId.makeUnsafe("tool-request-1"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "Allow Synara to launch the calculator?",
+          args: {
+            _meta: {
+              tool_name: "mcp_tool",
+              tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+            },
+          },
+        },
+      }),
+    )[0];
+    expect(toolApproval).toMatchObject({
+      kind: "approval.requested",
+      summary: "Tool approval requested",
+      payload: {
+        requestKind: "tool",
+        requestType: "tool_approval",
+        detail: "Allow Synara to launch the calculator?",
+        toolName: "mcp_tool",
+        toolParamsDisplay: [{ name: "app", value: "kcalc", display_name: "app" }],
+      },
+    });
+
     const userInput = [
       runtimeEvent({
         type: "user-input.requested",
@@ -556,6 +585,66 @@ describe("provider runtime activity projection", () => {
         },
       },
     ]);
+  });
+
+  it.each(["tool_approval", "dynamic_tool_call"] as const)(
+    "renders Claude-shaped %s approvals as tool approvals with parameter rows",
+    (requestType) => {
+      const [approval] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "request.opened",
+          provider: "claudeAgent",
+          eventId: `claude-${requestType}-request`,
+          requestId: ApprovalRequestId.makeUnsafe(`claude-${requestType}-1`),
+          payload: {
+            requestType,
+            detail: "mcp__synara__tool: {}",
+            args: {
+              toolName: "mcp__synara__tool",
+              input: { app: "kcalc", args: ["--hidpi"], headless: false },
+              sessionApprovalAvailable: true,
+              toolUseId: "toolu_01",
+            },
+          },
+        }),
+      );
+
+      expect(approval).toMatchObject({
+        kind: "approval.requested",
+        summary: "Tool approval requested",
+        payload: {
+          requestKind: "tool",
+          requestType,
+          toolName: "mcp__synara__tool",
+          toolParamsDisplay: [
+            { name: "app", value: "kcalc" },
+            { name: "args", value: '["--hidpi"]' },
+            { name: "headless", value: "false" },
+          ],
+          sessionApprovalAvailable: true,
+        },
+      });
+      expect(() => decodeActivityAppendCommand(approval!)).not.toThrow();
+    },
+  );
+
+  it("omits tool presentation when a Claude tool approval carries no input", () => {
+    const [approval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        provider: "claudeAgent",
+        eventId: "claude-tool-approval-empty-input",
+        requestId: ApprovalRequestId.makeUnsafe("claude-tool-approval-empty"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "Agent: {}",
+          args: { toolName: "Agent", input: {}, sessionApprovalAvailable: false },
+        },
+      }),
+    );
+
+    expect(approval?.payload).toMatchObject({ requestKind: "tool", toolName: "Agent" });
+    expect(approval?.payload).not.toHaveProperty("toolParamsDisplay");
   });
 
   it("bounds pathological tool payloads before persistence", () => {

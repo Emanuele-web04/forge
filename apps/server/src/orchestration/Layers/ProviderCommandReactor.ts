@@ -1743,7 +1743,6 @@ const make = Effect.gen(function* () {
               currentProvider === "grok" ||
               currentProvider === "devin") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
-
       if (
         !runtimeModeChanged &&
         !providerChanged &&

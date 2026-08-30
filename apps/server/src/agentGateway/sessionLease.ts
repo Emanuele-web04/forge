@@ -5,6 +5,56 @@ import type {
   AgentGatewayCredentialsShape,
   AgentGatewayMcpConnection,
 } from "./Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
+
+export interface AgentGatewaySessionLeaseOptions {
+  readonly additionalCapabilities?: readonly AgentGatewayCapability[];
+}
+
+/**
+ * The session-start facts that decide what a gateway credential may do.
+ *
+ * Adapters never assemble capability lists. Every lease site hands the start
+ * input it already has (or the subset it captured for a later re-lease) to
+ * `acquireAgentGatewaySessionLease`, and this module derives the capabilities.
+ * A new optional capability is one field here plus one line in
+ * `agentGatewayCapabilitiesFor` — no adapter edits, and no site can silently
+ * miss it.
+ */
+export interface AgentGatewayCapabilityInput {}
+
+/** Lease no optional capabilities. Spelled out so an omission reads as a choice. */
+export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {};
+
+/** The single derivation from session-start facts to gateway capabilities. */
+export function agentGatewayCapabilitiesFor(
+  input: AgentGatewayCapabilityInput,
+): readonly AgentGatewayCapability[] {
+  void input;
+  return [];
+}
+
+export function agentGatewaySessionLeaseOptionsFor(
+  input: AgentGatewayCapabilityInput,
+): AgentGatewaySessionLeaseOptions | undefined {
+  const additionalCapabilities = agentGatewayCapabilitiesFor(input);
+  return additionalCapabilities.length === 0 ? undefined : { additionalCapabilities };
+}
+
+/**
+ * Narrow a start input to the fields a later re-lease needs.
+ *
+ * Adapters that re-lease from a stored session context (Antigravity mints its
+ * credential per turn; Pi rotates the credential when a turn completes) no
+ * longer hold the start input by then. They keep this projection instead of a
+ * hand-picked flag, so the set of capability facts stays defined in one place.
+ */
+export function captureAgentGatewayCapabilityInput(
+  input: AgentGatewayCapabilityInput,
+): AgentGatewayCapabilityInput {
+  void input;
+  return {};
+}
 
 type AgentGatewaySessionLeaseCredentials = Pick<
   AgentGatewayCredentialsShape,
@@ -142,14 +192,24 @@ export function withAgentGatewayTurnCancellation<A, E, R>(
   });
 }
 
+/**
+ * The capability input is required on purpose: a lease that forgets it fails
+ * silently (the credential is issued, the tools are just missing), so the type
+ * checker refuses the omission at every call site instead.
+ */
 export function acquireAgentGatewaySessionLease(
   credentials: AgentGatewaySessionLeaseCredentials | undefined,
   threadId: ThreadId,
   provider: ProviderKind,
+  capabilityInput: AgentGatewayCapabilityInput,
 ): AgentGatewaySessionLease | undefined {
   if (credentials === undefined) return undefined;
 
-  const connection = credentials.connectionForThread(threadId, provider);
+  const options = agentGatewaySessionLeaseOptionsFor(capabilityInput);
+  const connection =
+    options === undefined
+      ? credentials.connectionForThread(threadId, provider)
+      : credentials.connectionForThread(threadId, provider, options);
   let released = false;
 
   return {
