@@ -86,6 +86,7 @@ interface SidebarSearchPaletteProps {
   homeDir: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
+  onOpenBugReport: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
@@ -102,7 +103,12 @@ function actionHandler(
   actionId: string,
   props: Pick<
     SidebarSearchPaletteProps,
-    "onCreateChat" | "onCreateThread" | "onOpenFeedback" | "onOpenSettings" | "onOpenUsageSettings"
+    | "onCreateChat"
+    | "onCreateThread"
+    | "onOpenFeedback"
+    | "onOpenBugReport"
+    | "onOpenSettings"
+    | "onOpenUsageSettings"
   >,
 ): (() => void) | null {
   switch (actionId) {
@@ -114,6 +120,8 @@ function actionHandler(
       return props.onOpenSettings;
     case "feedback":
       return props.onOpenFeedback;
+    case "bug":
+      return props.onOpenBugReport;
     case "usage-settings":
       return props.onOpenUsageSettings;
     default:
@@ -129,6 +137,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
   feedback: BugIcon,
+  bug: BugIcon,
   settings: SettingsIcon,
   "usage-settings": SettingsIcon,
 };

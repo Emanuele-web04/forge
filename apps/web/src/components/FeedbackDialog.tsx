@@ -34,14 +34,19 @@ export function FeedbackDialog({
 }: FeedbackDialogProps) {
   const [isSending, setIsSending] = useState(false);
   const [isDraftingIssue, setIsDraftingIssue] = useState(false);
+  const isSendingRef = useRef(false);
+  const isDraftingRef = useRef(false);
 
   const disabled = isSending || isDraftingIssue;
 
   const handleSubmit = async (category: FeedbackCategory | null, details: string) => {
+    if (isSendingRef.current) {
+      return;
+    }
+    isSendingRef.current = true;
     setIsSending(true);
     try {
       await submitFeedback(buildFeedbackSubmission({ category, details, context }));
-      setIsSending(false);
       onOpenChange(false);
       toastManager.add({
         type: "success",
@@ -49,31 +54,35 @@ export function FeedbackDialog({
         description: "Thanks for helping make Synara better.",
       });
     } catch (error) {
-      setIsSending(false);
       toastManager.add({
         type: "error",
         title: "Could not send feedback",
         description:
           error instanceof Error ? error.message : "An unexpected delivery error occurred.",
       });
+    } finally {
+      setIsSending(false);
+      isSendingRef.current = false;
     }
   };
 
   const handleDraftIssue = async (details: string) => {
-    if (!onDraftGithubIssue || disabled) {
+    if (!onDraftGithubIssue || disabled || isDraftingRef.current) {
       return;
     }
+    isDraftingRef.current = true;
     setIsDraftingIssue(true);
     try {
       await onDraftGithubIssue(details);
-      setIsDraftingIssue(false);
     } catch (error) {
-      setIsDraftingIssue(false);
       toastManager.add({
         type: "error",
         title: "Could not draft a GitHub issue",
         description: error instanceof Error ? error.message : "An unexpected error occurred.",
       });
+    } finally {
+      setIsDraftingIssue(false);
+      isDraftingRef.current = false;
     }
   };
 
@@ -96,6 +105,7 @@ export function FeedbackDialog({
           initialCategory={initialCategory}
           isSending={isSending}
           isDraftingIssue={isDraftingIssue}
+          open={open}
           onSubmit={handleSubmit}
           onDraftGithubIssue={onDraftGithubIssue ? handleDraftIssue : undefined}
         />
@@ -105,10 +115,11 @@ export function FeedbackDialog({
 }
 
 export interface FeedbackDialogFormProps {
-  defaultDetails?: string | undefined;
+  defaultDetails?: string;
   initialCategory?: FeedbackCategory | null | undefined;
   isSending: boolean;
-  isDraftingIssue?: boolean | undefined;
+  isDraftingIssue?: boolean;
+  open?: boolean;
   onSubmit: (category: FeedbackCategory | null, details: string) => Promise<void>;
   onDraftGithubIssue?: ((details: string) => Promise<void>) | undefined;
 }
@@ -118,6 +129,7 @@ export function FeedbackDialogForm({
   initialCategory,
   isSending,
   isDraftingIssue = false,
+  open = true,
   onSubmit,
   onDraftGithubIssue,
 }: FeedbackDialogFormProps) {
@@ -126,9 +138,15 @@ export function FeedbackDialogForm({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    setCategory(initialCategory ?? null);
+    setDetails(defaultDetails);
+  }, [initialCategory, defaultDetails]);
+
+  useEffect(() => {
+    if (!open) return;
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [open]);
 
   const disabled = isSending || isDraftingIssue;
   const canSubmit = details.trim().length > 0 && !disabled;
@@ -151,7 +169,7 @@ export function FeedbackDialogForm({
         void handleSubmit();
       }}
     >
-      <div className="flex flex-wrap gap-1.5" aria-label="Feedback category">
+      <div role="group" aria-label="Feedback category" className="flex flex-wrap gap-1.5">
         {FEEDBACK_CATEGORIES.map((option) => {
           const selected = category === option.value;
           return (
@@ -204,7 +222,7 @@ export function FeedbackDialogForm({
         )}
       </Button>
 
-      {onDraftGithubIssue && (
+      {category === "bug" && onDraftGithubIssue && (
         <>
           <div className="border-t" />
           <p className="text-center text-xs text-muted-foreground">

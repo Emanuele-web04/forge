@@ -5597,7 +5597,13 @@ export default function Sidebar() {
         id: "feedback",
         label: "Feedback Synara",
         description: "Send feedback or report an issue to the Synara team.",
-        keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
+        keywords: ["feedback", "issue", "problem", "report", "support", "synara"],
+      },
+      {
+        id: "bug",
+        label: "Report a bug",
+        description: "Open the bug report dialog with the Bug category selected.",
+        keywords: ["bug", "report", "issue", "problem", "broken", "crash", "synara"],
       },
       {
         id: "settings",
@@ -6909,6 +6915,7 @@ export default function Sidebar() {
             void navigate({ to: "/settings" });
           }}
           onOpenFeedback={openFeedbackDialog}
+          onOpenBugReport={() => openFeedbackDialog(undefined, "bug")}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
@@ -6940,6 +6947,7 @@ function SidebarSearchPaletteController(props: {
   homeDir: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
+  onOpenBugReport: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -7005,6 +7013,7 @@ function SidebarSearchPaletteController(props: {
       homeDir={props.homeDir}
       onOpenSettings={props.onOpenSettings}
       onOpenFeedback={props.onOpenFeedback}
+      onOpenBugReport={props.onOpenBugReport}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}

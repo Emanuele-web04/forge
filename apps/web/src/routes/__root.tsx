@@ -26,7 +26,7 @@ import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { buildFeedbackSubmission } from "../feedback";
-import { buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
+import { buildBugReportDiagnostics, buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
@@ -761,12 +761,7 @@ function GlobalFeedbackDialog() {
   const requestedInitialCategory = useFeedbackDialogStore((state) => state.initialCategory);
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
 
-  const {
-    activeProjectId: handleNewThreadActiveProjectId,
-    handleNewThread,
-    projects,
-  } = useHandleNewThread();
-  const effectiveActiveProjectId = activeProjectId ?? handleNewThreadActiveProjectId ?? null;
+  const { handleNewThread, projects } = useHandleNewThread();
   const hasProjects = projects.length > 0;
 
   const context: FeedbackThreadContext = requestedContext ?? {
@@ -786,7 +781,7 @@ function GlobalFeedbackDialog() {
   };
 
   const onDraftGithubIssue = async (details: string) => {
-    const projectId = effectiveActiveProjectId ?? projects[0]?.id ?? null;
+    const projectId = activeProjectId ?? projects[0]?.id ?? null;
     if (!projectId) {
       throw new Error("No project available.");
     }
@@ -794,7 +789,7 @@ function GlobalFeedbackDialog() {
     const submission = buildFeedbackSubmission({ category: "bug", details, context });
     const prompt = buildGithubIssueInterviewPrompt({
       details,
-      diagnosticsSummary: submission.summary,
+      diagnosticsSummary: buildBugReportDiagnostics(submission.diagnostics),
     });
 
     const threadId = await handleNewThread(projectId, { fresh: true });

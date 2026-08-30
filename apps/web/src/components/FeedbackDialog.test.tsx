@@ -1,7 +1,7 @@
 // FILE: FeedbackDialog.test.tsx
 // Purpose: Verifies the feedback dialog form preselects the Bug chip, renders
 //          the GitHub issue draft action conditionally, and disables both
-//          actions while sending.
+//          actions while in flight.
 // Layer: Web UI tests
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,14 +9,13 @@ import { describe, expect, it } from "vitest";
 
 import { FeedbackDialogForm } from "./FeedbackDialog";
 
+const noopSubmit = async () => {};
+const noopDraft = async () => {};
+
 describe("FeedbackDialogForm", () => {
   it("preselects the Bug chip when initialCategory is bug", () => {
     const markup = renderToStaticMarkup(
-      <FeedbackDialogForm
-        initialCategory="bug"
-        isSending={false}
-        onSubmit={() => Promise.resolve()}
-      />,
+      <FeedbackDialogForm initialCategory="bug" isSending={false} onSubmit={noopSubmit} />,
     );
 
     expect(markup).toContain('aria-pressed="true"');
@@ -26,39 +25,82 @@ describe("FeedbackDialogForm", () => {
     expect(pressedMatches?.length).toBe(1);
   });
 
-  it("shows the GitHub issue draft action only when onDraftGithubIssue is provided", () => {
-    const withDraft = renderToStaticMarkup(
-      <FeedbackDialogForm
-        isSending={false}
-        onSubmit={() => Promise.resolve()}
-        onDraftGithubIssue={() => Promise.resolve()}
-      />,
+  it("renders category chips inside an accessible group", () => {
+    const markup = renderToStaticMarkup(
+      <FeedbackDialogForm isSending={false} onSubmit={noopSubmit} />,
     );
 
-    expect(withDraft).toContain("Draft a GitHub issue with your agent");
-
-    const withoutDraft = renderToStaticMarkup(
-      <FeedbackDialogForm isSending={false} onSubmit={() => Promise.resolve()} />,
-    );
-
-    expect(withoutDraft).not.toContain("Draft a GitHub issue with your agent");
+    expect(markup).toContain('role="group"');
+    expect(markup).toContain('aria-label="Feedback category"');
   });
 
-  it("disables both submit and draft actions while sending", () => {
+  it("shows the GitHub issue draft action only when category is bug and onDraftGithubIssue is provided", () => {
+    const withBugAndDraft = renderToStaticMarkup(
+      <FeedbackDialogForm
+        initialCategory="bug"
+        isSending={false}
+        onSubmit={noopSubmit}
+        onDraftGithubIssue={noopDraft}
+      />,
+    );
+    expect(withBugAndDraft).toContain("Draft a GitHub issue with your agent");
+
+    const withoutCategory = renderToStaticMarkup(
+      <FeedbackDialogForm isSending={false} onSubmit={noopSubmit} onDraftGithubIssue={noopDraft} />,
+    );
+    expect(withoutCategory).not.toContain("Draft a GitHub issue with your agent");
+
+    const withoutDraftProp = renderToStaticMarkup(
+      <FeedbackDialogForm initialCategory="bug" isSending={false} onSubmit={noopSubmit} />,
+    );
+    expect(withoutDraftProp).not.toContain("Draft a GitHub issue with your agent");
+  });
+
+  function getActionButtons(markup: string): string[] {
+    // Full button tag plus children so we can identify the two main actions.
+    const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g) ?? [];
+    return buttons.filter(
+      (button) =>
+        button.includes('type="submit"') ||
+        button.includes('type="submit"') ||
+        button.includes(">Submit") ||
+        button.includes(">Sending…") ||
+        button.includes(">Draft a GitHub issue") ||
+        button.includes(">Opening thread"),
+    );
+  }
+
+  it("disables submit and draft buttons while sending", () => {
     const markup = renderToStaticMarkup(
       <FeedbackDialogForm
+        initialCategory="bug"
         defaultDetails="Something is broken"
         isSending
         isDraftingIssue={false}
-        onSubmit={() => Promise.resolve()}
-        onDraftGithubIssue={() => Promise.resolve()}
+        onSubmit={noopSubmit}
+        onDraftGithubIssue={noopDraft}
       />,
     );
 
-    const buttons = markup.match(/<button\b[^>]*>/g) ?? [];
-    const disabledButtons = buttons.filter((button) => button.includes("disabled"));
+    const actionButtons = getActionButtons(markup);
+    expect(actionButtons.length).toBe(2);
+    expect(actionButtons.every((button) => button.includes("disabled"))).toBe(true);
+  });
 
-    // Submit and draft buttons should both be disabled while sending.
-    expect(disabledButtons.length).toBeGreaterThanOrEqual(2);
+  it("disables submit and draft buttons while drafting an issue", () => {
+    const markup = renderToStaticMarkup(
+      <FeedbackDialogForm
+        initialCategory="bug"
+        defaultDetails="Something is broken"
+        isSending={false}
+        isDraftingIssue
+        onSubmit={noopSubmit}
+        onDraftGithubIssue={noopDraft}
+      />,
+    );
+
+    const actionButtons = getActionButtons(markup);
+    expect(actionButtons.length).toBe(2);
+    expect(actionButtons.every((button) => button.includes("disabled"))).toBe(true);
   });
 });
