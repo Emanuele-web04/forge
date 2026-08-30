@@ -41,6 +41,7 @@ const rejectPromptDuringLoadReplay =
   process.env.SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY === "1";
 const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY === "1";
 const loadReplayModeId = process.env.SYNARA_ACP_LOAD_REPLAY_MODE_ID?.trim();
+const loadReplayAvailableCommands = process.env.SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const sessionId = "mock-session-1";
 
@@ -265,6 +266,18 @@ function scheduleLoadReplayUpdates(
               },
             })
           : Effect.void;
+      const commandsUpdate =
+        index === loadReplayDelaysMs.length - 1 && loadReplayAvailableCommands
+          ? client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: [
+                  { name: "compact", description: "Compact the current context" },
+                ],
+              },
+            })
+          : Effect.void;
       void runEffect(
         client
           .sessionUpdate({
@@ -274,7 +287,7 @@ function scheduleLoadReplayUpdates(
               content: { type: "text", text: `late replay ${index + 1}` },
             },
           })
-          .pipe(Effect.andThen(modeUpdate)),
+          .pipe(Effect.andThen(modeUpdate), Effect.andThen(commandsUpdate)),
       ).finally(() => {
         pendingLoadReplayUpdates -= 1;
       });

@@ -1729,6 +1729,19 @@ export function makeGrokAdapter(
           yield* Deferred.await(ctx.sessionConfigReady);
         }
         yield* waitForAbandonedGrokCompaction(ctx);
+        // Do not publish a working turn while session/load replay is still
+        // being suppressed. A concurrent stop releases the shared gate and is
+        // reported as the session disappearing before any turn lifecycle opens.
+        yield* ctx.acp.awaitLoadReplayReady.pipe(
+          Effect.mapError((cause) =>
+            ctx.stopped
+              ? new ProviderAdapterSessionNotFoundError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                })
+              : mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
+          ),
+        );
         // The setup gate above is resolved by stopSessionInternal too; a turn
         // unblocked by a failed or stopped startup must fail here instead of
         // emitting lifecycle events for a dead session.

@@ -339,7 +339,10 @@ export interface AcpSessionRuntimeShape {
     ReadonlyArray<Acp.SessionConfigOption>,
     AcpErrors.AcpError
   >;
-  readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
+  readonly getAvailableCommands: Effect.Effect<
+    ReadonlyArray<Acp.AvailableCommand>,
+    AcpErrors.AcpError
+  >;
   /** Waits for session/load replay suppression to settle or reach its hard cap. */
   readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
@@ -788,6 +791,9 @@ const makeAcpSessionRuntime = (
     });
     const getModeState = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(modeStateRef)));
     const getConfigOptions = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(configOptionsRef)));
+    const getAvailableCommands = awaitLoadReplayReady.pipe(
+      Effect.andThen(Ref.get(availableCommandsRef)),
+    );
     // Counts every parsed event offered into eventQueue (see
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
     // writer per offer, and readers only need a monotonic snapshot.
@@ -1354,7 +1360,7 @@ const makeAcpSessionRuntime = (
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
       getModeState,
       getConfigOptions,
-      getAvailableCommands: Ref.get(availableCommandsRef),
+      getAvailableCommands,
       awaitLoadReplayReady,
       prompt: (payload) =>
         getStartedState.pipe(

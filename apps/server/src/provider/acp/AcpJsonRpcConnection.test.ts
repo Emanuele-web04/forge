@@ -307,6 +307,43 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("settles load replay before reading available commands", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        expect(yield* runtime.getAvailableCommands).toEqual([
+          { name: "compact", description: "Compact the current context" },
+        ]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("forwards provider session metadata when loading a session", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {

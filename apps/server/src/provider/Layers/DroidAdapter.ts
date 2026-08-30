@@ -153,6 +153,7 @@ const DROID_NESTED_TASK_IDLE_TIMEOUT_MS = 60 * 60_000;
 const DROID_CANCEL_GRACE_MS = 5_000;
 const DROID_PLAN_CAPTURE_CANCEL_FALLBACK_MS = 1_000;
 const DROID_ACP_REQUEST_TIMEOUT_MS = 30_000;
+const DROID_STARTUP_REPLAY_MAX_WAIT_MS = 3_000;
 const DROID_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DROID_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const DROID_DISCOVERY_CACHE_MAX_ENTRIES = 16;
@@ -1282,54 +1283,69 @@ export function makeDroidAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          // The consumer fork activates the shared replay gate; configuration
-          // waits for that gate before reading retained state or issuing RPCs.
-          // The session is already registered and the start-scope finalizer no
-          // longer owns its scope, so any remaining startup failure or
-          // interruption must tear the session down explicitly.
-          yield* runDroidAcpConfigurationAfterReplay({
-            runtime: acp,
-            threadId: input.threadId,
-            effect: Effect.gen(function* () {
-              if (droidModelSelection?.model) {
-                yield* applyDroidAcpModelSelection({
-                  runtime: acp,
-                  model: droidModelSelection.model,
-                  reasoningEffort: droidModelSelection.options?.reasoningEffort,
-                  mapError: ({ cause, method }) =>
-                    mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-                });
-              }
-              // The requested model/effort are applied; turns gated on this
-              // deferred can now prompt without inheriting provider defaults.
-              yield* Deferred.succeed(sessionConfigReady, undefined);
-              ctx.sessionConfigReady = undefined;
+          // The consumer fork activates the shared replay gate. Configuration
+          // remains pending until replay settles, but startup only waits briefly
+          // while holding the thread lock so stop/restart stays responsive.
+          yield* Effect.gen(function* () {
+            const configurationFiber = yield* runDroidAcpConfigurationAfterReplay({
+              runtime: acp,
+              threadId: input.threadId,
+              effect: Effect.gen(function* () {
+                if (droidModelSelection?.model) {
+                  yield* applyDroidAcpModelSelection({
+                    runtime: acp,
+                    model: droidModelSelection.model,
+                    reasoningEffort: droidModelSelection.options?.reasoningEffort,
+                    mapError: ({ cause, method }) =>
+                      mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+                  });
+                }
+                // Turns await this deferred, so none can inherit provider
+                // defaults while long replay/configuration work continues.
+                yield* Deferred.succeed(sessionConfigReady, undefined);
+                ctx.sessionConfigReady = undefined;
+              }),
+            }).pipe(
+              Effect.onError((cause) =>
+                stopSessionInternal(ctx, {
+                  exitKind: "error",
+                  reason: Cause.pretty(cause),
+                  awaitTermination: false,
+                }),
+              ),
+              Effect.forkIn(ctx.scope),
+            );
 
-              yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                type: "session.started",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                payload: { resume: started.initializeResult },
-              });
-              yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                type: "session.state.changed",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                payload: { state: "ready", reason: "Droid ACP session ready" },
-              });
-              yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                type: "thread.started",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                payload: { providerThreadId: started.sessionId },
-              });
-            }),
+            yield* Fiber.join(configurationFiber).pipe(
+              Effect.timeoutOption(DROID_STARTUP_REPLAY_MAX_WAIT_MS),
+            );
+
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "session.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { resume: started.initializeResult },
+            });
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { state: "ready", reason: "Droid ACP session ready" },
+            });
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "thread.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { providerThreadId: started.sessionId },
+            });
           }).pipe(
             Effect.onExit((exit) =>
-              Exit.isSuccess(exit) ? Effect.void : Effect.ignore(stopSessionInternal(ctx)),
+              Exit.isSuccess(exit)
+                ? Effect.void
+                : Effect.ignore(stopSessionInternal(ctx, { awaitTermination: false })),
             ),
           );
 
