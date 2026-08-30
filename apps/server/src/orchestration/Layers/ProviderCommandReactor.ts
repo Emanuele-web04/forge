@@ -831,9 +831,16 @@ const make = Effect.gen(function* () {
   });
   const retainAndAppendProviderContextLifecycleActivity = Effect.fnUntraced(function* (
     input: ProviderContextLifecycleActivityRecord,
+    options: { readonly retryExisting?: boolean } = {},
   ) {
     const activityKey = providerContextLifecycleActivityKey(input);
-    pendingProviderContextLifecycleActivities.set(activityKey, input);
+    if (options.retryExisting === true) {
+      if (pendingProviderContextLifecycleActivities.get(activityKey) !== input) {
+        return "discarded" as const;
+      }
+    } else {
+      pendingProviderContextLifecycleActivities.set(activityKey, input);
+    }
     const activityAppended = yield* appendProviderContextLifecycleActivity(input).pipe(
       Effect.as(true),
       Effect.catchCause((cause) =>
@@ -852,6 +859,11 @@ const make = Effect.gen(function* () {
               .pipe(Effect.as(false)),
       ),
     );
+    // Thread deletion clears retained activity records. Do not let an
+    // in-flight initial append or retry resurrect work after that cleanup.
+    if (pendingProviderContextLifecycleActivities.get(activityKey) !== input) {
+      return "discarded" as const;
+    }
     if (!activityAppended) {
       return "activity-pending" as const;
     }
@@ -899,7 +911,9 @@ const make = Effect.gen(function* () {
             // idempotent activity append succeeds, the same attempt may safely
             // retire the durable marker. A marker failure itself is not queued:
             // that keeps the recap pending for the next accepted turn.
-            const persistence = yield* retainAndAppendProviderContextLifecycleActivity(pending);
+            const persistence = yield* retainAndAppendProviderContextLifecycleActivity(pending, {
+              retryExisting: true,
+            });
             if (persistence === "completed") {
               const attempt = pendingContextBootstrapAttempts.get(pending.threadId);
               if (attempt?.turnId === pending.turnId) {
