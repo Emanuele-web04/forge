@@ -20,7 +20,8 @@ The feedback bug-reporting feature is a single sequential feature. Review fixes 
 - `cd apps/web && bun run test src/feedbackGithubIssue.test.ts src/feedbackDialogStore.test.ts src/components/SidebarBugReportButton.test.tsx src/components/FeedbackDialog.test.tsx` — 4 test files, 21/21 tests passed.
 - `cd apps/web && bun run test` — 330 test files, 4141 tests passed.
 - `bun fmt` — passed.
-- `bun lint` — 473 pre-existing warnings, 0 errors.
+- `bun lint` — 471 warnings, 0 errors.
 - `bun typecheck` — all 7 packages passed.
 - No files changed outside the ledger's file list.
+- Final branch head SHA: `07032bafe047b2adea0ce54cd75c3a781775b91e`.
 - No push, PR, or GitHub issue created.

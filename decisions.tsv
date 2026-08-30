@@ -9,4 +9,4 @@ Committed local feature and tests	Preserve verified state on branch without push
 Reviewed and fixed prompt security issues	Remove pre-confirmation remote search, secure temp files, quote-safe command, tighten confirmation, sanitize diagnostics, expand secret/path redaction	feedbackGithubIssue.ts, feedbackGithubIssue.test.ts	fixed and tests updated
 Hardened FeedbackDialog concurrency and accessibility	Add synchronous ref guards and role="group" to prevent double-submit and improve screen-reader semantics	FeedbackDialog.tsx, FeedbackDialog.test.tsx	fixed and tests updated
 Simplified project ID handling and added search-palette bug action	Drop redundant alias chain, add "Report a bug" palette action to provide an app-owned bug path	Sidebar.tsx, SidebarSearchPalette.tsx, __root.tsx	fixed
-Ran final verification	Confirm the changed-scope work is clean	bun fmt; bun lint; bun typecheck; cd apps/web && bun run test	all passed
+Ran final verification	Confirm the changed-scope work is clean	bun fmt; bun lint (471 warnings, 0 errors); bun typecheck; cd apps/web && bun run test (330 files, 4141 tests)	all passed; final branch SHA 07032bafe047b2adea0ce54cd75c3a781775b91e
