@@ -477,6 +477,14 @@ function isStaleClaudeResumeError(error: unknown): boolean {
   return String(error).toLowerCase().includes("no conversation found with session id");
 }
 
+function isOpenCodeCompatibleResumeError(error: unknown): boolean {
+  return (
+    Schema.is(ProviderAdapterRequestError)(error) &&
+    (error.provider === "opencode" || error.provider === "kilo") &&
+    error.method === "session.update"
+  );
+}
+
 function isRollbackStillInProgressError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -1219,12 +1227,26 @@ const make = Effect.gen(function* () {
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
 
+    const providerSessionStartInput = (resumeCursor?: unknown) => ({
+      ...providerSessionOptions,
+      ...(preferredProvider ? { provider: preferredProvider } : {}),
+      ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+    });
+
+    const startProviderSessionWithOutcome = (resumeCursor?: unknown) => {
+      const startInput = providerSessionStartInput(resumeCursor);
+      return providerService.startSessionWithOutcome
+        ? providerService.startSessionWithOutcome(threadId, startInput)
+        : providerService.startSession(threadId, startInput).pipe(
+            Effect.map((session) => ({
+              session,
+              nativeResumeAttempted: resumeCursor !== undefined && resumeCursor !== null,
+            })),
+          );
+    };
+
     const startProviderSession = (resumeCursor?: unknown) =>
-      providerService.startSession(threadId, {
-        ...providerSessionOptions,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-      });
+      startProviderSessionWithOutcome(resumeCursor).pipe(Effect.map(({ session }) => session));
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -1292,6 +1314,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: reusableSession,
+          nativeResumeAttempted: false,
         };
       }
 
@@ -1335,6 +1358,7 @@ const make = Effect.gen(function* () {
       return {
         activeSessionBeforeEnsure,
         activeSession: restartedSession,
+        nativeResumeAttempted: false,
       };
     }
 
@@ -1372,6 +1396,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: forkedSession,
+          nativeResumeAttempted: false,
         };
       }
       if (shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId) {
@@ -1387,7 +1412,28 @@ const make = Effect.gen(function* () {
       sidechatContextBootstrapThreadIds.add(threadId);
     }
 
-    const startedSession = yield* startProviderSession();
+    const startOutcome = yield* startProviderSessionWithOutcome().pipe(
+      Effect.catch((error) => {
+        if (!isOpenCodeCompatibleResumeError(error)) {
+          return Effect.fail(error);
+        }
+        return Effect.gen(function* () {
+          yield* clearStaleProviderResumeState({
+            threadId,
+            cause: error,
+          });
+          yield* Effect.logWarning(
+            "provider command reactor retrying OpenCode-compatible session without stale resume",
+            {
+              threadId,
+              provider: preferredProvider,
+            },
+          );
+          return yield* startProviderSessionWithOutcome();
+        });
+      }),
+    );
+    const startedSession = startOutcome.session;
     // Record the exact selection the session was spawned with so later
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
@@ -1397,6 +1443,7 @@ const make = Effect.gen(function* () {
     return {
       activeSessionBeforeEnsure,
       activeSession: startedSession,
+      nativeResumeAttempted: startOutcome.nativeResumeAttempted,
     };
   });
 
@@ -1520,15 +1567,12 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const { activeSessionBeforeEnsure, activeSession } = yield* ensureSessionForThread(
-      input.threadId,
-      input.createdAt,
-      {
+    const { activeSessionBeforeEnsure, activeSession, nativeResumeAttempted } =
+      yield* ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
-      },
-    );
+      });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
     }
@@ -1613,7 +1657,8 @@ const make = Effect.gen(function* () {
     }
     const shouldBootstrapPriorTranscriptContext =
       (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
-        activeSessionBeforeEnsure === undefined) ||
+        activeSessionBeforeEnsure === undefined &&
+        !nativeResumeAttempted) ||
         hasPendingPriorTranscriptBootstrap) &&
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext;

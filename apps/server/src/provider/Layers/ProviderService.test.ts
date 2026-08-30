@@ -990,6 +990,34 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("reports whether a successful session start restored native context", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-start-outcome");
+
+      const initial = yield* provider.startSessionWithOutcome!(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopRuntimeSession!({ threadId });
+      const resumed = yield* provider.startSessionWithOutcome!(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(initial.nativeResumeAttempted, false);
+      assert.equal(resumed.nativeResumeAttempted, true);
+      assert.deepEqual(
+        routing.codex.startSession.mock.calls.at(-1)?.[0]?.resumeCursor,
+        initial.session.resumeCursor,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

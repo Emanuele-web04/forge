@@ -52,6 +52,11 @@ export interface ProviderRuntimeEventPumpHealth {
   readonly lastQuarantinedAt?: string;
 }
 
+export interface ProviderSessionStartOutcome {
+  readonly session: ProviderSession;
+  readonly nativeResumeAttempted: boolean;
+}
+
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
@@ -63,6 +68,15 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  /**
+   * Start a provider session and report whether it supplied a provider-native
+   * resume cursor to the adapter.
+   */
+  readonly startSessionWithOutcome?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+  ) => Effect.Effect<ProviderSessionStartOutcome, ProviderServiceError>;
 
   /**
    * Send a provider turn.

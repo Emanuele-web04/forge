@@ -1836,7 +1836,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           ),
         ),
       ),
-    ).rejects.toThrow("session.update unavailable during resume");
+    ).rejects.toMatchObject({
+      _tag: "ProviderAdapterRequestError",
+      provider: "opencode",
+      method: "session.update",
+      detail: "session.update unavailable during resume",
+    });
 
     expect(runtime.updateCalls).toEqual([
       { sessionID: "existing-session-1", permission: OPEN_CODE_PLAN_PERMISSION_RULES },

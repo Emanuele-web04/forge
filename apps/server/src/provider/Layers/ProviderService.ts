@@ -1661,7 +1661,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         } as const;
       });
 
-    const startSession: ProviderServiceShape["startSession"] = (threadId, rawInput) =>
+    const startSessionWithOutcome: NonNullable<
+      ProviderServiceShape["startSessionWithOutcome"]
+    > = (threadId, rawInput) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
           operation: "ProviderService.startSession",
@@ -1719,7 +1721,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
                     : {}),
-                  ...(effectiveResumeCursor !== undefined
+                  ...(hasResumeCursor(effectiveResumeCursor)
                     ? { resumeCursor: effectiveResumeCursor }
                     : {}),
                 })
@@ -1783,7 +1785,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInterruptionFences.delete(threadId);
               }
 
-              return session;
+              return {
+                session,
+                nativeResumeAttempted: hasResumeCursor(effectiveResumeCursor),
+              };
             });
 
             if (!persistedBinding || persistedBinding.provider === input.provider) {
@@ -1857,6 +1862,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }),
         );
       });
+
+    const startSession: ProviderServiceShape["startSession"] = (threadId, input) =>
+      startSessionWithOutcome(threadId, input).pipe(Effect.map(({ session }) => session));
 
     const forkThread: NonNullable<ProviderServiceShape["forkThread"]> = (rawInput) =>
       Effect.gen(function* () {
@@ -2978,6 +2986,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     return {
       startSession,
+      startSessionWithOutcome,
       forkThread,
       sendTurn,
       steerTurn,

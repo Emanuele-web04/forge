@@ -223,6 +223,7 @@ describe("ProviderCommandReactor", () => {
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
+    const persistedResumeCursors = new Map<ThreadId, unknown>();
     const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
       Effect.succeed(runtimeSessions),
     );
@@ -267,6 +268,29 @@ describe("ProviderCommandReactor", () => {
       };
       runtimeSessions.push(session);
       return Effect.succeed(session);
+    });
+    const startSessionWithOutcome = vi.fn<
+      NonNullable<ProviderServiceShape["startSessionWithOutcome"]>
+    >((threadId, sessionInput) => {
+      const effectiveResumeCursor =
+        sessionInput.resumeCursor ?? persistedResumeCursors.get(threadId);
+      const nativeResumeAttempted =
+        effectiveResumeCursor !== undefined && effectiveResumeCursor !== null;
+      return startSession(threadId, sessionInput).pipe(
+        Effect.map((session) => {
+          const resolvedSession = nativeResumeAttempted
+            ? { ...session, resumeCursor: effectiveResumeCursor }
+            : session;
+          const runtimeIndex = runtimeSessions.findIndex(
+            (candidate) => candidate.threadId === threadId,
+          );
+          if (runtimeIndex >= 0) {
+            runtimeSessions[runtimeIndex] = resolvedSession;
+          }
+          persistedResumeCursors.set(threadId, resolvedSession.resumeCursor);
+          return { session: resolvedSession, nativeResumeAttempted };
+        }),
+      );
     });
     const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((_: unknown) =>
       Effect.succeed({
@@ -380,6 +404,7 @@ describe("ProviderCommandReactor", () => {
         if (index >= 0) {
           runtimeSessions.splice(index, 1);
         }
+        persistedResumeCursors.delete(threadId);
       }),
     );
     const stopRuntimeSession = vi.fn((input: unknown) =>
@@ -414,6 +439,7 @@ describe("ProviderCommandReactor", () => {
         if (!threadId) {
           return;
         }
+        persistedResumeCursors.set(threadId, null);
         const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
         if (index >= 0) {
           runtimeSessions.splice(index, 1);
@@ -465,6 +491,7 @@ describe("ProviderCommandReactor", () => {
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
+      startSessionWithOutcome,
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
       startReview,
@@ -634,6 +661,7 @@ describe("ProviderCommandReactor", () => {
       reactor,
       serverSettings,
       startSession,
+      startSessionWithOutcome,
       listSessions,
       sendTurn,
       steerTurn,
@@ -854,6 +882,32 @@ describe("ProviderCommandReactor", () => {
   ) {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     return readModel.threads.find((thread) => thread.id === threadId);
+  }
+
+  async function dispatchHarnessUserTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly messageId: string;
+      readonly text: string;
+      readonly createdAt: string;
+    },
+  ) {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-${input.messageId}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId(input.messageId),
+          role: "user",
+          text: input.text,
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: input.createdAt,
+      }),
+    );
   }
 
   it("REL-01B gate: delivers intents committed before the reactor subscribes", async () => {
@@ -8198,6 +8252,124 @@ describe("ProviderCommandReactor", () => {
     });
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
+
+  it.each(["opencode", "kilo"] as const)(
+    "sends the post-idle %s turn bare after native resume succeeds",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-resume-seed`,
+        text: "Remember that the module is called zorblax.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.stopRuntimeSession({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-resume-follow-up`,
+        text: "What did we call the module?",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+      expect(harness.startSessionWithOutcome).toHaveBeenCalledTimes(2);
+      const resumedInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(resumedInput.input).toBe("What did we call the module?");
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "injects one transcript recap for a cursor-less %s cold start",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-cold-seed`,
+        text: "The deployment color is violet.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.clearSessionResumeCursor({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-cold-follow-up`,
+        text: "Which deployment color did we choose?",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      const coldStartInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(coldStartInput.input).toContain("<thread_context>");
+      expect(coldStartInput.input).toContain("The deployment color is violet.");
+      expect(coldStartInput.input?.match(/Which deployment color did we choose\?/g)).toHaveLength(1);
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-cold-next`,
+        text: "Continue with that choice.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+      const nextInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
+      expect(nextInput.input).toBe("Continue with that choice.");
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "retries a stale %s resume once with transcript context and one user turn",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-stale-seed`,
+        text: "Keep the release channel on delta.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.stopRuntimeSession({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider,
+            method: "session.update",
+            detail: "Session not found",
+          }),
+        ),
+      );
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-stale-follow-up`,
+        text: "Which release channel should we use?",
+        createdAt: now,
+      });
+      await waitFor(async () => {
+        const thread = await readHarnessThread(harness);
+        return harness.sendTurn.mock.calls.length === 2 || thread?.session?.status === "error";
+      });
+
+      expect(harness.startSession.mock.calls).toHaveLength(3);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn.mock.calls).toHaveLength(2);
+      const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(retryInput.input).toContain("<thread_context>");
+      expect(retryInput.input).toContain("Keep the release channel on delta.");
+      expect(retryInput.input?.match(/Which release channel should we use\?/g)).toHaveLength(1);
+    },
+  );
 
   it("starts a fresh session when only projected session state exists", async () => {
     const harness = await createHarness();
