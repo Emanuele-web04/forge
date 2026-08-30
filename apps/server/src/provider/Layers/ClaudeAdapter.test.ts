@@ -237,6 +237,48 @@ function providerValidationIssue(error: unknown): string {
   return error.issue;
 }
 
+type ClaudeAutoSessionStartExpectation =
+  | { readonly status: "started"; readonly model: string }
+  | { readonly status: "rejected"; readonly issue: RegExp };
+
+function verifyClaudeAutoSessionStart(input: {
+  readonly models: Array<ModelInfo>;
+  readonly requestedModel: string;
+  readonly expected: ClaudeAutoSessionStartExpectation;
+}) {
+  const { layer } = makeClaudeModelCatalogHarness(input.models);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const startSession = () =>
+      adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "auto",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: input.requestedModel,
+        },
+      });
+
+    if (input.expected.status === "started") {
+      const session = yield* startSession();
+      assert.equal(session.model, input.expected.model);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      return;
+    }
+
+    const result = yield* startSession().pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") {
+      assert.match(providerValidationIssue(result.failure), input.expected.issue);
+    }
+    assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+  }).pipe(
+    Effect.provideService(Random.Random, makeDeterministicRandomService()),
+    Effect.provide(layer),
+  );
+}
+
 function makeHarness(config?: {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
@@ -8483,235 +8525,128 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("starts Auto when Claude discovers only supported context-window variants", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "default",
-        resolvedModel: "claude-opus-5[1m]",
-        displayName: "Default (recommended)",
-        description: "Default Claude model",
-        supportsAutoMode: true,
-      },
-      {
-        value: "opus[1m]",
-        resolvedModel: "claude-opus-5[1m]",
-        displayName: "Claude Opus 5 (1M context)",
-        description: "Claude Opus 5",
-        supportsAutoMode: true,
-      },
-    ]);
+  it.effect(
+    "starts Auto when Claude discovers only supported context-window variants",
+    () =>
+      verifyClaudeAutoSessionStart({
+        requestedModel: "claude-opus-5",
+        models: [
+          {
+            value: "default",
+            resolvedModel: "claude-opus-5[1m]",
+            displayName: "Default (recommended)",
+            description: "Default Claude model",
+            supportsAutoMode: true,
+          },
+          {
+            value: "opus[1m]",
+            resolvedModel: "claude-opus-5[1m]",
+            displayName: "Claude Opus 5 (1M context)",
+            description: "Claude Opus 5",
+            supportsAutoMode: true,
+          },
+        ],
+        expected: { status: "started", model: "claude-opus-5" },
+      }),
+  );
 
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "auto",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-5",
+  it.effect("keeps exact Claude Auto capability matches authoritative", () =>
+    verifyClaudeAutoSessionStart({
+      requestedModel: "claude-opus-5",
+      models: [
+        {
+          value: "claude-opus-5",
+          displayName: "Claude Opus 5",
+          description: "Claude Opus 5",
+          supportsAutoMode: true,
         },
-      });
-
-      assert.equal(session.model, "claude-opus-5");
-      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
-
-  it.effect("keeps exact Claude Auto capability matches authoritative", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "claude-opus-5",
-        displayName: "Claude Opus 5",
-        description: "Claude Opus 5",
-        supportsAutoMode: true,
-      },
-      {
-        value: "claude-opus-5[1m]",
-        displayName: "Claude Opus 5 (1M context)",
-        description: "Claude Opus 5",
-        supportsAutoMode: false,
-      },
-    ]);
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "auto",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-5",
+        {
+          value: "claude-opus-5[1m]",
+          displayName: "Claude Opus 5 (1M context)",
+          description: "Claude Opus 5",
+          supportsAutoMode: false,
         },
-      });
+      ],
+      expected: { status: "started", model: "claude-opus-5" },
+    }),
+  );
 
-      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
+  it.effect("rejects conflicting normalized Claude Auto capability matches", () =>
+    verifyClaudeAutoSessionStart({
+      requestedModel: "claude-opus-5",
+      models: [
+        {
+          value: "opus[1m]",
+          resolvedModel: "claude-opus-5[1m]",
+          displayName: "Claude Opus 5 (1M context)",
+          description: "Claude Opus 5",
+          supportsAutoMode: true,
+        },
+        {
+          value: "claude-opus-5[200k]",
+          displayName: "Claude Opus 5 (200K context)",
+          description: "Claude Opus 5",
+          supportsAutoMode: false,
+        },
+      ],
+      expected: { status: "rejected", issue: /conflicting Auto mode capability metadata/u },
+    }),
+  );
 
-  it.effect("rejects conflicting normalized Claude Auto capability matches", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "opus[1m]",
-        resolvedModel: "claude-opus-5[1m]",
-        displayName: "Claude Opus 5 (1M context)",
-        description: "Claude Opus 5",
-        supportsAutoMode: true,
-      },
-      {
-        value: "claude-opus-5[200k]",
-        displayName: "Claude Opus 5 (200K context)",
-        description: "Claude Opus 5",
-        supportsAutoMode: false,
-      },
-    ]);
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const result = yield* adapter
-        .startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "auto",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-5",
+  it.effect(
+    "rejects false Auto capability after context-window normalization",
+    () =>
+      verifyClaudeAutoSessionStart({
+        requestedModel: "claude-opus-5",
+        models: [
+          {
+            value: "opus[1m]",
+            resolvedModel: "claude-opus-5[1m]",
+            displayName: "Claude Opus 5 (1M context)",
+            description: "Claude Opus 5",
+            supportsAutoMode: false,
           },
-        })
-        .pipe(Effect.result);
+        ],
+        expected: {
+          status: "rejected",
+          issue: /^Claude model "Claude Opus 5 \(1M context\)" does not support Auto mode\.$/u,
+        },
+      }),
+  );
 
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.include(
-          providerValidationIssue(result.failure),
-          "conflicting Auto mode capability metadata",
-        );
-      }
-      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
-
-  it.effect("rejects false Auto capability after context-window normalization", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "opus[1m]",
-        resolvedModel: "claude-opus-5[1m]",
-        displayName: "Claude Opus 5 (1M context)",
-        description: "Claude Opus 5",
-        supportsAutoMode: false,
-      },
-    ]);
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const result = yield* adapter
-        .startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "auto",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-5",
+  it.effect(
+    "reports a model absent when only an unsupported qualifier resembles it",
+    () =>
+      verifyClaudeAutoSessionStart({
+        requestedModel: "claude-opus-5",
+        models: [
+          {
+            value: "claude-opus-5[preview]",
+            displayName: "Claude Opus 5 Preview",
+            description: "Claude Opus 5 preview",
+            supportsAutoMode: true,
           },
-        })
-        .pipe(Effect.result);
+        ],
+        expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
+      }),
+  );
 
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.equal(
-          providerValidationIssue(result.failure),
-          'Claude model "Claude Opus 5 (1M context)" does not support Auto mode.',
-        );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
-
-  it.effect("reports a model absent when only an unsupported qualifier resembles it", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "claude-opus-5[preview]",
-        displayName: "Claude Opus 5 Preview",
-        description: "Claude Opus 5 preview",
-        supportsAutoMode: true,
-      },
-    ]);
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const result = yield* adapter
-        .startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "auto",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-5",
+  it.effect(
+    "does not normalize an explicit context-window request to a bare model",
+    () =>
+      verifyClaudeAutoSessionStart({
+        requestedModel: "claude-opus-5[1m]",
+        models: [
+          {
+            value: "claude-opus-5",
+            displayName: "Claude Opus 5",
+            description: "Claude Opus 5",
+            supportsAutoMode: true,
           },
-        })
-        .pipe(Effect.result);
-
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.include(
-          providerValidationIssue(result.failure),
-          "was not returned by Claude model discovery",
-        );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
-
-  it.effect("does not normalize an explicit context-window request to a bare model", () => {
-    const { layer } = makeClaudeModelCatalogHarness([
-      {
-        value: "claude-opus-5",
-        displayName: "Claude Opus 5",
-        description: "Claude Opus 5",
-        supportsAutoMode: true,
-      },
-    ]);
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const result = yield* adapter
-        .startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "auto",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-5[1m]",
-          },
-        })
-        .pipe(Effect.result);
-
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.include(
-          providerValidationIssue(result.failure),
-          "was not returned by Claude model discovery",
-        );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(layer),
-    );
-  });
+        ],
+        expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
+      }),
+  );
 
   it.effect("rejects Auto when the selected Claude model omits capability metadata", () => {
     const query = new FakeClaudeQuery();
