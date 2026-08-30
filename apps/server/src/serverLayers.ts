@@ -55,8 +55,16 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { ProviderAccountServiceLive } from "./providerAccounts";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
+
+// Both the RPC/background graph and the provider-adapter graph must resolve the
+// same account selection and authentication jobs. Keeping this as one layer
+// value lets Effect memoize one ProviderAccountService across both graphs.
+const ProviderAccountServiceWithSettingsLive = ProviderAccountServiceLive.pipe(
+  Layer.provideMerge(ServerSettingsLive),
+);
 
 export function provideThreadDeletionReactorDeviceService<
   ReactorServices,
@@ -79,6 +87,11 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
+  const providerAccountLayer = ProviderAccountServiceWithSettingsLive;
+  const textGenerationLayer = TextGenerationLayerLive.pipe(
+    Layer.provideMerge(providerAccountLayer),
+  );
+  const gitLayer = GitLayerLive.pipe(Layer.provideMerge(providerAccountLayer));
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
@@ -104,14 +117,14 @@ export function makeServerRuntimeServicesLayer(
   );
   const threadGitMetadataReactorLayer = ThreadGitMetadataReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(gitLayer),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(textGenerationLayer),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
   );
@@ -164,7 +177,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(AutomationRepositoryLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(textGenerationLayer),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
@@ -207,7 +220,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(DeviceServiceLive),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
-    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(gitLayer),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
@@ -226,6 +239,7 @@ export function makeServerRuntimeServicesLayer(
     externalMcpServiceLayer,
     externalMcpGatewayLayer,
     providerHealthLayer,
+    providerAccountLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     orchestrationReactorLayer,
@@ -234,8 +248,8 @@ export function makeServerRuntimeServicesLayer(
     threadDeletionReactorLayer,
     devServerManagerLayer,
     DeviceServiceLive,
-    GitLayerLive,
-    TextGenerationLayerLive,
+    gitLayer,
+    textGenerationLayer,
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,
@@ -264,6 +278,7 @@ export function makeServerApplicationLayers() {
   // single ServerSettings service instead of capturing private defaults.
   const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
     Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(ProviderAccountServiceWithSettingsLive),
   );
   return {
     runtimeServicesLayer,

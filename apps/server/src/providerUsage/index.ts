@@ -17,6 +17,7 @@ import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { ServerConfig } from "../config";
 import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
 import { ServerSettingsService } from "../serverSettings";
+import { ProviderAccountService } from "../providerAccounts";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";
@@ -125,7 +126,7 @@ export function __resetProviderUsageCacheForTests(): void {
   snapshotCacheGenerations.clear();
 }
 
-function invalidateProviderUsageSnapshots(providers: ReadonlyArray<ProviderKind>): void {
+export function invalidateProviderUsageSnapshots(providers: ReadonlyArray<ProviderKind>): void {
   for (const provider of providers) {
     snapshotCache.delete(provider);
     inFlightFetches.delete(provider);
@@ -159,7 +160,7 @@ async function getProviderUsageSnapshot(
 
   const fetchPromise = (async () => {
     const snapshot = await fetchProviderUsage(provider, providerContext);
-    const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
+    const enriched = snapshot ? await enrichWithLocalUsage(snapshot, providerContext) : null;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
     if (
       enriched &&
@@ -206,6 +207,8 @@ async function enrichWithLocalUsage(
   const localLines = await loadLocalProviderUsageLines({
     provider: snapshot.provider,
     homeDir: ctx.homeDir,
+    ...(ctx.env.CODEX_HOME ? { homePath: ctx.env.CODEX_HOME } : {}),
+    env: ctx.env,
   });
   if (localLines.length === 0) {
     return snapshot;
@@ -220,6 +223,7 @@ export async function collectProviderUsageSnapshots(
     forceRefresh?: boolean;
     provider?: ProviderKind;
     providers?: ReadonlyArray<ProviderKind>;
+    providerContexts?: Partial<Record<ProviderKind, ProviderUsageContext>>;
   } = {},
 ): Promise<ServerProviderUsageSnapshot[]> {
   const providers = options.provider
@@ -231,7 +235,11 @@ export async function collectProviderUsageSnapshots(
         );
   const settled = await Promise.allSettled(
     providers.map((provider) =>
-      getProviderUsageSnapshot(provider, ctx, options.forceRefresh === true),
+      getProviderUsageSnapshot(
+        provider,
+        options.providerContexts?.[provider] ?? ctx,
+        options.forceRefresh === true,
+      ),
     ),
   );
 
@@ -243,6 +251,7 @@ export async function collectProviderUsageSnapshots(
 export const listProviderUsage = Effect.fn(function* (input: ServerListProviderUsageInput) {
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
+  const providerAccounts = yield* Effect.serviceOption(ProviderAccountService);
   const settings = yield* serverSettings.getSettings;
   const supportedProviders = PROVIDER_USAGE_PROVIDERS.filter(
     (provider) => PROVIDER_USAGE_FETCHERS[provider] !== undefined,
@@ -259,19 +268,33 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
   }
 
   return yield* Effect.tryPromise({
-    try: () =>
-      collectProviderUsageSnapshots(
+    try: async () => {
+      const baseContext = {
+        ...buildContext(),
+        homeDir: serverConfig.homeDir,
+        claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+      };
+      const providerContexts: Partial<Record<ProviderKind, ProviderUsageContext>> = {};
+      if (providerAccounts._tag === "Some") {
+        const [codexAccount, claudeAccount] = await Promise.all([
+          Effect.runPromise(providerAccounts.value.resolveEnvironment("codex")),
+          Effect.runPromise(providerAccounts.value.resolveEnvironment("claudeAgent")),
+        ]);
+        providerContexts.codex = { ...baseContext, env: codexAccount.env };
+        providerContexts.claudeAgent = { ...baseContext, env: claudeAccount.env };
+      }
+      return collectProviderUsageSnapshots(
         {
-          ...buildContext(),
-          homeDir: serverConfig.homeDir,
-          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          ...baseContext,
         },
         {
           forceRefresh: input.forceRefresh === true,
           ...(input.provider ? { provider: input.provider } : {}),
           ...(!input.provider ? { providers: enabledProviders } : {}),
+          providerContexts,
         },
-      ),
+      );
+    },
     catch: () => [] as unknown as ServerListProviderUsageResult,
   });
 });

@@ -100,6 +100,37 @@ describe("claudeCredentialKeepalive", () => {
     assert.deepEqual(stopped, ["/one/claude", "/two/claude"]);
   });
 
+  it("restarts the keepalive when the active Claude account directory changes", async () => {
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const controller = createClaudeCredentialKeepaliveController({
+      start: (input) => {
+        const configDir = input?.env?.CLAUDE_CONFIG_DIR ?? "system";
+        started.push(configDir);
+        return {
+          stop: async () => {
+            stopped.push(configDir);
+          },
+        };
+      },
+    });
+
+    await controller.reconcile({
+      enabled: true,
+      binaryPath: "claude",
+      env: { CLAUDE_CONFIG_DIR: "/managed/claude-a" },
+    });
+    await controller.reconcile({
+      enabled: true,
+      binaryPath: "claude",
+      env: { CLAUDE_CONFIG_DIR: "/managed/claude-b" },
+    });
+    await controller.stop();
+
+    assert.deepEqual(started, ["/managed/claude-a", "/managed/claude-b"]);
+    assert.deepEqual(stopped, ["/managed/claude-a", "/managed/claude-b"]);
+  });
+
   it("aborts and waits for an in-flight auth probe when stopped", async () => {
     let markStarted: () => void = () => undefined;
     const started = new Promise<void>((resolve) => {

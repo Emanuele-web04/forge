@@ -138,6 +138,13 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  ServerCreateProviderAccountInput,
+  ServerListProviderAccountsResult,
+  ServerProviderAccountInput,
+  ServerProviderAccountMutationResult,
+  ServerSetActiveProviderAccountInput,
+} from "./providerAccounts";
+import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -934,6 +941,42 @@ export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   error: WsRpcError,
 });
 
+export const WsServerListProviderAccountsRpc = Rpc.make(WS_METHODS.serverListProviderAccounts, {
+  payload: Schema.Struct({}),
+  success: ServerListProviderAccountsResult,
+  error: WsRpcError,
+});
+
+export const WsServerCreateProviderAccountRpc = Rpc.make(WS_METHODS.serverCreateProviderAccount, {
+  payload: ServerCreateProviderAccountInput,
+  success: ServerProviderAccountMutationResult,
+  error: WsRpcError,
+});
+
+export const WsServerSetActiveProviderAccountRpc = Rpc.make(
+  WS_METHODS.serverSetActiveProviderAccount,
+  {
+    payload: ServerSetActiveProviderAccountInput,
+    success: ServerProviderAccountMutationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerReauthenticateProviderAccountRpc = Rpc.make(
+  WS_METHODS.serverReauthenticateProviderAccount,
+  {
+    payload: ServerProviderAccountInput,
+    success: ServerProviderAccountMutationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerDeleteProviderAccountRpc = Rpc.make(WS_METHODS.serverDeleteProviderAccount, {
+  payload: ServerProviderAccountInput,
+  success: ServerProviderAccountMutationResult,
+  error: WsRpcError,
+});
+
 export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: ServerUpdateSettingsInput,
   success: ServerUpdateSettingsResult,
@@ -1308,6 +1351,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
   WsServerGetSettingsRpc,
+  WsServerListProviderAccountsRpc,
+  WsServerCreateProviderAccountRpc,
+  WsServerSetActiveProviderAccountRpc,
+  WsServerReauthenticateProviderAccountRpc,
+  WsServerDeleteProviderAccountRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

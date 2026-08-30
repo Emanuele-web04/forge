@@ -646,6 +646,15 @@ export function createWsNativeApi(): NativeApi {
       getEnvironment: () => transport.request(WS_METHODS.serverGetEnvironment),
       getSettings: () => transport.request(WS_METHODS.serverGetSettings),
       updateSettings: (input) => transport.request(WS_METHODS.serverUpdateSettings, input),
+      listProviderAccounts: () => transport.request(WS_METHODS.serverListProviderAccounts),
+      createProviderAccount: (input) =>
+        transport.request(WS_METHODS.serverCreateProviderAccount, input),
+      setActiveProviderAccount: (input) =>
+        transport.request(WS_METHODS.serverSetActiveProviderAccount, input, { timeoutMs: null }),
+      reauthenticateProviderAccount: (input) =>
+        transport.request(WS_METHODS.serverReauthenticateProviderAccount, input),
+      deleteProviderAccount: (input) =>
+        transport.request(WS_METHODS.serverDeleteProviderAccount, input, { timeoutMs: null }),
       getAuthSession: () => requestAuthJson<AuthSessionState>("/api/auth/session"),
       bootstrapAuth: (input: AuthBootstrapInput) =>
         requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {

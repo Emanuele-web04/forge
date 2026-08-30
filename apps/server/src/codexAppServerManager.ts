@@ -986,6 +986,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
+  private readonly resolveDefaultHomePath: () => Promise<string | undefined>;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -997,6 +998,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
+      readonly resolveDefaultHomePath?: () => Promise<string | undefined>;
     },
   ) {
     super();
@@ -1009,6 +1011,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       0,
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
+    this.resolveDefaultHomePath = options?.resolveDefaultHomePath ?? (async () => undefined);
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -2397,6 +2400,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "One or more Codex app-server process trees did not exit.",
       );
     }
+    this.skillsCache.clear();
+    this.pluginsCache.clear();
+    this.pluginDetailCache.clear();
+    this.modelCache.clear();
+    this.voiceAuthCache = undefined;
   }
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
@@ -2761,14 +2769,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const now = new Date().toISOString();
+    const defaultHomePath = await this.resolveDefaultHomePath();
     await this.assertSupportedCodexCliVersion({
       binaryPath: "codex",
       cwd: normalizedCwd,
+      ...(defaultHomePath ? { homePath: defaultHomePath } : {}),
     });
     const child = spawnCodexAppServer({
       binaryPath: "codex",
       cwd: normalizedCwd,
-      env: await buildCodexProcessEnv(),
+      env: await buildCodexProcessEnv(defaultHomePath ? { homePath: defaultHomePath } : {}),
     });
     const context: CodexSessionContext = {
       session: {
