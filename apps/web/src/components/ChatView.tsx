@@ -6736,7 +6736,7 @@ export default function ChatView({
   // --- Composer attachment entry points -------------------------------------
   const addComposerImages = useCallback(
     (files: readonly File[]) => {
-      if (!activeThreadId || files.length === 0) return;
+      if (!activeThreadId || files.length === 0 || isSidechatExpired) return;
 
       if (pendingUserInputs.length > 0) {
         toastManager.add({
@@ -6748,7 +6748,7 @@ export default function ChatView({
 
       enqueueComposerImages(files);
     },
-    [activeThreadId, enqueueComposerImages, pendingUserInputs.length],
+    [activeThreadId, enqueueComposerImages, isSidechatExpired, pendingUserInputs.length],
   );
 
   const removeComposerImage = (imageId: string) => {
@@ -6757,7 +6757,7 @@ export default function ChatView({
 
   const addComposerFiles = useCallback(
     (files: readonly File[]) => {
-      if (!activeThreadId || files.length === 0) return;
+      if (!activeThreadId || files.length === 0 || isSidechatExpired) return;
 
       if (pendingUserInputs.length > 0) {
         toastManager.add({
@@ -6782,7 +6782,13 @@ export default function ChatView({
           : error,
       );
     },
-    [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
+    [
+      activeThreadId,
+      addComposerFilesToDraft,
+      isSidechatExpired,
+      pendingUserInputs.length,
+      setThreadError,
+    ],
   );
 
   const addComposerAttachments = useCallback(
@@ -6810,6 +6816,7 @@ export default function ChatView({
     onComposerDragLeave,
     onComposerDrop,
   } = useComposerDropzone({
+    disabled: isSidechatExpired,
     addImages: addComposerImages,
     fileSupport: {
       genericFiles: "accept",

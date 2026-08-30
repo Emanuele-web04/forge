@@ -397,7 +397,7 @@ export function createSidechatSummariesForSourceSelector(
     const summaries = selectSidebarSummaries(state);
     if (summaries === previousSummaries) return previousSidechats;
     previousSummaries = summaries;
-    previousSidechats = summaries
+    const nextSidechats = summaries
       .filter(
         (thread) => thread.sidechatSourceThreadId === sourceThreadId && thread.archivedAt == null,
       )
@@ -406,6 +406,13 @@ export function createSidechatSummariesForSourceSelector(
           Date.parse(right.sidechatLastActivityAt ?? right.updatedAt ?? right.createdAt) -
           Date.parse(left.sidechatLastActivityAt ?? left.updatedAt ?? left.createdAt),
       );
+    if (
+      nextSidechats.length === previousSidechats.length &&
+      nextSidechats.every((thread, index) => thread === previousSidechats[index])
+    ) {
+      return previousSidechats;
+    }
+    previousSidechats = nextSidechats;
     return previousSidechats;
   };
 }

@@ -319,6 +319,40 @@ describe("createSidechatSummariesForSourceSelector", () => {
 
     expect(selectSidechats(state).map((thread) => thread.id)).toEqual([newer.id, older.id]);
   });
+
+  it("keeps its result reference when only an unrelated summary changes", () => {
+    const sourceThreadId = "thread-source" as ThreadId;
+    const selectSidechats = createSidechatSummariesForSourceSelector(sourceThreadId);
+    const sidechat = {
+      ...summaryA,
+      id: "sidechat-stable" as ThreadId,
+      sidechatSourceThreadId: sourceThreadId,
+    } as SidebarThreadSummary;
+    const unrelated = {
+      ...summaryA,
+      id: "thread-unrelated" as ThreadId,
+    } as SidebarThreadSummary;
+    const before = selectSidechats(
+      makeState({
+        threadIds: [sidechat.id, unrelated.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: sidechat,
+          [unrelated.id]: unrelated,
+        },
+      }),
+    );
+    const after = selectSidechats(
+      makeState({
+        threadIds: [sidechat.id, unrelated.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: sidechat,
+          [unrelated.id]: { ...unrelated, title: "Updated elsewhere" },
+        },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
 });
 
 describe("createComposerThreadMentionSourcesSelector", () => {
