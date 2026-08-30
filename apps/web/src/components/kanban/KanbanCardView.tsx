@@ -120,6 +120,7 @@ function KanbanCardViewComponent({
       ? (prByThreadId.get(card.threadId) ?? null)
       : resolveThreadPullRequestFallback({
           branch: card.thread.branch,
+          hasDedicatedWorktree: card.thread.worktreePath !== null,
           lastKnownPr: card.thread.lastKnownPr ?? null,
         })
     : null;
