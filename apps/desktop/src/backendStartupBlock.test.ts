@@ -61,6 +61,23 @@ describe("BackendStartupBlockDetector", () => {
     });
   });
 
+  it("preserves a consent challenge larger than the general output buffer", () => {
+    const detector = new BackendStartupBlockDetector();
+    const challenge = {
+      ...divergenceChallenge,
+      recordedName: "x".repeat(20_000),
+    };
+    const serialized = serializeMigrationDivergenceConsentChallenge(challenge);
+
+    detector.push(`MigrationDivergenceConsentRequiredError: blocked\n${serialized.slice(0, 100)}`);
+    detector.push(serialized.slice(100));
+
+    expect(detector.read()).toEqual({
+      kind: "migration-divergence-consent-required",
+      challenge,
+    });
+  });
+
   it("recognizes a migration bundle identity mismatch", () => {
     const detector = new BackendStartupBlockDetector();
 

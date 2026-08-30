@@ -2,6 +2,7 @@
 // Purpose: Classifies expected backend startup blocks that need user action, not crash retries.
 
 import {
+  MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
   parseMigrationDivergenceConsentChallenge,
   type MigrationDivergenceConsentChallenge,
 } from "@synara/shared/migrationRecovery";
@@ -33,9 +34,6 @@ export class BackendStartupBlockDetector {
 
     const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
     this.output = `${this.output}${text.replace(/\r/g, "")}`;
-    if (this.output.length > MAX_STARTUP_OUTPUT_CHARS) {
-      this.output = this.output.slice(-MAX_STARTUP_OUTPUT_CHARS);
-    }
 
     const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
     if (divergenceChallenge) {
@@ -45,6 +43,8 @@ export class BackendStartupBlockDetector {
       };
       return;
     }
+
+    this.output = retainRelevantStartupOutput(this.output);
 
     if (this.output.includes("MigrationRuntimeIdentityMismatchError:")) {
       this.block = { kind: "migration-runtime-identity-mismatch" };
@@ -75,4 +75,14 @@ export class BackendStartupBlockDetector {
   read(): BackendStartupBlock | null {
     return this.block;
   }
+}
+
+function retainRelevantStartupOutput(output: string): string {
+  const challengeStart = output.lastIndexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX);
+  const challengeLineIsIncomplete =
+    challengeStart !== -1 && output.indexOf("\n", challengeStart) === -1;
+  if (challengeLineIsIncomplete) return output.slice(challengeStart);
+  return output.length > MAX_STARTUP_OUTPUT_CHARS
+    ? output.slice(-MAX_STARTUP_OUTPUT_CHARS)
+    : output;
 }

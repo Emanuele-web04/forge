@@ -30,6 +30,7 @@ import {
   findFirstMigrationLineageDivergence,
   LAST_SHARED_LINEAGE_MIGRATION_ID,
   migrationEntries,
+  planLegacyMigration32Rename,
   planMigrationLineageAliasRepairs,
 } from "./Migrations.ts";
 
@@ -237,19 +238,12 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
 
   const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name] as const));
   const highWaterMark = recorded[recorded.length - 1]!.migration_id;
-  const canonicalPrefixThrough31 = migrationEntries
-    .filter(([id]) => id < 32)
-    .every(([id, name]) => recordedNames.get(id) === name);
-  if (
-    canonicalPrefixThrough31 &&
-    recordedNames.has(32) &&
-    recordedNames.get(32) !== "ReconcileImportedSchemaLineage"
-  ) {
-    return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
-  }
-
   const inspectedNames = new Map(recordedNames);
-  for (const repair of planMigrationLineageAliasRepairs(recordedNames)) {
+  const migration32Rename = planLegacyMigration32Rename(recordedNames);
+  if (migration32Rename !== null) {
+    inspectedNames.set(32, migration32Rename);
+  }
+  for (const repair of planMigrationLineageAliasRepairs(inspectedNames)) {
     if (repair.kind === "rename") {
       inspectedNames.set(repair.migrationId, repair.name);
     } else {
@@ -267,7 +261,10 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
       return null;
     }
     return {
-      sourceVersion: `imported-v${highWaterMark}-from${firstDivergedId}`,
+      sourceVersion:
+        migration32Rename === null
+          ? `imported-v${highWaterMark}-from${firstDivergedId}`
+          : `v${highWaterMark}-legacy32`,
       targetVersion: latestMigrationId,
       lineageDivergence: {
         firstDivergedId,
@@ -277,6 +274,10 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
         lineageFingerprint: migrationLineageFingerprint(recorded),
       },
     };
+  }
+
+  if (migration32Rename !== null) {
+    return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
   }
 
   if (highWaterMark < latestMigrationId) {

@@ -786,6 +786,34 @@ describe("migration backups", () => {
     });
   });
 
+  it("requires consent for divergence after a legacy migration-32 tracker row", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 31 });
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES
+            (32, 'LegacyImportedSchemaLineage'),
+            (33, 'UnexpectedMigrationAfterLegacy32')
+        `;
+
+        const blocked = yield* Effect.flip(runWithPreMigrationBackup(dbPath, Effect.void));
+        expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+        if (!(blocked instanceof MigrationDivergenceConsentRequiredError)) return;
+        expect(blocked.challenge).toMatchObject({
+          firstDivergedId: 33,
+          recordedName: "UnexpectedMigrationAfterLegacy32",
+        });
+      }),
+    );
+
+    expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
   it("keeps reviewed migration aliases on the automatic upgrade path", async () => {
     const dbPath = await makeDbPath();
 

@@ -254,6 +254,25 @@ const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
 
+const IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID = 32;
+
+export function planLegacyMigration32Rename(
+  recordedNamesById: ReadonlyMap<number, string>,
+): string | null {
+  const canonicalName = canonicalMigrationNamesById.get(
+    IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID,
+  );
+  if (canonicalName === undefined) return null;
+
+  const hasCanonicalPrefix = migrationEntries
+    .filter(([id]) => id < IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID)
+    .every(([id, name]) => recordedNamesById.get(id) === name);
+  const recordedName = recordedNamesById.get(IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID);
+  return hasCanonicalPrefix && recordedName !== undefined && recordedName !== canonicalName
+    ? canonicalName
+    : null;
+}
+
 /**
  * First canonical entry whose name is not recorded at the same ID, considering
  * only IDs the database claims to have applied.
@@ -402,19 +421,12 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   const recordedNamesBeforeCanonicalization = new Map(
     recorded.map((row) => [row.migration_id, row.name]),
   );
-  const hasCanonicalPrefixThrough31 = migrationEntries
-    .filter(([id]) => id < 32)
-    .every(([id, name]) => recordedNamesBeforeCanonicalization.get(id) === name);
-  const migration32Name = recordedNamesBeforeCanonicalization.get(32);
-  if (
-    hasCanonicalPrefixThrough31 &&
-    migration32Name !== undefined &&
-    migration32Name !== "ReconcileImportedSchemaLineage"
-  ) {
+  const migration32Rename = planLegacyMigration32Rename(recordedNamesBeforeCanonicalization);
+  if (migration32Rename !== null) {
     yield* sql`
       UPDATE effect_sql_migrations
-      SET name = 'ReconcileImportedSchemaLineage'
-      WHERE migration_id = 32
+      SET name = ${migration32Rename}
+      WHERE migration_id = ${IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID}
     `;
     recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
       SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
