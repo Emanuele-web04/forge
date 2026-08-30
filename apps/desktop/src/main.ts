@@ -292,8 +292,7 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
-  allowDevelopmentOverride:
-    requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+  allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
