@@ -32,6 +32,12 @@ import {
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 
+interface OpenInPickerPrimaryAction {
+  onClick: () => void;
+  disabled?: boolean;
+  icon?: ReactNode;
+}
+
 interface OpenInPickerProps {
   // Editor config is optional: callers that already hold it (e.g. the chat
   // header) pass it through, while standalone surfaces (file-preview headers)
@@ -50,11 +56,7 @@ interface OpenInPickerProps {
   defaultEditor?: EditorId;
   // Lets a file surface reuse the installed-editor menu while its main action
   // stays in-app. Omitting this preserves the normal preferred-editor action.
-  primaryAction?: {
-    onClick: () => void;
-    disabled?: boolean;
-    icon?: ReactNode;
-  };
+  primaryAction?: OpenInPickerPrimaryAction;
   // Surface-specific actions appended after the shared installed-editor list.
   // OpenInPicker owns the separator so callers cannot create malformed menus.
   additionalMenuItems?: ReactNode;
@@ -112,9 +114,7 @@ interface OpenInPickerFrameProps {
   labelMode: "responsive" | "always";
   groupLabel: string;
   menuLabel: string;
-  primaryDisabled: boolean;
-  primaryIcon: ReactNode;
-  onPrimaryOpen: () => void;
+  primaryAction: OpenInPickerPrimaryAction;
   onMenuOpenChange?: (open: boolean) => void;
   menuContent: ReactNode;
 }
@@ -125,10 +125,10 @@ function OpenInPickerFrame(props: OpenInPickerFrameProps) {
       <ChatHeaderButton
         tone="outline"
         className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={props.primaryDisabled}
-        onClick={props.onPrimaryOpen}
+        disabled={props.primaryAction.disabled ?? false}
+        onClick={props.primaryAction.onClick}
       >
-        {props.primaryIcon}
+        {props.primaryAction.icon ?? null}
         <span
           className={cn(
             "font-normal",
@@ -159,124 +159,61 @@ function OpenInPickerFrame(props: OpenInPickerFrameProps) {
   );
 }
 
-function EditorActionOpenInPicker({
-  keybindings,
-  availableEditors,
-  openInTarget,
-  labelMode: labelModeProp,
-  defaultEditor,
-  additionalMenuItems,
-  menuEditorOrder,
-  groupLabel: groupLabelProp,
-  menuLabel: menuLabelProp,
-}: OpenInPickerContentProps) {
-  const labelMode = labelModeProp ?? "responsive";
-  const groupLabel = groupLabelProp ?? "Open in editor";
-  const menuLabel = menuLabelProp ?? "Editor options";
-  const launchers = useEditorLaunchers({
-    keybindings,
-    availableEditors,
-    openInTarget,
-    defaultEditor,
-  });
-  const primaryIcon = launchers.primaryOption?.Icon ? (
-    <launchers.primaryOption.Icon aria-hidden="true" className="size-3.5" />
-  ) : null;
+function EditorActionOpenInPicker(props: OpenInPickerContentProps) {
+  const launchers = useEditorLaunchers(props);
+  const PrimaryIcon = launchers.primaryOption?.Icon;
 
   return (
     <OpenInPickerFrame
-      labelMode={labelMode}
-      groupLabel={groupLabel}
-      menuLabel={menuLabel}
-      primaryDisabled={!launchers.preferredEditor || !openInTarget}
-      primaryIcon={primaryIcon}
-      onPrimaryOpen={() => launchers.openInEditor(launchers.preferredEditor)}
+      labelMode={props.labelMode ?? "responsive"}
+      groupLabel={props.groupLabel ?? "Open in editor"}
+      menuLabel={props.menuLabel ?? "Editor options"}
+      primaryAction={{
+        disabled: !launchers.preferredEditor || !props.openInTarget,
+        icon: PrimaryIcon ? <PrimaryIcon aria-hidden="true" className="size-3.5" /> : null,
+        onClick: () => launchers.openInEditor(launchers.preferredEditor),
+      }}
       menuContent={
         <OpenInPickerMenuPopup
           launchers={launchers}
-          openInTarget={openInTarget}
-          {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
-          {...(menuEditorOrder ? { menuEditorOrder } : {})}
+          openInTarget={props.openInTarget}
+          additionalMenuItems={props.additionalMenuItems}
+          menuEditorOrder={props.menuEditorOrder}
         />
       }
     />
   );
 }
 
-type PrimaryActionOpenInPickerProps = Omit<OpenInPickerContentProps, "primaryAction"> & {
-  primaryAction: NonNullable<OpenInPickerProps["primaryAction"]>;
+type PrimaryActionOpenInPickerProps = OpenInPickerContentProps & {
+  primaryAction: OpenInPickerPrimaryAction;
 };
 
-function PrimaryActionOpenInPicker({
-  keybindings,
-  availableEditors,
-  openInTarget,
-  labelMode: labelModeProp,
-  defaultEditor,
-  primaryAction,
-  additionalMenuItems,
-  menuEditorOrder,
-  groupLabel: groupLabelProp,
-  menuLabel: menuLabelProp,
-}: PrimaryActionOpenInPickerProps) {
+function PrimaryActionOpenInPicker({ primaryAction, ...props }: PrimaryActionOpenInPickerProps) {
   const [launcherMenuMounted, setLauncherMenuMounted] = useState(false);
-  const handleMenuOpenChange = (open: boolean) => {
-    if (open) setLauncherMenuMounted(true);
-  };
 
   return (
     <OpenInPickerFrame
-      labelMode={labelModeProp ?? "responsive"}
-      groupLabel={groupLabelProp ?? "Open in editor"}
-      menuLabel={menuLabelProp ?? "Editor options"}
-      primaryDisabled={primaryAction.disabled ?? false}
-      primaryIcon={primaryAction.icon ?? null}
-      onPrimaryOpen={primaryAction.onClick}
-      onMenuOpenChange={handleMenuOpenChange}
-      menuContent={
-        launcherMenuMounted ? (
-          <OpenInPickerMenuWithLaunchers
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            openInTarget={openInTarget}
-            {...(defaultEditor ? { defaultEditor } : {})}
-            {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
-            {...(menuEditorOrder ? { menuEditorOrder } : {})}
-          />
-        ) : null
-      }
+      labelMode={props.labelMode ?? "responsive"}
+      groupLabel={props.groupLabel ?? "Open in editor"}
+      menuLabel={props.menuLabel ?? "Editor options"}
+      primaryAction={primaryAction}
+      onMenuOpenChange={(open) => {
+        if (open) setLauncherMenuMounted(true);
+      }}
+      menuContent={launcherMenuMounted ? <OpenInPickerMenuWithLaunchers {...props} /> : null}
     />
   );
 }
 
-function OpenInPickerMenuWithLaunchers({
-  keybindings,
-  availableEditors,
-  openInTarget,
-  defaultEditor,
-  additionalMenuItems,
-  menuEditorOrder,
-}: Pick<
-  OpenInPickerContentProps,
-  | "keybindings"
-  | "availableEditors"
-  | "openInTarget"
-  | "defaultEditor"
-  | "additionalMenuItems"
-  | "menuEditorOrder"
->) {
-  const launchers = useEditorLaunchers({
-    keybindings,
-    availableEditors,
-    openInTarget,
-    defaultEditor,
-  });
+function OpenInPickerMenuWithLaunchers(props: OpenInPickerContentProps) {
+  const launchers = useEditorLaunchers(props);
   return (
     <OpenInPickerMenuPopup
       launchers={launchers}
-      openInTarget={openInTarget}
-      {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
-      {...(menuEditorOrder ? { menuEditorOrder } : {})}
+      openInTarget={props.openInTarget}
+      additionalMenuItems={props.additionalMenuItems}
+      menuEditorOrder={props.menuEditorOrder}
     />
   );
 }
@@ -289,8 +226,8 @@ function OpenInPickerMenuPopup({
 }: {
   launchers: EditorLaunchers;
   openInTarget: string | null;
-  additionalMenuItems?: ReactNode;
-  menuEditorOrder?: ReadonlyArray<EditorId>;
+  additionalMenuItems: ReactNode;
+  menuEditorOrder: ReadonlyArray<EditorId> | undefined;
 }) {
   const { options, preferredEditor, openFavoriteShortcutLabel, setDefaultEditor, openInEditor } =
     launchers;

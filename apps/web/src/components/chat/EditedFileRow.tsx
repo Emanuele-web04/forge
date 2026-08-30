@@ -65,7 +65,6 @@ export function EditedFileRow(props: EditedFileRowProps) {
     >
       <button
         type="button"
-        data-edited-file-path-trigger="true"
         aria-label={`Review changes to ${props.filePath}`}
         className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         onClick={props.onReview}

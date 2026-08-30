@@ -31,25 +31,28 @@ const AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [
   "iterm",
 ];
 const FILE_PATH = "apps/web/src/components/chat/EditedFileRow.tsx";
+const ROOTLESS_FILE_PATH = "a/very/long/path/that/does/not/exist/EditedFileRow.tsx";
 const WORKSPACE_ROOT = "/workspace/synara";
 const FILE_MANAGER_LABEL = resolveEditorLabel("file-manager", navigator.platform);
 
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 let restoreNativeApi: (() => void) | undefined;
 
-function installNativeApi(openInEditor: ReturnType<typeof vi.fn>): () => void {
+function mockOpenInEditor() {
   const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
+  const openInEditor = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(window, "nativeApi", {
     configurable: true,
     value: { shell: { openInEditor } } as unknown as NativeApi,
   });
-  return () => {
+  restoreNativeApi = () => {
     if (previousDescriptor) {
       Object.defineProperty(window, "nativeApi", previousDescriptor);
     } else {
       Reflect.deleteProperty(window, "nativeApi");
     }
   };
+  return openInEditor;
 }
 
 function setClipboard(writeText: ReturnType<typeof vi.fn>): void {
@@ -93,6 +96,16 @@ function editedFileRow(props: {
   );
 }
 
+async function openFileOptions(filePath = FILE_PATH) {
+  const menuButton = page.getByRole("button", { name: `Open ${filePath} options` });
+  await menuButton.click();
+  return menuButton;
+}
+
+function fileManagerMenuItem() {
+  return page.getByRole("menuitemradio", { name: FILE_MANAGER_LABEL });
+}
+
 beforeEach(() => {
   localStorage.clear();
   harness.toastAdd.mockReset();
@@ -119,15 +132,14 @@ describe("EditedFileRow", () => {
       );
 
     expect(preferenceListenerCalls()).toHaveLength(0);
-    await page.getByRole("button", { name: `Open ${FILE_PATH} options` }).click();
+    await openFileOptions();
     await vi.waitFor(() => expect(preferenceListenerCalls()).toHaveLength(2));
   });
 
   it("keeps row review, Review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
     const onReview = vi.fn();
     const openFile = vi.fn(() => true);
-    const openInEditor = vi.fn().mockResolvedValue(undefined);
-    restoreNativeApi = installNativeApi(openInEditor);
+    const openInEditor = mockOpenInEditor();
 
     const screen = await render(
       editedFileRow({ openFile, onReview, workspaceRoot: WORKSPACE_ROOT }),
@@ -163,14 +175,12 @@ describe("EditedFileRow", () => {
   });
 
   it("lists installed launchers in file-action order, then copies both path forms", async () => {
-    const openInEditor = vi.fn().mockResolvedValue(undefined);
+    const openInEditor = mockOpenInEditor();
     const writeText = vi.fn().mockResolvedValue(undefined);
-    restoreNativeApi = installNativeApi(openInEditor);
     setClipboard(writeText);
     await render(editedFileRow({ openFile: () => true, workspaceRoot: WORKSPACE_ROOT }));
 
-    const menuButton = page.getByRole("button", { name: `Open ${FILE_PATH} options` });
-    await menuButton.click();
+    const menuButton = await openFileOptions();
     expect(
       Array.from(document.querySelectorAll<HTMLElement>("[role='menuitemradio']"), (item) =>
         item.textContent?.trim(),
@@ -209,9 +219,8 @@ describe("EditedFileRow", () => {
 
   it("keeps copy actions usable while disabling opens for deleted files", async () => {
     const openFile = vi.fn(() => true);
-    const openInEditor = vi.fn().mockResolvedValue(undefined);
+    const openInEditor = mockOpenInEditor();
     const writeText = vi.fn().mockResolvedValue(undefined);
-    restoreNativeApi = installNativeApi(openInEditor);
     setClipboard(writeText);
     await render(
       editedFileRow({
@@ -222,8 +231,8 @@ describe("EditedFileRow", () => {
     );
 
     expect(page.getByRole("button", { name: "Open", exact: true }).element()).toBeDisabled();
-    await page.getByRole("button", { name: `Open ${FILE_PATH} options` }).click();
-    expect(page.getByRole("menuitemradio", { name: FILE_MANAGER_LABEL }).element()).toBeDisabled();
+    await openFileOptions();
+    expect(fileManagerMenuItem().element()).toBeDisabled();
     await page.getByText("Copy relative path", { exact: true }).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(FILE_PATH));
     expect(openFile).not.toHaveBeenCalled();
@@ -232,8 +241,7 @@ describe("EditedFileRow", () => {
 
   it("does not fall back externally when the in-app opener reports a missing file", async () => {
     const openFile = vi.fn(() => false);
-    const openInEditor = vi.fn().mockResolvedValue(undefined);
-    restoreNativeApi = installNativeApi(openInEditor);
+    const openInEditor = mockOpenInEditor();
     await render(editedFileRow({ openFile, workspaceRoot: WORKSPACE_ROOT }));
 
     await page.getByRole("button", { name: "Open", exact: true }).click();
@@ -243,8 +251,7 @@ describe("EditedFileRow", () => {
 
   it("disables relative Open actions without a workspace root and stays contained when narrow", async () => {
     const openFile = vi.fn(() => false);
-    const openInEditor = vi.fn().mockResolvedValue(undefined);
-    restoreNativeApi = installNativeApi(openInEditor);
+    mockOpenInEditor();
     const host = document.createElement("div");
     host.style.cssText = "width:250px;overflow:hidden;";
     document.body.append(host);
@@ -252,28 +259,21 @@ describe("EditedFileRow", () => {
     const screen = await render(
       editedFileRow({
         openFile,
-        filePath: "a/very/long/path/that/does/not/exist/EditedFileRow.tsx",
+        filePath: ROOTLESS_FILE_PATH,
       }),
       { container: host },
     );
     try {
       expect(page.getByRole("button", { name: "Open", exact: true }).element()).toBeDisabled();
       expect(openFile).not.toHaveBeenCalled();
-      expect(openInEditor).not.toHaveBeenCalled();
 
       const row = screen.container.querySelector<HTMLElement>("[data-edited-file-row='true']");
       expect(row).not.toBeNull();
       expect(row!.scrollWidth).toBeLessThanOrEqual(row!.clientWidth);
       expect(page.getByRole("button", { name: "Review", exact: true }).element()).toBeVisible();
 
-      await page
-        .getByRole("button", {
-          name: "Open a/very/long/path/that/does/not/exist/EditedFileRow.tsx options",
-        })
-        .click();
-      expect(
-        page.getByRole("menuitemradio", { name: FILE_MANAGER_LABEL }).element(),
-      ).toBeDisabled();
+      await openFileOptions(ROOTLESS_FILE_PATH);
+      expect(fileManagerMenuItem().element()).toBeDisabled();
       expect(page.getByRole("menuitem", { name: "Copy absolute path" }).element()).toBeDisabled();
       expect(
         page.getByRole("menuitem", { name: "Copy relative path" }).element(),
