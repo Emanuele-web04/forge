@@ -1346,7 +1346,8 @@ export const restoreMarkedMigrationBackup = (
           : null;
       const matchingRestoreMarker =
         hasExpectedCompletedBackup &&
-        activeMarker?.backupPath === options.expectedBackupPath &&
+        activeMarker !== null &&
+        activeMarker.backupPath === options.expectedBackupPath &&
         activeMarker.payload.phase === "migration-restore-in-progress"
           ? activeMarker
           : null;
@@ -1360,7 +1361,8 @@ export const restoreMarkedMigrationBackup = (
       }
       if (hasExpectedCompletedBackup) {
         if (
-          completedProvenance?.backupPath !== options.expectedBackupPath ||
+          completedProvenance === null ||
+          completedProvenance.backupPath !== options.expectedBackupPath ||
           completedProvenance.markerPath !== options.expectedProvenancePath
         ) {
           throw new Error("Completed migration provenance no longer matches the selected backup.");
