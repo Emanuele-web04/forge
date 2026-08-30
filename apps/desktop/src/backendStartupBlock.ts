@@ -4,7 +4,7 @@
 import {
   parseMigrationDivergenceConsentChallenge,
   type MigrationDivergenceConsentChallenge,
-} from "@synara/shared/migrationSafety";
+} from "@synara/shared/migrationRecovery";
 
 const MAX_STARTUP_OUTPUT_CHARS = 16_384;
 

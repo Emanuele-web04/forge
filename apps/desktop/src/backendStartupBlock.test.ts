@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   serializeMigrationDivergenceConsentChallenge,
   type MigrationDivergenceConsentChallenge,
-} from "@synara/shared/migrationSafety";
+} from "@synara/shared/migrationRecovery";
 
 import { BackendStartupBlockDetector } from "./backendStartupBlock";
 

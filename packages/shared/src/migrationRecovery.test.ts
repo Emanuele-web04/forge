@@ -1,12 +1,32 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+  findMigrationRuntimeIdentityMismatch,
   migrationBackupDirectory,
   migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
+  migrationRuntimeSourceDigest,
+  parseMigrationDivergenceConsentChallenge,
   parseMigrationRecoveryResumeState,
+  serializeMigrationDivergenceConsentChallenge,
+  type MigrationDivergenceConsentChallenge,
 } from "./migrationRecovery";
+
+const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+  version: 1,
+  databasePath: "/data/state.sqlite",
+  backupDirectory: "/data/state.sqlite.backups",
+  sourceVersion: "imported-v90-from90",
+  targetVersion: 96,
+  firstDivergedId: 90,
+  expectedName: "ProjectionThreadMessageTextSegments",
+  recordedName: "AuthSessionRenewalPolicy",
+  highWaterMark: 90,
+  lineageFingerprint: "a".repeat(64),
+  consentToken: "b".repeat(64),
+};
 
 describe("migration recovery paths", () => {
   it("derives the marker and backup directory from the database path", () => {
@@ -60,5 +80,70 @@ describe("parseMigrationRecoveryResumeState", () => {
     expect(parseMigrationRecoveryResumeState(marker({ resumeAttempts: 1.5 }))).toBeNull();
     expect(parseMigrationRecoveryResumeState(marker({ resumeAttempts: "2" }))).toBeNull();
     expect(parseMigrationRecoveryResumeState(marker({ resumeAttempts: null }))).toBeNull();
+  });
+});
+
+describe("migration divergence consent challenge", () => {
+  it("round-trips through a single machine-readable output line", () => {
+    const serialized = serializeMigrationDivergenceConsentChallenge(divergenceChallenge);
+
+    expect(serialized.startsWith(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX)).toBe(true);
+    expect(
+      parseMigrationDivergenceConsentChallenge(`startup failed\n${serialized}\nstack trace`),
+    ).toEqual(divergenceChallenge);
+  });
+
+  it("fails closed for malformed or incomplete challenge output", () => {
+    expect(parseMigrationDivergenceConsentChallenge("unrelated output")).toBeNull();
+    expect(
+      parseMigrationDivergenceConsentChallenge(
+        `${MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX}{"version":1}`,
+      ),
+    ).toBeNull();
+    expect(
+      parseMigrationDivergenceConsentChallenge(
+        `${MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX}{not-json}`,
+      ),
+    ).toBeNull();
+    expect(
+      parseMigrationDivergenceConsentChallenge(
+        `${MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX}{not-json}\n${serializeMigrationDivergenceConsentChallenge(divergenceChallenge)}`,
+      ),
+    ).toEqual(divergenceChallenge);
+  });
+});
+
+describe("migration runtime source identity", () => {
+  it("is deterministic and changes with the migration source", () => {
+    const first = migrationRuntimeSourceDigest("export const migrations = [1];\n");
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(migrationRuntimeSourceDigest("export const migrations = [1];\n")).toBe(first);
+    expect(migrationRuntimeSourceDigest("export const migrations = [1, 2];\n")).not.toBe(first);
+  });
+
+  it("distinguishes launcher and checked-out source mismatches", () => {
+    const embeddedDigest = migrationRuntimeSourceDigest("embedded");
+    const launcherDigest = migrationRuntimeSourceDigest("launcher");
+
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest })).toEqual({
+      kind: "launcher-bundle",
+      expectedDigest: launcherDigest,
+      actualDigest: embeddedDigest,
+    });
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "source" })).toEqual({
+      kind: "source-bundle",
+      expectedDigest: migrationRuntimeSourceDigest("source"),
+      actualDigest: embeddedDigest,
+    });
+    expect(
+      findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "embedded" }),
+    ).toBeNull();
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest: "" })?.kind).toBe(
+      "launcher-bundle",
+    );
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "" })?.kind).toBe(
+      "source-bundle",
+    );
   });
 });

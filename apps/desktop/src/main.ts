@@ -65,7 +65,7 @@ import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
   MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
   type MigrationRuntimeIdentityMismatch,
-} from "@synara/shared/migrationSafety";
+} from "@synara/shared/migrationRecovery";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";

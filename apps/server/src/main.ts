@@ -13,7 +13,7 @@ import { NetService } from "@synara/shared/Net";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
   MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
-} from "@synara/shared/migrationSafety";
+} from "@synara/shared/migrationRecovery";
 import {
   optionalBooleanEnvironmentConfig,
   optionalBooleanFlag,

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { migrationRuntimeSourceDigest } from "@synara/shared/migrationSafety";
+import { migrationRuntimeSourceDigest } from "@synara/shared/migrationRecovery";
 
 import {
   MigrationRuntimeIdentityMismatchError,

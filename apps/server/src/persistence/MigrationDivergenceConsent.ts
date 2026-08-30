@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 
-import { migrationBackupDirectory } from "@synara/shared/migrationRecovery";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
+  migrationBackupDirectory,
   serializeMigrationDivergenceConsentChallenge,
   type MigrationDivergenceConsentChallenge,
-} from "@synara/shared/migrationSafety";
+} from "@synara/shared/migrationRecovery";
 
 export interface MigrationLineageDivergence {
   readonly firstDivergedId: number;
