@@ -423,7 +423,12 @@ describe("completed migration backup recovery", () => {
     });
     await fs.rename(databasePath, `${databasePath}.stranded-after-restore-crash`);
 
-    await Effect.runPromise(restoreMarkedMigrationBackup(databasePath));
+    await Effect.runPromise(
+      restoreMarkedMigrationBackup(databasePath, {
+        expectedBackupPath: backupPath,
+        expectedProvenancePath: migrationBackupProvenancePath(databasePath),
+      }),
+    );
 
     const restored = new DatabaseSync(databasePath, { readOnly: true });
     try {

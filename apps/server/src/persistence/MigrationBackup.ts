@@ -1330,15 +1330,28 @@ export const restoreMarkedMigrationBackup = (
       ) {
         throw new Error("Both expected migration backup and provenance paths are required.");
       }
-      const activeMarker = hasExpectedCompletedBackup
-        ? null
-        : await readMigrationRecoveryMarker(dbPath);
+      let activeMarker: MigrationRecoveryMarker | null;
+      if (hasExpectedCompletedBackup) {
+        try {
+          activeMarker = await readMigrationRecoveryMarker(dbPath);
+        } catch {
+          activeMarker = null;
+        }
+      } else {
+        activeMarker = await readMigrationRecoveryMarker(dbPath);
+      }
       const completedProvenance =
         hasExpectedCompletedBackup || !activeMarker
           ? await readCompletedMigrationProvenance(dbPath)
           : null;
+      const matchingRestoreMarker =
+        hasExpectedCompletedBackup &&
+        activeMarker?.backupPath === options.expectedBackupPath &&
+        activeMarker.payload.phase === "migration-restore-in-progress"
+          ? activeMarker
+          : null;
       const record = hasExpectedCompletedBackup
-        ? completedProvenance
+        ? (matchingRestoreMarker ?? completedProvenance)
         : (activeMarker ?? completedProvenance);
       if (!record) {
         throw new Error(
@@ -1347,8 +1360,8 @@ export const restoreMarkedMigrationBackup = (
       }
       if (hasExpectedCompletedBackup) {
         if (
-          record.backupPath !== options.expectedBackupPath ||
-          record.markerPath !== options.expectedProvenancePath
+          completedProvenance?.backupPath !== options.expectedBackupPath ||
+          completedProvenance.markerPath !== options.expectedProvenancePath
         ) {
           throw new Error("Completed migration provenance no longer matches the selected backup.");
         }
