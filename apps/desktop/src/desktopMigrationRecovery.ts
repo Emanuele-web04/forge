@@ -67,10 +67,7 @@ export function invalidMigrationStartupRecoveryChoices(input: {
   if (input.canOpenReleasePage) {
     choices.push({ label: "Download latest release", decision: "open-release-page" });
   }
-  choices.push(
-    { label: "Open logs", decision: "open-logs" },
-    { label: "Quit", decision: "quit" },
-  );
+  choices.push({ label: "Open logs", decision: "open-logs" }, { label: "Quit", decision: "quit" });
   return choices;
 }
 

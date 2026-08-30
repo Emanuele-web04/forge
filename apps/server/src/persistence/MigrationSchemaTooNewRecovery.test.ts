@@ -296,7 +296,9 @@ describe("completed migration backup recovery", () => {
     const restored = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(
-        restored.prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations").get(),
+        restored
+          .prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations")
+          .get(),
       ).toMatchObject({ migrationId: importedBackupMigrationId });
     } finally {
       restored.close();
