@@ -230,6 +230,13 @@ function makeClaudeModelCatalogHarness(models: Array<ModelInfo>) {
   return { query, layer };
 }
 
+function providerValidationIssue(error: unknown): string {
+  if (!(error instanceof ProviderAdapterValidationError)) {
+    assert.fail("Expected a provider adapter validation error.");
+  }
+  return error.issue;
+}
+
 function makeHarness(config?: {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
@@ -8582,7 +8589,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.include(result.failure.issue, "conflicting Auto mode capability metadata");
+        assert.include(
+          providerValidationIssue(result.failure),
+          "conflicting Auto mode capability metadata",
+        );
       }
       assert.equal(yield* adapter.hasSession(THREAD_ID), false);
     }).pipe(
@@ -8619,7 +8629,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.equal(
-          result.failure.issue,
+          providerValidationIssue(result.failure),
           'Claude model "Claude Opus 5 (1M context)" does not support Auto mode.',
         );
       }
@@ -8655,7 +8665,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.include(result.failure.issue, "was not returned by Claude model discovery");
+        assert.include(
+          providerValidationIssue(result.failure),
+          "was not returned by Claude model discovery",
+        );
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -8725,7 +8738,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.include(result.failure.issue, "Claude model capability discovery failed");
+        assert.include(
+          providerValidationIssue(result.failure),
+          "Claude model capability discovery failed",
+        );
       }
       assert.equal(query.closeCalls, 1);
       assert.equal(yield* adapter.hasSession(THREAD_ID), false);
