@@ -16,9 +16,21 @@
  *   frame is still in the tree with off-screen coordinates, and tapping it
  *   would hit whatever happens to be at that position instead.
  *
+ * The matching itself — exact label before substring, ambiguity refused rather
+ * than guessed — is `@synara/shared/uiTreeTargeting`, shared with the desktop
+ * family. What stays here is what UIKit specifically needs: labels compared
+ * with case and surrounding space ignored, a subrole that counts as a role, and
+ * "on screen" meaning the tap point falls inside the display's own frame.
+ *
  * @module device/uiTreeTargeting
  */
 import type { DeviceUiNode, DeviceUiPoint } from "@synara/contracts";
+import {
+  flattenUiTree,
+  resolveUiTreeTarget,
+  uiTreeActivationPoint,
+  type UiTreeTargetSpec,
+} from "@synara/shared/uiTreeTargeting";
 
 /** What the caller asked for. At least a label; role narrows an ambiguous one. */
 export interface DeviceUiTarget {
@@ -64,30 +76,23 @@ export class DeviceUiTargetError extends Error {
 /** How many near-misses to name; a whole screen of labels is noise, not help. */
 const MAX_REPORTED_CANDIDATES = 12;
 
-function flatten(root: DeviceUiNode): DeviceUiNode[] {
-  const out: DeviceUiNode[] = [];
-  const walk = (node: DeviceUiNode): void => {
-    out.push(node);
-    for (const child of node.children) walk(child);
-  };
-  walk(root);
-  return out;
+const childrenOf = (node: DeviceUiNode): readonly DeviceUiNode[] => node.children;
+
+/** Only a node with a label of its own can be named, or usefully listed back. */
+function labelledNodes(root: DeviceUiNode): readonly DeviceUiNode[] {
+  return flattenUiTree(root, childrenOf).filter(
+    (node) => node.label !== null && node.label.length > 0,
+  );
 }
 
 /** Every label currently rendered, used to tell a moving list from a stuck one. */
 export function visibleLabels(root: DeviceUiNode): string[] {
-  return flatten(root)
-    .filter((node) => node.label !== null && node.label.length > 0)
-    .map((node) => node.label as string);
+  return labelledNodes(root).map((node) => node.label as string);
 }
 
 /** Where a tap on this node lands: its own control point, else the frame centre. */
 export function tapPointForNode(node: DeviceUiNode): DeviceUiPoint {
-  if (node.activationPoint !== null) return node.activationPoint;
-  return {
-    x: node.frame.x + node.frame.width / 2,
-    y: node.frame.y + node.frame.height / 2,
-  };
+  return uiTreeActivationPoint(node);
 }
 
 function normalize(value: string): string {
@@ -130,45 +135,44 @@ function describe(node: DeviceUiNode): string {
  * one on screen is the one meant.
  */
 export function findTarget(root: DeviceUiNode, target: DeviceUiTarget): DeviceUiTargetMatch {
-  const wanted = normalize(target.label);
-  if (wanted.length === 0) {
+  if (normalize(target.label).length === 0) {
     throw new DeviceUiTargetError("A tap target needs a non-empty label.");
   }
+  const match = resolveUiTreeTarget({
+    pool: labelledNodes(root),
+    query: { label: target.label, role: target.role },
+    spec: deviceTargetSpec(root, target),
+  });
+  return { point: tapPointForNode(match.node), node: match.node, onScreen: match.onScreen };
+}
 
-  const labelled = flatten(root).filter((node) => node.label !== null && node.label.length > 0);
-  const byRole =
-    target.role === undefined
-      ? labelled
-      : labelled.filter((node) => matchesRole(node, target.role as string));
-
-  const exact = byRole.filter((node) => normalize(node.label as string) === wanted);
-  const matches =
-    exact.length > 0
-      ? exact
-      : byRole.filter((node) => normalize(node.label as string).includes(wanted));
-
-  if (matches.length === 0) {
-    const roleNote = target.role === undefined ? "" : ` with role ${JSON.stringify(target.role)}`;
-    throw new DeviceUiTargetError(
-      `No element labelled ${JSON.stringify(target.label)}${roleNote} is in the accessibility tree. ` +
-        `It may belong to a screen you have not opened yet; call device_describe_ui and use a label listed there.`,
-      labelled.slice(0, MAX_REPORTED_CANDIDATES).map(describe),
-      true,
-    );
-  }
-
-  const visible = matches.filter((node) => isOnScreen(node, root));
-  const candidates = visible.length > 0 ? visible : matches;
-  if (candidates.length > 1) {
-    throw new DeviceUiTargetError(
-      `${candidates.length} elements match ${JSON.stringify(target.label)}. ` +
-        `Pass role to narrow it, or tap explicit coordinates from device_describe_ui.`,
-      candidates.slice(0, MAX_REPORTED_CANDIDATES).map(describe),
-    );
-  }
-
-  const node = candidates[0] as DeviceUiNode;
-  return { point: tapPointForNode(node), node, onScreen: visible.length > 0 };
+function deviceTargetSpec(
+  root: DeviceUiNode,
+  target: DeviceUiTarget,
+): UiTreeTargetSpec<DeviceUiNode> {
+  return {
+    labelOf: (node) => node.label ?? "",
+    matchesRole,
+    matchKey: normalize,
+    exactKey: normalize,
+    isOnScreen: (node) => isOnScreen(node, root),
+    preferOnScreen: true,
+    noMatch: (pool) => {
+      const roleNote = target.role === undefined ? "" : ` with role ${JSON.stringify(target.role)}`;
+      return new DeviceUiTargetError(
+        `No element labelled ${JSON.stringify(target.label)}${roleNote} is in the accessibility tree. ` +
+          `It may belong to a screen you have not opened yet; call device_describe_ui and use a label listed there.`,
+        pool.slice(0, MAX_REPORTED_CANDIDATES).map(describe),
+        true,
+      );
+    },
+    ambiguous: (matches) =>
+      new DeviceUiTargetError(
+        `${matches.length} elements match ${JSON.stringify(target.label)}. ` +
+          `Pass role to narrow it, or tap explicit coordinates from device_describe_ui.`,
+        matches.slice(0, MAX_REPORTED_CANDIDATES).map(describe),
+      ),
+  };
 }
 
 /**

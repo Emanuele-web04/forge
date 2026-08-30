@@ -10,6 +10,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
 
 import {
@@ -35,6 +36,13 @@ import {
   resolveWorkingLabel,
   deriveComposerSendState,
   deriveComposerVoiceState,
+  editAndResendDispatchFields,
+  queuedChatTurnDispatchFields,
+  queuedPlanFollowUpDispatchFields,
+  resolveQueuedTurnDispatchSettings,
+  threadSettingsDispatchFields,
+  turnStartDispatchFields,
+  type TurnDispatchSettings,
   describeVoiceRecordingStartError,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
@@ -2942,5 +2950,170 @@ describe("resolveDraftFallbackModelSelection", () => {
         settingsDefaultProvider: "grok",
       }),
     ).toEqual({ provider: "grok", model: "grok-4.6" });
+  });
+});
+
+describe("turn dispatch settings", () => {
+  const LIVE_SETTINGS: TurnDispatchSettings = {
+    modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+    providerOptions: { codex: { binaryPath: "/live/codex" } },
+    assistantDeliveryMode: "streaming",
+    runtimeMode: "auto",
+    interactionMode: "plan",
+    envMode: "worktree",
+  };
+
+  const QUEUED_CHAT_TURN = {
+    id: "queued-1",
+    kind: "chat",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    previewText: "queued",
+    prompt: "queued",
+    images: [],
+    files: [],
+    assistantSelections: [],
+    browserAnnotations: [],
+    terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    skills: [],
+    mentions: [],
+    selectedProvider: "claudeAgent",
+    selectedModel: "opus-4.8",
+    selectedPromptEffort: null,
+    modelSelection: { provider: "claudeAgent", model: "opus-4.8" },
+    providerOptionsForDispatch: { codex: { binaryPath: "/queued/codex" } },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    envMode: "local",
+  } as const satisfies QueuedComposerChatTurn;
+
+  // Every dispatch site spreads one of these projections. The key lists below are
+  // the wire shape: they must stay exactly what the hand-written payloads sent
+  // before the projections existed, in the same order.
+  it("projects a thread.turn.start payload", () => {
+    const fields = turnStartDispatchFields(LIVE_SETTINGS, "steer");
+    expect(Object.keys(fields)).toEqual([
+      "modelSelection",
+      "providerOptions",
+      "assistantDeliveryMode",
+      "dispatchMode",
+      "runtimeMode",
+      "interactionMode",
+    ]);
+    expect(fields).toEqual({
+      modelSelection: LIVE_SETTINGS.modelSelection,
+      providerOptions: LIVE_SETTINGS.providerOptions,
+      assistantDeliveryMode: "streaming",
+      dispatchMode: "steer",
+      runtimeMode: "auto",
+      interactionMode: "plan",
+    });
+  });
+
+  it("projects an edit-and-resend payload without a dispatch mode", () => {
+    const fields = editAndResendDispatchFields(LIVE_SETTINGS);
+    expect(Object.keys(fields)).toEqual([
+      "modelSelection",
+      "providerOptions",
+      "assistantDeliveryMode",
+      "runtimeMode",
+      "interactionMode",
+    ]);
+  });
+
+  it("projects a queued chat turn, with and without a source plan", () => {
+    const withPlan = queuedChatTurnDispatchFields(LIVE_SETTINGS, {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      planId: "plan-1",
+    });
+    expect(Object.keys(withPlan)).toEqual([
+      "modelSelection",
+      "providerOptionsForDispatch",
+      "sourceProposedPlan",
+      "runtimeMode",
+      "interactionMode",
+      "envMode",
+    ]);
+    // The workflow-resume site passes no plan; the key must stay absent rather
+    // than land on the persisted draft as `undefined`.
+    const withoutPlan = queuedChatTurnDispatchFields(LIVE_SETTINGS, undefined);
+    expect(Object.keys(withoutPlan)).toEqual([
+      "modelSelection",
+      "providerOptionsForDispatch",
+      "runtimeMode",
+      "interactionMode",
+      "envMode",
+    ]);
+    expect("sourceProposedPlan" in withoutPlan).toBe(false);
+  });
+
+  it("projects a queued plan follow-up without an interaction mode or environment", () => {
+    expect(Object.keys(queuedPlanFollowUpDispatchFields(LIVE_SETTINGS))).toEqual([
+      "modelSelection",
+      "providerOptionsForDispatch",
+      "runtimeMode",
+    ]);
+  });
+
+  it("projects the thread-level settings for creation and persistence", () => {
+    expect(threadSettingsDispatchFields(LIVE_SETTINGS)).toEqual({
+      modelSelection: LIVE_SETTINGS.modelSelection,
+      runtimeMode: "auto",
+      interactionMode: "plan",
+    });
+  });
+
+  it("omits provider options entirely when there are none", () => {
+    const withoutOptions: TurnDispatchSettings = { ...LIVE_SETTINGS, providerOptions: undefined };
+    expect("providerOptions" in turnStartDispatchFields(withoutOptions, "queue")).toBe(false);
+    expect("providerOptions" in editAndResendDispatchFields(withoutOptions)).toBe(false);
+    expect(
+      "providerOptionsForDispatch" in queuedChatTurnDispatchFields(withoutOptions, undefined),
+    ).toBe(false);
+    expect("providerOptionsForDispatch" in queuedPlanFollowUpDispatchFields(withoutOptions)).toBe(
+      false,
+    );
+  });
+
+  it("replays a queued turn's frozen settings instead of the live composer's", () => {
+    expect(resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, QUEUED_CHAT_TURN)).toEqual({
+      modelSelection: QUEUED_CHAT_TURN.modelSelection,
+      providerOptions: QUEUED_CHAT_TURN.providerOptionsForDispatch,
+      // Not carried by a queued turn: it follows the live app setting.
+      assistantDeliveryMode: "streaming",
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      envMode: "local",
+    });
+  });
+
+  it("keeps the live settings when there is no queued turn", () => {
+    expect(resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, null)).toBe(LIVE_SETTINGS);
+    expect(resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, undefined)).toBe(LIVE_SETTINGS);
+  });
+
+  it("falls back to live settings for fields a persisted queued turn never stored", () => {
+    const { providerOptionsForDispatch: _options, ...legacyTurn } = QUEUED_CHAT_TURN;
+    const resolved = resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, legacyTurn);
+    expect(resolved.providerOptions).toEqual(LIVE_SETTINGS.providerOptions);
+  });
+
+  it("leaves the environment alone for a queued plan follow-up", () => {
+    const resolved = resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, {
+      id: "queued-2",
+      kind: "plan-follow-up",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      previewText: "follow up",
+      text: "follow up",
+      interactionMode: "default",
+      selectedProvider: "codex",
+      selectedModel: "gpt-5.6-sol",
+      selectedPromptEffort: null,
+      modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+      runtimeMode: "approval-required",
+    });
+    expect(resolved.envMode).toBe("worktree");
+    expect(resolved.runtimeMode).toBe("approval-required");
   });
 });

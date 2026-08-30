@@ -20,6 +20,8 @@ release/
 /.synara/
 /.synara-*/
 .idea/
+.claude/worktrees/
+__pycache__/
 apps/web/.playwright
 apps/web/playwright-report
 apps/web/test-results
