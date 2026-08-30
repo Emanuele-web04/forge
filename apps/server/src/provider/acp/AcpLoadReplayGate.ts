@@ -54,54 +54,70 @@ export const makeAcpLoadReplayGate = (
     const ready = yield* Deferred.make<"ready" | "released">();
     const state = yield* Ref.make<ReplayGateState>({ _tag: "WaitingForConsumer" });
 
-    const complete = (outcome: "ready" | "released") =>
-      Effect.gen(function* () {
-        const nextState =
-          outcome === "ready"
-            ? ({ _tag: "Ready" } satisfies ReplayReady)
-            : ({ _tag: "Released" } satisfies ReplayReleased);
-        const completed = yield* Ref.modify(state, (current) =>
-          current._tag === "Ready" || current._tag === "Released"
-            ? ([false, current] as const)
-            : ([true, nextState] as const),
-        );
-        if (completed) {
-          yield* Deferred.succeed(consumerAttached, undefined);
-          yield* Deferred.succeed(ready, outcome);
-        }
-        return completed;
-      });
-
-    const open = complete("ready");
+    const release = Effect.gen(function* () {
+      const completed = yield* Ref.modify(state, (current) =>
+        current._tag === "Ready" || current._tag === "Released"
+          ? ([false, current] as const)
+          : ([true, { _tag: "Released" } satisfies ReplayReleased] as const),
+      );
+      if (completed) {
+        yield* Deferred.succeed(consumerAttached, undefined);
+        yield* Deferred.succeed(ready, "released");
+      }
+    }).pipe(Effect.asVoid);
 
     const settle = Effect.gen(function* () {
       yield* Deferred.await(consumerAttached);
       while (true) {
-        const current = yield* Ref.get(state);
-        if (current._tag === "Ready" || current._tag === "Released") {
+        const now = yield* Clock.currentTimeMillis;
+        const decision = yield* Ref.modify(state, (current) => {
+          if (current._tag === "Ready" || current._tag === "Released") {
+            return [{ _tag: "Done" } as const, current] as const;
+          }
+          if (current._tag === "WaitingForConsumer") {
+            return [{ _tag: "Retry" } as const, current] as const;
+          }
+
+          const quietForMs = now - current.lastSuppressedAt;
+          const elapsedMs = now - current.startedAt;
+          const reachedHardTimeout = elapsedMs >= options.hardTimeoutMs;
+          if (quietForMs >= options.quietMs || reachedHardTimeout) {
+            return [
+              { _tag: "Opened", elapsedMs, reachedHardTimeout } as const,
+              { _tag: "Ready" } satisfies ReplayReady,
+            ] as const;
+          }
+
+          return [
+            {
+              _tag: "Wait",
+              delayMs: Math.max(
+                1,
+                Math.min(
+                  options.quietMs - quietForMs,
+                  options.hardTimeoutMs - elapsedMs,
+                  REPLAY_SETTLE_POLL_MAX_MS,
+                ),
+              ),
+            } as const,
+            current,
+          ] as const;
+        });
+
+        if (decision._tag === "Done") {
           return;
         }
-        if (current._tag !== "Suppressing") {
+        if (decision._tag === "Retry") {
           continue;
         }
-
-        const now = yield* Clock.currentTimeMillis;
-        const quietForMs = now - current.lastSuppressedAt;
-        const elapsedMs = now - current.startedAt;
-        const reachedHardTimeout = elapsedMs >= options.hardTimeoutMs;
-        if (quietForMs >= options.quietMs || reachedHardTimeout) {
-          const opened = yield* open;
-          if (opened && reachedHardTimeout) {
-            yield* options.onHardTimeout({ elapsedMs });
+        if (decision._tag === "Opened") {
+          yield* Deferred.succeed(ready, "ready");
+          if (decision.reachedHardTimeout) {
+            yield* options.onHardTimeout({ elapsedMs: decision.elapsedMs });
           }
           return;
         }
-
-        const untilQuietMs = options.quietMs - quietForMs;
-        const untilHardTimeoutMs = options.hardTimeoutMs - elapsedMs;
-        yield* Effect.sleep(
-          Math.max(1, Math.min(untilQuietMs, untilHardTimeoutMs, REPLAY_SETTLE_POLL_MAX_MS)),
-        );
+        yield* Effect.sleep(decision.delayMs);
       }
     });
 
@@ -147,6 +163,6 @@ export const makeAcpLoadReplayGate = (
       ),
       awaitReady: Deferred.await(ready),
       settle,
-      release: complete("released").pipe(Effect.asVoid),
+      release,
     };
   });

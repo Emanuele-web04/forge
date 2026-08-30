@@ -31,10 +31,13 @@ const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
 const loadReplayDelaysMs = (process.env.SYNARA_ACP_LOAD_REPLAY_DELAYS_MS ?? "")
   .split(",")
-  .map((value) => Number(value.trim()))
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0)
+  .map(Number)
   .filter((value) => Number.isFinite(value) && value >= 0);
 const rejectPromptDuringLoadReplay =
   process.env.SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY === "1";
+const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const sessionId = "mock-session-1";
 
@@ -374,11 +377,16 @@ app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
   configOptions: configOptions(),
 }));
 
-app.onRequest(OfficialAcp.methods.agent.session.fork, () => ({
-  sessionId: "mock-session-fork-1",
-  modes: modeState(),
-  configOptions: configOptions(),
-}));
+app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
+  if (rejectForkDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw new OfficialAcp.RequestError(-32603, "Fork arrived before load replay settled.");
+  }
+  return {
+    sessionId: "mock-session-fork-1",
+    modes: modeState(),
+    configOptions: configOptions(),
+  };
+});
 
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
   if (failSetConfigOption) {

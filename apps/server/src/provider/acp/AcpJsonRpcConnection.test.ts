@@ -413,6 +413,56 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("forks a loaded session after replay settles without an event consumer", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 1_000,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect(
     "assigns distinct fallback assistant item ids across separate runtime instances",
     () => {

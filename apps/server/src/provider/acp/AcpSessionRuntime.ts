@@ -767,7 +767,8 @@ const makeAcpSessionRuntime = (
       if (gate === undefined) {
         return Effect.void;
       }
-      return gate.awaitReady.pipe(
+      return gate.attachConsumer.pipe(
+        Effect.andThen(gate.awaitReady),
         Effect.flatMap((outcome) =>
           outcome === "ready"
             ? Effect.void
