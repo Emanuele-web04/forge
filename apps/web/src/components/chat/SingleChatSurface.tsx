@@ -968,7 +968,7 @@ export function SingleChatSurface(props: {
         return (
           <DeferredChatView
             threadId={pane.threadId}
-            headerVariant="sidechat-minimal"
+            hideHeader
             paneScopeId={dockSidechatPaneScopeId(pane.id)}
             deferMount={false}
             surfaceMode="split"
@@ -978,7 +978,6 @@ export function SingleChatSurface(props: {
             onToggleBrowser={noopChatSurfaceAction}
             onOpenBrowserUrl={noopChatSurfaceAction}
             onOpenTurnDiff={noopChatSurfaceAction}
-            onCloseThreadPane={() => closePane(props.threadId, pane.id)}
           />
         );
       default:

@@ -449,6 +449,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { dispatchThreadNotes } from "~/pinnedMessages";
 import { dispatchThreadGoal } from "~/threadGoal";
 import {
@@ -1137,7 +1138,7 @@ interface LateComposerSendHandlers {
 
 interface ChatViewProps {
   threadId: ThreadId;
-  headerVariant?: "full" | "sidechat-minimal";
+  hideHeader?: boolean;
   paneScopeId?: string;
   surfaceMode?: "single" | "split";
   presentationMode?: "default" | "editor";
@@ -1202,7 +1203,7 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
 
 export default function ChatView({
   threadId,
-  headerVariant: headerVariantProp,
+  hideHeader: hideHeaderProp,
   paneScopeId: paneScopeIdProp,
   surfaceMode: surfaceModeProp,
   presentationMode: presentationModeProp,
@@ -1225,7 +1226,7 @@ export default function ChatView({
   // `panicThreshold` is unset) on this entire component, the hottest one in the app.
   // See ChatView.compiler.test.ts.
   const paneScopeId = paneScopeIdProp ?? SINGLE_CHAT_PANE_SCOPE_ID;
-  const headerVariant = headerVariantProp ?? "full";
+  const hideHeader = hideHeaderProp ?? false;
   const surfaceMode = surfaceModeProp ?? "single";
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
@@ -4567,7 +4568,7 @@ export default function ChatView({
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentEnabled = !isEditorRail && headerVariant === "full";
+  const environmentEnabled = !isEditorRail && !hideHeader;
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
@@ -12069,8 +12070,8 @@ export default function ChatView({
           isDragOverComposer ? "opacity-100" : "opacity-0",
         )}
       />
-      {/* Top bar */}
-      <header
+      <ChatSurfaceHeader
+        hidden={hideHeader}
         className={cn(
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
           !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
@@ -12081,12 +12082,11 @@ export default function ChatView({
           // right-side chat pane), not flush against the window edges — the editor's
           // own top bar already reserves both desktop window-control gutters. Applying
           // them here just leaves redundant empty space on the sides.
-          !isEditorRail && headerVariant === "full" && desktopTopBarTrafficLightGutterClassName,
-          !isEditorRail && headerVariant === "full" && desktopTopBarWindowControlsGutterClassName,
+          !isEditorRail && desktopTopBarTrafficLightGutterClassName,
+          !isEditorRail && desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader
-          variant={headerVariant}
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
@@ -12176,7 +12176,7 @@ export default function ChatView({
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
-      </header>
+      </ChatSurfaceHeader>
 
       {/* Floating find panel — a root-level overlay so it sits on top of the
           header and the docked Environment panel at the pane's top-right. */}
