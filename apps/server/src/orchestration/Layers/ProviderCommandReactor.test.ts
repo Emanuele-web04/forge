@@ -8348,6 +8348,57 @@ describe("ProviderCommandReactor", () => {
   );
 
   it.each(["opencode", "kilo"] as const)(
+    "keeps a fresh %s session usable while stopped-recap cleanup retries",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const cleanupFailure = () =>
+        Effect.fail(
+          new ProviderValidationError({
+            operation: "test.completePriorTranscriptBootstrap",
+            issue: "injected transcript cleanup failure",
+          }),
+        );
+      harness.pendingPriorTranscriptBootstraps.add(threadId);
+      harness.completePriorTranscriptBootstrap
+        .mockImplementationOnce(cleanupFailure)
+        .mockImplementationOnce(cleanupFailure);
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.makeUnsafe(`${provider}-failed-bootstrap-cleanup-stop`),
+          threadId,
+          createdAt: now,
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-cleanup-failure-fresh-turn`,
+        text: "Start even though durable cleanup is temporarily unavailable.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(2);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+
+      await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-cleanup-retry-fresh-turn`,
+        text: "Retry cleanup without replaying the stopped recap.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(3);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
     "completes an empty pending %s transcript recap after a bare turn",
     async (provider) => {
       const harness = await createHarness({

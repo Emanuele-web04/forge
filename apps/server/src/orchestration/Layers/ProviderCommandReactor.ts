@@ -1488,6 +1488,7 @@ const make = Effect.gen(function* () {
         });
       }),
     );
+    let retainContextBootstrapSuppression = false;
     if (startOutcome.priorTranscriptBootstrapPending) {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
@@ -1498,7 +1499,11 @@ const make = Effect.gen(function* () {
         // An explicit stop intentionally discards pending synthetic context.
         // If its best-effort persistence cleanup was interrupted, finish that
         // cleanup before starting the fresh session instead of resurrecting it.
-        yield* providerService.completePriorTranscriptBootstrap({ threadId });
+        const completed = yield* persistPriorTranscriptBootstrapCompletion(
+          threadId,
+          preferredProvider,
+        );
+        retainContextBootstrapSuppression = !completed;
       }
     }
     const startedSession = startOutcome.session;
@@ -1507,7 +1512,9 @@ const make = Effect.gen(function* () {
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
     yield* bindSessionToThread(startedSession);
-    suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+    if (!retainContextBootstrapSuppression) {
+      suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+    }
     return {
       activeSessionBeforeEnsure,
       activeSession: startedSession,
