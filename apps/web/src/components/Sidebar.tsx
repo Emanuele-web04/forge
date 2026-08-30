@@ -206,6 +206,7 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-
 import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
+import { SidebarBugReportButton } from "./SidebarBugReportButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
@@ -6446,6 +6447,7 @@ export default function Sidebar() {
                     <span>Settings</span>
                   </SidebarMenuButton>
                 )}
+                <SidebarBugReportButton onClick={() => openFeedbackDialog(undefined, "bug")} />
                 {showDesktopUpdateButton ? (
                   <Tooltip>
                     <TooltipTrigger

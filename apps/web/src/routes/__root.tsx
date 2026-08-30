@@ -25,6 +25,10 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
+import { buildFeedbackSubmission } from "../feedback";
+import { buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { appendComposerPromptText } from "../lib/chatReferences";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
@@ -751,10 +755,20 @@ function GlobalShortcutsDialog() {
 }
 
 function GlobalFeedbackDialog() {
-  const { activeProject, activeThread } = useFocusedChatContext();
+  const { activeProject, activeProjectId, activeThread } = useFocusedChatContext();
   const isOpen = useFeedbackDialogStore((state) => state.isOpen);
   const requestedContext = useFeedbackDialogStore((state) => state.context);
+  const requestedInitialCategory = useFeedbackDialogStore((state) => state.initialCategory);
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
+
+  const {
+    activeProjectId: handleNewThreadActiveProjectId,
+    handleNewThread,
+    projects,
+  } = useHandleNewThread();
+  const effectiveActiveProjectId = activeProjectId ?? handleNewThreadActiveProjectId ?? null;
+  const hasProjects = projects.length > 0;
+
   const context: FeedbackThreadContext = requestedContext ?? {
     provider: activeThread?.modelSelection.provider ?? null,
     model: activeThread?.modelSelection.model ?? null,
@@ -771,7 +785,41 @@ function GlobalFeedbackDialog() {
     hasThreadError: Boolean(activeThread?.error),
   };
 
-  return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
+  const onDraftGithubIssue = async (details: string) => {
+    const projectId = effectiveActiveProjectId ?? projects[0]?.id ?? null;
+    if (!projectId) {
+      throw new Error("No project available.");
+    }
+
+    const submission = buildFeedbackSubmission({ category: "bug", details, context });
+    const prompt = buildGithubIssueInterviewPrompt({
+      details,
+      diagnosticsSummary: submission.summary,
+    });
+
+    const threadId = await handleNewThread(projectId, { fresh: true });
+    if (!threadId) {
+      throw new Error("Could not open a draft thread.");
+    }
+
+    appendComposerPromptText(threadId, prompt);
+    setOpen(false);
+    toastManager.add({
+      type: "success",
+      title: "Bug-report thread ready",
+      description: "Review the prompt and send it.",
+    });
+  };
+
+  return (
+    <FeedbackDialog
+      open={isOpen}
+      context={context}
+      initialCategory={requestedInitialCategory}
+      onOpenChange={setOpen}
+      onDraftGithubIssue={hasProjects ? onDraftGithubIssue : undefined}
+    />
+  );
 }
 
 function GlobalWhatsNewSurface() {
