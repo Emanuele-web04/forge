@@ -80,6 +80,8 @@ describe("Codex Synara harness policy", () => {
       expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
+      expect(instructions).toContain("Make every final response self-contained");
+      expect(instructions).toContain("contain all context the user needs to decide");
       expect(instructions).toContain("one exact synara_create_threads plan");
       expect(instructions).toContain("tools.mcp__synara__browser_open");
       for (const name of BROWSER_TOOL_NAMES) {
