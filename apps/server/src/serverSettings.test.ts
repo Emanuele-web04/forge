@@ -172,4 +172,31 @@ describe("ServerSettingsService", () => {
     expect(settings.textGenerationModelSelection.provider).toBe("codex");
     expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
+
+  it("falls back only to providers with dedicated Git text generation", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "codex",
+              model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            },
+            providers: {
+              codex: { enabled: false },
+              claudeAgent: { enabled: true },
+              cursor: { enabled: false },
+              kilo: { enabled: true },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(settings.textGenerationModelSelection.provider).toBe("kilo");
+    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.kilo);
+  });
 });

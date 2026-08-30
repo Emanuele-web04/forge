@@ -10,7 +10,6 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
-  type ProviderWithDefaultModel,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -35,6 +34,7 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { writeFileStringAtomically } from "./atomicWrite";
 import { ServerConfig } from "./config";
+import { GIT_TEXT_GENERATION_PROVIDER_ORDER } from "./git/textGenerationSelection";
 import {
   ProviderCredentials,
   ProviderCredentialsLive,
@@ -150,20 +150,15 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
-  "codex",
-  "claudeAgent",
-  "kilo",
-  "opencode",
-];
-
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   if (settings.providers[selection.provider].enabled) {
     return settings;
   }
 
-  const fallback = PROVIDER_ORDER.find((provider) => settings.providers[provider].enabled);
+  const fallback = GIT_TEXT_GENERATION_PROVIDER_ORDER.find(
+    (provider) => settings.providers[provider].enabled,
+  );
   if (!fallback) {
     return settings;
   }

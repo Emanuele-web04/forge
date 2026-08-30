@@ -1,15 +1,26 @@
 import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara/contracts";
 
+export const GIT_TEXT_GENERATION_PROVIDER_ORDER = [
+  "codex",
+  "cursor",
+  "kilo",
+  "opencode",
+] as const satisfies readonly ProviderKind[];
+
+export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDER_ORDER)[number];
+
+const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>(GIT_TEXT_GENERATION_PROVIDER_ORDER);
+
 export interface TextGenerationProviderInput {
   readonly modelSelection: ModelSelection;
   readonly providerOptions?: ProviderStartOptions;
   readonly codexHomePath?: string;
 }
 
-export function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
-  return (
-    provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
-  );
+export function hasDedicatedTextGenerationProvider(
+  provider: ProviderKind | undefined,
+): provider is GitTextGenerationProvider {
+  return provider !== undefined && GIT_TEXT_GENERATION_PROVIDER_SET.has(provider);
 }
 
 export function resolveTextGenerationInputForSelection(

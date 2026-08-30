@@ -17,6 +17,7 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
+  didProviderEnablementChange,
   getAppModelOptions,
   getCustomBinaryPathForProvider,
   getDefaultNativeFontSmoothing,
@@ -80,6 +81,25 @@ describe("server-backed provider enablement", () => {
       binaryPath: "/custom/opencode",
       enabled: true,
     });
+  });
+
+  it("invalidates discovery for initial and changed streamed provider settings", () => {
+    const disabledOpenCode = {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+        opencode: {
+          ...DEFAULT_SERVER_SETTINGS_VIEW.providers.opencode,
+          enabled: false,
+        },
+      },
+    };
+
+    expect(didProviderEnablementChange(undefined, disabledOpenCode)).toBe(true);
+    expect(
+      didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, DEFAULT_SERVER_SETTINGS_VIEW),
+    ).toBe(false);
+    expect(didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, disabledOpenCode)).toBe(true);
   });
 });
 

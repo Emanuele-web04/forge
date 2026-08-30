@@ -209,7 +209,8 @@ function SettingsRouteView() {
     systemUiFont,
     setSystemUiFont,
   } = useTheme();
-  const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
+    useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -285,6 +286,11 @@ function SettingsRouteView() {
   const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
+  const isProviderActivityDirty =
+    settings.disabledProviders.length !== defaults.disabledProviders.length ||
+    settings.disabledProviders.some(
+      (provider, index) => provider !== defaults.disabledProviders[index],
+    );
 
   // Deep links and sidebar search targets all resolve to stable DOM ids in the active panel.
   useEffect(() => {
@@ -370,6 +376,7 @@ function SettingsRouteView() {
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
+    ...(isProviderActivityDirty ? ["Provider activity"] : []),
     ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
     ...(isProviderOrderDirty ? ["Provider order"] : []),
   ];
@@ -393,7 +400,7 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
-    resetSettings();
+    await resetSettings();
     setResetEpoch((current) => current + 1);
   }
 
@@ -1296,6 +1303,7 @@ function SettingsRouteView() {
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}
+                  updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
                 <ProvidersSettingsPanel

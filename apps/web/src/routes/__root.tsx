@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
+  type ServerSettingsView,
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
@@ -129,7 +130,7 @@ import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
-import { useAppSettings } from "../appSettings";
+import { didProviderEnablementChange, useAppSettings } from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
@@ -2164,7 +2165,13 @@ function EventRouter() {
       { replayCurrent: true },
     );
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
+      const previousSettings = queryClient.getQueryData<ServerSettingsView>(
+        serverQueryKeys.settings(),
+      );
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
+      if (didProviderEnablementChange(previousSettings, payload.settings)) {
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+      }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,
       });

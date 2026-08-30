@@ -589,6 +589,18 @@ export function getServerDisabledProviders(
   return DEFAULT_PROVIDER_ORDER.filter((provider) => !settings.providers[provider].enabled);
 }
 
+export function didProviderEnablementChange(
+  previous: Pick<ServerSettingsView, "providers"> | undefined,
+  next: Pick<ServerSettingsView, "providers">,
+): boolean {
+  return (
+    previous === undefined ||
+    DEFAULT_PROVIDER_ORDER.some(
+      (provider) => previous.providers[provider].enabled !== next.providers[provider].enabled,
+    )
+  );
+}
+
 function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
@@ -1305,7 +1317,18 @@ export function useAppSettings() {
       });
   }, [localSettings, queryClient, serverSettingsQuery.data]);
 
-  const updateSettings = (patch: Partial<AppSettings>) => {
+  const refreshProvidersAfterEnablementChange = async () => {
+    const api = ensureNativeApi();
+    await api.server
+      .refreshProviders()
+      .then((result) => reconcileServerProviderStatuses(queryClient, result.providers))
+      .catch(() => queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() }));
+    await queryClient
+      .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+      .catch(() => undefined);
+  };
+
+  const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     setSettings((prev) =>
       normalizeAppSettings({
         ...prev,
@@ -1324,46 +1347,54 @@ export function useAppSettings() {
     }
 
     const api = ensureNativeApi();
-    void api.server
-      .updateSettings(serverPatch)
-      .then((nextSettings) => {
-        queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
-        if (hasOwn(patch, "disabledProviders")) {
-          void api.server
-            .refreshProviders()
-            .then((result) => reconcileServerProviderStatuses(queryClient, result.providers))
-            .catch(() => queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() }));
-        }
-        if (touchesProviderDiscoverySettings(patch)) {
-          void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
-        }
-      })
-      .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
-        if (touchesProviderDiscoverySettings(patch)) {
-          void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
-        }
-      });
+    try {
+      const nextSettings = await api.server.updateSettings(serverPatch);
+      queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+      if (hasOwn(patch, "disabledProviders")) {
+        await refreshProvidersAfterEnablementChange();
+      } else if (touchesProviderDiscoverySettings(patch)) {
+        await queryClient
+          .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+          .catch(() => undefined);
+      }
+    } catch {
+      await queryClient
+        .invalidateQueries({ queryKey: serverQueryKeys.settings() })
+        .catch(() => undefined);
+      if (touchesProviderDiscoverySettings(patch)) {
+        await queryClient
+          .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+          .catch(() => undefined);
+      }
+    }
   };
 
-  const resetSettings = () => {
+  const updateSettings = (patch: Partial<AppSettings>): void => {
+    void updateSettingsAndWait(patch);
+  };
+
+  const resetSettings = async (): Promise<void> => {
     setSettings(DEFAULT_APP_SETTINGS);
-    void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
-    void ensureNativeApi()
-      .server.updateSettings(serverPatch)
-      .then((nextSettings) => {
-        queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
-      })
-      .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
-      });
+    try {
+      const nextSettings = await ensureNativeApi().server.updateSettings(serverPatch);
+      queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+      await refreshProvidersAfterEnablementChange();
+    } catch {
+      await queryClient
+        .invalidateQueries({ queryKey: serverQueryKeys.settings() })
+        .catch(() => undefined);
+      await queryClient
+        .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
+        .catch(() => undefined);
+    }
   };
 
   return {
     settings,
     serverSettings: serverSettingsQuery.data,
     updateSettings,
+    updateSettingsAndWait,
     resetSettings,
     defaults,
   } as const;

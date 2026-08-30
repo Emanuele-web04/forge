@@ -27,7 +27,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
@@ -807,12 +807,14 @@ function ProviderToolRow(props: {
 export type ProvidersSettingsPanelProps = AppSettingsBinding & {
   readonly active: boolean;
   readonly resetEpoch: number;
+  readonly updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
 };
 
 export function ProvidersSettingsPanel({
   settings,
   defaults,
   updateSettings,
+  updateSettingsAndWait,
   active,
   resetEpoch,
 }: ProvidersSettingsPanelProps) {
@@ -827,6 +829,8 @@ export function ProvidersSettingsPanel({
   const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderKind>>(
     () => new Set(),
   );
+  const providerEnablementMutationInFlightRef = useRef(false);
+  const [providerEnablementMutationPending, setProviderEnablementMutationPending] = useState(false);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
@@ -891,6 +895,21 @@ export function ProvidersSettingsPanel({
   );
   const outdatedProviderCount = outdatedProviderStatuses.length;
   const installSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
+
+  const updateProviderEnablement = useCallback(
+    async (disabledProviders: ProviderKind[]) => {
+      if (providerEnablementMutationInFlightRef.current) return;
+      providerEnablementMutationInFlightRef.current = true;
+      setProviderEnablementMutationPending(true);
+      try {
+        await updateSettingsAndWait({ disabledProviders });
+      } finally {
+        providerEnablementMutationInFlightRef.current = false;
+        setProviderEnablementMutationPending(false);
+      }
+    },
+    [updateSettingsAndWait],
+  );
 
   useSettingsRestoreSignal(resetEpoch, () => {
     setOpenInstallProviders(createClosedProviderInstallDisclosureState());
@@ -966,12 +985,16 @@ export function ProvidersSettingsPanel({
         <SettingsRow
           title="Enabled providers"
           description="Disabling a provider stops its background health checks, model and command discovery, updates, and new turns. Existing threads stay visible and continue after you re-enable it; a turn already running is not interrupted."
-          status={`${enabledProviderCount} of ${PROVIDER_VISIBILITY_OPTIONS.length} enabled`}
+          status={
+            providerEnablementMutationPending
+              ? "Saving provider activity"
+              : `${enabledProviderCount} of ${PROVIDER_VISIBILITY_OPTIONS.length} enabled`
+          }
           resetAction={
-            disabledProviderSet.size > 0 ? (
+            disabledProviderSet.size > 0 && !providerEnablementMutationPending ? (
               <SettingResetButton
                 label="enabled providers"
-                onClick={() => updateSettings({ disabledProviders: defaults.disabledProviders })}
+                onClick={() => void updateProviderEnablement([...defaults.disabledProviders])}
               />
             ) : null
           }
@@ -998,15 +1021,15 @@ export function ProvidersSettingsPanel({
                   actions={
                     <Switch
                       checked={enabled}
-                      disabled={serverSettingsQuery.isPending}
+                      disabled={serverSettingsQuery.isPending || providerEnablementMutationPending}
                       onCheckedChange={(checked) =>
-                        updateSettings({
-                          disabledProviders: setProviderDisabled(
+                        void updateProviderEnablement(
+                          setProviderDisabled(
                             settings.disabledProviders,
                             option.provider,
                             !Boolean(checked),
                           ),
-                        })
+                        )
                       }
                       aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
                     />
