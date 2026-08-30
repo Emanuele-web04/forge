@@ -71,7 +71,7 @@ describe("source desktop launch", () => {
       {
         platform: "win32",
         readWindowsEnvironment: () => ({
-          SYNARA_HOME: "C:\\Users\\tester\\persisted-synara-home",
+          Synara_Home: "C:\\Users\\tester\\persisted-synara-home",
         }),
       },
     );

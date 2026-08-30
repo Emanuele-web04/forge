@@ -9,13 +9,24 @@ import {
 } from "@synara/shared/desktopIdentity";
 import { readWindowsPersistentEnvironment } from "@synara/shared/shell";
 
+function environmentValue(environment, name, caseInsensitive) {
+  const exactValue = environment[name];
+  if (exactValue !== undefined || !caseInsensitive) return exactValue;
+
+  const matchingName = Object.keys(environment).find(
+    (candidate) => candidate.toUpperCase() === name,
+  );
+  return matchingName ? environment[matchingName] : undefined;
+}
+
 function configuredSourceDesktopHome(environment, platform, readWindowsEnvironment) {
-  const inheritedHome = environment.SYNARA_HOME?.trim();
+  const isWindows = platform === "win32";
+  const inheritedHome = environmentValue(environment, "SYNARA_HOME", isWindows)?.trim();
   if (inheritedHome) return inheritedHome;
-  if (platform !== "win32") return undefined;
+  if (!isWindows) return undefined;
 
   try {
-    return readWindowsEnvironment().SYNARA_HOME?.trim();
+    return environmentValue(readWindowsEnvironment(), "SYNARA_HOME", true)?.trim();
   } catch {
     return undefined;
   }
