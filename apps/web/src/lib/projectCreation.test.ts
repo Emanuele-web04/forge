@@ -60,6 +60,7 @@ describe("createOrRecoverProjectFromPath", () => {
     dispatchCommand.mockResolvedValue(undefined);
     await createOrRecoverProjectFromPath({
       api,
+      title: "Product suite",
       workspaceRoot: "/repos/frontend",
       sourcePaths: ["/repos/backend"],
       loadSnapshot: async () => null,
@@ -69,6 +70,7 @@ describe("createOrRecoverProjectFromPath", () => {
     const command = dispatchCommand.mock.calls[0]?.[0];
     expect(command?.type).toBe("project.create");
     if (command?.type !== "project.create") throw new Error("Expected project.create");
+    expect(command.title).toBe("Product suite");
     expect(command.sources?.map((source) => source.path)).toEqual([
       "/repos/frontend",
       "/repos/backend",

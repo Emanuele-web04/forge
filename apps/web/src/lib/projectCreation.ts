@@ -36,6 +36,7 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
 // the create command races an already-linked workspace root.
 export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
+  title?: string;
   workspaceRoot: string;
   sourcePaths?: ReadonlyArray<string>;
   createIfMissing?: boolean;
@@ -59,7 +60,7 @@ export async function createOrRecoverProjectFromPath(input: {
   const delayMs = input.delayMs ?? DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS;
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
-  const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const title = input.title?.trim() || buildProjectTitleFromWorkspaceRoot(workspaceRoot);
   const sourcePaths: string[] = [];
   const seenSourcePaths = new Set<string>();
   for (const candidate of [workspaceRoot, ...(input.sourcePaths ?? [])]) {

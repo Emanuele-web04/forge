@@ -2505,6 +2505,7 @@ export default function Sidebar() {
     async (
       rawCwd: string,
       options: {
+        title?: string;
         createIfMissing?: boolean;
         spaceId?: SpaceId | null;
         additionalSourcePaths?: ReadonlyArray<string>;
@@ -2547,7 +2548,11 @@ export default function Sidebar() {
 
         const creationResult = await createOrRecoverProjectFromPath({
           api,
+          ...(options.title === undefined ? {} : { title: options.title }),
           workspaceRoot: cwd,
+          ...(options.additionalSourcePaths === undefined
+            ? {}
+            : { sourcePaths: options.additionalSourcePaths }),
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
@@ -3419,6 +3424,7 @@ export default function Sidebar() {
         } else {
           handleSelectSpaceForIncomingProject(destinationSpaceId);
           await addProjectFromPath(value.workspaceRoot, {
+            title: value.title,
             createIfMissing: value.createIfMissing,
             spaceId: value.spaceId,
             additionalSourcePaths: value.additionalSourcePaths,
