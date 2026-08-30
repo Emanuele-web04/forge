@@ -5178,10 +5178,9 @@ export default function Sidebar() {
     orderedProjectThreadIds: readonly ThreadId[],
     totalThreadCount: number,
   ) {
-    const containsActiveThread = entries.some(
-      (entry) => entry.thread.id === activeSidebarThreadId,
-    );
-    const open = collapsedThreadFolderIds[folder.id] !== true || containsActiveThread;
+    // Match project disclosure semantics: an active thread does not override an
+    // explicit user collapse. The chat stays active while its sidebar group closes.
+    const open = collapsedThreadFolderIds[folder.id] !== true;
     const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
     const dropActive = threadFolderDropTargetKey === dropTargetKey;
     return (
