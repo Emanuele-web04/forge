@@ -18,6 +18,7 @@ vi.mock("../ui/toast", () => ({
   toastManager: { add: harness.toastAdd },
 }));
 
+import { resolveEditorLabel } from "~/editorMetadata";
 import { WorkspaceFileOpenerContext } from "~/lib/workspaceFileOpener";
 import { EditedFileRow } from "./EditedFileRow";
 
@@ -31,6 +32,7 @@ const AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [
 ];
 const FILE_PATH = "apps/web/src/components/chat/EditedFileRow.tsx";
 const WORKSPACE_ROOT = "/workspace/synara";
+const FILE_MANAGER_LABEL = resolveEditorLabel("file-manager", navigator.platform);
 
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 let restoreNativeApi: (() => void) | undefined;
@@ -157,7 +159,7 @@ describe("EditedFileRow", () => {
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(menuButton.element());
     await userEvent.keyboard("{Enter}");
-    await expect.element(page.getByText("Finder", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText(FILE_MANAGER_LABEL, { exact: true })).toBeInTheDocument();
   });
 
   it("lists installed launchers in file-action order, then copies both path forms", async () => {
@@ -173,7 +175,7 @@ describe("EditedFileRow", () => {
       Array.from(document.querySelectorAll<HTMLElement>("[role='menuitemradio']"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["Finder", "VS Code", "Cursor", "WebStorm", "Terminal", "iTerm"]);
+    ).toEqual([FILE_MANAGER_LABEL, "VS Code", "Cursor", "WebStorm", "Terminal", "iTerm"]);
     const menuTexts = Array.from(
       document.querySelectorAll<HTMLElement>("[role='menu'] [role^='menuitem']"),
       (item) => item.textContent?.trim(),
@@ -221,7 +223,7 @@ describe("EditedFileRow", () => {
 
     expect(page.getByRole("button", { name: "Open", exact: true }).element()).toBeDisabled();
     await page.getByRole("button", { name: `Open ${FILE_PATH} options` }).click();
-    expect(page.getByRole("menuitemradio", { name: "Finder" }).element()).toBeDisabled();
+    expect(page.getByRole("menuitemradio", { name: FILE_MANAGER_LABEL }).element()).toBeDisabled();
     await page.getByText("Copy relative path", { exact: true }).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(FILE_PATH));
     expect(openFile).not.toHaveBeenCalled();
@@ -269,7 +271,9 @@ describe("EditedFileRow", () => {
           name: "Open a/very/long/path/that/does/not/exist/EditedFileRow.tsx options",
         })
         .click();
-      expect(page.getByRole("menuitemradio", { name: "Finder" }).element()).toBeDisabled();
+      expect(
+        page.getByRole("menuitemradio", { name: FILE_MANAGER_LABEL }).element(),
+      ).toBeDisabled();
       expect(page.getByRole("menuitem", { name: "Copy absolute path" }).element()).toBeDisabled();
       expect(
         page.getByRole("menuitem", { name: "Copy relative path" }).element(),
