@@ -971,9 +971,7 @@ export function ProvidersSettingsPanel({
             disabledProviderSet.size > 0 ? (
               <SettingResetButton
                 label="enabled providers"
-                onClick={() =>
-                  updateSettings({ disabledProviders: defaults.disabledProviders })
-                }
+                onClick={() => updateSettings({ disabledProviders: defaults.disabledProviders })}
               />
             ) : null
           }

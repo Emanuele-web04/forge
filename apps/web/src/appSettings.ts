@@ -1332,9 +1332,7 @@ export function useAppSettings() {
           void api.server
             .refreshProviders()
             .then((result) => reconcileServerProviderStatuses(queryClient, result.providers))
-            .catch(() =>
-              queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() }),
-            );
+            .catch(() => queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() }));
         }
         if (touchesProviderDiscoverySettings(patch)) {
           void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
