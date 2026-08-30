@@ -333,6 +333,11 @@ const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
 const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+// Provider finalizers stop every owned runtime concurrently, but POSIX leaves
+// extra headroom for the rest of the Effect scope to close cleanly.
+const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
+const POSIX_BACKEND_FORCE_KILL_DELAY_MS = 18_000;
+const POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS = 20_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -1382,13 +1387,7 @@ function handleFatalStartupError(stage: string, error: unknown): void {
     isQuitting = true;
     dialog.showErrorBox("Synara failed to start", `Stage: ${stage}\n${message}${detail}`);
   }
-  if (process.platform === "win32") {
-    requestGracefulAppQuit(`fatal startup (${stage})`);
-    return;
-  }
-  stopBackend();
-  restoreStdIoCapture?.();
-  app.quit();
+  requestGracefulAppQuit(`fatal startup (${stage})`);
 }
 
 function registerDesktopProtocol(): void {
@@ -3816,35 +3815,20 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
   return child;
 }
 
-function stopBackend(): void {
-  const child = takeBackendProcessForShutdown();
-  if (!child) return;
-
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }, BACKEND_FORCE_KILL_DELAY_MS).unref();
-  }
-}
-
-async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
+async function stopBackendAndWaitForExit(): Promise<void> {
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
   if (backendChild.exitCode !== null || backendChild.signalCode !== null) return;
 
   if (process.platform === "win32") {
-    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
     try {
       const result = await stopWindowsBackendAndWait({
         child: backendChild,
         backendHttpUrl,
         shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-        forceKillDelayMs,
-        timeoutMs,
+        forceKillDelayMs: BACKEND_FORCE_KILL_DELAY_MS,
+        timeoutMs: BACKEND_SHUTDOWN_TIMEOUT_MS,
       });
       requireWindowsBackendExit(result);
     } catch (error) {
@@ -3854,12 +3838,14 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
     return;
   }
 
-  const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
   try {
     await stopPosixBackendAndWait({
       child: backendChild,
-      forceKillDelayMs,
-      timeoutMs,
+      backendHttpUrl,
+      shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+      terminateDelayMs: POSIX_BACKEND_TERMINATE_DELAY_MS,
+      forceKillDelayMs: POSIX_BACKEND_FORCE_KILL_DELAY_MS,
+      timeoutMs: POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS,
     });
   } catch (error) {
     backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);

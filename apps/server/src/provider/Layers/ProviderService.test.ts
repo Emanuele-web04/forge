@@ -54,7 +54,10 @@ import {
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
-import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderSessionDirectoryShape,
+} from "../Services/ProviderSessionDirectory.ts";
 import {
   makeProviderServiceLive,
   PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES,
@@ -530,7 +533,7 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
 );
 
 it.effect(
-  "ProviderServiceLive persists active sessions as stopped before adapter cleanup runs",
+  "ProviderServiceLive persists active sessions as stopped when adapter cleanup fails",
   () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-stopall-"));
@@ -602,6 +605,139 @@ it.effect(
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored-runtime-event") {
+  return Effect.gen(function* () {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-stopall-race-"));
+    const dbPath = path.join(tempDir, "orchestration.sqlite");
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const releaseStoppedSessionSweep = yield* Deferred.make<void>();
+    const runtimeEventObserved = yield* Deferred.make<void>();
+    let shutdownStarted = false;
+
+    const delayedDirectoryLayer = Layer.effect(
+      ProviderSessionDirectory,
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        return {
+          ...directory,
+          getBinding: (threadId) =>
+            directory
+              .getBinding(threadId)
+              .pipe(
+                Effect.tap(() =>
+                  scenario === "ignored-runtime-event" && shutdownStarted
+                    ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                ),
+              ),
+          listThreadIds: () =>
+            Deferred.await(releaseStoppedSessionSweep).pipe(
+              Effect.andThen(directory.listThreadIds()),
+            ),
+          upsert: (binding) =>
+            directory
+              .upsert(binding)
+              .pipe(
+                Effect.tap(() =>
+                  scenario === "newer-runtime-write" &&
+                  asRuntimePayloadRecord(binding.runtimePayload).lastRuntimeEvent ===
+                    "turn.completed"
+                    ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                ),
+              ),
+        } satisfies ProviderSessionDirectoryShape;
+      }),
+    ).pipe(Layer.provide(directoryLayer));
+
+    const codex = makeFakeCodexAdapter();
+    const threadId = asThreadId("thread-stopall-terminal-race");
+    const shutdownSnapshotCursor = { resume: "shutdown-snapshot" };
+    const terminalCursor = { resume: "terminal-cursor" };
+    const expectedCursor =
+      scenario === "newer-runtime-write" ? terminalCursor : shutdownSnapshotCursor;
+    const registry: typeof ProviderAdapterRegistry.Service = {
+      getByProvider: (provider) =>
+        provider === "codex"
+          ? Effect.succeed(codex.adapter)
+          : Effect.fail(new ProviderUnsupportedError({ provider })),
+      listProviders: () => Effect.succeed(["codex"]),
+    };
+
+    codex.stopAll.mockImplementation(() =>
+      Effect.sync(() => {
+        shutdownStarted = true;
+        if (scenario === "newer-runtime-write") {
+          codex.updateSession(threadId, (session) => ({
+            ...session,
+            status: "closed",
+            resumeCursor: terminalCursor,
+            updatedAt: new Date().toISOString(),
+          }));
+        }
+        codex.emit({
+          type: scenario === "newer-runtime-write" ? "turn.completed" : "session.exited",
+          eventId: asEventId("event-stopall-terminal-race"),
+          provider: scenario === "newer-runtime-write" ? "codex" : "claudeAgent",
+          createdAt: new Date().toISOString(),
+          threadId,
+          payload:
+            scenario === "newer-runtime-write" ? { state: "completed" } : { exitKind: "graceful" },
+        });
+      }).pipe(
+        Effect.andThen(Deferred.await(runtimeEventObserved)),
+        Effect.andThen(Deferred.succeed(releaseStoppedSessionSweep, undefined)),
+        Effect.asVoid,
+      ),
+    );
+
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+      Layer.provide(delayedDirectoryLayer),
+    );
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        threadId,
+      });
+      codex.updateSession(threadId, (session) => ({
+        ...session,
+        resumeCursor: shutdownSnapshotCursor,
+      }));
+      yield* codex.waitForRuntimeSubscribers();
+    }).pipe(Effect.provide(providerLayer));
+
+    const persisted = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntimeRepository;
+      return yield* repository.getByThreadId({ threadId });
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+    assert.equal(Option.isSome(persisted), true);
+    if (Option.isSome(persisted)) {
+      assert.equal(persisted.value.status, "stopped");
+      assert.deepEqual(persisted.value.resumeCursor, expectedCursor);
+    }
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer));
+}
+
+it.effect("ProviderServiceLive preserves a terminal cursor newer than its shutdown snapshot", () =>
+  verifyShutdownCursorOrdering("newer-runtime-write"),
+);
+
+it.effect("ProviderServiceLive retains its shutdown snapshot after an ignored runtime event", () =>
+  verifyShutdownCursorOrdering("ignored-runtime-event"),
 );
 
 it.effect(
@@ -5140,6 +5276,34 @@ validation.layer("ProviderServiceLive validation", (it) => {
 });
 
 const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });
+it.effect("ProviderServiceLive starts independent provider teardown concurrently", () =>
+  Effect.gen(function* () {
+    const shutdown = makeProviderServiceLayer();
+    const scope = yield* Scope.make("sequential");
+    const releaseStops = yield* Deferred.make<void>();
+    const startedProviders = new Set<ProviderKind>();
+
+    for (const adapter of [shutdown.codex, shutdown.claude, shutdown.antigravity]) {
+      adapter.stopAll.mockImplementation(() =>
+        Effect.sync(() => {
+          startedProviders.add(adapter.adapter.provider);
+        }).pipe(Effect.andThen(Deferred.await(releaseStops))),
+      );
+    }
+
+    yield* Layer.buildWithScope(shutdown.rawLayer, scope);
+    const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+
+    yield* waitUntil(
+      () => startedProviders.size === 3,
+      500,
+      20,
+      "all provider teardown operations to start",
+    ).pipe(Effect.ensuring(Deferred.succeed(releaseStops, undefined)));
+    yield* Fiber.join(closing);
+  }),
+);
+
 it.effect("ProviderServiceLive backpressures slow subscribers and completes fanout shutdown", () =>
   Effect.gen(function* () {
     const scope = yield* Scope.make("sequential");

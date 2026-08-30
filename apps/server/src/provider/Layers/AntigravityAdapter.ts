@@ -55,6 +55,7 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -2431,11 +2432,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           }),
       });
 
-    const stopAll = () =>
-      Effect.forEach([...sessions.keys()], (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+    const stopAll = () => settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(

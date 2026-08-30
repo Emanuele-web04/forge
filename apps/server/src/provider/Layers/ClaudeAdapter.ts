@@ -100,6 +100,7 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
@@ -6236,40 +6237,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       } satisfies ProviderListSkillsResult);
 
     const stopAll: ClaudeAdapterShape["stopAll"] = () =>
-      Effect.gen(function* () {
-        yield* Effect.forEach(
-          sessions,
-          ([, context]) =>
-            stopSessionInternal(context, {
-              emitExitEvent: true,
-            }),
-          { discard: true },
-        );
-        yield* Effect.forEach(
-          failedStartupProcessOwners,
-          ([threadId, owner]) => teardownFailedStartupProcess(threadId, owner),
-          { discard: true },
-        );
-        yield* teardownFailedDiscoveryProcesses();
-      });
+      settleConcurrentTeardowns(
+        [
+          settleConcurrentTeardowns([...sessions.values()], (context) =>
+            stopSessionInternal(context, { emitExitEvent: true }),
+          ),
+          settleConcurrentTeardowns([...failedStartupProcessOwners], ([threadId, owner]) =>
+            teardownFailedStartupProcess(threadId, owner),
+          ),
+          teardownFailedDiscoveryProcesses(),
+        ],
+        (teardown) => teardown,
+      );
 
     yield* Effect.addFinalizer(() =>
-      Effect.gen(function* () {
-        yield* Effect.forEach(
-          sessions,
-          ([, context]) =>
-            stopSessionInternal(context, {
-              emitExitEvent: false,
-            }),
-          { discard: true },
-        );
-        yield* Effect.forEach(
-          failedStartupProcessOwners,
-          ([threadId, owner]) => teardownFailedStartupProcess(threadId, owner),
-          { discard: true },
-        );
-        yield* teardownFailedDiscoveryProcesses();
-      }).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
+      settleConcurrentTeardowns(
+        [
+          settleConcurrentTeardowns([...sessions.values()], (context) =>
+            stopSessionInternal(context, { emitExitEvent: false }),
+          ),
+          settleConcurrentTeardowns([...failedStartupProcessOwners], ([threadId, owner]) =>
+            teardownFailedStartupProcess(threadId, owner),
+          ),
+          teardownFailedDiscoveryProcesses(),
+        ],
+        (teardown) => teardown,
+      ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
     );
 
     const composerCapabilities: ProviderComposerCapabilities = {

@@ -74,6 +74,7 @@ import {
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
   runProviderRuntimeEventPump,
@@ -722,36 +723,37 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         runtimePayload: toRuntimePayloadFromSession(session, extra),
       });
 
-    const markThreadStopped = (
-      threadId: ThreadId,
-      stoppedAt: string,
-      session?: ProviderSession,
-    ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
-      session
+    const markThreadStopped = (input: {
+      readonly threadId: ThreadId;
+      readonly stoppedAt: string;
+      readonly session?: ProviderSession;
+      readonly resumeCursor?: unknown;
+    }): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
+      input.session
         ? directory.upsert({
-            threadId,
-            provider: session.provider,
-            runtimeMode: session.runtimeMode,
+            threadId: input.threadId,
+            provider: input.session.provider,
+            runtimeMode: input.session.runtimeMode,
             status: "stopped",
-            ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
+            ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             runtimePayload: {
-              ...toRuntimePayloadFromSession(session, {
+              ...toRuntimePayloadFromSession(input.session, {
                 lastRuntimeEvent: "provider.stopAll",
-                lastRuntimeEventAt: stoppedAt,
+                lastRuntimeEventAt: input.stoppedAt,
               }),
               activeTurnId: null,
             },
           })
-        : directory.getProvider(threadId).pipe(
+        : directory.getProvider(input.threadId).pipe(
             Effect.flatMap((provider) =>
               directory.upsert({
-                threadId,
+                threadId: input.threadId,
                 provider,
                 status: "stopped",
                 runtimePayload: {
                   activeTurnId: null,
                   lastRuntimeEvent: "provider.stopAll",
-                  lastRuntimeEventAt: stoppedAt,
+                  lastRuntimeEventAt: input.stoppedAt,
                 },
               }),
             ),
@@ -822,6 +824,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // mutex adds no meaningful contention. Creation is synchronous
     // (Semaphore.makeUnsafe), so concurrent callers cannot mint two locks.
     const withBindingWriteLock = makeKeyedLock<ThreadId>().withLock;
+    let shutdownBindingWriteVersions: Map<ThreadId, number> | undefined;
+    const recordRuntimeBindingWriteDuringShutdown = (threadId: ThreadId): void => {
+      const versions = shutdownBindingWriteVersions;
+      if (versions !== undefined) {
+        versions.set(threadId, (versions.get(threadId) ?? 0) + 1);
+      }
+    };
 
     interface StartedTurnPersistenceInput {
       readonly threadId: ThreadId;
@@ -1164,6 +1173,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 : {}),
             },
           });
+          recordRuntimeBindingWriteDuringShutdown(event.threadId);
           if (event.type === "session.exited") {
             const dispatchState = dispatchStateByThread.get(event.threadId);
             if (dispatchState) {
@@ -2801,20 +2811,68 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       });
 
     const runStopAll = () =>
-      Effect.gen(function* () {
-        const stoppedAt = new Date().toISOString();
-        const threadIds = yield* directory.listThreadIds();
-        const activeSessionByThreadId = new Map(
-          (yield* Effect.forEach(adapters, (adapter) => adapter.listSessions()))
-            .flatMap((sessions) => sessions)
-            .map((session) => [session.threadId, session] as const),
+      Effect.suspend(() => {
+        const bindingWriteVersions = new Map<ThreadId, number>();
+        shutdownBindingWriteVersions = bindingWriteVersions;
+        return Effect.gen(function* () {
+          const stoppedAt = new Date().toISOString();
+          const activeSessionByThreadId = new Map(
+            (yield* Effect.forEach(adapters, (adapter) => adapter.listSessions()))
+              .flatMap((sessions) => sessions)
+              .map(
+                (session) =>
+                  [
+                    session.threadId,
+                    {
+                      session,
+                      bindingWriteVersion: bindingWriteVersions.get(session.threadId) ?? 0,
+                    },
+                  ] as const,
+              ),
+          );
+          const persistStoppedSessions = Effect.gen(function* () {
+            const threadIds = yield* directory.listThreadIds();
+            yield* Effect.forEach(
+              new Set([...threadIds, ...activeSessionByThreadId.keys()]),
+              (threadId) => {
+                const snapshot = activeSessionByThreadId.get(threadId);
+                return withBindingWriteLock(
+                  threadId,
+                  Effect.suspend(() =>
+                    markThreadStopped({
+                      threadId,
+                      stoppedAt,
+                      ...(snapshot === undefined ? {} : { session: snapshot.session }),
+                      ...(snapshot !== undefined &&
+                      (bindingWriteVersions.get(threadId) ?? 0) === snapshot.bindingWriteVersion
+                        ? { resumeCursor: snapshot.session.resumeCursor }
+                        : {}),
+                    }),
+                  ),
+                );
+              },
+            );
+          });
+
+          // Persist durable stopped state and reap independent process trees at
+          // the same time. Slow/locked SQLite must not consume the desktop's
+          // graceful-shutdown budget before provider teardown even begins.
+          yield* settleConcurrentTeardowns(
+            [
+              persistStoppedSessions,
+              settleConcurrentTeardowns(adapters, (adapter) => adapter.stopAll()),
+            ],
+            (teardown) => teardown,
+          );
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (shutdownBindingWriteVersions === bindingWriteVersions) {
+                shutdownBindingWriteVersions = undefined;
+              }
+            }),
+          ),
         );
-        yield* Effect.forEach(
-          new Set([...threadIds, ...activeSessionByThreadId.keys()]),
-          (threadId) =>
-            markThreadStopped(threadId, stoppedAt, activeSessionByThreadId.get(threadId)),
-        );
-        yield* Effect.forEach(adapters, (adapter) => adapter.stopAll());
       });
 
     const awaitRuntimeEventFanoutDrained: Effect.Effect<void> = Effect.suspend(() =>
