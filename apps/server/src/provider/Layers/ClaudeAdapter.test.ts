@@ -8610,7 +8610,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       yield* Deferred.await(freshUsageObserved);
       assert.deepEqual(
         events.map((event) => event.type),
-        ["thread.token-usage.updated", "thread.state.changed", "thread.token-usage.updated"],
+        [
+          "thread.token-usage.updated",
+          "thread.state.changed",
+          "thread.token-usage.updated",
+          "thread.token-usage.updated",
+        ],
       );
       const firstUsage = events[0];
       assert.equal(firstUsage?.type, "thread.token-usage.updated");
@@ -8622,7 +8627,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (compaction?.type === "thread.state.changed") {
         assert.equal(compaction.payload.state, "compacted");
       }
-      const freshUsage = events[2];
+      const accountingUsage = events[2];
+      assert.equal(accountingUsage?.type, "thread.token-usage.updated");
+      if (accountingUsage?.type === "thread.token-usage.updated") {
+        assert.deepEqual(accountingUsage.payload.usage, {
+          usedTokens: 0,
+          totalProcessedTokens: 340_000,
+        });
+      }
+      const freshUsage = events[3];
       assert.equal(freshUsage?.type, "thread.token-usage.updated");
       if (freshUsage?.type === "thread.token-usage.updated") {
         assert.equal(freshUsage.turnId, nextTurn.turnId);

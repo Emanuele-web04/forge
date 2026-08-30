@@ -2732,9 +2732,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (context.tokenUsageState === "skip-compaction-call") {
           context.tokenUsageState = "awaiting-fresh-assistant";
         }
+        const accountingOnlyUsage =
+          totalProcessedTokens !== undefined
+            ? { usedTokens: 0, totalProcessedTokens }
+            : undefined;
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
           context.tokenUsageState !== "current"
-            ? undefined
+            ? accountingOnlyUsage
             : lastGoodUsage
               ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
               : accumulatedSnapshot;

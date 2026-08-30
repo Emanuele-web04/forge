@@ -5,6 +5,7 @@ import {
   deriveContextWindowSelectionStatus,
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
+  deriveLatestContextWindowState,
   deriveLatestContextWindowSnapshot,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowSelectionLabel,
@@ -51,20 +52,29 @@ describe("contextWindow", () => {
 
   it("invalidates earlier usage at a completed compaction until fresh usage arrives", () => {
     const beforeCompaction = [
-      makeActivity("activity-1", "context-window.updated", {
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "200k",
+        maxTokens: 200_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
         usedTokens: 180_000,
         maxTokens: 200_000,
       }),
-      makeActivity("activity-2", "context-compaction", {
+      makeActivity("activity-3", "context-compaction", {
         state: "compacted",
+      }),
+      makeActivity("activity-4", "context-window.updated", {
+        usedTokens: 0,
+        totalProcessedTokens: 340_000,
       }),
     ];
 
     expect(deriveLatestContextWindowSnapshot(beforeCompaction)).toBeNull();
+    expect(deriveLatestContextWindowState(beforeCompaction).invalidatedByCompaction).toBe(true);
 
     const afterFreshUsage = deriveLatestContextWindowSnapshot([
       ...beforeCompaction,
-      makeActivity("activity-3", "context-window.updated", {
+      makeActivity("activity-5", "context-window.updated", {
         usedTokens: 20_000,
         maxTokens: 200_000,
       }),
