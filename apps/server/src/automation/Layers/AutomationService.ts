@@ -3090,6 +3090,22 @@ export const AutomationServiceLive = Layer.effect(
             onSome: (run) => Option.some({ run }),
           });
         }
+        if (disabledReason) {
+          const { run, inserted } = yield* createPendingRun(
+            definition,
+            { type: "scheduled" },
+            scheduledFor,
+            now,
+            { threadIdOverride: null },
+          );
+          const skipped = inserted
+            ? yield* markScheduledRunSkipped(run, disabledReason, now)
+            : null;
+          yield* advanceScheduledDefinition(definition, nextRunAt, now);
+          return skipped
+            ? Option.some<AutomationRunNowResult>({ run: skipped })
+            : Option.none<AutomationRunNowResult>();
+        }
 
         if (automationRequiresTargetThread(definition.mode) && !definition.targetThreadId) {
           return yield* Effect.fail(
@@ -3209,10 +3225,6 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         const run = claimedRun.value;
-        if (disabledReason) {
-          const skipped = yield* markScheduledRunSkipped(run, disabledReason, now);
-          return Option.some({ run: skipped });
-        }
         const result = yield* dispatchRun(definition, run, now).pipe(
           Effect.catch(() =>
             automationRepository.getRunById({ id: run.id }).pipe(
@@ -3250,6 +3262,17 @@ export const AutomationServiceLive = Layer.effect(
           return Option.none<AutomationRunNowResult>();
         }
         if (!automationContinuesThread(definition.mode)) {
+          const plannedThreadId = run.threadId ?? deriveAutomationRunIds(run.id).threadId;
+          const reserved = yield* automationRepository
+            .reserveDeferredRun({
+              id: run.id,
+              threadId: plannedThreadId,
+              reservedAt: now,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to reserve deferred automation run.")));
+          if (!reserved) {
+            return Option.none<AutomationRunNowResult>();
+          }
           yield* completeDeferredOneShotDefinition(definition, now);
           const result = yield* dispatchRun(definition, run, now).pipe(
             Effect.catch(() =>

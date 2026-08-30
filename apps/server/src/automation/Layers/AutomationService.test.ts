@@ -1489,6 +1489,7 @@ layer("AutomationService", (it) => {
           input: {
             ...createInput("local"),
             schedule: { type: "interval", everySeconds: 300 },
+            maxIterations: 1,
             stopAfterConsecutiveFailures: 1,
           },
           now,
@@ -1507,6 +1508,7 @@ layer("AutomationService", (it) => {
         assert.strictEqual(pausedRun?.status, "skipped");
         assert.match(pausedRun?.result?.summary ?? "", /disabled in Settings/);
         assert.strictEqual(pausedDefinition?.enabled, true);
+        assert.strictEqual(pausedDefinition?.iterationCount, 0);
         assert.strictEqual(pausedDefinition?.consecutiveFailureCount, 0);
         assert.strictEqual(dispatchedCommands.length, 0);
 
@@ -1517,8 +1519,12 @@ layer("AutomationService", (it) => {
           leaseOwnerId: "test-scheduler",
         });
         const resumedRun = resumed.find((entry) => entry.run.automationId === automationId)?.run;
+        const resumedDefinition = (yield* service.list({ projectId })).definitions.find(
+          (definition) => definition.id === automationId,
+        );
 
         assert.strictEqual(resumedRun?.status, "running");
+        assert.strictEqual(resumedDefinition?.iterationCount, 1);
         assert.isAtLeast(dispatchedCommands.length, 2);
       }),
   );
