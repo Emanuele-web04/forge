@@ -138,6 +138,10 @@ Bug fixes, reliability improvements, performance work, documentation, and mainte
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a reproducible problem, [open an issue](https://github.com/Emanuele-web04/synara/issues/new/choose) with the Synara version, operating system, runtime, and relevant logs.
 
+## Plans and audits
+
+[plans/README.md](./plans/README.md) owns the numbered automation-plan sequence and status. [.plans/README.md](./.plans/README.md) indexes maintainability and implementation plan artifacts. The current evidence-backed audit is [PR357 merge readiness](./audit/PR357_MERGE_READINESS_AUDIT.md); [audit/README.md](./audit/README.md) is retained as historical context.
+
 ## License
 
 Synara is licensed under the [MIT License](./LICENSE).

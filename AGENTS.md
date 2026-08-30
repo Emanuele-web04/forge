@@ -15,6 +15,12 @@ Synara is a minimal web GUI for using coding agents like Codex and Claude.
 
 This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
 
+## Plans and audit routing
+
+- [plans/README.md](plans/README.md) owns the execution order and status of the numbered automation plans.
+- [.plans/README.md](.plans/README.md) indexes maintainability and implementation plan artifacts; it is not an execution queue.
+- [audit/PR357_MERGE_READINESS_AUDIT.md](audit/PR357_MERGE_READINESS_AUDIT.md) is the current evidence-backed audit. `audit/README.md` is historical and points there.
+
 ## Core Priorities
 
 1. Performance first.

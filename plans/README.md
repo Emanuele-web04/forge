@@ -14,7 +14,7 @@ Plans 001–005 are read-only handoff plans for implementing a Codex-like automa
 | 004  | Add Automation Triage, Results, and Run Actions      | P2       | L      | 001, 002, 003      | DONE   |
 | 005  | Add Cron, Timezone, Skills, and Automation Policies  | P2       | L      | 001, 002, 003, 004 | DONE   |
 | 006  | Make Synara the Authoritative Agent Harness          | P1       | L      | —                  | DONE   |
-| 007  | Codex-Parity Automation Agent Surface & Run Protocol | P1       | L      | 001–005            | DONE   |
+| 007  | Codex-Parity Automation Agent Surface & Run Protocol | P1       | L      | 001–005            | TODO   |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale).
 

@@ -1,7 +1,8 @@
 # Synara Roadmap Execution Controller
 
 > **Purpose:** Keep execution prompts small. This file controls progress; the detailed,
-> evidence-backed specification remains in `audit/README.md`.
+> evidence-backed specification remains in
+> [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md).
 >
 > **Planned at:** commit `5056e395e`, 2026-07-14.
 
@@ -26,7 +27,8 @@ after all rows are code-complete.
 ## Source of truth
 
 - `AGENTS.md` owns repository rules.
-- `audit/README.md` owns each workstream's evidence, scope, acceptance criteria, STOP
+- [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md)
+  owns each workstream's evidence, scope, acceptance criteria, STOP
   conditions, dependency graph, and deferred/rejected decisions.
 - This file owns execution order, current status, and the next eligible workstream.
 - The dirty worktree is authoritative. Never revert or recreate existing changes.
@@ -35,8 +37,11 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 
 1. `AGENTS.md`;
 2. this controller;
-3. the active workstream in `audit/README.md`;
-4. the dependency/order section of `audit/README.md` when needed;
+3. the active workstream in
+   [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md);
+4. the dependency/order section of
+   [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md)
+   when needed;
 5. the live code and existing diff in that workstream's scope.
 
 ## Current pointer
@@ -192,7 +197,8 @@ recorded stdout backpressure gate remains open.
 ## Pruning checkpoint progress
 
 - Roadmap expansion is frozen; unopened TODO rows remain frozen.
-- The phase-by-phase diary was deleted because it duplicated evidence owned by `audit/README.md`.
+- The phase-by-phase diary was deleted because it duplicated evidence owned by
+  [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md).
 - Active deletion targets, in order: duplicated provider/orchestration ownership in the five hotspot
   files; redundant focused-test scaffolding; then the official ACP SDK canary boundary and its exact
   custom-wire deletion map.
@@ -1102,13 +1108,17 @@ recorded stdout backpressure gate remains open.
 ## Per-workstream loop
 
 1. Set the row to `IN PROGRESS` and update **Current pointer**.
-2. Read the exact finding in `audit/README.md`; do not load unrelated findings.
+2. Read the exact finding in
+   [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md);
+   do not load unrelated findings.
 3. Inspect cited symbols, callers, existing tests for behavior, and the current diff.
 4. State a small in-scope/out-of-scope boundary.
 5. Implement one coherent phase, adapting to existing changes rather than replacing them.
 6. Inspect the diff for scope leakage and duplicated old/new authority.
 7. Run only a necessary small check, or record verification as deferred.
-8. Update the finding in `audit/README.md` with implementation status and concise evidence.
+8. Update the finding in
+   [`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md)
+   with implementation status and concise evidence.
 9. Update this table and pointer.
 10. Report files changed, behavior, duplication removed, checks run/deferred, risks, and next
     eligible item.
@@ -1126,7 +1136,8 @@ errors, and minimal non-standard extension codecs. No `effect-acp` package or im
 
 The roadmap is code-complete when every row is `DONE`, `CODE COMPLETE`, or explicitly
 `REJECTED`/`BLOCKED` with evidence; duplicate authorities and dormant competing scaffolds have
-been removed or safely activated; and both this controller and `audit/README.md` agree.
+been removed or safely activated; and both this controller and
+[`audit/PR357_MERGE_READINESS_AUDIT.md`](../audit/PR357_MERGE_READINESS_AUDIT.md) agree.
 
 It is not release-verified until the user separately authorizes the repository-required full
 verification pass.
