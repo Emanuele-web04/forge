@@ -2651,8 +2651,7 @@ export function makeGrokAdapter(
         ),
       );
 
-    const stopAll: GrokAdapterShape["stopAll"] = () =>
-      settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
+    const stopAll = () => settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(

@@ -1806,8 +1806,7 @@ export function makeCursorAdapter(
         ),
       );
 
-    const stopAll: CursorAdapterShape["stopAll"] = () =>
-      settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
+    const stopAll = () => settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(

@@ -2258,8 +2258,7 @@ export function makeDroidAdapter(
         ),
       );
 
-    const stopAll: DroidAdapterShape["stopAll"] = () =>
-      settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
+    const stopAll = () => settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(

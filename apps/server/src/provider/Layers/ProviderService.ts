@@ -53,7 +53,7 @@ import {
 } from "effect";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
-import { ProviderValidationError } from "../Errors.ts";
+import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -2857,13 +2857,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           // Persist durable stopped state and reap independent process trees at
           // the same time. Slow/locked SQLite must not consume the desktop's
           // graceful-shutdown budget before provider teardown even begins.
-          yield* settleConcurrentTeardowns(
-            [
-              persistStoppedSessions,
-              settleConcurrentTeardowns(adapters, (adapter) => adapter.stopAll()),
-            ],
-            (teardown) => teardown,
-          );
+          const shutdownWork: ReadonlyArray<
+            Effect.Effect<void, ProviderAdapterError | ProviderSessionDirectoryWriteError, never>
+          > = [
+            persistStoppedSessions,
+            settleConcurrentTeardowns(adapters, (adapter) => adapter.stopAll()),
+          ];
+          yield* settleConcurrentTeardowns(shutdownWork, (teardown) => teardown);
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
