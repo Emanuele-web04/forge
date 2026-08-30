@@ -79,4 +79,26 @@ describe("verifyMigrationRuntimeIdentity", () => {
       }),
     ).toThrow(MigrationRuntimeIdentityMismatchError);
   });
+
+  it("does not inspect a coincidental checkout after launcher and bundle identities match", () => {
+    const digest = migrationRuntimeSourceDigest("matching bundles");
+
+    expect(() =>
+      verifyMigrationRuntimeIdentity({
+        cwd: sourceCheckout("unrelated checkout source"),
+        embeddedDigest: digest,
+        launcherDigest: digest,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not parse cwd package metadata after launcher and bundle identities match", () => {
+    const cwd = sourceCheckout("unrelated checkout source");
+    fs.writeFileSync(path.join(cwd, "package.json"), "{");
+    const digest = migrationRuntimeSourceDigest("matching bundles");
+
+    expect(() =>
+      verifyMigrationRuntimeIdentity({ cwd, embeddedDigest: digest, launcherDigest: digest }),
+    ).not.toThrow();
+  });
 });

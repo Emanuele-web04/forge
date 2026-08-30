@@ -54,10 +54,18 @@ export function verifyMigrationRuntimeIdentity(input: {
     return;
   }
 
+  if (input.launcherDigest !== undefined) {
+    const mismatch = findMigrationRuntimeIdentityMismatch({
+      embeddedDigest: input.embeddedDigest,
+      launcherDigest: input.launcherDigest,
+    });
+    if (mismatch) throw new MigrationRuntimeIdentityMismatchError(mismatch);
+    return;
+  }
+
   const sourceText = readMigrationSourceIfPresent(input.cwd);
   const mismatch = findMigrationRuntimeIdentityMismatch({
     embeddedDigest: input.embeddedDigest,
-    launcherDigest: input.launcherDigest,
     sourceText,
   });
   if (mismatch) throw new MigrationRuntimeIdentityMismatchError(mismatch);
