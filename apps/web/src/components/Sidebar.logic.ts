@@ -1436,8 +1436,10 @@ export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarTh
   sortOrder: SidebarThreadSortOrder,
 ): T[] {
   return threads.toSorted((left, right) => {
-    const byAttentionRank = threadSortAttentionRank(right) - threadSortAttentionRank(left);
-    if (byAttentionRank !== 0) return byAttentionRank;
+    if (sortOrder !== "created_at") {
+      const byAttentionRank = threadSortAttentionRank(right) - threadSortAttentionRank(left);
+      if (byAttentionRank !== 0) return byAttentionRank;
+    }
     const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
     const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
     const byTimestamp =
