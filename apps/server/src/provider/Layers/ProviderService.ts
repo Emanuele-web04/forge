@@ -760,6 +760,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
 
     let runtimeCursorWriteVersion = 0;
+    let shutdownStartedAt: string | undefined;
     const latestRuntimeCursorWriteByThread = new Map<
       ThreadId,
       { readonly version: number; readonly resumeCursor: unknown }
@@ -1157,18 +1158,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     : currentActiveTurnId;
             const lastError = runtimeLastErrorForEvent(event);
             const resumeCursor = liveResumeCursor ?? binding.resumeCursor;
+            const eventStatus = runtimeStatusForEvent(event, activeTurnId);
+            // Cursor capture happens before the write lock. An event that began
+            // before shutdown can therefore queue behind the stopped snapshot;
+            // retain its cursor without reviving the durable runtime state.
+            const preserveShutdownStop =
+              shutdownStartedAt !== undefined && eventStatus === "running";
 
             yield* directory.upsert({
               threadId: event.threadId,
               provider: binding.provider,
               ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
               ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-              status: runtimeStatusForEvent(event, activeTurnId),
+              status: preserveShutdownStop ? "stopped" : eventStatus,
               ...(resumeCursor !== undefined ? { resumeCursor } : {}),
               runtimePayload: {
-                activeTurnId,
-                lastRuntimeEvent: event.type,
-                lastRuntimeEventAt: event.createdAt,
+                activeTurnId: preserveShutdownStop ? null : activeTurnId,
+                lastRuntimeEvent: preserveShutdownStop ? "provider.stopAll" : event.type,
+                lastRuntimeEventAt: preserveShutdownStop ? shutdownStartedAt : event.createdAt,
                 ...(lastError !== undefined ? { lastError } : {}),
                 ...(runtimeEventRetiredGatewayTurnAuthority(event)
                   ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
@@ -2822,6 +2829,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const runStopAll = () =>
       Effect.gen(function* () {
         const stoppedAt = new Date().toISOString();
+        shutdownStartedAt = stoppedAt;
         const runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
         const activeSessionByThreadId = new Map(
           (yield* Effect.forEach(adapters, (adapter) =>

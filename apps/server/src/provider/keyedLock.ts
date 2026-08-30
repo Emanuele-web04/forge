@@ -39,12 +39,20 @@ export function makeKeyedLock<Key>(): KeyedLock<Key> {
       if (queued !== undefined) {
         Deferred.doneUnsafe(queued, Effect.void);
       }
+      let acquired = false;
       return Effect.uninterruptibleMask((restore) =>
-        Deferred.await(previous).pipe(
+        restore(Deferred.await(previous)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              acquired = true;
+            }),
+          ),
           Effect.andThen(restore(effect)),
           Effect.ensuring(
             Effect.sync(() => {
-              Deferred.doneUnsafe(completed, Effect.void);
+              // An interrupted waiter still owns its FIFO node. Link that node
+              // to its predecessor so later callers cannot overtake the holder.
+              Deferred.doneUnsafe(completed, acquired ? Effect.void : Deferred.await(previous));
               acquiredEntry.users -= 1;
               if (acquiredEntry.users === 0 && entries.get(key) === acquiredEntry) {
                 entries.delete(key);

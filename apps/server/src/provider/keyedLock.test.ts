@@ -79,4 +79,47 @@ describe("makeKeyedLock", () => {
     expect(order).toEqual(["second", "third"]);
     expect(lock.activeKeyCount()).toBe(0);
   });
+
+  it("interrupts a queued waiter without letting later callers overtake the holder", async () => {
+    const lock = makeKeyedLock<string>();
+    const release = await Effect.runPromise(Deferred.make<void>());
+    const order: string[] = [];
+
+    const first = Effect.runFork(
+      lock.withLock(
+        "thread-1",
+        Effect.sync(() => order.push("first-start")).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Effect.sync(() => order.push("first-end"))),
+        ),
+      ),
+    );
+    await Effect.runPromise(Effect.yieldNow);
+    const second = Effect.runFork(lock.withLock("thread-1", Effect.void));
+    await Effect.runPromise(Effect.yieldNow);
+
+    const interrupted = Effect.runPromise(Fiber.interrupt(second));
+    await expect(
+      Promise.race([
+        interrupted.then(() => "interrupted"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 500)),
+      ]),
+    ).resolves.toBe("interrupted");
+
+    const third = Effect.runFork(
+      lock.withLock(
+        "thread-1",
+        Effect.sync(() => order.push("third")),
+      ),
+    );
+    await Effect.runPromise(Effect.yieldNow);
+    expect(order).toEqual(["first-start"]);
+
+    await Effect.runPromise(Deferred.succeed(release, undefined));
+    await Effect.runPromise(Fiber.join(first));
+    await Effect.runPromise(Fiber.join(third));
+
+    expect(order).toEqual(["first-start", "first-end", "third"]);
+    expect(lock.activeKeyCount()).toBe(0);
+  });
 });

@@ -613,7 +613,8 @@ type ShutdownCursorOrderingScenario =
   | "cursorless-runtime-write"
   | "mid-list-runtime-write"
   | "blocked-runtime-write"
-  | "queued-runtime-write";
+  | "queued-runtime-write"
+  | "late-nonterminal-runtime-write";
 
 function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) {
   return Effect.gen(function* () {
@@ -627,6 +628,7 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
     const releaseStoppedSessionSweep = yield* Deferred.make<void>();
     const runtimeEventObserved = yield* Deferred.make<void>();
     const runtimeWriteStarted = yield* Deferred.make<void>();
+    const runtimeCursorCaptureStarted = yield* Deferred.make<void>();
     const providerTeardownStarted = yield* Deferred.make<void>();
     let shutdownStarted = false;
     let shutdownRequested = false;
@@ -722,20 +724,46 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
       });
     };
 
-    if (scenario === "mid-list-runtime-write" || scenario === "queued-runtime-write") {
+    if (
+      scenario === "mid-list-runtime-write" ||
+      scenario === "queued-runtime-write" ||
+      scenario === "late-nonterminal-runtime-write"
+    ) {
       const listSessions = codex.listSessions.getMockImplementation();
       assert.ok(listSessions);
       let emittedDuringShutdownList = false;
+      let runtimeCursorCapturePending = false;
       codex.listSessions.mockImplementation(() => {
         const currentSessions = listSessions();
+        if (runtimeCursorCapturePending) {
+          runtimeCursorCapturePending = false;
+          return Deferred.succeed(runtimeCursorCaptureStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(providerTeardownStarted)),
+            Effect.andThen(listSessions()),
+          );
+        }
         if (!shutdownRequested || emittedDuringShutdownList) {
           return currentSessions;
         }
         emittedDuringShutdownList = true;
         return Effect.gen(function* () {
           const staleSessions = (yield* currentSessions).map((session) => ({ ...session }));
-          updateSessionWithTerminalCursor();
-          emitTerminalTurn();
+          if (scenario === "late-nonterminal-runtime-write") {
+            runtimeCursorCapturePending = true;
+            codex.emit({
+              type: "turn.tasks.updated",
+              eventId: asEventId("event-stopall-late-nonterminal-race"),
+              provider: "codex",
+              createdAt: new Date().toISOString(),
+              threadId,
+              payload: { tasks: [{ task: "Finishing shutdown", status: "inProgress" }] },
+            });
+            yield* Deferred.await(runtimeCursorCaptureStarted);
+            return staleSessions;
+          } else {
+            updateSessionWithTerminalCursor();
+            emitTerminalTurn();
+          }
           yield* Deferred.await(
             scenario === "queued-runtime-write" ? runtimeWriteStarted : runtimeEventObserved,
           );
@@ -768,6 +796,11 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
         } else if (scenario === "queued-runtime-write") {
           yield* codex.stopSession(threadId);
           yield* Deferred.succeed(providerTeardownStarted, undefined);
+        } else if (scenario === "late-nonterminal-runtime-write") {
+          yield* codex.stopSession(threadId);
+          yield* Deferred.succeed(providerTeardownStarted, undefined);
+          yield* Deferred.succeed(releaseStoppedSessionSweep, undefined);
+          return;
         }
         yield* Deferred.await(runtimeEventObserved);
         yield* Deferred.succeed(releaseStoppedSessionSweep, undefined);
@@ -837,6 +870,10 @@ it.effect("ProviderServiceLive starts teardown while an earlier binding write is
 
 it.effect("ProviderServiceLive preserves a cursor from a writer queued before shutdown", () =>
   verifyShutdownCursorOrdering("queued-runtime-write"),
+);
+
+it.effect("ProviderServiceLive keeps a late nonterminal shutdown write stopped", () =>
+  verifyShutdownCursorOrdering("late-nonterminal-runtime-write"),
 );
 
 it.effect(
