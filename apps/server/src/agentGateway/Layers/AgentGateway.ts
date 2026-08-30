@@ -77,6 +77,7 @@ import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserA
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
+import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -783,6 +784,56 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.orElseSucceed(() => null)),
   });
 
+  const kanbanTools = makeAgentGatewayKanbanTools({
+    snapshotQuery,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
+    helpers: {
+      // Move-card re-reads and live-checks the target shell itself, so the
+      // plain loader is correct for every column.
+      requireThreadShell,
+      assertCallerMayDriveThread,
+      runCreateThreads,
+      startTurn: ({ threadId, message, dispatchMode, runtimeMode, interactionMode }) => {
+        const suffix = randomUUID();
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`agent:${suffix}:kanban-move`),
+            threadId: ThreadId.makeUnsafe(threadId),
+            message: {
+              messageId: MessageId.makeUnsafe(`agent:${suffix}:message`),
+              role: "user",
+              text: message,
+              attachments: [],
+            },
+            dispatchMode,
+            dispatchOrigin: "agent",
+            runtimeMode,
+            interactionMode,
+            createdAt: isoNow(),
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      },
+      interruptTurn: ({ threadId }) => {
+        const suffix = randomUUID();
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe(`agent:${suffix}:kanban-interrupt`),
+            threadId: ThreadId.makeUnsafe(threadId),
+            createdAt: isoNow(),
+          })
+          .pipe(
+            Effect.map((eventSequence) => ({ sequence: eventSequence.sequence })),
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          );
+      },
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -796,6 +847,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadGoal,
     ...automationTools,
     ...browserTools,
+    ...kanbanTools,
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
       : []),

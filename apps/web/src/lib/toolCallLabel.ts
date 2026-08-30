@@ -220,6 +220,26 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara sent a message",
     failed: "Synara couldn't send a message",
   },
+  synara_read_kanban_board: {
+    running: "Synara is reading the board",
+    completed: "Synara read the board",
+    failed: "Synara couldn't read the board",
+  },
+  synara_read_kanban_card: {
+    running: "Synara is reading a board card",
+    completed: "Synara read a board card",
+    failed: "Synara couldn't read a board card",
+  },
+  synara_create_kanban_task: {
+    running: "Synara is creating a board task",
+    completed: "Synara created a board task",
+    failed: "Synara couldn't create a board task",
+  },
+  synara_move_kanban_card: {
+    running: "Synara is moving a board card",
+    completed: "Synara moved a board card",
+    failed: "Synara couldn't move a board card",
+  },
   synara_interrupt_thread: {
     running: "Synara is interrupting a thread",
     completed: "Synara interrupted a thread",
