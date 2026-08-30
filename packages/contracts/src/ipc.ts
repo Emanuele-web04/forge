@@ -169,6 +169,20 @@ import type {
 } from "./device";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
+  MindConfirmInput,
+  MindConfirmResult,
+  MindForgetInput,
+  MindForgetResult,
+  MindListInput,
+  MindListResult,
+  MindPinInput,
+  MindPinResult,
+  MindRecallInput,
+  MindRecallResult,
+  MindRememberInput,
+  MindRememberResult,
+} from "./mind";
+import type {
   ServerConfig,
   ServerDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
@@ -935,5 +949,13 @@ export interface NativeApi {
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
     scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
+  };
+  mind: {
+    list: (input: MindListInput) => Promise<MindListResult>;
+    search: (input: MindRecallInput) => Promise<MindRecallResult>;
+    remember: (input: MindRememberInput) => Promise<MindRememberResult>;
+    confirm: (input: MindConfirmInput) => Promise<MindConfirmResult>;
+    forget: (input: MindForgetInput) => Promise<MindForgetResult>;
+    pin: (input: MindPinInput) => Promise<MindPinResult>;
   };
 }

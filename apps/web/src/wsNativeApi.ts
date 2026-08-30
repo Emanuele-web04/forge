@@ -48,6 +48,12 @@ import {
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   type DeviceEvent,
+  type MindConfirmInput,
+  type MindForgetInput,
+  type MindListInput,
+  type MindPinInput,
+  type MindRecallInput,
+  type MindRememberInput,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -842,6 +848,14 @@ export function createWsNativeApi(): NativeApi {
       scrollToElement: (input) =>
         transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
       onEvent: deviceEventListeners.subscribe,
+    },
+    mind: {
+      list: (input: MindListInput) => transport.request(WS_METHODS.mindList, input),
+      search: (input: MindRecallInput) => transport.request(WS_METHODS.mindSearch, input),
+      remember: (input: MindRememberInput) => transport.request(WS_METHODS.mindRemember, input),
+      confirm: (input: MindConfirmInput) => transport.request(WS_METHODS.mindConfirm, input),
+      forget: (input: MindForgetInput) => transport.request(WS_METHODS.mindForget, input),
+      pin: (input: MindPinInput) => transport.request(WS_METHODS.mindPin, input),
     },
     browser: {
       open: async (input) => {

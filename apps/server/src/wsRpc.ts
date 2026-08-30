@@ -129,6 +129,7 @@ import {
   makeWsStreamAdmission,
 } from "./wsStreamAdmission";
 import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
+import { MindService } from "./mind/Services/MindService";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
@@ -363,6 +364,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerHealth = yield* ProviderHealth;
       const providerService = yield* ProviderService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
+      const mindService = yield* MindService;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
@@ -1998,6 +2000,18 @@ const makeWsRpcHandlersLayer = () =>
             automationService.resolveProposal(input),
             "Failed to resolve automation proposal",
           ),
+        [WS_METHODS.mindList]: (input) =>
+          rpcEffect(mindService.list(input), "Failed to load memories"),
+        [WS_METHODS.mindSearch]: (input) =>
+          rpcEffect(mindService.recall(input), "Failed to search memories"),
+        [WS_METHODS.mindRemember]: (input) =>
+          rpcEffect(mindService.remember(input), "Failed to remember memory"),
+        [WS_METHODS.mindConfirm]: (input) =>
+          rpcEffect(mindService.confirm(input), "Failed to confirm memory"),
+        [WS_METHODS.mindForget]: (input) =>
+          rpcEffect(mindService.forget(input), "Failed to forget memory"),
+        [WS_METHODS.mindPin]: (input) => rpcEffect(mindService.pin(input), "Failed to pin memory"),
+
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

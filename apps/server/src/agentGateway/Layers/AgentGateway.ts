@@ -72,6 +72,7 @@ import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
+import { MindService, makeAgentGatewayMemoryTools } from "../memoryTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
@@ -132,6 +133,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   // it) the agent never sees the device_* tools at all, rather than being
   // offered eleven tools that can only report an unsupported platform.
   const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
+  const mindService = Option.getOrUndefined(yield* Effect.serviceOption(MindService));
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
       serverSettings.getSettings,
@@ -783,6 +785,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.orElseSucceed(() => null)),
   });
 
+  const memoryTools = mindService
+    ? makeAgentGatewayMemoryTools({ mindService, requireThreadShell })
+    : ({} as Record<string, ToolEntry>);
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -796,6 +802,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadGoal,
     ...automationTools,
     ...browserTools,
+    ...Object.values(memoryTools),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
       : []),

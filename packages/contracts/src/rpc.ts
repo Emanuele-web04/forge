@@ -234,6 +234,20 @@ import {
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
 } from "./stats";
+import {
+  MindConfirmInput,
+  MindConfirmResult,
+  MindForgetInput,
+  MindForgetResult,
+  MindListInput,
+  MindListResult,
+  MindPinInput,
+  MindPinResult,
+  MindRecallInput,
+  MindRecallResult,
+  MindRememberInput,
+  MindRememberResult,
+} from "./mind";
 import { WS_METHODS } from "./ws";
 import {
   WS_BOOTSTRAP_METHOD,
@@ -1227,6 +1241,42 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
+export const WsMindListRpc = Rpc.make(WS_METHODS.mindList, {
+  payload: MindListInput,
+  success: MindListResult,
+  error: WsRpcError,
+});
+
+export const WsMindSearchRpc = Rpc.make(WS_METHODS.mindSearch, {
+  payload: MindRecallInput,
+  success: MindRecallResult,
+  error: WsRpcError,
+});
+
+export const WsMindRememberRpc = Rpc.make(WS_METHODS.mindRemember, {
+  payload: MindRememberInput,
+  success: MindRememberResult,
+  error: WsRpcError,
+});
+
+export const WsMindConfirmRpc = Rpc.make(WS_METHODS.mindConfirm, {
+  payload: MindConfirmInput,
+  success: MindConfirmResult,
+  error: WsRpcError,
+});
+
+export const WsMindForgetRpc = Rpc.make(WS_METHODS.mindForget, {
+  payload: MindForgetInput,
+  success: MindForgetResult,
+  error: WsRpcError,
+});
+
+export const WsMindPinRpc = Rpc.make(WS_METHODS.mindPin, {
+  payload: MindPinInput,
+  success: MindPinResult,
+  error: WsRpcError,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -1352,6 +1402,12 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsMindListRpc,
+  WsMindSearchRpc,
+  WsMindRememberRpc,
+  WsMindConfirmRpc,
+  WsMindForgetRpc,
+  WsMindPinRpc,
 );
 
 /** @deprecated Use WsFeatureRpcGroup. Bootstrap is intentionally a separate endpoint/group. */

@@ -50,6 +50,12 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
         'During an automation-dispatched turn, persist durable context with synara_update_automation_memory {"memory": "..."} before finishing; memory is full replacement, DB-backed, and capped at 32 KiB.',
         'Every automation-dispatched turn must finish by calling synara_report_automation_result. Use decision "silent" only for a successful run with nothing requiring user attention; otherwise use "notify" with a concise title and summary. Failures remain visible regardless of this decision or the automation notification policy. Never call this tool for a manual follow-up turn.',
+        "Use the synara_remember, synara_recall_memories, synara_confirm_memory, synara_forget_memory, and synara_prune_memories tools to manage durable, project-scoped memory. These tools require the memory:use capability and are only available to the provider session that owns the thread.",
+        "Call synara_remember to store a concise, project-scoped fact. Repeating the same text in one project reinforces the existing memory instead of creating a duplicate.",
+        "Call synara_recall_memories with an optional query to retrieve up to eight relevant memories, ranked by recency and decay, plus a digest of the results.",
+        "Call synara_confirm_memory when a recalled memory is still accurate; it raises the memory's weight and resets decay.",
+        "Call synara_forget_memory to permanently remove a memory by its id.",
+        "Call synara_prune_memories to safely remove stale, low-weight, unconfirmed memories from the caller's project.",
       ]
     : [
         "Synara MCP control is unavailable in this provider session. Do not claim that Synara threads, projects, or automations were created or changed.",

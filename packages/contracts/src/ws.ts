@@ -159,6 +159,14 @@ import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
+import {
+  MindConfirmInput,
+  MindForgetInput,
+  MindListInput,
+  MindPinInput,
+  MindRecallInput,
+  MindRememberInput,
+} from "./mind";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -290,6 +298,14 @@ export const WS_METHODS = {
   automationArchiveRun: "automation.archiveRun",
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
+
+  // Mind methods
+  mindList: "mind.list",
+  mindSearch: "mind.search",
+  mindRemember: "mind.remember",
+  mindConfirm: "mind.confirm",
+  mindForget: "mind.forget",
+  mindPin: "mind.pin",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -492,6 +508,14 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
+
+  // Mind methods
+  tagRequestBody(WS_METHODS.mindList, MindListInput),
+  tagRequestBody(WS_METHODS.mindSearch, MindRecallInput),
+  tagRequestBody(WS_METHODS.mindRemember, MindRememberInput),
+  tagRequestBody(WS_METHODS.mindConfirm, MindConfirmInput),
+  tagRequestBody(WS_METHODS.mindForget, MindForgetInput),
+  tagRequestBody(WS_METHODS.mindPin, MindPinInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

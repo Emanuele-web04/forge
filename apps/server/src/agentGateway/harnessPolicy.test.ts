@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   renderSynaraHarnessPolicy,
   SYNARA_HARNESS_POLICY_MARKER,
+  SYNARA_HARNESS_POLICY_VERSION,
   takeSynaraHarnessPolicyForProviderSession,
   takeSynaraHarnessPolicyTextPartForProviderSession,
   takeSynaraHarnessPolicyForSession,
@@ -192,5 +193,31 @@ describe("Synara harness policy", () => {
     // Promising tools this session cannot reach would be a lie.
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
+  });
+
+  it("bumps the harness policy version", () => {
+    assert.include(SYNARA_HARNESS_POLICY_VERSION, "2026-08-30.2");
+    assert.notEqual(SYNARA_HARNESS_POLICY_VERSION, "2026-08-25.2");
+  });
+
+  it("includes memory tool standing orders when gateway control is available", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+
+    assert.include(policy, "memory:use");
+    assert.include(policy, "synara_remember");
+    assert.include(policy, "synara_recall_memories");
+    assert.include(policy, "synara_confirm_memory");
+    assert.include(policy, "synara_forget_memory");
+    assert.include(policy, "synara_prune_memories");
+    assert.include(policy, "project-scoped memory");
+    assert.notInclude(policy, "synara_remember" + " tools are available"); // sanity: no phantom concatenation
+  });
+
+  it("does not advertise memory tools when gateway control is unavailable", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    assert.notInclude(policy, "memory:use");
+    assert.notInclude(policy, "synara_remember");
+    assert.notInclude(policy, "synara_recall_memories");
   });
 });

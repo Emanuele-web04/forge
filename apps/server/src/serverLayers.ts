@@ -53,6 +53,8 @@ import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/O
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
+import { MindServiceLive } from "./mind/Layers/MindService.ts";
+import { MindRepositoryLive } from "./persistence/Layers/MindRepository.ts";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
@@ -79,6 +81,8 @@ export function makeServerRuntimeServicesLayer(
 ) {
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
+  const mindRepositoryLayer = MindRepositoryLive;
+  const mindServiceLayer = MindServiceLive.pipe(Layer.provideMerge(mindRepositoryLayer));
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
@@ -211,6 +215,7 @@ export function makeServerRuntimeServicesLayer(
     // The gateway exposes device_* tools only where a backend can exist, but it
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
+    Layer.provideMerge(mindServiceLayer),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
@@ -222,6 +227,8 @@ export function makeServerRuntimeServicesLayer(
     agentGatewayCredentialsLayer,
     agentGatewayLayer,
     BrowserAutomationHostLive,
+    mindRepositoryLayer,
+    mindServiceLayer,
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
