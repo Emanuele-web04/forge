@@ -5,6 +5,7 @@ import type {
   ManagedProviderAccountProvider,
   ProviderAccount,
   ProviderAccountCollection,
+  ProviderKind,
   ServerListProviderAccountsResult,
 } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,6 +33,12 @@ import {
 } from "./SettingsPanelPrimitives";
 
 const PROVIDERS: ReadonlyArray<ManagedProviderAccountProvider> = ["claudeAgent", "codex"];
+
+export function visibleProviderAccountProviders(
+  disabledProviders: ReadonlySet<ProviderKind>,
+): ReadonlyArray<ManagedProviderAccountProvider> {
+  return PROVIDERS.filter((provider) => !disabledProviders.has(provider));
+}
 
 function providerTitle(provider: ManagedProviderAccountProvider): string {
   return provider === "claudeAgent" ? "Claude" : "Codex";
@@ -145,13 +152,22 @@ function AccountRow({
   );
 }
 
-export function ProviderAccountsSettingsPanel() {
+export function ProviderAccountsSettingsPanel({
+  disabledProviders,
+}: {
+  readonly disabledProviders: ReadonlySet<ProviderKind>;
+}) {
   const queryClient = useQueryClient();
   const statuses = useProviderStatusesForLocalConfig();
   const [busyProvider, setBusyProvider] = useState<ManagedProviderAccountProvider | null>(null);
+  const visibleProviders = useMemo(
+    () => visibleProviderAccountProviders(disabledProviders),
+    [disabledProviders],
+  );
   const accountsQuery = useQuery({
     queryKey: serverQueryKeys.providerAccounts(),
     queryFn: () => ensureNativeApi().server.listProviderAccounts(),
+    enabled: visibleProviders.length > 0,
     staleTime: 5_000,
     refetchInterval: (query) =>
       query.state.data?.providers.some((collection) =>
@@ -217,6 +233,8 @@ export function ProviderAccountsSettingsPanel() {
     );
   };
 
+  if (visibleProviders.length === 0) return null;
+
   return (
     <SettingsSectionShell
       title="Provider accounts"
@@ -249,7 +267,7 @@ export function ProviderAccountsSettingsPanel() {
             />
           </SettingsCard>
         ) : null}
-        {PROVIDERS.map((provider) => {
+        {visibleProviders.map((provider) => {
           const collection = accountsQuery.data?.providers.find(
             (entry) => entry.provider === provider,
           );

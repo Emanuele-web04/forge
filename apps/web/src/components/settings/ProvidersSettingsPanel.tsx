@@ -973,8 +973,6 @@ export function ProvidersSettingsPanel({
 
   return (
     <div className="space-y-6">
-      <ProviderAccountsSettingsPanel />
-
       <SettingsSection title="Provider activity">
         <SettingsRow
           title="Enabled providers"
@@ -1034,6 +1032,8 @@ export function ProvidersSettingsPanel({
           </div>
         </SettingsRow>
       </SettingsSection>
+
+      <ProviderAccountsSettingsPanel disabledProviders={disabledProviderSet} />
 
       <SettingsSection title="Provider picker">
         <SettingsRow
