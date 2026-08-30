@@ -184,6 +184,8 @@ describe("orchestration projector", () => {
         subagentRole: null,
         forkSourceThreadId: null,
         sidechatSourceThreadId: null,
+        sidechatLastActivityAt: null,
+        sidechatExpiredAt: null,
         lastKnownPr: null,
         latestTurn: null,
         createdAt: now,
@@ -199,6 +201,104 @@ describe("orchestration projector", () => {
         session: null,
       },
     ]);
+  });
+
+  it("projects side chat activity and expiry timestamps", async () => {
+    const createdAt = "2026-08-30T10:00:00.000Z";
+    const activityAt = "2026-08-30T10:15:00.000Z";
+    const expiredAt = "2026-08-30T11:15:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: createdAt,
+          commandId: "cmd-create-sidechat",
+          payload: {
+            threadId: "thread-sidechat",
+            projectId: "project-1",
+            title: "Side investigation",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            sidechatSourceThreadId: "thread-source",
+            sidechatLastActivityAt: createdAt,
+            sidechatExpiredAt: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const afterActivity = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.sidechat-activity-recorded",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: activityAt,
+          commandId: "cmd-sidechat-activity",
+          payload: { threadId: "thread-sidechat", lastActivityAt: activityAt },
+        }),
+      ),
+    );
+    const afterExpiry = await Effect.runPromise(
+      projectEvent(
+        afterActivity,
+        makeEvent({
+          sequence: 3,
+          type: "thread.sidechat-expired",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: expiredAt,
+          commandId: "cmd-sidechat-expire",
+          payload: {
+            threadId: "thread-sidechat",
+            expectedLastActivityAt: activityAt,
+            expiredAt,
+          },
+        }),
+      ),
+    );
+    const afterStoppedSession = await Effect.runPromise(
+      projectEvent(
+        afterExpiry,
+        makeEvent({
+          sequence: 4,
+          type: "thread.session-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: "2026-08-30T11:15:01.000Z",
+          commandId: "cmd-stop-expired-sidechat",
+          payload: {
+            threadId: "thread-sidechat",
+            session: {
+              threadId: "thread-sidechat",
+              status: "stopped",
+              providerName: "codex",
+              providerSessionId: "session-sidechat",
+              providerThreadId: "provider-thread-sidechat",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-08-30T11:15:01.000Z",
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(afterStoppedSession.threads[0]).toMatchObject({
+      sidechatLastActivityAt: activityAt,
+      sidechatExpiredAt: expiredAt,
+      updatedAt: "2026-08-30T11:15:01.000Z",
+    });
   });
 
   it("updates thread settings from turn start events", async () => {

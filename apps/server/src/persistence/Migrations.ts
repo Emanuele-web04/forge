@@ -112,6 +112,7 @@ import Migration0093 from "./Migrations/093_BackfillMaxIterationsDisabledReason.
 import Migration0094 from "./Migrations/094_ProjectionThreadsGoal.ts";
 import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
 import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
+import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -223,6 +224,7 @@ export const migrationEntries = [
   [94, "ProjectionThreadsGoal", Migration0094],
   [95, "ProjectionThreadsGoalTiming", Migration0095],
   [96, "ProjectionThreadsGoalAchievements", Migration0096],
+  [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

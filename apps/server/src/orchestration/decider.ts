@@ -1178,6 +1178,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
           sidechatSourceThreadId: command.sidechatSourceThreadId,
+          sidechatLastActivityAt: command.sidechatSourceThreadId ? command.createdAt : null,
+          sidechatExpiredAt: null,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1213,6 +1215,83 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }));
 
       return [createdEvent, ...importedMessageEvents];
+    }
+
+    case "thread.sidechat.activity.record": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (!thread.sidechatSourceThreadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a side chat.`,
+        });
+      }
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' already expired.`,
+        });
+      }
+      const lastActivityAt =
+        thread.sidechatLastActivityAt && thread.sidechatLastActivityAt > command.activityAt
+          ? thread.sidechatLastActivityAt
+          : command.activityAt;
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: lastActivityAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.sidechat-activity-recorded",
+        payload: { threadId: command.threadId, lastActivityAt },
+      };
+    }
+
+    case "thread.sidechat.expire": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (!thread.sidechatSourceThreadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a side chat.`,
+        });
+      }
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' already expired.`,
+        });
+      }
+      const lastActivityAt = thread.sidechatLastActivityAt ?? thread.updatedAt ?? thread.createdAt;
+      if (lastActivityAt !== command.expectedLastActivityAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' became active before expiry.`,
+        });
+      }
+      if (
+        thread.latestTurn?.state === "running" ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' still has a running turn.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.expiredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.sidechat-expired",
+        payload: {
+          threadId: command.threadId,
+          expectedLastActivityAt: command.expectedLastActivityAt,
+          expiredAt: command.expiredAt,
+        },
+      };
     }
 
     case "thread.delete": {
@@ -1664,6 +1743,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "This side chat expired after 1 hour of inactivity. Start a new side chat.",
+        });
+      }
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
@@ -1823,6 +1908,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "This side chat expired after 1 hour of inactivity. Start a new side chat.",
+        });
+      }
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2133,6 +2224,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "This side chat expired after 1 hour of inactivity. Start a new side chat.",
+        });
+      }
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
