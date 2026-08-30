@@ -66,15 +66,17 @@ export const makeAcpLoadReplayGate = (
 
     const release = Effect.gen(function* () {
       const completed = yield* Ref.modify(state, (current) =>
-        current._tag === "Ready" || current._tag === "Released"
+        current._tag === "Released"
           ? ([false, current] as const)
-          : ([true, { _tag: "Released" } satisfies ReplayReleased] as const),
+          : current._tag === "Ready"
+            ? ([true, current] as const)
+            : ([true, { _tag: "Released" } satisfies ReplayReleased] as const),
       );
       if (completed) {
         yield* Deferred.succeed(consumerAttached, undefined);
         yield* Deferred.succeed(ready, "released");
       }
-    }).pipe(Effect.asVoid);
+    }).pipe(Effect.asVoid, Effect.uninterruptible);
 
     const settle = Effect.gen(function* () {
       yield* Deferred.await(consumerAttached);
@@ -115,6 +117,15 @@ export const makeAcpLoadReplayGate = (
               current,
             ] as const;
           },
+        ).pipe(
+          Effect.flatMap((next) =>
+            next._tag === "Opened"
+              ? Deferred.succeed(ready, "ready").pipe(Effect.as(next))
+              : Effect.succeed(next),
+          ),
+          // State must never become Ready without completing its waiter: scope
+          // release uses that state to decide whether it still needs to unblock.
+          Effect.uninterruptible,
         );
 
         if (decision._tag === "Done") {
@@ -124,7 +135,6 @@ export const makeAcpLoadReplayGate = (
           continue;
         }
         if (decision._tag === "Opened") {
-          yield* Deferred.succeed(ready, "ready");
           if (decision.reachedHardTimeout) {
             yield* options.onHardTimeout({ elapsedMs: decision.elapsedMs });
           }

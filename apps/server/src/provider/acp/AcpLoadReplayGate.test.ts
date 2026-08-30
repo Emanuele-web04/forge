@@ -35,6 +35,8 @@ describe("AcpLoadReplayGate", () => {
 
       expect(yield* gate.isSuppressing).toBe(false);
       expect(yield* gate.suppressUpdate).toBe(false);
+      yield* gate.release;
+      expect(yield* gate.awaitReady).toBe("ready");
     }),
   );
 
