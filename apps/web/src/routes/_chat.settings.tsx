@@ -1303,7 +1303,6 @@ function SettingsRouteView() {
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}
-                  updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
                 <ProvidersSettingsPanel
@@ -1311,6 +1310,7 @@ function SettingsRouteView() {
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}
+                  updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
