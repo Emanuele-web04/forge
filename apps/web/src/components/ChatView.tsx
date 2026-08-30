@@ -3622,7 +3622,9 @@ export default function ChatView({
     timelineEntries.length === 0 &&
     !activeThread?.parentThreadId &&
     !isEditorRail &&
-    threadDetailHydration === "ready";
+    threadDetailHydration === "ready" &&
+    localDispatch === null &&
+    optimisticUserMessages.length === 0;
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =

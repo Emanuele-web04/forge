@@ -8790,4 +8790,143 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it("does not flash the empty home landing while the first send is in flight", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const baseSnapshot = withHomeChatProject(createDraftOnlySnapshot());
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: HOME_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [HOME_PROJECT_ID]: THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: baseSnapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      const landingHeading = page.getByText("What should we work on?");
+      await expect.element(landingHeading).toBeInTheDocument();
+
+      const prompt = "first send landing regression";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+
+      sendButton.click();
+
+      let sentMessageId: string | null = null;
+      const landingPhrase = "What should we work on?";
+
+      // Wait for the first paint where the optimistic user row has replaced the
+      // centered empty landing. The landing copy must not be present before the
+      // delayed server echo either.
+      await vi.waitFor(
+        () => {
+          const text = document.body.textContent ?? "";
+          expect(text).not.toContain(landingPhrase);
+          const userRow = document.querySelector<HTMLElement>(
+            "[data-message-id][data-message-role='user']",
+          );
+          expect(userRow).not.toBeNull();
+          expect(userRow?.textContent ?? "").toContain(prompt);
+          sentMessageId = userRow?.dataset.messageId ?? null;
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(sentMessageId, "sent user row did not render before the delayed echo").not.toBeNull();
+
+      const pollStartedAt = performance.now();
+      while (performance.now() - pollStartedAt < 300) {
+        expect(document.body.textContent ?? "").not.toContain(landingPhrase);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+
+      const echoedSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        snapshotSequence: baseSnapshot.snapshotSequence + 1,
+        updatedAt: isoAt(1_200),
+        threads: [
+          {
+            id: THREAD_ID,
+            projectId: HOME_PROJECT_ID,
+            title: "Home thread",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5",
+            },
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            latestTurn: null,
+            createdAt: NOW_ISO,
+            updatedAt: isoAt(1_200),
+            deletedAt: null,
+            handoff: null,
+            messages: [
+              {
+                id: MessageId.makeUnsafe(sentMessageId!),
+                role: "user",
+                text: prompt,
+                turnId: null,
+                streaming: false,
+                source: "native",
+                createdAt: isoAt(1_100),
+                updatedAt: isoAt(1_100),
+              },
+            ],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            session: {
+              threadId: THREAD_ID,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: isoAt(1_100),
+            },
+          },
+        ],
+      };
+
+      useStore.getState().syncServerReadModel(echoedSnapshot);
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(prompt);
+          expect(document.body.textContent).not.toContain(landingPhrase);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
 });
