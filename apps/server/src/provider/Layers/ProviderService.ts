@@ -1661,9 +1661,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         } as const;
       });
 
-    const startSessionWithOutcome: NonNullable<
-      ProviderServiceShape["startSessionWithOutcome"]
-    > = (threadId, rawInput) =>
+    const startSessionWithOutcome: NonNullable<ProviderServiceShape["startSessionWithOutcome"]> = (
+      threadId,
+      rawInput,
+    ) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
           operation: "ProviderService.startSession",

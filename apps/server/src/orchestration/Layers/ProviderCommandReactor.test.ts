@@ -8311,7 +8311,9 @@ describe("ProviderCommandReactor", () => {
       const coldStartInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
       expect(coldStartInput.input).toContain("<thread_context>");
       expect(coldStartInput.input).toContain("The deployment color is violet.");
-      expect(coldStartInput.input?.match(/Which deployment color did we choose\?/g)).toHaveLength(1);
+      expect(coldStartInput.input?.match(/Which deployment color did we choose\?/g)).toHaveLength(
+        1,
+      );
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-cold-next`,
