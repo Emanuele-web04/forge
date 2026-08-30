@@ -3466,6 +3466,53 @@ layer("AutomationService", (it) => {
       }),
   );
 
+  it.effect("defers stop evaluation until its provider is re-enabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-provider-disabled");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-provider-disabled");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: aiCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeAutomationRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* realDelay(25);
+
+      const deferredRun = (yield* service.list({ projectId })).runs.find(
+        (entry) => entry.id === run.id,
+      );
+      assert.isUndefined(deferredRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      const resumed = yield* waitForAutomationList({
+        service,
+        description: "re-enabled provider stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+          undefined,
+      });
+      const resumedRun = resumed.runs.find((entry) => entry.id === run.id);
+
+      assert.strictEqual(resumedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(completionEvaluationInputs.length, 1);
+    }),
+  );
+
   it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>
     Effect.gen(function* () {
       resetHarness();

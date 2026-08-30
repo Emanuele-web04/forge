@@ -615,6 +615,21 @@ export const AutomationServiceLive = Layer.effect(
         ),
         Effect.mapError(toServiceError("Failed to read provider settings.")),
       );
+    const completionEvaluationProviderDisabledReason = (definition: AutomationDefinition) =>
+      serverSettings.getSettings.pipe(
+        Effect.map((settings) => {
+          const directInput = resolveTextGenerationInputForSelection(
+            definition.modelSelection,
+            definition.providerOptions,
+          );
+          const provider =
+            directInput?.modelSelection.provider ?? settings.textGenerationModelSelection.provider;
+          return settings.providers[provider].enabled
+            ? null
+            : `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`;
+        }),
+        Effect.mapError(toServiceError("Failed to read completion-evaluation provider settings.")),
+      );
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -1585,6 +1600,9 @@ export const AutomationServiceLive = Layer.effect(
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
     ) =>
       Effect.gen(function* () {
+        if (yield* completionEvaluationProviderDisabledReason(definition)) {
+          return false;
+        }
         if (!run.threadId) {
           yield* recordCompletionEvaluation({
             run,
@@ -1705,6 +1723,23 @@ export const AutomationServiceLive = Layer.effect(
       }).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
+            const disabledReason = yield* completionEvaluationProviderDisabledReason(
+              definition,
+            ).pipe(
+              Effect.catch((settingsError) =>
+                Effect.logWarning(
+                  "automation completion evaluation provider state could not be rechecked",
+                  {
+                    automationId: definition.id,
+                    runId: run.id,
+                    error: errorMessage(settingsError),
+                  },
+                ).pipe(Effect.as(null)),
+              ),
+            );
+            if (disabledReason) {
+              return false;
+            }
             const reason = completionFailureReason(error);
             yield* Effect.logWarning("automation completion evaluation failed", {
               automationId: definition.id,
@@ -1785,11 +1820,17 @@ export const AutomationServiceLive = Layer.effect(
               if (!runUsesCurrentCompletionPolicy(run, definition)) {
                 return Effect.void;
               }
-              return enqueueCompletionEvaluationJob({
-                definition,
-                run,
-                policy,
-              });
+              return completionEvaluationProviderDisabledReason(definition).pipe(
+                Effect.flatMap((disabledReason) =>
+                  disabledReason
+                    ? Effect.void
+                    : enqueueCompletionEvaluationJob({
+                        definition,
+                        run,
+                        policy,
+                      }),
+                ),
+              );
             },
           }),
         ),
@@ -1848,6 +1889,20 @@ export const AutomationServiceLive = Layer.effect(
           error: errorMessage(error),
         }),
       ),
+    );
+
+    yield* serverSettings.streamChanges.pipe(
+      Stream.runForEach(() =>
+        enqueuePendingCompletionEvaluations().pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(
+              "automation pending stop evaluations could not be reconciled after settings changed",
+              { error: errorMessage(error) },
+            ),
+          ),
+        ),
+      ),
+      Effect.forkScoped,
     );
 
     const appendFailureAutoDisableResult = (

@@ -925,7 +925,29 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
 }
 
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
-  return normalizeAppSettings(settings);
+  return {
+    ...normalizeAppSettings(settings),
+    // Provider enablement belongs to the connected server. Scrub legacy values
+    // so a browser profile cannot project one server's shutdown state onto another.
+    disabledProviders: [],
+  };
+}
+
+export function applyLocalAppSettingsPatch(
+  settings: AppSettings,
+  patch: Partial<AppSettings>,
+): AppSettings {
+  const { disabledProviders: _disabledProviders, ...localPatch } = patch;
+  return normalizeStoredAppSettings({
+    ...settings,
+    ...localPatch,
+    ...(hasOwn(patch, "kiloServerPassword")
+      ? { kiloServerPasswordConfigured: Boolean(patch.kiloServerPassword?.trim()) }
+      : {}),
+    ...(hasOwn(patch, "openCodeServerPassword")
+      ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+      : {}),
+  });
 }
 
 export function getCustomModelsForProvider(
@@ -1312,8 +1334,9 @@ export function useAppSettings() {
     ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
   });
 
+  const normalizedLocalSettings = normalizeStoredAppSettings(localSettings);
   const settings = normalizeAppSettings({
-    ...localSettings,
+    ...normalizedLocalSettings,
     ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
   });
 
@@ -1381,18 +1404,7 @@ export function useAppSettings() {
   };
 
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
-    setSettings((prev) =>
-      normalizeAppSettings({
-        ...prev,
-        ...patch,
-        ...(hasOwn(patch, "kiloServerPassword")
-          ? { kiloServerPasswordConfigured: Boolean(patch.kiloServerPassword?.trim()) }
-          : {}),
-        ...(hasOwn(patch, "openCodeServerPassword")
-          ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
-          : {}),
-      }),
-    );
+    setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??

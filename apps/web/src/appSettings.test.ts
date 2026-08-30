@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  applyLocalAppSettingsPatch,
   appSettingsPatchToServerSettingsPatch,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
@@ -59,6 +60,27 @@ describe("server-backed provider enablement", () => {
         },
       }),
     ).toEqual(["opencode", "pi"]);
+  });
+
+  it("keeps server-backed provider disablement out of local settings", () => {
+    const stored = AppSettingsSchema.makeUnsafe({
+      disabledProviders: ["opencode"],
+      hiddenProviders: ["pi"],
+    });
+
+    expect(normalizeStoredAppSettings(stored)).toMatchObject({
+      disabledProviders: [],
+      hiddenProviders: ["pi"],
+    });
+    expect(
+      applyLocalAppSettingsPatch(stored, {
+        disabledProviders: ["codex", "opencode"],
+        hiddenProviders: ["kilo"],
+      }),
+    ).toMatchObject({
+      disabledProviders: [],
+      hiddenProviders: ["kilo"],
+    });
   });
 
   it("persists disable and re-enable patches for every provider", () => {
