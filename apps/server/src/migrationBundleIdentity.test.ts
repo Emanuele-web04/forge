@@ -56,4 +56,27 @@ describe("verifyMigrationRuntimeIdentity", () => {
       }),
     ).toThrow(/desktop and server bundles were built from different migration sources/u);
   });
+
+  it("classifies a missing server identity as a runtime identity mismatch", () => {
+    expect(() =>
+      verifyMigrationRuntimeIdentity({
+        cwd: sourceCheckout("same source"),
+        embeddedDigest: null,
+        launcherDigest: migrationRuntimeSourceDigest("desktop bundle"),
+      }),
+    ).toThrow(MigrationRuntimeIdentityMismatchError);
+  });
+
+  it("checks the source checkout when launched from a nested package", () => {
+    const checkout = sourceCheckout("current source");
+    const nestedCwd = path.join(checkout, "apps/server");
+    fs.writeFileSync(path.join(nestedCwd, "package.json"), '{"name":"@synara/cli"}\n');
+
+    expect(() =>
+      verifyMigrationRuntimeIdentity({
+        cwd: nestedCwd,
+        embeddedDigest: migrationRuntimeSourceDigest("stale bundle"),
+      }),
+    ).toThrow(MigrationRuntimeIdentityMismatchError);
+  });
 });

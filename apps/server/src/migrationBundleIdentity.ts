@@ -44,11 +44,12 @@ export function verifyMigrationRuntimeIdentity(input: {
   readonly launcherDigest?: string | undefined;
 }): void {
   if (input.embeddedDigest === null) {
-    if (input.launcherDigest) {
-      throw new Error(
-        "Refusing database startup because the server bundle has no migration source identity. " +
-          "Rebuild with bun run build:desktop before starting Synara.",
-      );
+    if (input.launcherDigest !== undefined) {
+      throw new MigrationRuntimeIdentityMismatchError({
+        kind: "launcher-bundle",
+        expectedDigest: input.launcherDigest,
+        actualDigest: "no embedded migration source identity",
+      });
     }
     return;
   }
@@ -63,8 +64,9 @@ export function verifyMigrationRuntimeIdentity(input: {
 }
 
 function readMigrationSourceIfPresent(cwd: string): string | undefined {
-  if (!isSynaraSourceCheckout(cwd)) return undefined;
-  const sourcePath = path.resolve(cwd, MIGRATION_RUNTIME_SOURCE_RELATIVE_PATH);
+  const checkoutRoot = findSynaraSourceCheckoutRoot(cwd);
+  if (checkoutRoot === null) return undefined;
+  const sourcePath = path.resolve(checkoutRoot, MIGRATION_RUNTIME_SOURCE_RELATIVE_PATH);
   try {
     return fs.readFileSync(sourcePath, "utf8");
   } catch (cause) {
@@ -73,14 +75,20 @@ function readMigrationSourceIfPresent(cwd: string): string | undefined {
   }
 }
 
-function isSynaraSourceCheckout(cwd: string): boolean {
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(path.resolve(cwd, "package.json"), "utf8")) as {
-      readonly name?: unknown;
-    };
-    return packageJson.name === "@synara/monorepo";
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw cause;
+function findSynaraSourceCheckoutRoot(cwd: string): string | null {
+  let candidate = path.resolve(cwd);
+  for (;;) {
+    try {
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(candidate, "package.json"), "utf8"),
+      ) as { readonly name?: unknown };
+      if (packageJson.name === "@synara/monorepo") return candidate;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+    }
+
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return null;
+    candidate = parent;
   }
 }
