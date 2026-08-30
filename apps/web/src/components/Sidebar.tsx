@@ -32,11 +32,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
-import {
-  PR_STATE_PRESENTATION_ICONS,
-  resolvePrStatePresentation,
-  type PrStatePresentation,
-} from "~/components/pullRequest/pullRequestStatePresentation";
+import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -133,7 +129,7 @@ import {
   isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
-import { useThreadPullRequests, type ThreadPullRequest } from "../hooks/useThreadPullRequests";
+import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -705,16 +701,6 @@ function resolveThreadRowMetaChips(input: {
   return chips;
 }
 
-interface PrStatusIndicator {
-  label: PrStatePresentation["label"];
-  colorClass: string;
-  icon: LucideIcon;
-  tooltip: string;
-  url: string;
-}
-
-type ThreadPr = ThreadPullRequest;
-
 function terminalStatusFromThreadState(input: {
   runningTerminalIds: string[];
   terminalAttentionStatesById: Record<string, "attention" | "review">;
@@ -742,50 +728,6 @@ function terminalStatusFromThreadState(input: {
     };
   }
   return null;
-}
-
-function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
-  if (!pr) return null;
-  const presentation = resolvePrStatePresentation(pr);
-  return {
-    label: presentation.label,
-    colorClass: presentation.colorClass,
-    icon: PR_STATE_PRESENTATION_ICONS[presentation.iconKind],
-    tooltip: `#${pr.number} ${presentation.label}: ${pr.title}`,
-    url: pr.url,
-  };
-}
-
-function ThreadPrStatusBadge({
-  prStatus,
-  onOpen,
-  className,
-}: {
-  prStatus: PrStatusIndicator;
-  onOpen: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={prStatus.tooltip}
-            className={cn(
-              "inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
-              prStatus.colorClass,
-              className,
-            )}
-            onClick={(event) => onOpen(event, prStatus.url)}
-          >
-            <SidebarGlyph icon={prStatus.icon} variant="meta" className="size-3.5" />
-          </button>
-        }
-      />
-      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
-    </Tooltip>
-  );
 }
 
 type SortableProjectHandleProps = Pick<
@@ -4377,11 +4319,11 @@ export default function Sidebar() {
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const leadingPrStatus =
+    const pr = prByThreadId.get(thread.id) ?? null;
+    const leadingPr =
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
-        : prStatus;
+        : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -4405,11 +4347,11 @@ export default function Sidebar() {
             />
           }
         >
-          {leadingPrStatus ? (
+          {leadingPr ? (
             <ThreadPrStatusBadge
-              prStatus={leadingPrStatus}
+              pr={leadingPr}
               onOpen={openPrLink}
-              className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
+              className="pointer-events-auto absolute left-1.5 top-1/2 z-30 h-5 w-6 -translate-y-1/2"
             />
           ) : null}
           <div
@@ -4423,7 +4365,7 @@ export default function Sidebar() {
               // present — instead of a rigid grid that permanently fenced off a
               // timestamp-era column and squeezed the title/project even when wide.
               "relative gap-1.5 transition-colors",
-              leadingPrStatus && "pl-8",
+              leadingPr && "pl-8",
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
                 hasTrailingGlyph: hasTrailingStatusGlyph,
@@ -4523,7 +4465,7 @@ export default function Sidebar() {
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
+    const pr = prByThreadId.get(thread.id) ?? null;
     const terminalStatus = terminalStatusFromThreadState({
       runningTerminalIds: threadTerminalState.runningTerminalIds,
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
@@ -4545,10 +4487,10 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPrStatus =
+    const leadingPr =
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
-        : prStatus;
+        : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon =
@@ -4568,11 +4510,11 @@ export default function Sidebar() {
         className="group/thread-row w-full"
         data-thread-item
       >
-        {leadingPrStatus ? (
+        {leadingPr ? (
           <ThreadPrStatusBadge
-            prStatus={leadingPrStatus}
+            pr={leadingPr}
             onOpen={openPrLink}
-            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
+            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 h-5 w-6 -translate-y-1/2"
           />
         ) : null}
         <Tooltip>
@@ -4589,7 +4531,7 @@ export default function Sidebar() {
                     isActive,
                     isSelected,
                   }),
-                  leadingPrStatus ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
+                  leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
