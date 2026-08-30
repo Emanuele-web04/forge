@@ -54,7 +54,7 @@ export interface ProviderRuntimeEventPumpHealth {
 
 export interface ProviderSessionStartOutcome {
   readonly session: ProviderSession;
-  readonly nativeResumeAttempted: boolean;
+  readonly nativeResumeSucceeded: boolean;
   readonly priorTranscriptBootstrapPending: boolean;
 }
 
@@ -80,8 +80,8 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
-   * Start a provider session and report whether it supplied a provider-native
-   * resume cursor to the adapter.
+   * Start a provider session and report whether the adapter confirmed that it
+   * restored the provider-native session named by the supplied cursor.
    */
   readonly startSessionWithOutcome?: (
     threadId: ThreadId,

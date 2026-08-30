@@ -4753,6 +4753,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           );
         });
 
+      const didResumeSession: NonNullable<OpenCodeAdapterShape["didResumeSession"]> = (
+        input,
+        session,
+      ) => {
+        const requestedSessionId = extractResumeSessionId(input.resumeCursor);
+        return (
+          requestedSessionId !== undefined &&
+          extractResumeSessionId(session.resumeCursor) === requestedSessionId
+        );
+      };
+
       return {
         provider,
         capabilities: {
@@ -4761,6 +4772,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           supportsNativeSlashCommandDiscovery: provider === "opencode",
         },
         startSession,
+        didResumeSession,
         sendTurn,
         interruptTurn,
         respondToRequest,

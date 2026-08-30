@@ -214,6 +214,7 @@ describe("ProviderCommandReactor", () => {
     readonly gitWritingModelSelection?: ModelSelection;
     readonly omitStopRuntimeSession?: boolean;
     readonly serverSettings?: DeepPartial<ServerSettings>;
+    readonly confirmNativeResume?: (resumeCursor: unknown) => boolean;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -275,17 +276,19 @@ describe("ProviderCommandReactor", () => {
     >((threadId, sessionInput, outcomeOptions) => {
       const effectiveResumeCursor =
         sessionInput.resumeCursor ?? persistedResumeCursors.get(threadId);
-      const nativeResumeAttempted =
-        effectiveResumeCursor !== undefined && effectiveResumeCursor !== null;
+      const nativeResumeSucceeded =
+        effectiveResumeCursor !== undefined &&
+        effectiveResumeCursor !== null &&
+        (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
         outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
-        !nativeResumeAttempted
+        !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
       }
       return startSession(threadId, sessionInput).pipe(
         Effect.map((session) => {
-          const resolvedSession = nativeResumeAttempted
+          const resolvedSession = nativeResumeSucceeded
             ? { ...session, resumeCursor: effectiveResumeCursor }
             : session;
           const runtimeIndex = runtimeSessions.findIndex(
@@ -297,7 +300,7 @@ describe("ProviderCommandReactor", () => {
           persistedResumeCursors.set(threadId, resolvedSession.resumeCursor);
           return {
             session: resolvedSession,
-            nativeResumeAttempted,
+            nativeResumeSucceeded,
             priorTranscriptBootstrapPending: pendingPriorTranscriptBootstraps.has(threadId),
           };
         }),
@@ -8303,6 +8306,40 @@ describe("ProviderCommandReactor", () => {
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
       const resumedInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
       expect(resumedInput.input).toBe("What did we call the module?");
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "injects transcript context when %s rejects the persisted resume cursor",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+        confirmNativeResume: () => false,
+      });
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-rejected-resume-seed`,
+        text: "The retained codename is heliotrope.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.stopRuntimeSession({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-rejected-resume-follow-up`,
+        text: "What is the retained codename?",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+      const followUpInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(followUpInput.input).toContain("<thread_context>");
+      expect(followUpInput.input).toContain("The retained codename is heliotrope.");
+      expect(followUpInput.input?.match(/What is the retained codename\?/g)).toHaveLength(1);
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
     },
   );
 

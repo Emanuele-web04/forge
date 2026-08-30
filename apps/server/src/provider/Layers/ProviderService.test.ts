@@ -125,7 +125,12 @@ function asRuntimePayloadRecord(value: unknown): Record<string, unknown> {
 
 function makeFakeCodexAdapter(
   provider: ProviderKind = "codex",
-  options?: { readonly conversationRollback?: "native" | "restart-session" },
+  options?: {
+    readonly conversationRollback?: "native" | "restart-session";
+    readonly didResumeSession?: NonNullable<
+      ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
+    >;
+  },
 ) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -285,6 +290,7 @@ function makeFakeCodexAdapter(
         : {}),
     },
     startSession,
+    ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
     sendTurn,
     steerTurn,
     startReview,
@@ -390,9 +396,16 @@ function makeProviderServiceLayer(
   providers?: {
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
+    readonly codexDidResumeSession?: NonNullable<
+      ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
+    >;
   },
 ) {
-  const codex = makeFakeCodexAdapter();
+  const codex = makeFakeCodexAdapter("codex", {
+    ...(providers?.codexDidResumeSession
+      ? { didResumeSession: providers.codexDidResumeSession }
+      : {}),
+  });
   const claude = makeFakeCodexAdapter("claudeAgent");
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
@@ -469,6 +482,9 @@ const restartRollbackRouting = makeProviderServiceLayer(undefined, {
   includeRestartRollbackDroid: true,
 });
 const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: true });
+const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
+  codexDidResumeSession: () => false,
+});
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-"));
@@ -989,6 +1005,35 @@ it.effect(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (it) => {
+  it.effect("keeps transcript bootstrap pending when the adapter rejects a supplied cursor", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-adapter-rejected-resume");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopRuntimeSession!({ threadId });
+      const outcome = yield* provider.startSessionWithOutcome!(
+        threadId,
+        {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        },
+        { registerPriorTranscriptBootstrapOnFreshStart: true },
+      );
+
+      assert.equal(outcome.nativeResumeSucceeded, false);
+      assert.equal(outcome.priorTranscriptBootstrapPending, true);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
 routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("reports native resume and persists bootstrap state until completion", () =>
     Effect.gen(function* () {
@@ -1011,9 +1056,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      assert.equal(initial.nativeResumeAttempted, false);
+      assert.equal(initial.nativeResumeSucceeded, false);
       assert.equal(initial.priorTranscriptBootstrapPending, true);
-      assert.equal(resumed.nativeResumeAttempted, true);
+      assert.equal(resumed.nativeResumeSucceeded, true);
       assert.equal(resumed.priorTranscriptBootstrapPending, true);
       assert.deepEqual(
         routing.codex.startSession.mock.calls.at(-1)?.[0]?.resumeCursor,
@@ -1027,7 +1072,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      assert.equal(resumedAfterCompletion.nativeResumeAttempted, true);
+      assert.equal(resumedAfterCompletion.nativeResumeSucceeded, true);
       assert.equal(resumedAfterCompletion.priorTranscriptBootstrapPending, false);
 
       yield* provider.stopSession({ threadId });

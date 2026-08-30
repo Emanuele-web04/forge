@@ -1257,7 +1257,7 @@ const make = Effect.gen(function* () {
         : providerService.startSession(threadId, startInput).pipe(
             Effect.map((session) => ({
               session,
-              nativeResumeAttempted: resumeCursor !== undefined && resumeCursor !== null,
+              nativeResumeSucceeded: resumeCursor !== undefined && resumeCursor !== null,
               priorTranscriptBootstrapPending: registerPriorTranscriptBootstrapOnFreshStart,
             })),
           );
@@ -1332,7 +1332,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: reusableSession,
-          nativeResumeAttempted: false,
+          nativeResumeSucceeded: false,
         };
       }
 
@@ -1376,7 +1376,7 @@ const make = Effect.gen(function* () {
       return {
         activeSessionBeforeEnsure,
         activeSession: restartedSession,
-        nativeResumeAttempted: false,
+        nativeResumeSucceeded: false,
       };
     }
 
@@ -1414,7 +1414,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: forkedSession,
-          nativeResumeAttempted: false,
+          nativeResumeSucceeded: false,
         };
       }
       if (shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId) {
@@ -1473,7 +1473,7 @@ const make = Effect.gen(function* () {
     return {
       activeSessionBeforeEnsure,
       activeSession: startedSession,
-      nativeResumeAttempted: startOutcome.nativeResumeAttempted,
+      nativeResumeSucceeded: startOutcome.nativeResumeSucceeded,
     };
   });
 
@@ -1607,7 +1607,7 @@ const make = Effect.gen(function* () {
     const registerPriorTranscriptBootstrapOnFreshStart =
       (selectedProvider === "kilo" || selectedProvider === "opencode") &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
-    const { activeSessionBeforeEnsure, activeSession, nativeResumeAttempted } =
+    const { activeSessionBeforeEnsure, activeSession, nativeResumeSucceeded } =
       yield* ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -1694,7 +1694,7 @@ const make = Effect.gen(function* () {
     const shouldBootstrapPriorTranscriptContext =
       (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
         activeSessionBeforeEnsure === undefined &&
-        !nativeResumeAttempted) ||
+        !nativeResumeSucceeded) ||
         hasPendingPriorTranscriptBootstrap) &&
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext;
