@@ -55,6 +55,20 @@ describe("Synara harness policy", () => {
     }
   });
 
+  it("keeps final answers self-contained when intermediate progress is collapsed", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, 'under a "Worked for..." disclosure');
+      assert.include(policy, "Make every final response self-contained");
+      assert.include(policy, "restate the essential context concisely in the final response");
+      assert.include(policy, 'Never ask them to approve "this", "that", "the above"');
+      assert.include(policy, "structured user-input tool");
+      assert.include(policy, "contain all context the user needs to decide");
+    }
+  });
+
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");

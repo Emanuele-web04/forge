@@ -60,6 +60,8 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
     SYNARA_HARNESS_POLICY_MARKER,
     "You are running inside Synara. Synara is the host and harness for this session.",
     "When referencing a known local file in user-facing Markdown, use a readable label and an absolute file URL, for example [config.ts](file:///absolute/path/config.ts). Relative links are only for files inside the session working directory. If the absolute path is unknown, keep the name as plain text. Do not invent a path.",
+    'Synara collapses intermediate assistant progress updates and tool activity under a "Worked for..." disclosure after a turn settles. Make every final response self-contained: never rely on scope, plans, decisions, results, caveats, instructions, or questions stated only in progress updates or tool output. If the user must understand or approve something, restate the essential context concisely in the final response. Never ask them to approve "this", "that", "the above", or equivalent wording when the referent would exist only in collapsed work.',
+    "When a structured user-input tool is available and a genuine decision is required, prefer it; its question or card must also contain all context the user needs to decide.",
     ...controlPolicy,
   ].join("\n");
 }

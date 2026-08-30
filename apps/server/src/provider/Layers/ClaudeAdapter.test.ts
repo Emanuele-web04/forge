@@ -667,6 +667,8 @@ describe("Claude Synara harness policy", () => {
   it("advertises scoped MCP additively when credentials are available", () => {
     const text = buildEmbeddedClaudeSystemPromptAppend(true);
     assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
+    assert.include(text, "Make every final response self-contained");
+    assert.include(text, "contain all context the user needs to decide");
     assert.include(text, "Use the synara_* tools");
     assert.notInclude(text, "Synara MCP control is unavailable");
   });
@@ -674,6 +676,8 @@ describe("Claude Synara harness policy", () => {
   it("stays truthful when scoped MCP credentials are absent", () => {
     const text = buildEmbeddedClaudeSystemPromptAppend(false);
     assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
+    assert.include(text, "Make every final response self-contained");
+    assert.include(text, "contain all context the user needs to decide");
     assert.include(text, "Synara MCP control is unavailable");
   });
 });
