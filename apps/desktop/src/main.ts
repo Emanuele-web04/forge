@@ -54,6 +54,7 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
@@ -1913,6 +1914,10 @@ function resolveUserDataPath(): string {
   return resolveDesktopUserDataPath({
     appDataBase,
     userDataDirectoryName: desktopIdentity.userDataDirectoryName,
+    testOverridePath:
+      requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+        ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
+        : undefined,
   });
 }
 

@@ -2,7 +2,10 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SYNARA_SOURCE_DESKTOP_BUILD_MARKER } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+} from "@synara/shared/desktopIdentity";
 import { spawnSourceDesktop } from "./source-desktop-launch.mjs";
 
 function captureSourceDesktopSpawn(environment, overrides = {}) {
@@ -89,6 +92,20 @@ describe("source desktop launch", () => {
     expect(spawnProcess.mock.calls[0][2].env).toMatchObject({
       SYNARA_DESKTOP_FLAVOR: "canary",
       SYNARA_HOME: join("/Users/tester", ".synara-canary"),
+    });
+  });
+
+  it("passes the smoke profile override to the spawned desktop", () => {
+    const smokeHome = "/tmp/synara-desktop-smoke";
+    const smokeUserData = join(smokeHome, "electron-user-data");
+    const { spawnProcess } = captureSourceDesktopSpawn({
+      SYNARA_HOME: smokeHome,
+      [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: smokeUserData,
+    });
+
+    expect(spawnProcess.mock.calls[0][2].env).toMatchObject({
+      SYNARA_HOME: smokeHome,
+      [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: smokeUserData,
     });
   });
 

@@ -11,7 +11,8 @@ export const SYNARA_CANARY_BUNDLE_ID = `${SYNARA_PRODUCTION_BUNDLE_ID}.canary`;
 export const SYNARA_CANARY_DESKTOP_SCHEME = "synara-canary";
 export const SYNARA_CANARY_DESKTOP_ORIGIN = `${SYNARA_CANARY_DESKTOP_SCHEME}://app`;
 export const SYNARA_CANARY_DESKTOP_ENTRY_URL = `${SYNARA_CANARY_DESKTOP_ORIGIN}/index.html`;
-export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v1";
+export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v2";
+export const SYNARA_DESKTOP_SMOKE_USER_DATA_ENV = "SYNARA_DESKTOP_SMOKE_USER_DATA";
 
 export type SynaraDesktopFlavor = "production" | "development" | "canary";
 
