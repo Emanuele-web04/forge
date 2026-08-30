@@ -231,7 +231,7 @@ describe("ProviderCommandReactor", () => {
       provider: "codex",
       model: "gpt-5-codex",
     };
-    const startSession = vi.fn((_: unknown, input: unknown) => {
+    const startSession = vi.fn<ProviderServiceShape["startSession"]>((_, input) => {
       const sessionIndex = nextSessionIndex++;
       const sessionModelSelection =
         typeof input === "object" && input !== null && "modelSelection" in input
