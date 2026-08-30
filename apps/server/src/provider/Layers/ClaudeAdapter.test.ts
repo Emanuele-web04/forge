@@ -21,7 +21,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
@@ -8481,6 +8481,156 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+
+  it.effect("invalidates compaction-call usage until the next assistant response", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: Array<ProviderRuntimeEvent> = [];
+      const turnCompleted = yield* Deferred.make<void>();
+      const freshUsageObserved = yield* Deferred.make<void>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            if (event.type === "turn.completed") {
+              yield* Deferred.succeed(turnCompleted, undefined);
+              return;
+            }
+            if (
+              event.type !== "thread.token-usage.updated" &&
+              (event.type !== "thread.state.changed" || event.payload.state !== "compacted")
+            ) {
+              return;
+            }
+            events.push(event);
+            if (
+              event.type === "thread.token-usage.updated" &&
+              event.payload.usage.usedTokens === 20_000
+            ) {
+              yield* Deferred.succeed(freshUsageObserved, undefined);
+            }
+          }),
+        ),
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "/compact",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-compact",
+        uuid: "assistant-before-compact",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-before-compact",
+          content: [{ type: "text", text: "Preparing to compact" }],
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 149_999,
+            output_tokens: 0,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        session_id: "sdk-session-compact",
+        uuid: "status-compacting",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: 150_000 },
+        session_id: "sdk-session-compact",
+        uuid: "compact-boundary",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-compact",
+        uuid: "assistant-compaction-call",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-compaction-call",
+          content: [{ type: "text", text: "Compacted" }],
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 189_999,
+            output_tokens: 0,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-compact",
+        uuid: "result-compact",
+        usage: {
+          input_tokens: 2,
+          cache_read_input_tokens: 339_998,
+          output_tokens: 0,
+        },
+      } as unknown as SDKMessage);
+      yield* Deferred.await(turnCompleted);
+
+      const nextTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-compact",
+        uuid: "assistant-after-compact",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-after-compact",
+          content: [{ type: "text", text: "Fresh response" }],
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 19_999,
+            output_tokens: 0,
+          },
+        },
+      } as unknown as SDKMessage);
+
+      yield* Deferred.await(freshUsageObserved);
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["thread.token-usage.updated", "thread.state.changed", "thread.token-usage.updated"],
+      );
+      const firstUsage = events[0];
+      assert.equal(firstUsage?.type, "thread.token-usage.updated");
+      if (firstUsage?.type === "thread.token-usage.updated") {
+        assert.equal(firstUsage.payload.usage.usedTokens, 150_000);
+      }
+      const compaction = events[1];
+      assert.equal(compaction?.type, "thread.state.changed");
+      if (compaction?.type === "thread.state.changed") {
+        assert.equal(compaction.payload.state, "compacted");
+      }
+      const freshUsage = events[2];
+      assert.equal(freshUsage?.type, "thread.token-usage.updated");
+      if (freshUsage?.type === "thread.token-usage.updated") {
+        assert.equal(freshUsage.turnId, nextTurn.turnId);
+        assert.equal(freshUsage.payload.usage.usedTokens, 20_000);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 

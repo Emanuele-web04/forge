@@ -304,6 +304,8 @@ interface ClaudeSubagentRun {
   readonly context: ClaudeSessionContext;
 }
 
+type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fresh-assistant";
+
 interface ClaudeSessionContext {
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
@@ -359,6 +361,7 @@ interface ClaudeSessionContext {
   lastKnownAutoCompactThreshold: number | undefined;
   contextUsageControlEnabled: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  tokenUsageState: ClaudeTokenUsageState;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // Original API model id the runtime rerouted away from (safeguard refusal
@@ -2726,9 +2729,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           : undefined;
         const lastGoodUsage = liveSnapshot ?? context.lastKnownTokenUsage;
         const maxTokens = claudeEffectiveContextBudget(context);
-        const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
-          ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
-          : accumulatedSnapshot;
+        if (context.tokenUsageState === "skip-compaction-call") {
+          context.tokenUsageState = "awaiting-fresh-assistant";
+        }
+        const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
+          context.tokenUsageState !== "current"
+            ? undefined
+            : lastGoodUsage
+              ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
+              : accumulatedSnapshot;
 
         // A safeguard reroute only applies to the turn that just finished.
         // Restore the user-selected model so subsequent turns do not silently
@@ -2982,6 +2991,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // only; subagent completion must not poll them.
           contextUsageControlEnabled: false,
           lastKnownTokenUsage: undefined,
+          tokenUsageState: "current",
           lastAssistantUuid: undefined,
           lastThreadStartedId: undefined,
           rerouteOriginalApiModelId: undefined,
@@ -3650,29 +3660,36 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // this reflects the actual prompt + output size for this single API call.
         const perCallUsage = (message.message as { usage?: unknown } | undefined)?.usage;
         if (perCallUsage) {
-          yield* maybeEmitContextUsageWarning(context, perCallUsage as Record<string, unknown>);
-          const normalizedPerCallUsage = normalizeClaudeTokenUsage(
-            perCallUsage as Record<string, unknown>,
-            claudeEffectiveContextBudget(context),
-          );
-          if (normalizedPerCallUsage) {
-            context.lastKnownTokenUsage = normalizedPerCallUsage;
-            const usageStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent(context, {
-              type: "thread.token-usage.updated",
-              eventId: usageStamp.eventId,
-              provider: PROVIDER,
-              createdAt: usageStamp.createdAt,
-              threadId: context.session.threadId,
-              ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
-              payload: { usage: normalizedPerCallUsage },
-              providerRefs: nativeProviderRefs(context),
-              raw: {
-                source: "claude.sdk.message",
-                method: "claude/assistant-usage",
-                payload: perCallUsage,
-              },
-            });
+          if (context.tokenUsageState === "skip-compaction-call") {
+            context.tokenUsageState = "awaiting-fresh-assistant";
+          } else {
+            yield* maybeEmitContextUsageWarning(context, perCallUsage as Record<string, unknown>);
+            const normalizedPerCallUsage = normalizeClaudeTokenUsage(
+              perCallUsage as Record<string, unknown>,
+              claudeEffectiveContextBudget(context),
+            );
+            if (normalizedPerCallUsage) {
+              context.lastKnownTokenUsage = normalizedPerCallUsage;
+              context.tokenUsageState = "current";
+              const usageStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent(context, {
+                type: "thread.token-usage.updated",
+                eventId: usageStamp.eventId,
+                provider: PROVIDER,
+                createdAt: usageStamp.createdAt,
+                threadId: context.session.threadId,
+                ...(context.turnState
+                  ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                  : {}),
+                payload: { usage: normalizedPerCallUsage },
+                providerRefs: nativeProviderRefs(context),
+                raw: {
+                  source: "claude.sdk.message",
+                  method: "claude/assistant-usage",
+                  payload: perCallUsage,
+                },
+              });
+            }
           }
         }
 
@@ -3738,6 +3755,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
         const target = run?.context ?? context;
+        if (target.tokenUsageState !== "current") {
+          return;
+        }
         const normalizedUsage = normalizeClaudeTokenUsage(
           message.usage,
           claudeEffectiveContextBudget(target),
@@ -4080,6 +4100,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             return;
           case "compact_boundary":
+            context.lastKnownTokenUsage = undefined;
+            context.tokenUsageState = "skip-compaction-call";
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "thread.state.changed",
@@ -5364,6 +5386,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             lastKnownAutoCompactThreshold: requestedAutoCompactWindowTokens,
             contextUsageControlEnabled: true,
             lastKnownTokenUsage: undefined,
+            tokenUsageState: "current",
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
             rerouteOriginalApiModelId: undefined,

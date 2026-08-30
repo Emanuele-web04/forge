@@ -53,13 +53,27 @@ const KNOWN_CONTEXT_WINDOW_MAX_TOKENS = {
   "1m": 1_000_000,
 } as const;
 
+function isCompletedContextCompaction(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "context-compaction") {
+    return false;
+  }
+  const payload = asRecord(activity.payload);
+  return payload?.state === "compacted" || payload?.status === "completed";
+}
+
 // Read the latest token-usage snapshot emitted by the runtime.
 function deriveLatestUsageContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
-    if (!activity || activity.kind !== "context-window.updated") {
+    if (!activity) {
+      continue;
+    }
+    if (isCompletedContextCompaction(activity)) {
+      return null;
+    }
+    if (activity.kind !== "context-window.updated") {
       continue;
     }
 

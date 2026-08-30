@@ -49,6 +49,30 @@ describe("contextWindow", () => {
     expect(snapshot?.compactsAutomatically).toBe(true);
   });
 
+  it("invalidates earlier usage at a completed compaction until fresh usage arrives", () => {
+    const beforeCompaction = [
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 180_000,
+        maxTokens: 200_000,
+      }),
+      makeActivity("activity-2", "context-compaction", {
+        state: "compacted",
+      }),
+    ];
+
+    expect(deriveLatestContextWindowSnapshot(beforeCompaction)).toBeNull();
+
+    const afterFreshUsage = deriveLatestContextWindowSnapshot([
+      ...beforeCompaction,
+      makeActivity("activity-3", "context-window.updated", {
+        usedTokens: 20_000,
+        maxTokens: 200_000,
+      }),
+    ]);
+
+    expect(afterFreshUsage?.usedTokens).toBe(20_000);
+  });
+
   it("ignores malformed payloads", () => {
     const snapshot = deriveLatestContextWindowSnapshot([
       makeActivity("activity-1", "context-window.updated", {}),
