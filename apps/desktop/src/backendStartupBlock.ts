@@ -1,6 +1,8 @@
 // FILE: backendStartupBlock.ts
 // Purpose: Classifies expected backend startup blocks that need user action, not crash retries.
 
+import { StringDecoder } from "node:string_decoder";
+
 import {
   MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
   parseMigrationDivergenceConsentChallenge,
@@ -28,23 +30,27 @@ export type BackendStartupBlock =
 export class BackendStartupBlockDetector {
   private output = "";
   private block: BackendStartupBlock | null = null;
+  private readonly decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
 
-  push(chunk: unknown): void {
-    if (this.block) return;
+  push(chunk: unknown, source: "stdout" | "stderr" = "stdout"): void {
+    const text = Buffer.isBuffer(chunk) ? this.decoders[source].write(chunk) : String(chunk);
+    this.append(text);
+  }
 
-    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+  end(source: "stdout" | "stderr"): void {
+    this.append(this.decoders[source].end());
+  }
+
+  private append(text: string): void {
+    if (text.length === 0) return;
     this.output = `${this.output}${text.replace(/\r/g, "")}`;
 
-    const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
-    if (divergenceChallenge) {
-      this.block = {
-        kind: "migration-divergence-consent-required",
-        challenge: divergenceChallenge,
-      };
-      return;
-    }
-
     this.output = retainRelevantStartupOutput(this.output);
+
+    if (this.block) return;
 
     if (this.output.includes("MigrationRuntimeIdentityMismatchError:")) {
       this.block = { kind: "migration-runtime-identity-mismatch" };
@@ -73,15 +79,26 @@ export class BackendStartupBlockDetector {
   }
 
   read(): BackendStartupBlock | null {
+    const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
+    if (divergenceChallenge) {
+      return {
+        kind: "migration-divergence-consent-required",
+        challenge: divergenceChallenge,
+      };
+    }
     return this.block;
   }
 }
 
 function retainRelevantStartupOutput(output: string): string {
-  const challengeStart = output.lastIndexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX);
-  const challengeLineIsIncomplete =
-    challengeStart !== -1 && output.indexOf("\n", challengeStart) === -1;
-  if (challengeLineIsIncomplete) return output.slice(challengeStart);
+  let challengeStart = output.lastIndexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX);
+  while (challengeStart > 0 && output[challengeStart - 1] !== "\n") {
+    challengeStart = output.lastIndexOf(
+      MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
+      challengeStart - 1,
+    );
+  }
+  if (challengeStart !== -1) return output.slice(challengeStart);
   return output.length > MAX_STARTUP_OUTPUT_CHARS
     ? output.slice(-MAX_STARTUP_OUTPUT_CHARS)
     : output;

@@ -883,15 +883,11 @@ const restoreSqliteMigrationBackup = (input: {
       throw cause;
     }
 
-    // Make the database/WAL/SHM swap durable before clearing the marker. A
-    // crash or cleanup failure before the final unlink therefore remains an
-    // explicit, retryable recovery state.
+    // Make the database/WAL/SHM swap durable. The caller retains the active
+    // recovery marker until restored provenance is durably recorded, so a
+    // crash between these two phases still has a recoverable pointer.
     await syncDirectory(path.dirname(input.dbPath));
     await pruneFailedMigrationBundles(input.dbPath);
-    await syncDirectory(path.dirname(input.dbPath));
-    await fs.unlink(migrationRecoveryMarkerPath(input.dbPath)).catch((cause) => {
-      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-    });
     await syncDirectory(path.dirname(input.dbPath));
   });
 
@@ -1191,5 +1187,11 @@ export const restoreMarkedMigrationBackup = (dbPath: string) =>
         phase: "migration-restored",
         restoredAt: new Date().toISOString(),
       });
+      if (record.markerPath === migrationRecoveryMarkerPath(dbPath)) {
+        await fs.unlink(record.markerPath).catch((cause) => {
+          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+        });
+        await syncDirectory(path.dirname(dbPath));
+      }
     }),
   );

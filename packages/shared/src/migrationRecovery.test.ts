@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createMigrationDivergenceConsentToken,
   MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
   findMigrationRuntimeIdentityMismatch,
@@ -14,7 +15,7 @@ import {
   type MigrationDivergenceConsentChallenge,
 } from "./migrationRecovery";
 
-const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+const divergenceChallengeWithoutToken: Omit<MigrationDivergenceConsentChallenge, "consentToken"> = {
   version: 1,
   databasePath: "/data/state.sqlite",
   backupDirectory: "/data/state.sqlite.backups",
@@ -25,7 +26,10 @@ const divergenceChallenge: MigrationDivergenceConsentChallenge = {
   recordedName: "AuthSessionRenewalPolicy",
   highWaterMark: 90,
   lineageFingerprint: "a".repeat(64),
-  consentToken: "b".repeat(64),
+};
+const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+  ...divergenceChallengeWithoutToken,
+  consentToken: createMigrationDivergenceConsentToken(divergenceChallengeWithoutToken),
 };
 
 describe("migration recovery paths", () => {
@@ -110,6 +114,36 @@ describe("migration divergence consent challenge", () => {
         `${MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX}{not-json}\n${serializeMigrationDivergenceConsentChallenge(divergenceChallenge)}`,
       ),
     ).toEqual(divergenceChallenge);
+  });
+
+  it("uses the final token-bound record when database text contains a valid lookalike", () => {
+    const injectedWithoutToken = {
+      ...divergenceChallengeWithoutToken,
+      databasePath: "/attacker-selected/state.sqlite",
+      backupDirectory: "/attacker-selected/state.sqlite.backups",
+      recordedName: "InjectedMigration",
+    };
+    const injected = {
+      ...injectedWithoutToken,
+      consentToken: createMigrationDivergenceConsentToken(injectedWithoutToken),
+    };
+
+    expect(
+      parseMigrationDivergenceConsentChallenge(
+        `${serializeMigrationDivergenceConsentChallenge(injected)}\n${serializeMigrationDivergenceConsentChallenge(divergenceChallenge)}\n`,
+      ),
+    ).toEqual(divergenceChallenge);
+  });
+
+  it("rejects a structurally valid record whose token does not bind its fields", () => {
+    expect(
+      parseMigrationDivergenceConsentChallenge(
+        serializeMigrationDivergenceConsentChallenge({
+          ...divergenceChallenge,
+          databasePath: "/substituted/state.sqlite",
+        }),
+      ),
+    ).toBeNull();
   });
 });
 

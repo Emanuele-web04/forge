@@ -881,6 +881,26 @@ describe("migration backups", () => {
     expect(provenance.restoredAt).toBeTypeOf("string");
   });
 
+  it("keeps an active restore marker until restored provenance is durable", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const provenancePath = migrationBackupProvenancePath(dbPath);
+    await fs.mkdir(provenancePath);
+
+    await expect(Effect.runPromise(restoreMarkedMigrationBackup(dbPath))).rejects.toThrow();
+    expect((await fs.stat(markerPath)).isFile()).toBe(true);
+    expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
+  });
+
   it("prunes versioned snapshots to the bounded retention count", async () => {
     const dbPath = await makeDbPath();
     await fs.mkdir(migrationBackupDirectory(dbPath), { recursive: true, mode: 0o755 });

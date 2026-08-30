@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  createMigrationDivergenceConsentToken,
   serializeMigrationDivergenceConsentChallenge,
   type MigrationDivergenceConsentChallenge,
 } from "@synara/shared/migrationRecovery";
 
 import { BackendStartupBlockDetector } from "./backendStartupBlock";
 
-const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+const divergenceChallengeWithoutToken: Omit<MigrationDivergenceConsentChallenge, "consentToken"> = {
   version: 1,
   databasePath: "/data/state.sqlite",
   backupDirectory: "/data/state.sqlite.backups",
@@ -17,7 +18,10 @@ const divergenceChallenge: MigrationDivergenceConsentChallenge = {
   recordedName: "AuthSessionRenewalPolicy",
   highWaterMark: 90,
   lineageFingerprint: "a".repeat(64),
-  consentToken: "b".repeat(64),
+};
+const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+  ...divergenceChallengeWithoutToken,
+  consentToken: createMigrationDivergenceConsentToken(divergenceChallengeWithoutToken),
 };
 
 describe("BackendStartupBlockDetector", () => {
@@ -61,11 +65,63 @@ describe("BackendStartupBlockDetector", () => {
     });
   });
 
+  it("selects the final authoritative challenge from drained output", () => {
+    const detector = new BackendStartupBlockDetector();
+    const injectedWithoutToken = {
+      ...divergenceChallengeWithoutToken,
+      databasePath: "/injected/state.sqlite",
+      backupDirectory: "/injected/state.sqlite.backups",
+      recordedName: "InjectedMigration",
+    };
+    const injected = {
+      ...injectedWithoutToken,
+      consentToken: createMigrationDivergenceConsentToken(injectedWithoutToken),
+    };
+
+    detector.push(`${serializeMigrationDivergenceConsentChallenge(injected)}\n`);
+    detector.push(`${serializeMigrationDivergenceConsentChallenge(divergenceChallenge)}\n`);
+
+    expect(detector.read()).toEqual({
+      kind: "migration-divergence-consent-required",
+      challenge: divergenceChallenge,
+    });
+  });
+
+  it("decodes split UTF-8 independently for stdout and stderr", () => {
+    const detector = new BackendStartupBlockDetector();
+    const challengeWithoutToken = {
+      ...divergenceChallengeWithoutToken,
+      recordedName: "Migrazione cafè",
+    };
+    const challenge = {
+      ...challengeWithoutToken,
+      consentToken: createMigrationDivergenceConsentToken(challengeWithoutToken),
+    };
+    const bytes = Buffer.from(`${serializeMigrationDivergenceConsentChallenge(challenge)}\n`);
+    const splitAt = bytes.indexOf(Buffer.from("è")) + 1;
+
+    detector.push(Buffer.from("🙂").subarray(0, 1), "stdout");
+    detector.push(bytes.subarray(0, splitAt), "stderr");
+    detector.push(bytes.subarray(splitAt), "stderr");
+    detector.end("stderr");
+
+    expect(detector.read()).toEqual({
+      kind: "migration-divergence-consent-required",
+      challenge,
+    });
+  });
+
   it("preserves a consent challenge larger than the general output buffer", () => {
     const detector = new BackendStartupBlockDetector();
+    const challengeWithoutToken = {
+      ...divergenceChallengeWithoutToken,
+      recordedName:
+        `prefix-${serializeMigrationDivergenceConsentChallenge(divergenceChallenge)}-` +
+        "x".repeat(20_000),
+    };
     const challenge = {
-      ...divergenceChallenge,
-      recordedName: "x".repeat(20_000),
+      ...challengeWithoutToken,
+      consentToken: createMigrationDivergenceConsentToken(challengeWithoutToken),
     };
     const serialized = serializeMigrationDivergenceConsentChallenge(challenge);
 

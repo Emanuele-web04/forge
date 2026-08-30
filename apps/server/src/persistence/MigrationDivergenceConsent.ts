@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import * as path from "node:path";
 
 import {
+  createMigrationDivergenceConsentToken,
   MIGRATION_DIVERGENCE_CONSENT_ENV,
   migrationBackupDirectory,
   serializeMigrationDivergenceConsentChallenge,
@@ -49,7 +49,7 @@ export function createMigrationDivergenceConsentChallenge(
   return {
     ...binding,
     backupDirectory: path.resolve(migrationBackupDirectory(databasePath)),
-    consentToken: createHash("sha256").update(JSON.stringify(binding)).digest("hex"),
+    consentToken: createMigrationDivergenceConsentToken(binding),
   };
 }
 

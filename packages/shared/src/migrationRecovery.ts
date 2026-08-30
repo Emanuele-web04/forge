@@ -84,6 +84,28 @@ export interface MigrationDivergenceConsentChallenge {
   readonly consentToken: string;
 }
 
+type MigrationDivergenceConsentBinding = Omit<
+  MigrationDivergenceConsentChallenge,
+  "backupDirectory" | "consentToken"
+>;
+
+export function createMigrationDivergenceConsentToken(
+  challenge: MigrationDivergenceConsentBinding,
+): string {
+  const binding = {
+    version: challenge.version,
+    databasePath: challenge.databasePath,
+    sourceVersion: challenge.sourceVersion,
+    targetVersion: challenge.targetVersion,
+    firstDivergedId: challenge.firstDivergedId,
+    expectedName: challenge.expectedName,
+    recordedName: challenge.recordedName,
+    highWaterMark: challenge.highWaterMark,
+    lineageFingerprint: challenge.lineageFingerprint,
+  } as const;
+  return createHash("sha256").update(JSON.stringify(binding)).digest("hex");
+}
+
 export interface MigrationRuntimeIdentityMismatch {
   readonly kind: "launcher-bundle" | "source-bundle";
   readonly expectedDigest: string;
@@ -129,16 +151,30 @@ export function parseMigrationDivergenceConsentChallenge(
   output: string,
 ): MigrationDivergenceConsentChallenge | null {
   let searchFrom = 0;
+  let authoritativeChallenge: MigrationDivergenceConsentChallenge | null = null;
   for (;;) {
     const prefixIndex = output.indexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX, searchFrom);
-    if (prefixIndex === -1) return null;
+    if (prefixIndex === -1) return authoritativeChallenge;
 
     const payloadStart = prefixIndex + MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX.length;
+    if (prefixIndex > 0 && output[prefixIndex - 1] !== "\n") {
+      searchFrom = payloadStart;
+      continue;
+    }
     const lineEnd = output.indexOf("\n", payloadStart);
     const payload = output.slice(payloadStart, lineEnd === -1 ? undefined : lineEnd).trim();
     try {
       const parsed: unknown = JSON.parse(payload);
-      if (isMigrationDivergenceConsentChallenge(parsed)) return parsed;
+      if (
+        isMigrationDivergenceConsentChallenge(parsed) &&
+        parsed.consentToken === createMigrationDivergenceConsentToken(parsed)
+      ) {
+        // The server emits its authoritative machine record after the human
+        // error text. Migration names come from the database and may contain
+        // an earlier lookalike prefix, so only the final valid record is safe
+        // to present to the user.
+        authoritativeChallenge = parsed;
+      }
     } catch {
       // Continue to a later machine-readable line if untrusted error text
       // happened to contain the prefix first.
