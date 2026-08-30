@@ -806,6 +806,16 @@ const removeRecoveryMarker = (dbPath: string) =>
     await syncDirectory(path.dirname(dbPath));
   });
 
+const removeRecoveryMarkerIfPresent = async (dbPath: string): Promise<void> => {
+  try {
+    await fs.unlink(migrationRecoveryMarkerPath(dbPath));
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw cause;
+  }
+  await syncDirectory(path.dirname(dbPath));
+};
+
 export interface RunWithPreMigrationBackupOptions {
   readonly divergenceConsent?: string | undefined;
 }
@@ -848,6 +858,8 @@ const restoreSqliteMigrationBackup = (input: {
   readonly dbPath: string;
   readonly backupPath: string;
   readonly latestSupportedMigrationId: number;
+  readonly beforeLiveDatabaseSwap?: (() => Promise<void>) | undefined;
+  readonly afterLiveDatabaseRollback?: (() => Promise<void>) | undefined;
 }) =>
   attemptPromise(async () => {
     const sourceInspection = await inspectSqliteMigrationBackup(input.backupPath);
@@ -875,7 +887,10 @@ const restoreSqliteMigrationBackup = (input: {
 
     const failedSuffix = `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`;
     const moved: Array<readonly [string, string]> = [];
+    let swapPrepared = false;
     try {
+      swapPrepared = true;
+      await input.beforeLiveDatabaseSwap?.();
       for (const suffix of ["", "-wal", "-shm"]) {
         const source = `${input.dbPath}${suffix}`;
         const destination = `${input.dbPath}${failedSuffix}${suffix}`;
@@ -890,8 +905,14 @@ const restoreSqliteMigrationBackup = (input: {
     } catch (cause) {
       // Rollback is valid only before the restored main database is installed.
       await fs.unlink(restoredTemporaryPath).catch(() => undefined);
+      let rollbackSucceeded = true;
       for (const [source, destination] of moved.reverse()) {
-        await fs.rename(destination, source).catch(() => undefined);
+        await fs.rename(destination, source).catch(() => {
+          rollbackSucceeded = false;
+        });
+      }
+      if (swapPrepared && rollbackSucceeded) {
+        await input.afterLiveDatabaseRollback?.();
       }
       throw cause;
     }
@@ -1389,31 +1410,30 @@ export const restoreMarkedMigrationBackup = (
             `Migration backup provenance does not describe the current database: ${record.markerPath}`,
           );
         }
-        await writePrivateJsonFile(migrationRecoveryMarkerPath(dbPath), {
-          ...record.payload,
-          version: 1,
-          databasePath: dbPath,
-          backupPath: record.backupPath,
-          phase: "migration-restore-in-progress",
-          restoreStartedAt: new Date().toISOString(),
-          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
-        });
-      } else {
-        // A restore is not a migration resume. Exhaust the automatic resume
-        // budget before replacing the live database so a crash or provenance
-        // write failure can only return to the explicit restore path.
-        await writePrivateJsonFile(record.markerPath, {
-          ...record.payload,
-          phase: "migration-restore-in-progress",
-          restoreStartedAt: new Date().toISOString(),
-          resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
-        });
       }
+      const restoreMarkerPath = migrationRecoveryMarkerPath(dbPath);
+      const restoreMarkerPayload = {
+        ...record.payload,
+        version: 1,
+        databasePath: dbPath,
+        backupPath: record.backupPath,
+        phase: "migration-restore-in-progress",
+        restoreStartedAt: new Date().toISOString(),
+        resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+      };
       await Effect.runPromise(
         restoreSqliteMigrationBackup({
           dbPath,
           backupPath: record.backupPath,
           latestSupportedMigrationId: latestMigrationId,
+          // Defer the fail-closed marker until the backup has been copied and
+          // verified. If the live swap then rolls back completely, restore the
+          // marker state that existed before this explicit attempt.
+          beforeLiveDatabaseSwap: () =>
+            writePrivateJsonFile(restoreMarkerPath, restoreMarkerPayload),
+          afterLiveDatabaseRollback: restoringCompletedProvenance
+            ? () => removeRecoveryMarkerIfPresent(dbPath)
+            : () => writePrivateJsonFile(record.markerPath, record.payload),
         }),
       );
       await writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
