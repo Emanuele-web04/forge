@@ -390,6 +390,7 @@ import { useRightDockStore } from "../rightDockStore";
 import {
   hasThreadDragType,
   parseThreadDragPayload,
+  resolveSidebarFolderDropTarget,
   THREAD_DRAG_MIME,
 } from "../threadDrag";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
@@ -5183,18 +5184,29 @@ export default function Sidebar() {
     const open = collapsedThreadFolderIds[folder.id] !== true;
     const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
     const dropActive = threadFolderDropTargetKey === dropTargetKey;
+    const resolvePointerDropTarget = (event: ReactDragEvent<HTMLElement>) =>
+      resolveSidebarFolderDropTarget({
+        clientX: event.clientX,
+        containerLeft: event.currentTarget.getBoundingClientRect().left,
+        folderId: folder.id,
+      });
     return (
       <div
         key={folder.id}
         className="group/thread-folder w-full"
         onDragEnter={(event) =>
-          handleThreadFolderDragOver(event, folder.projectId, folder.id)
+          handleThreadFolderDragOver(event, folder.projectId, resolvePointerDropTarget(event))
         }
-        onDragOver={(event) => handleThreadFolderDragOver(event, folder.projectId, folder.id)}
-        onDragLeave={(event) =>
-          handleThreadFolderDragLeave(event, folder.projectId, folder.id)
+        onDragOver={(event) =>
+          handleThreadFolderDragOver(event, folder.projectId, resolvePointerDropTarget(event))
         }
-        onDrop={(event) => handleThreadFolderDrop(event, folder.projectId, folder.id)}
+        onDragLeave={(event) => {
+          handleThreadFolderDragLeave(event, folder.projectId, folder.id);
+          handleThreadFolderDragLeave(event, folder.projectId, null);
+        }}
+        onDrop={(event) =>
+          handleThreadFolderDrop(event, folder.projectId, resolvePointerDropTarget(event))
+        }
       >
         <SidebarMenuSubItem className="w-full">
           <SidebarMenuSubButton
@@ -5318,6 +5330,7 @@ export default function Sidebar() {
                 SIDEBAR_HEADER_ROW_CLASS_NAME,
                 "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
                 isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                projectRootDropActive && "bg-info/14 ring-1 ring-info/55 ring-inset",
               )}
               {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
               {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
@@ -5346,6 +5359,10 @@ export default function Sidebar() {
                   y: event.clientY,
                 });
               }}
+              onDragEnter={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragOver={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragLeave={(event) => handleThreadFolderDragLeave(event, project.id, null)}
+              onDrop={(event) => handleThreadFolderDrop(event, project.id, null)}
             >
               <SidebarLeadingIcon
                 size="sm"
@@ -5526,7 +5543,7 @@ export default function Sidebar() {
                     )}
                   >
                     <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden />
-                    <span>Move to project root</span>
+                    <span>Move out of folder</span>
                   </div>
                 </SidebarMenuSubItem>
               ) : null}

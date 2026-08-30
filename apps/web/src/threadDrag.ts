@@ -12,6 +12,8 @@ export interface ThreadDragPayload {
   threadId: ThreadId;
 }
 
+export const SIDEBAR_FOLDER_ROOT_GUTTER_PX = 20;
+
 type ThreadDragDataTransfer = Pick<DataTransfer, "getData" | "types">;
 
 export function hasThreadDragType(dataTransfer: ThreadDragDataTransfer): boolean {
@@ -30,4 +32,14 @@ export function parseThreadDragPayload(
   } catch {
     return null;
   }
+}
+
+export function resolveSidebarFolderDropTarget(input: {
+  clientX: number;
+  containerLeft: number;
+  folderId: string;
+}): string | null {
+  return input.clientX <= input.containerLeft + SIDEBAR_FOLDER_ROOT_GUTTER_PX
+    ? null
+    : input.folderId;
 }
