@@ -8,6 +8,7 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForSourceSelector,
@@ -566,5 +567,57 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createLastActivityTimestampSelector", () => {
+  const stamped = "2026-03-09T11:00:00.000Z";
+  const withStamp = {
+    threadIds: [threadIdA] as readonly ThreadId[],
+    threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped } },
+  };
+
+  it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      threadShellById: {
+        // Shell A has a durable stamp; shell B is present but stale/pruned.
+        [threadIdA]: { ...shellA, updatedAt: stamped },
+        [threadIdB]: { ...shellB },
+      },
+    });
+    const result = selectTimestamps(state);
+    expect(Object.keys(result)).toEqual([threadIdA]);
+    expect(result[threadIdA]).toBe(Date.parse(stamped));
+    // Absent shells must not be conflated with an explicit null.
+    expect(threadIdB in result).toBe(false);
+    expect(
+      selectTimestamps(
+        makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
+      ),
+    ).toEqual({});
+  });
+
+  it("keeps the previous result while neither streaming nor meta-only shell churn moves a stamp (F1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const before = selectTimestamps(makeState(withStamp));
+
+    expect(
+      selectTimestamps(
+        makeState({ ...withStamp, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
+      ),
+    ).toBe(before);
+
+    // A meta-only shell update (new object, same durable stamp) must not churn
+    // the result — the fast path returns the previous object by reference (F1).
+    const after = selectTimestamps(
+      makeState({
+        ...withStamp,
+        threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped, title: "renamed" } },
+      }),
+    );
+    expect(after).toBe(before);
+    expect(after[threadIdA]).toBe(Date.parse(stamped));
   });
 });
