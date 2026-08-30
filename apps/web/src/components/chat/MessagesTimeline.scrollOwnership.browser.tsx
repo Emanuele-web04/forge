@@ -9,7 +9,7 @@ import "../../index.css";
 
 import { MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
-import { useRef, useState } from "react";
+import { useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
@@ -64,7 +64,11 @@ interface HarnessHandle {
   releaseUserScroll: () => void;
 }
 
-function ScrollOwnershipTimeline({ handleRef }: { handleRef: { current: HarnessHandle | null } }) {
+function ScrollOwnershipTimeline({
+  handleRef,
+}: {
+  handleRef: MutableRefObject<HarnessHandle | null>;
+}) {
   const listRef = useRef<LegendListRef | null>(null);
   const [entries, setEntries] = useState<TimelineEntries>(seedEntries);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -72,34 +76,38 @@ function ScrollOwnershipTimeline({ handleRef }: { handleRef: { current: HarnessH
 
   const followLiveOutput = isStreaming && !isUserScrollDetached;
 
-  handleRef.current = {
-    listRef,
-    startStreaming: () => {
-      setIsStreaming(true);
-    },
-    streamChunk: (lines: number) => {
-      setEntries((current) => {
-        const lastIndex = current.findIndex(
-          (entry) => entry.kind === "message" && entry.message.streaming,
-        );
-        const existingText =
-          lastIndex >= 0 && current[lastIndex]?.kind === "message"
-            ? current[lastIndex].message.text
-            : "";
-        const grownText = `${existingText}${"Streamed line of response text.\n\n".repeat(lines)}`;
-        const grown = messageEntry("streaming-assistant-message", "assistant", grownText, true);
-        if (lastIndex < 0) {
-          return [...current, grown];
-        }
-        return current.map((entry, index) => (index === lastIndex ? grown : entry));
-      });
-    },
-    releaseUserScroll: () => {
-      flushSync(() => {
-        setIsUserScrollDetached(true);
-      });
-    },
-  };
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      listRef,
+      startStreaming: () => {
+        setIsStreaming(true);
+      },
+      streamChunk: (lines: number) => {
+        setEntries((current) => {
+          const lastIndex = current.findIndex(
+            (entry) => entry.kind === "message" && entry.message.streaming,
+          );
+          const existingText =
+            lastIndex >= 0 && current[lastIndex]?.kind === "message"
+              ? current[lastIndex].message.text
+              : "";
+          const grownText = `${existingText}${"Streamed line of response text.\n\n".repeat(lines)}`;
+          const grown = messageEntry("streaming-assistant-message", "assistant", grownText, true);
+          if (lastIndex < 0) {
+            return [...current, grown];
+          }
+          return current.map((entry, index) => (index === lastIndex ? grown : entry));
+        });
+      },
+      releaseUserScroll: () => {
+        flushSync(() => {
+          setIsUserScrollDetached(true);
+        });
+      },
+    }),
+    [],
+  );
 
   return (
     <div style={{ height: VIEWPORT_HEIGHT_PX }}>
