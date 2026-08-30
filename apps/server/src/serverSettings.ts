@@ -34,7 +34,10 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { writeFileStringAtomically } from "./atomicWrite";
 import { ServerConfig } from "./config";
-import { GIT_TEXT_GENERATION_PROVIDER_ORDER } from "./git/textGenerationSelection";
+import {
+  GIT_TEXT_GENERATION_PROVIDER_ORDER,
+  hasDedicatedTextGenerationProvider,
+} from "./git/textGenerationSelection";
 import {
   ProviderCredentials,
   ProviderCredentialsLive,
@@ -152,7 +155,10 @@ export class ServerSettingsService extends ServiceMap.Service<
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
-  if (settings.providers[selection.provider].enabled) {
+  if (
+    hasDedicatedTextGenerationProvider(selection.provider) &&
+    settings.providers[selection.provider].enabled
+  ) {
     return settings;
   }
 

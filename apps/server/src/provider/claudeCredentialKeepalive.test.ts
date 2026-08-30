@@ -7,6 +7,7 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS,
   CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS,
+  createClaudeCredentialKeepaliveController,
   isClaudeCredentialKeepaliveEnabled,
   resolveClaudeCredentialKeepaliveBinaryPath,
   resolveClaudeCredentialKeepaliveIntervalMs,
@@ -71,5 +72,26 @@ describe("claudeCredentialKeepalive", () => {
       30 * 60 * 1000,
     );
     assert.equal(resolveClaudeCredentialKeepaliveIntervalMs({}), 30 * 60 * 1000);
+  });
+
+  it("stops and restarts the keepalive as Claude is disabled and re-enabled", () => {
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const controller = createClaudeCredentialKeepaliveController({
+      start: (input) => {
+        const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(input?.binaryPath);
+        started.push(binaryPath);
+        return { stop: () => stopped.push(binaryPath) };
+      },
+    });
+
+    controller.reconcile({ enabled: true, binaryPath: "/one/claude" });
+    controller.reconcile({ enabled: true, binaryPath: "/one/claude" });
+    controller.reconcile({ enabled: false, binaryPath: "/one/claude" });
+    controller.reconcile({ enabled: true, binaryPath: "/two/claude" });
+    controller.stop();
+
+    assert.deepEqual(started, ["/one/claude", "/two/claude"]);
+    assert.deepEqual(stopped, ["/one/claude", "/two/claude"]);
   });
 });

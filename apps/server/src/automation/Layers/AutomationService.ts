@@ -9,6 +9,7 @@ import {
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   MessageId,
+  PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type AutomationAllowedCapability,
   type AutomationCompletionPolicy,
@@ -605,6 +606,15 @@ export const AutomationServiceLive = Layer.effect(
     const git = yield* GitCore;
     const textGeneration = yield* TextGeneration;
     const serverSettings = yield* ServerSettingsService;
+    const providerDisabledReason = (definition: AutomationDefinition) =>
+      serverSettings.getSettings.pipe(
+        Effect.map((settings) =>
+          settings.providers[definition.modelSelection.provider].enabled
+            ? null
+            : `${PROVIDER_DISPLAY_NAMES[definition.modelSelection.provider]} is disabled in Settings > Providers.`,
+        ),
+        Effect.mapError(toServiceError("Failed to read provider settings.")),
+      );
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -2900,6 +2910,14 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
+        const disabledReason = yield* providerDisabledReason(definition);
+        if (disabledReason) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: `Automation is paused because ${disabledReason}`,
+            }),
+          );
+        }
         const now = isoNow();
         let heartbeatRunState:
           | { readonly activeRuns: number; readonly pendingCompletionEvaluations: number }
@@ -3056,6 +3074,23 @@ export const AutomationServiceLive = Layer.effect(
           return Option.none<AutomationRunNowResult>();
         }
 
+        const disabledReason = yield* providerDisabledReason(definition);
+        if (disabledReason && definition.schedule.type === "once") {
+          const deferredRun = yield* claimPendingRun(
+            definition,
+            { type: "scheduled" },
+            scheduledFor,
+            now,
+            { nextRunAt, disable: false },
+            new Date(Date.parse(now) + AUTOMATION_HEARTBEAT_DEFER_RETRY_MS).toISOString(),
+          );
+          yield* publishDefinition(definition.id);
+          return Option.match(deferredRun, {
+            onNone: () => Option.none<AutomationRunNowResult>(),
+            onSome: (run) => Option.some({ run }),
+          });
+        }
+
         if (automationRequiresTargetThread(definition.mode) && !definition.targetThreadId) {
           return yield* Effect.fail(
             new AutomationServiceError({
@@ -3174,6 +3209,10 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         const run = claimedRun.value;
+        if (disabledReason) {
+          const skipped = yield* markScheduledRunSkipped(run, disabledReason, now);
+          return Option.some({ run: skipped });
+        }
         const result = yield* dispatchRun(definition, run, now).pipe(
           Effect.catch(() =>
             automationRepository.getRunById({ id: run.id }).pipe(
@@ -3196,12 +3235,36 @@ export const AutomationServiceLive = Layer.effect(
         if (!definition.enabled) {
           return Option.none<AutomationRunNowResult>();
         }
+        const disabledReason = yield* providerDisabledReason(definition);
+        if (disabledReason) {
+          const deferred = yield* automationRepository
+            .setRunDeferred({
+              id: run.id,
+              deferredUntil: new Date(
+                Date.parse(now) + AUTOMATION_HEARTBEAT_DEFER_RETRY_MS,
+              ).toISOString(),
+              updatedAt: now,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to defer automation run.")));
+          yield* publish({ type: "run-upserted", run: deferred });
+          return Option.none<AutomationRunNowResult>();
+        }
         if (!automationContinuesThread(definition.mode)) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "Only automation runs that continue a thread may be deferred.",
-            }),
+          yield* completeDeferredOneShotDefinition(definition, now);
+          const result = yield* dispatchRun(definition, run, now).pipe(
+            Effect.catch(() =>
+              automationRepository.getRunById({ id: run.id }).pipe(
+                Effect.mapError(toServiceError("Failed to load automation run.")),
+                Effect.map((runOption) =>
+                  Option.match(runOption, {
+                    onNone: (): AutomationRunNowResult => ({ run }),
+                    onSome: (failed): AutomationRunNowResult => ({ run: failed }),
+                  }),
+                ),
+              ),
+            ),
           );
+          return Option.some(result);
         }
         const deferState = heartbeatDeferState(run.scheduledFor, now);
         const continuationThreadId = automationContinuationThreadId(definition);

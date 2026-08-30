@@ -199,4 +199,25 @@ describe("ServerSettingsService", () => {
     expect(settings.textGenerationModelSelection.provider).toBe("kilo");
     expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.kilo);
   });
+
+  it("normalizes enabled but unsupported Git text generation selections", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "claudeAgent",
+              model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(settings.textGenerationModelSelection.provider).toBe("codex");
+    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
 });

@@ -5572,6 +5572,14 @@ describe("ProviderCommandReactor", () => {
         provider: "claudeAgent",
         model: "claude-opus-4-8",
       },
+      serverSettings: {
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          kilo: { enabled: false },
+          opencode: { enabled: false },
+        },
+      },
     });
     const now = new Date().toISOString();
 

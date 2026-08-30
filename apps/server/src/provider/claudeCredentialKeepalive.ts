@@ -90,6 +90,11 @@ export interface ClaudeCredentialKeepaliveHandle {
   readonly stop: () => void;
 }
 
+export interface ClaudeCredentialKeepaliveController {
+  readonly reconcile: (input: { readonly enabled: boolean; readonly binaryPath?: string }) => void;
+  readonly stop: () => void;
+}
+
 export function startClaudeCredentialKeepalive(input?: {
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
@@ -143,5 +148,49 @@ export function startClaudeCredentialKeepalive(input?: {
   log(`[claude-keepalive] started (every ${intervalMs / 60_000}m, macOS)`);
   return {
     stop: () => clearInterval(timer),
+  };
+}
+
+export function createClaudeCredentialKeepaliveController(input?: {
+  readonly platform?: NodeJS.Platform;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDir?: string;
+  readonly log?: (message: string) => void;
+  readonly start?: typeof startClaudeCredentialKeepalive;
+}): ClaudeCredentialKeepaliveController {
+  const start = input?.start ?? startClaudeCredentialKeepalive;
+  let active: {
+    readonly binaryPath: string;
+    readonly handle: ClaudeCredentialKeepaliveHandle;
+  } | null = null;
+
+  const stop = (): void => {
+    active?.handle.stop();
+    active = null;
+  };
+
+  return {
+    reconcile: (settings) => {
+      if (!settings.enabled) {
+        stop();
+        return;
+      }
+      const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(settings.binaryPath);
+      if (active?.binaryPath === binaryPath) {
+        return;
+      }
+      stop();
+      active = {
+        binaryPath,
+        handle: start({
+          ...(input?.platform ? { platform: input.platform } : {}),
+          ...(input?.env ? { env: input.env } : {}),
+          binaryPath,
+          ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
+          ...(input?.log ? { log: input.log } : {}),
+        }),
+      };
+    },
+    stop,
   };
 }

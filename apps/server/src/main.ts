@@ -7,7 +7,18 @@
  * @module CliConfig
  */
 import OS from "node:os";
-import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
@@ -35,7 +46,7 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
-import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
+import { createClaudeCredentialKeepaliveController } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
@@ -382,20 +393,26 @@ const makeServerProgram = (input: CliInput) =>
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
-    yield* Effect.forkChild(
-      Effect.gen(function* () {
-        const settings = yield* serverSettings.getSettings;
-        if (settings.providers.claudeAgent.enabled === false) {
-          return;
-        }
-        yield* Effect.sync(() =>
-          startClaudeCredentialKeepalive({
-            binaryPath: settings.providers.claudeAgent.binaryPath,
-            homeDir: config.homeDir,
-            log: (message) => Effect.runFork(Effect.logInfo(message)),
-          }),
-        );
-      }),
+    const claudeKeepalive = createClaudeCredentialKeepaliveController({
+      homeDir: config.homeDir,
+      log: (message) => Effect.runFork(Effect.logInfo(message)),
+    });
+    const reconcileClaudeKeepalive = (settings: {
+      readonly providers: {
+        readonly claudeAgent: { readonly enabled: boolean; readonly binaryPath?: string };
+      };
+    }) =>
+      Effect.sync(() =>
+        claudeKeepalive.reconcile({
+          enabled: settings.providers.claudeAgent.enabled,
+          binaryPath: settings.providers.claudeAgent.binaryPath,
+        }),
+      );
+    yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
+    yield* serverSettings.streamChanges.pipe(
+      Stream.runForEach(reconcileClaudeKeepalive),
+      Effect.ensuring(Effect.sync(claudeKeepalive.stop)),
+      Effect.forkChild,
     );
 
     yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));

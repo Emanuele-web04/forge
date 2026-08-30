@@ -1,4 +1,4 @@
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ModelSelection, type ProviderKind } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
@@ -26,7 +26,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
 
   const resolveRequestedProvider = (input: {
     readonly model?: string;
-    readonly modelSelection?: { provider: ProviderKind };
+    readonly modelSelection?: ModelSelection;
   }): ProviderKind => {
     if (input.modelSelection?.provider) {
       return input.modelSelection.provider;
@@ -51,19 +51,11 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     operation: string,
     input: {
       readonly model?: string;
-      readonly modelSelection?: { provider: ProviderKind };
+      readonly modelSelection?: ModelSelection;
     },
   ) =>
     Effect.gen(function* () {
-      const provider = resolveRequestedProvider(input);
-      if (!hasDedicatedTextGenerationProvider(provider)) {
-        return yield* Effect.fail(
-          new TextGenerationError({
-            operation,
-            detail: `${PROVIDER_DISPLAY_NAMES[provider]} does not support Git text generation.`,
-          }),
-        );
-      }
+      const requestedProvider = resolveRequestedProvider(input);
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
           (cause) =>
@@ -74,6 +66,18 @@ const makeProviderTextGeneration = Effect.gen(function* () {
             }),
         ),
       );
+      const fallbackModelSelection = hasDedicatedTextGenerationProvider(requestedProvider)
+        ? undefined
+        : settings.textGenerationModelSelection;
+      const provider = fallbackModelSelection?.provider ?? requestedProvider;
+      if (!hasDedicatedTextGenerationProvider(provider)) {
+        return yield* Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail: `${PROVIDER_DISPLAY_NAMES[requestedProvider]} does not support Git text generation, and no supported fallback is enabled.`,
+          }),
+        );
+      }
       if (!settings.providers[provider].enabled) {
         return yield* Effect.fail(
           new TextGenerationError({
@@ -82,20 +86,14 @@ const makeProviderTextGeneration = Effect.gen(function* () {
           }),
         );
       }
-      return implementationForProvider(provider);
+      return {
+        implementation: implementationForProvider(provider),
+        fallbackModelSelection,
+      };
     });
 
-  const runWithProvider = <Output>(
-    operation: string,
-    input: {
-      readonly model?: string;
-      readonly modelSelection?: { provider: ProviderKind };
-    },
-    run: (implementation: TextGenerationShape) => Effect.Effect<Output, TextGenerationError>,
-  ) => resolveImplementation(operation, input).pipe(Effect.flatMap(run));
-
   const call = <
-    Input extends { readonly model?: string; readonly modelSelection?: { provider: ProviderKind } },
+    Input extends { readonly model?: string; readonly modelSelection?: ModelSelection },
     Output,
   >(
     operation: string,
@@ -104,7 +102,21 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       implementation: TextGenerationShape,
       input: Input,
     ) => Effect.Effect<Output, TextGenerationError>,
-  ) => runWithProvider(operation, input, (implementation) => run(implementation, input));
+  ) =>
+    resolveImplementation(operation, input).pipe(
+      Effect.flatMap(({ implementation, fallbackModelSelection }) =>
+        run(
+          implementation,
+          fallbackModelSelection
+            ? ({
+                ...input,
+                model: fallbackModelSelection.model,
+                modelSelection: fallbackModelSelection,
+              } as Input)
+            : input,
+        ),
+      ),
+    );
 
   return {
     generateCommitMessage: (input) =>

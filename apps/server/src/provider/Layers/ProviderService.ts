@@ -384,6 +384,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
+    const ensureProviderEnabled = (provider: ProviderKind, operation: string) =>
+      options?.providerIsEnabled
+        ? options.providerIsEnabled(provider).pipe(
+            Effect.flatMap((enabled) =>
+              enabled
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderValidationError({
+                      operation,
+                      issue: `${provider} is disabled in Settings > Providers.`,
+                    }),
+                  ),
+            ),
+          )
+        : Effect.void;
     const lifecycle = makeProviderLifecycleCoordinator();
     for (const binding of yield* directory.listBindings()) {
       if (binding.lifecycleGeneration !== undefined) {
@@ -1417,6 +1432,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               binding.provider,
               binding.runtimeMode ?? "full-access",
             );
+            yield* ensureProviderEnabled(binding.provider, input.operation);
 
             const resumed = yield* adapter.startSession({
               threadId,
@@ -1558,6 +1574,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           // the provider binding, but the adapter already owns a live session.
           const liveAdapter = yield* findLiveSessionAdapter(input.threadId);
           if (liveAdapter) {
+            if (input.allowRecovery) {
+              yield* ensureProviderEnabled(liveAdapter.provider, input.operation);
+            }
             return {
               adapter: liveAdapter,
               isActive: true,
@@ -1570,6 +1589,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
         const adapter = yield* registry.getByProvider(binding.provider);
+        if (input.allowRecovery) {
+          yield* ensureProviderEnabled(binding.provider, input.operation);
+        }
 
         const hasActiveSession = yield* adapter.hasSession(input.threadId);
         const requiresCredentialRotation =
@@ -1626,14 +1648,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           threadId,
           provider: parsed.provider ?? "codex",
         };
-        if (options?.providerIsEnabled && !(yield* options.providerIsEnabled(input.provider))) {
-          return yield* Effect.fail(
-            new ProviderValidationError({
-              operation: "ProviderService.startSession",
-              issue: `${input.provider} is disabled in Settings > Providers.`,
-            }),
-          );
-        }
+        yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
         yield* validateAutoRuntimeMode(
           "ProviderService.startSession",
           input.provider,

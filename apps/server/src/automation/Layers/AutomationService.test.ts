@@ -1474,6 +1474,100 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect(
+    "skips recurring runs without failure accounting while their provider is disabled",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const repository = yield* AutomationRepository;
+        const serverSettings = yield* ServerSettingsService;
+        const automationId = AutomationId.makeUnsafe("automation-provider-disabled");
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+        yield* repository.createDefinition({
+          id: automationId,
+          input: {
+            ...createInput("local"),
+            schedule: { type: "interval", everySeconds: 300 },
+            stopAfterConsecutiveFailures: 1,
+          },
+          now,
+        });
+
+        const paused = yield* service.runDueOnce({
+          now,
+          limit: 10,
+          leaseOwnerId: "test-scheduler",
+        });
+        const pausedDefinition = (yield* service.list({ projectId })).definitions.find(
+          (definition) => definition.id === automationId,
+        );
+        const pausedRun = paused.find((entry) => entry.run.automationId === automationId)?.run;
+
+        assert.strictEqual(pausedRun?.status, "skipped");
+        assert.match(pausedRun?.result?.summary ?? "", /disabled in Settings/);
+        assert.strictEqual(pausedDefinition?.enabled, true);
+        assert.strictEqual(pausedDefinition?.consecutiveFailureCount, 0);
+        assert.strictEqual(dispatchedCommands.length, 0);
+
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+        const resumed = yield* service.runDueOnce({
+          now: "2026-06-16T10:05:00.000Z",
+          limit: 10,
+          leaseOwnerId: "test-scheduler",
+        });
+        const resumedRun = resumed.find((entry) => entry.run.automationId === automationId)?.run;
+
+        assert.strictEqual(resumedRun?.status, "running");
+        assert.isAtLeast(dispatchedCommands.length, 2);
+      }),
+  );
+
+  it.effect("defers a disabled one-shot until its provider is re-enabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const serverSettings = yield* ServerSettingsService;
+      const automationId = AutomationId.makeUnsafe("automation-provider-disabled-once");
+      const runAt = "2026-06-16T10:00:15.000Z";
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt },
+        },
+        now,
+      });
+
+      const paused = yield* service.runDueOnce({
+        now: runAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const deferred = paused.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.isDefined(deferred?.deferredUntil);
+      assert.strictEqual(dispatchedCommands.length, 0);
+
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      const resumed = yield* service.runDueOnce({
+        now: deferred!.deferredUntil!,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const completedDefinition = (yield* service.list({ projectId })).definitions.find(
+        (definition) => definition.id === automationId,
+      );
+
+      const resumedRun = resumed.find((entry) => entry.run.id === deferred?.id)?.run;
+      assert.strictEqual(resumedRun?.id, deferred?.id);
+      assert.strictEqual(resumedRun?.status, "running");
+      assert.strictEqual(completedDefinition?.enabled, false);
+      assert.strictEqual(dispatchedCommands.length, 2);
+    }),
+  );
+
   it.effect("records and advances missed scheduled occurrences when misfire policy is skip", () =>
     Effect.gen(function* () {
       resetHarness();

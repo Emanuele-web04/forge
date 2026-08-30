@@ -5161,6 +5161,32 @@ disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
       assert.equal(disabledProviderStart.codex.startSession.mock.calls.length, 0);
     }),
   );
+
+  it.effect("rejects recovery-triggered provider starts while disabled", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-disabled-provider-recovery");
+      disabledProviderStart.codex.startSession.mockClear();
+      disabledProviderStart.codex.compactThread.mockClear();
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        status: "stopped",
+        resumeCursor: { opaque: "resume-disabled-provider" },
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.result(provider.compactThread({ threadId }));
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      assert.equal(failure.failure.message.includes("disabled"), true);
+      assert.equal(disabledProviderStart.codex.startSession.mock.calls.length, 0);
+      assert.equal(disabledProviderStart.codex.compactThread.mock.calls.length, 0);
+    }),
+  );
 });
 
 const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });

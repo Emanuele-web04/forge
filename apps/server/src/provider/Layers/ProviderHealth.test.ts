@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -49,10 +49,13 @@ import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance
 
 const encoder = new TextEncoder();
 
-function mockHandle(result: { stdout: string; stderr: string; code: number }) {
+function mockHandle(
+  result: { stdout: string; stderr: string; code: number },
+  options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
+) {
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+    exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
     stdin: Sink.drain,
@@ -562,6 +565,81 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(status.versionAdvisory?.updateCommand, null);
         }
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+
+    it.effect("retries a joined refresh after provider enablement changes its revision", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-enable-race-",
+        });
+        const commands: string[] = [];
+        let releaseFirst!: () => void;
+        let markFirstStarted!: () => void;
+        const firstReleased = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        const firstStarted = new Promise<void>((resolve) => {
+          markFirstStarted = resolve;
+        });
+        let shouldBlock = true;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) => {
+            const input = command as unknown as {
+              readonly command: string;
+              readonly args: ReadonlyArray<string>;
+            };
+            commands.push(input.command);
+            const result = input.args.includes("--version")
+              ? { stdout: `${input.command} 1.0.0\n`, stderr: "", code: 0 }
+              : { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            if (!shouldBlock) {
+              return Effect.succeed(mockHandle(result));
+            }
+            shouldBlock = false;
+            markFirstStarted();
+            return Effect.succeed(
+              mockHandle(result, {
+                exitCode: Effect.promise(() => firstReleased).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(0)),
+                ),
+              }),
+            );
+          }),
+        );
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              ...allProvidersDisabledSettings,
+              providers: {
+                ...allProvidersDisabledSettings.providers,
+                codex: { enabled: true },
+              },
+            }),
+          ),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(spawnerLayer),
+        );
+
+        yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          const serverSettings = yield* ServerSettingsService;
+          const firstRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
+          yield* Effect.promise(() => firstStarted);
+          yield* serverSettings.updateSettings({ providers: { opencode: { enabled: true } } });
+          const joinedRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
+          releaseFirst();
+          const statuses = yield* Fiber.join(joinedRefresh);
+          yield* Fiber.join(firstRefresh);
+
+          assert.ok(commands.some((command) => command.includes("opencode")));
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "opencode")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+        }).pipe(Effect.provide(layer));
+      }),
     );
 
     it.effect("rejects one-click updates for disabled providers", () =>

@@ -2456,34 +2456,38 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         );
 
       const refreshNow = Effect.gen(function* () {
-        const refreshRevision = (yield* serverSettings.getSnapshot).revision;
-        // Drop the cached Claude subscription probe so switching accounts (login
-        // / logout / add account outside the app) is reflected on the next
-        // refresh instead of being pinned to the old account for up to 5 minutes.
-        yield* Cache.invalidate(claudeSubscriptionCache, "claude");
-        const loadedStatuses = yield* loadProviderStatuses;
-        if ((yield* serverSettings.getSnapshot).revision !== refreshRevision) {
-          const currentStatuses = yield* Ref.get(statusesRef);
-          return yield* projectStatusesForCurrentSettings(currentStatuses);
-        }
-        const previousRawStatuses = yield* Ref.get(statusesRef);
-        const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
-        const stabilizedLoadedStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
-          previousRawStatuses,
-          loadedStatuses,
-        );
-        const nextRawStatuses = mergeProviderStatusUpdates(
-          previousRawStatuses,
-          stabilizedLoadedStatuses,
-        );
-        const nextStatuses = yield* projectStatusesForCurrentSettings(nextRawStatuses);
-        yield* Ref.set(statusesRef, nextRawStatuses);
-        if (providerStatusesEqual(previousStatuses, nextStatuses)) {
+        while (true) {
+          const refreshRevision = (yield* serverSettings.getSnapshot).revision;
+          // Drop the cached Claude subscription probe so switching accounts (login
+          // / logout / add account outside the app) is reflected on the next
+          // refresh instead of being pinned to the old account for up to 5 minutes.
+          yield* Cache.invalidate(claudeSubscriptionCache, "claude");
+          const loadedStatuses = yield* loadProviderStatuses;
+          if ((yield* serverSettings.getSnapshot).revision !== refreshRevision) {
+            // A caller that joined this refresh expects the settings mutation it
+            // just made to be reflected. Retry in the same shared fiber so an
+            // enable cannot resolve with the stale pre-mutation probe.
+            continue;
+          }
+          const previousRawStatuses = yield* Ref.get(statusesRef);
+          const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
+          const stabilizedLoadedStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
+            previousRawStatuses,
+            loadedStatuses,
+          );
+          const nextRawStatuses = mergeProviderStatusUpdates(
+            previousRawStatuses,
+            stabilizedLoadedStatuses,
+          );
+          const nextStatuses = yield* projectStatusesForCurrentSettings(nextRawStatuses);
+          yield* Ref.set(statusesRef, nextRawStatuses);
+          if (providerStatusesEqual(previousStatuses, nextStatuses)) {
+            return nextStatuses;
+          }
+          yield* persistStatuses(nextRawStatuses);
+          yield* PubSub.publish(changesPubSub, nextStatuses);
           return nextStatuses;
         }
-        yield* persistStatuses(nextRawStatuses);
-        yield* PubSub.publish(changesPubSub, nextStatuses);
-        return nextStatuses;
       });
 
       // Keep a single refresh in flight so repeated config reads do not spawn

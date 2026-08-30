@@ -141,6 +141,32 @@ describe("ProviderTextGenerationLive", () => {
     expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
   });
 
+  it("routes unsupported selections through the configured supported fallback", async () => {
+    const { layer, codex, cursor } = makeProviderTextGenerationTestLayer({
+      textGenerationModelSelection: { provider: "cursor", model: "composer-2" },
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          model: "claude-opus-4-8",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "composer-2",
+        modelSelection: { provider: "cursor", model: "composer-2" },
+      }),
+    );
+  });
+
   it("routes standard git-writing models to Codex", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 
