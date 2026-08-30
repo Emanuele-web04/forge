@@ -2329,6 +2329,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
+                  const fileListHasMounted = Object.hasOwn(
+                    expandedFileListByTurnId,
+                    turnSummary.turnId,
+                  );
                   const checkpointTurnCount = turnSummary.checkpointTurnCount;
                   const checkpointTurnCounts =
                     turnSummary.checkpointTurnCounts ??
@@ -2455,7 +2459,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </div>
                       <DisclosureRegion open={fileChangesExpanded}>
                         {firstCheckpointFiles.map((file) => renderCheckpointFileRow(file, true))}
-                        {overflowCheckpointFiles.length > 0 ? (
+                        {overflowCheckpointFiles.length > 0 && fileListHasMounted ? (
                           <DisclosureRegion open={fileListExpanded}>
                             {overflowCheckpointFiles.map((file) =>
                               renderCheckpointFileRow(file, false),
