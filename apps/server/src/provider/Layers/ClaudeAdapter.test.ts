@@ -8730,12 +8730,18 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const events: Array<ProviderRuntimeEvent> = [];
-      const turnCompleted = yield* Deferred.make<void>();
+      const compactionTurnCompleted = yield* Deferred.make<void>();
+      const freshTurnCompleted = yield* Deferred.make<void>();
+      let completedTurns = 0;
       yield* adapter.streamEvents.pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (event.type === "turn.completed") {
-              yield* Deferred.succeed(turnCompleted, undefined);
+              completedTurns += 1;
+              yield* Deferred.succeed(
+                completedTurns === 1 ? compactionTurnCompleted : freshTurnCompleted,
+                undefined,
+              );
               return;
             }
             if (
@@ -8788,11 +8794,44 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         usage: { total_tokens: 190_000 },
       } as unknown as SDKMessage);
 
-      yield* Deferred.await(turnCompleted);
+      yield* Deferred.await(compactionTurnCompleted);
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-legacy-compact",
+        uuid: "legacy-fresh-assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "legacy-fresh-assistant",
+          content: [{ type: "text", text: "Fresh response" }],
+          usage: { total_tokens: 20_000 },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-legacy-compact",
+        uuid: "legacy-fresh-result",
+        usage: { total_tokens: 50_000 },
+      } as unknown as SDKMessage);
+
+      yield* Deferred.await(freshTurnCompleted);
       assert.deepEqual(
         events.map((event) => event.type),
-        ["thread.state.changed"],
+        ["thread.state.changed", "thread.token-usage.updated", "thread.token-usage.updated"],
       );
+      for (const event of events) {
+        if (event.type === "thread.token-usage.updated") {
+          assert.equal(event.payload.usage.totalProcessedTokens, undefined);
+        }
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

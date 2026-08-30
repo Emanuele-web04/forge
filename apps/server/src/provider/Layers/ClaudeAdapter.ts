@@ -2769,7 +2769,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : withoutProcessedTokenTotal(accumulatedSnapshot)
           : undefined;
         const liveSnapshot = liveContextUsage
-          ? snapshotFromClaudeContextUsage(liveContextUsage, totalProcessedTokens)
+          ? snapshotFromClaudeContextUsage(
+              liveContextUsage,
+              context.processedTokenBaselineKnown ? totalProcessedTokens : undefined,
+            )
           : undefined;
         const lastGoodUsage = liveSnapshot ?? context.lastKnownTokenUsage;
         const maxTokens = claudeEffectiveContextBudget(context);
@@ -2783,13 +2786,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
           context.tokenUsageState !== "current"
             ? accountingOnlyUsage
-            : lastGoodUsage
-              ? mergeClaudeTokenUsageSnapshot(
-                  lastGoodUsage,
-                  accountedAccumulatedSnapshot,
-                  maxTokens,
-                )
-              : accountedAccumulatedSnapshot;
+            : !context.processedTokenBaselineKnown
+              ? (lastGoodUsage ?? accountedAccumulatedSnapshot)
+              : lastGoodUsage
+                ? mergeClaudeTokenUsageSnapshot(
+                    lastGoodUsage,
+                    accountedAccumulatedSnapshot,
+                    maxTokens,
+                  )
+                : accountedAccumulatedSnapshot;
         context.processedTokenTurnBaseline = context.processedTokenTotal;
 
         // A safeguard reroute only applies to the turn that just finished.
