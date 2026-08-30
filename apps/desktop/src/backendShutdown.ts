@@ -86,6 +86,7 @@ export function shouldDeferDesktopWindowClose(input: {
 
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
 const posixShutdownsByProcess = new WeakMap<object, Promise<void>>();
+const POSIX_SHUTDOWN_REQUEST_RETRY_DELAY_MS = 250;
 
 function isLoopbackShutdownUrl(url: URL): boolean {
   return (
@@ -205,13 +206,16 @@ function runPosixBackendShutdown(input: {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let forced = false;
+    let terminationStarted = false;
     let pendingRequest: PendingDesktopBackendShutdownRequest | null = null;
+    let requestRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let terminateTimer: ReturnType<typeof setTimeout> | null = null;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = (): void => {
       input.child.off("exit", onExit);
+      if (requestRetryTimer) clearTimeout(requestRetryTimer);
       if (terminateTimer) clearTimeout(terminateTimer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (deadlineTimer) clearTimeout(deadlineTimer);
@@ -239,6 +243,13 @@ function runPosixBackendShutdown(input: {
         if (hasExited(input.child)) onExit();
         return;
       }
+      if (signal === "SIGTERM") {
+        terminationStarted = true;
+        if (requestRetryTimer) {
+          clearTimeout(requestRetryTimer);
+          requestRetryTimer = null;
+        }
+      }
       if (signal === "SIGKILL") {
         forced = true;
       }
@@ -251,23 +262,43 @@ function runPosixBackendShutdown(input: {
         onExit();
       }
     };
-
-    input.child.once("exit", onExit);
-    try {
-      pendingRequest = input.startRequest({
-        backendHttpUrl: input.backendHttpUrl,
-        shutdownToken: input.shutdownToken,
-      });
-      if (settled) {
-        pendingRequest.cancel();
+    const scheduleRequestRetry = (): void => {
+      if (settled || terminationStarted || hasExited(input.child) || requestRetryTimer) return;
+      requestRetryTimer = setTimeout(() => {
+        requestRetryTimer = null;
+        startRequestAttempt();
+      }, POSIX_SHUTDOWN_REQUEST_RETRY_DELAY_MS);
+      unrefTimer(requestRetryTimer);
+    };
+    const startRequestAttempt = (): void => {
+      if (settled || terminationStarted || hasExited(input.child)) return;
+      let request: PendingDesktopBackendShutdownRequest;
+      try {
+        request = input.startRequest({
+          backendHttpUrl: input.backendHttpUrl,
+          shutdownToken: input.shutdownToken,
+        });
+      } catch {
+        scheduleRequestRetry();
         return;
       }
-      void pendingRequest.outcome.catch(() => {
-        // Transport failure cannot shorten or reset the fallback schedule.
-      });
-    } catch {
-      pendingRequest = null;
-    }
+      if (settled) {
+        request.cancel();
+        return;
+      }
+      pendingRequest = request;
+      void request.outcome.then(
+        (outcome) => {
+          if (outcome.type === "error") {
+            scheduleRequestRetry();
+          }
+        },
+        () => scheduleRequestRetry(),
+      );
+    };
+
+    input.child.once("exit", onExit);
+    startRequestAttempt();
 
     if (hasExited(input.child)) {
       onExit();

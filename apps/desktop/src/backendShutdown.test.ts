@@ -122,6 +122,65 @@ describe("stopPosixBackendAndWait", () => {
     expect(pendingRequest.cancel).toHaveBeenCalledOnce();
   });
 
+  it("retries transport failures while the backend is still starting", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const failedRequest = makePendingRequest(Promise.resolve({ type: "error" }));
+    const acceptedRequest = makePendingRequest(
+      Promise.resolve({ type: "response", statusCode: 202 }),
+    );
+    const startRequest = vi
+      .fn()
+      .mockReturnValueOnce(failedRequest)
+      .mockImplementationOnce(() => {
+        child.exit(0);
+        return acceptedRequest;
+      });
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      terminateDelayMs: 6_000,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest,
+    });
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(startRequest).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(startRequest).toHaveBeenCalledTimes(2);
+    expect(child.killSignals).toEqual([]);
+    expect(acceptedRequest.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("stops retrying transport failures when TERM fallback begins", async () => {
+    const child = makeTestBackendShutdownProcess();
+    child.exitOnKill = true;
+    const startRequest = vi.fn(() => makePendingRequest(Promise.resolve({ type: "error" })));
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      terminateDelayMs: 600,
+      forceKillDelayMs: 800,
+      timeoutMs: 1_000,
+      startRequest,
+    });
+
+    await vi.advanceTimersByTimeAsync(599);
+    expect(startRequest).toHaveBeenCalledTimes(3);
+    expect(child.killSignals).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(startRequest).toHaveBeenCalledTimes(3);
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+  });
+
   it("escalates from graceful shutdown to TERM and KILL while still requiring exit", async () => {
     const child = makeTestBackendShutdownProcess();
     const shutdown = stopPosixBackendAndWait({
