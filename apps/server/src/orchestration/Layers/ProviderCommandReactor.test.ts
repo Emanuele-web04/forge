@@ -2551,6 +2551,72 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("does not replay or recover goal continuations for an expired side chat", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const sidechatId = ThreadId.makeUnsafe("thread-expired-goal-sidechat");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-create-expired-goal-sidechat"),
+        threadId: sidechatId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Expired goal sidechat",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-sidechat-expiry"),
+        threadId: sidechatId,
+        goal: "This goal must not resume",
+        goalStartBehavior: "defer",
+      }),
+    );
+    const sidechatBeforeExpiry = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads.find((thread) => thread.id === sidechatId);
+    expect(sidechatBeforeExpiry?.goalStartedAt).toBeTruthy();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-persist-goal-before-sidechat-expiry"),
+        threadId: sidechatId,
+        goalStartedAt: sidechatBeforeExpiry?.goalStartedAt ?? null,
+        trigger: "turn-completed",
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.sidechat.expire",
+        commandId: CommandId.makeUnsafe("cmd-expire-goal-sidechat"),
+        threadId: sidechatId,
+        expectedLastActivityAt:
+          sidechatBeforeExpiry?.sidechatLastActivityAt ??
+          sidechatBeforeExpiry?.createdAt ??
+          createdAt,
+        expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("ignores a stale continuation request after the goal is cleared", async () => {
     const harness = await createHarness();
 

@@ -139,6 +139,7 @@ import {
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
+import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
 type ProviderQueueDrainEvent = Extract<
   ProviderRuntimeEvent,
@@ -3207,6 +3208,7 @@ const make = Effect.gen(function* () {
       !thread ||
       thread.deletedAt != null ||
       thread.archivedAt != null ||
+      isExpiredSidechat(thread) ||
       thread.parentThreadId != null ||
       thread.interactionMode === "plan" ||
       !activeThreadGoal(thread)?.trim() ||
@@ -3331,6 +3333,7 @@ const make = Effect.gen(function* () {
           !thread ||
           thread.deletedAt != null ||
           thread.archivedAt != null ||
+          isExpiredSidechat(thread) ||
           thread.parentThreadId != null ||
           thread.interactionMode === "plan" ||
           !activeThreadGoal(thread)?.trim() ||
@@ -4397,7 +4400,12 @@ const make = Effect.gen(function* () {
           const thread = yield* resolveThread(event.payload.threadId);
           const startsOrResumesGoal =
             event.payload.goalPausedAt == null && event.payload.goalStartedAt != null;
-          if (event.payload.goalStartBehavior !== "defer" && startsOrResumesGoal) {
+          if (
+            thread &&
+            !isExpiredSidechat(thread) &&
+            event.payload.goalStartBehavior !== "defer" &&
+            startsOrResumesGoal
+          ) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",
               commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
@@ -4465,6 +4473,7 @@ const make = Effect.gen(function* () {
           const thread = yield* resolveThread(event.payload.threadId);
           if (
             thread &&
+            !isExpiredSidechat(thread) &&
             thread.parentThreadId == null &&
             activeThreadGoal(thread)?.trim() &&
             thread.goalPausedAt == null
@@ -5188,6 +5197,7 @@ const make = Effect.gen(function* () {
         (thread) =>
           thread.deletedAt == null &&
           thread.archivedAt == null &&
+          !isExpiredSidechat(thread) &&
           thread.parentThreadId == null &&
           Boolean(activeThreadGoal(thread)?.trim()) &&
           thread.goalPausedAt == null,

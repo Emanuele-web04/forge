@@ -19,9 +19,11 @@ const EXPIRED_AT = "2026-08-30T11:00:00.000Z";
 
 function makeReadModel(input: {
   expiredAt?: string | null;
+  lastActivityAt?: string;
   running?: boolean;
 }): OrchestrationReadModel {
   const running = input.running ?? false;
+  const lastActivityAt = input.lastActivityAt ?? LAST_ACTIVITY_AT;
   return {
     snapshotSequence: 1,
     updatedAt: LAST_ACTIVITY_AT,
@@ -38,7 +40,7 @@ function makeReadModel(input: {
         branch: null,
         worktreePath: null,
         sidechatSourceThreadId: SOURCE_THREAD_ID,
-        sidechatLastActivityAt: LAST_ACTIVITY_AT,
+        sidechatLastActivityAt: lastActivityAt,
         sidechatExpiredAt: input.expiredAt ?? null,
         createdAt: LAST_ACTIVITY_AT,
         updatedAt: LAST_ACTIVITY_AT,
@@ -128,5 +130,63 @@ describe("side chat expiry decider", () => {
         }),
       ),
     ).rejects.toThrow("expired after 1 hour of inactivity");
+  });
+
+  it("rejects goal continuations after expiry", async () => {
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: makeReadModel({ expiredAt: EXPIRED_AT }),
+          command: {
+            type: "thread.goal.continue",
+            commandId: CommandId.makeUnsafe("cmd-goal-expired-sidechat"),
+            threadId: SIDECHAT_THREAD_ID,
+            goalStartedAt: LAST_ACTIVITY_AT,
+            trigger: "startup-recovery",
+            createdAt: EXPIRED_AT,
+          },
+        }),
+      ),
+    ).rejects.toThrow("expired after 1 hour of inactivity");
+  });
+
+  it("compares expiry activity timestamps by instant", async () => {
+    const equivalentOffsetTimestamp = "2026-08-30T12:00:00+02:00";
+    const event = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: makeReadModel({ lastActivityAt: equivalentOffsetTimestamp }),
+        command: {
+          type: "thread.sidechat.expire",
+          commandId: CommandId.makeUnsafe("cmd-expire-offset-sidechat"),
+          threadId: SIDECHAT_THREAD_ID,
+          expectedLastActivityAt: LAST_ACTIVITY_AT,
+          expiredAt: EXPIRED_AT,
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      type: "thread.sidechat-expired",
+      payload: { expectedLastActivityAt: LAST_ACTIVITY_AT },
+    });
+  });
+
+  it("records the latest activity by instant and canonicalizes it", async () => {
+    const event = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: makeReadModel({ lastActivityAt: "2026-08-30T12:00:00+02:00" }),
+        command: {
+          type: "thread.sidechat.activity.record",
+          commandId: CommandId.makeUnsafe("cmd-record-offset-sidechat"),
+          threadId: SIDECHAT_THREAD_ID,
+          activityAt: "2026-08-30T10:30:00.000Z",
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      type: "thread.sidechat-activity-recorded",
+      payload: { lastActivityAt: "2026-08-30T10:30:00.000Z" },
+    });
   });
 });
