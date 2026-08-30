@@ -85,8 +85,9 @@ export function resolveThreadPullRequestFallback(input: {
 
 /**
  * Resolves the PR badge for each given thread. Callers pass only the rows they render:
- * every distinct checkout behind them gets a polled git-status query and every stored PR
- * reference a polled lookup, so hidden history must stay out of the input.
+ * every distinct thread-owned worktree gets a polled git-status query and every stored PR
+ * reference a polled lookup. Shared local checkouts intentionally use only the durable thread PR:
+ * their live branch may belong to another concurrent thread.
  */
 export function useThreadPullRequests(input: {
   readonly threads: readonly ThreadPullRequestSource[];
@@ -112,7 +113,7 @@ export function useThreadPullRequests(input: {
     () => [
       ...new Set(
         threadGitTargets
-          .filter((target) => target.branch !== null || target.hasDedicatedWorktree)
+          .filter((target) => target.hasDedicatedWorktree)
           .map((target) => target.cwd)
           .filter((cwd): cwd is string => cwd !== null),
       ),

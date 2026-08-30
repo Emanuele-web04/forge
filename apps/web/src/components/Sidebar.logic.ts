@@ -103,11 +103,10 @@ export function pullRequestRepositoryConfigFingerprint(
 }
 
 /**
- * Shared project roots can serve several threads, so their live Git status only belongs to a
- * thread when the checked-out branch matches the persisted thread branch. A materialized
- * worktree is thread-scoped, though, and coding agents may checkout or create a new branch
- * without going through Synara's branch picker. In that case the worktree's checked-out branch
- * is authoritative even when the persisted branch metadata is stale.
+ * Shared project roots can serve several threads, so their live Git status is environment state,
+ * not thread ownership. Only a materialized worktree is thread-scoped: coding agents may checkout
+ * or create a new branch there without going through Synara's branch picker, so its checked-out
+ * branch is authoritative even when the persisted branch metadata is stale.
  */
 export function shouldUseLivePullRequestForSidebarThread(input: {
   readonly threadBranch: string | null;
@@ -117,10 +116,7 @@ export function shouldUseLivePullRequestForSidebarThread(input: {
   if (input.liveBranch === null) {
     return false;
   }
-  if (input.hasDedicatedWorktree) {
-    return true;
-  }
-  return input.threadBranch !== null && input.threadBranch === input.liveBranch;
+  return input.hasDedicatedWorktree;
 }
 
 export function resolveSidebarThreadPullRequest<
@@ -133,6 +129,12 @@ export function resolveSidebarThreadPullRequest<
   readonly livePullRequest: T | null;
   readonly persistedPullRequest: T | null;
 }): T | null {
+  // A shared local checkout can move because another thread is working in the same project root.
+  // Its live PR must never overwrite the durable PR explicitly associated with this thread.
+  if (!input.hasDedicatedWorktree) {
+    return input.persistedPullRequest;
+  }
+
   // A settled (merged/closed) PR is the thread's outcome, not a claim about the current
   // checkout, so it stays visible after the checkout moves on — e.g. switching back to
   // main after merging must flip the badge to "merged", not drop it and let stale

@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-25.2";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-30.1";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -32,6 +32,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         'If device_boot returns kind "boot-limit-reached", Synara has hit its cap on simulators it booted: relay the listed devices and ask the user which to shut down rather than retrying. device_open_url always requires explicit user approval. If a device tool reports DeviceApprovalRequired, the action was refused before it ran because this session has no approval gate: explain that the user must do it from the device pane and do not retry it.',
         "A simulator is not a real device: Settings omits hardware-backed panes such as Airplane Mode, Cellular, and Face ID enrollment, and Developer options appear only once the runtime exposes them. If a toggle the user asked for does not exist in the tree, say so plainly instead of hunting for it or substituting a different setting.",
         "For thread discovery and diagnosis, use synara_list_threads, synara_read_thread, synara_read_thread_activity, synara_read_thread_events, synara_read_thread_runtime_events, and synara_diagnose_thread before inspecting Synara's SQLite files or process logs. Fall back to host storage only when a tool's coverage metadata says the required evidence is unavailable.",
+        "After successfully creating a pull request for the current thread's own deliverable, call synara_set_thread_pull_request with its URL. Never associate a pull request that the thread only reviews, references, or discusses.",
         "Provider-native subagent or Task tools are implementation details: they do not create Synara threads and must not substitute for an explicit request to create Synara threads.",
         "For a plural thread request, submit one exact synara_create_threads plan. The array length is the exact requested count.",
         "If synara_create_threads rejects the plan during validation or preflight before returning an operationId, correct that same plan and retry it with the same requestId. This is safe because no durable operation, thread, or worktree was created.",

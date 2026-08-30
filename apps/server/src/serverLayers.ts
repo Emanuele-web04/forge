@@ -193,7 +193,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
