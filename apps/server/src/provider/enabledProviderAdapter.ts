@@ -15,26 +15,26 @@ export class ProviderDisabledError extends Error {
   readonly status = 409;
 }
 
+export function ensureProviderEnabled(provider: ProviderKind, serverSettings: ServerSettingsShape) {
+  return serverSettings.getSettings.pipe(
+    Effect.flatMap((settings) =>
+      settings.providers[provider].enabled
+        ? Effect.void
+        : Effect.fail(
+            new ProviderDisabledError(
+              `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`,
+            ),
+          ),
+    ),
+  );
+}
+
 export function getEnabledProviderAdapter(
   provider: ProviderKind,
   serverSettings: ServerSettingsShape,
   providerAdapterRegistry: ProviderAdapterRegistryShape,
 ) {
-  return providerAdapterRegistry
-    .getByProvider(provider)
-    .pipe(
-      Effect.flatMap((adapter) =>
-        serverSettings.getSettings.pipe(
-          Effect.flatMap((settings) =>
-            settings.providers[adapter.provider].enabled
-              ? Effect.succeed(adapter)
-              : Effect.fail(
-                  new ProviderDisabledError(
-                    `${PROVIDER_DISPLAY_NAMES[adapter.provider]} is disabled in Settings > Providers.`,
-                  ),
-                ),
-          ),
-        ),
-      ),
-    );
+  return ensureProviderEnabled(provider, serverSettings).pipe(
+    Effect.andThen(providerAdapterRegistry.getByProvider(provider)),
+  );
 }

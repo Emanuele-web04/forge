@@ -608,6 +608,7 @@ const makeWsRpcHandlersLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+        serverSettings,
       });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
