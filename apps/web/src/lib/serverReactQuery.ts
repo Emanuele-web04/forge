@@ -23,6 +23,7 @@ export const serverQueryKeys = {
   localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
+  providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
@@ -307,6 +308,15 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
 export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
   const api = ensureNativeApi();
   return api.server.listProviderUsage(input);
+}
+
+/** Provider enablement changes alter the membership of the batch and invalidate any
+ * provider-scoped result that may otherwise survive after a provider is disabled. */
+export async function invalidateProviderUsageQueries(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() }),
+    queryClient.invalidateQueries({ queryKey: serverQueryKeys.providerUsageRoot() }),
+  ]);
 }
 
 // Local profile + shareable-card core statistics. The client passes its own fixed

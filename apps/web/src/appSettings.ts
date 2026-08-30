@@ -41,6 +41,7 @@ import {
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import {
+  invalidateProviderUsageQueries,
   reconcileServerProviderStatuses,
   serverQueryKeys,
   serverSettingsQueryOptions,
@@ -1387,6 +1388,7 @@ export function useAppSettings() {
     await queryClient
       .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
       .catch(() => undefined);
+    await invalidateProviderUsageQueries(queryClient).catch(() => undefined);
   };
 
   const enqueueServerSettingsMutation = <Result>(
