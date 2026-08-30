@@ -25,6 +25,7 @@ import { randomUUID } from "./utils";
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "account.rate-limits.updated",
   "account.rate-limited",
+  "context-compaction",
   "context-window.updated",
 ]);
 

@@ -101,14 +101,17 @@ describe("threadHandoff", () => {
     ).toHaveLength(4);
   });
 
-  it("does not import a source provider's configured context window", () => {
-    const activity = (kind: string): OrchestrationThreadActivity => ({
+  it("imports usage and compaction boundaries without the source provider's configured window", () => {
+    const activity = (
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"] = {},
+    ): OrchestrationThreadActivity => ({
       id: EventId.makeUnsafe(`activity-${kind}`),
       createdAt: "2026-07-21T00:00:00.000Z",
       tone: "info",
       kind,
       summary: kind,
-      payload: {},
+      payload,
       turnId: null,
     });
 
@@ -116,11 +119,15 @@ describe("threadHandoff", () => {
       activities: [
         activity("context-window.configured"),
         activity("context-window.updated"),
+        activity("context-compaction", { state: "compacted" }),
         activity("tool.started"),
       ],
     });
 
-    expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+    expect(imported.map(({ kind }) => kind)).toEqual([
+      "context-window.updated",
+      "context-compaction",
+    ]);
   });
 
   it("excludes disabled, missing, unavailable, and unauthenticated handoff targets", () => {
