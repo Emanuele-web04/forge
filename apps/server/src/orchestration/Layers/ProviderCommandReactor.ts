@@ -709,7 +709,7 @@ const make = Effect.gen(function* () {
   };
 
   const completePendingContextBootstrapAttempt = Effect.fnUntraced(function* (
-    threadId: string,
+    threadId: ThreadId,
     attempt: PendingContextBootstrapAttempt,
     event: ProviderQueueDrainEvent,
   ) {
