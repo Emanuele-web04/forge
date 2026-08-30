@@ -612,7 +612,8 @@ type ShutdownCursorOrderingScenario =
   | "ignored-runtime-event"
   | "cursorless-runtime-write"
   | "mid-list-runtime-write"
-  | "blocked-runtime-write";
+  | "blocked-runtime-write"
+  | "queued-runtime-write";
 
 function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) {
   return Effect.gen(function* () {
@@ -636,16 +637,22 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
         const directory = yield* ProviderSessionDirectory;
         return {
           ...directory,
-          getBinding: (threadId) =>
-            directory
-              .getBinding(threadId)
-              .pipe(
-                Effect.tap(() =>
-                  scenario === "ignored-runtime-event" && shutdownStarted
-                    ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
-                    : Effect.void,
-                ),
+          getBinding: (threadId) => {
+            const read =
+              scenario === "queued-runtime-write" && shutdownRequested
+                ? Deferred.succeed(runtimeWriteStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(providerTeardownStarted)),
+                    Effect.andThen(directory.getBinding(threadId)),
+                  )
+                : directory.getBinding(threadId);
+            return read.pipe(
+              Effect.tap(() =>
+                scenario === "ignored-runtime-event" && shutdownStarted
+                  ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
               ),
+            );
+          },
           listThreadIds: () =>
             Deferred.await(releaseStoppedSessionSweep).pipe(
               Effect.andThen(directory.listThreadIds()),
@@ -684,7 +691,8 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
     const expectedCursor =
       scenario === "newer-runtime-write" ||
       scenario === "mid-list-runtime-write" ||
-      scenario === "blocked-runtime-write"
+      scenario === "blocked-runtime-write" ||
+      scenario === "queued-runtime-write"
         ? terminalCursor
         : shutdownSnapshotCursor;
     const registry: typeof ProviderAdapterRegistry.Service = {
@@ -714,7 +722,7 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
       });
     };
 
-    if (scenario === "mid-list-runtime-write") {
+    if (scenario === "mid-list-runtime-write" || scenario === "queued-runtime-write") {
       const listSessions = codex.listSessions.getMockImplementation();
       assert.ok(listSessions);
       let emittedDuringShutdownList = false;
@@ -728,7 +736,9 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
           const staleSessions = (yield* currentSessions).map((session) => ({ ...session }));
           updateSessionWithTerminalCursor();
           emitTerminalTurn();
-          yield* Deferred.await(runtimeEventObserved);
+          yield* Deferred.await(
+            scenario === "queued-runtime-write" ? runtimeWriteStarted : runtimeEventObserved,
+          );
           return staleSessions;
         });
       });
@@ -754,6 +764,9 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
             payload: { exitKind: "graceful" },
           });
         } else if (scenario === "blocked-runtime-write") {
+          yield* Deferred.succeed(providerTeardownStarted, undefined);
+        } else if (scenario === "queued-runtime-write") {
+          yield* codex.stopSession(threadId);
           yield* Deferred.succeed(providerTeardownStarted, undefined);
         }
         yield* Deferred.await(runtimeEventObserved);
@@ -820,6 +833,10 @@ it.effect("ProviderServiceLive refreshes a session snapshot after a mid-list cur
 
 it.effect("ProviderServiceLive starts teardown while an earlier binding write is blocked", () =>
   verifyShutdownCursorOrdering("blocked-runtime-write"),
+);
+
+it.effect("ProviderServiceLive preserves a cursor from a writer queued before shutdown", () =>
+  verifyShutdownCursorOrdering("queued-runtime-write"),
 );
 
 it.effect(

@@ -759,29 +759,35 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ),
           );
 
-    // Runtime events are where adapters surface provider-native ids; refresh
-    // from the live session before idle stop/recovery freezes an old cursor.
-    const refreshResumeCursorFromActiveSession = (
+    let runtimeCursorWriteVersion = 0;
+    const latestRuntimeCursorWriteByThread = new Map<
+      ThreadId,
+      { readonly version: number; readonly resumeCursor: unknown }
+    >();
+
+    // Runtime events are where adapters surface provider-native ids. Capture
+    // the live cursor before queueing the durable write so shutdown cannot
+    // delete the adapter session while an earlier event is waiting on SQLite.
+    const captureResumeCursorFromActiveSession = (
       event: ProviderRuntimeEvent,
-      binding: ProviderRuntimeBinding,
     ): Effect.Effect<unknown | null | undefined> => {
       if (!shouldRefreshResumeCursorForEvent(event)) {
-        return Effect.succeed(binding.resumeCursor);
+        return Effect.succeed(undefined);
       }
 
       return Effect.gen(function* () {
-        const adapter = yield* registry.getByProvider(binding.provider);
+        const adapter = yield* registry.getByProvider(event.provider);
         const sessions = yield* adapter.listSessions();
         const activeSession = sessions.find((session) => session.threadId === event.threadId);
-        return activeSession?.resumeCursor ?? binding.resumeCursor;
+        return activeSession?.resumeCursor;
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider.session.resume_cursor_refresh_failed", {
             threadId: event.threadId,
-            provider: binding.provider,
+            provider: event.provider,
             eventType: event.type,
             cause: Cause.pretty(cause),
-          }).pipe(Effect.as(binding.resumeCursor)),
+          }).pipe(Effect.as(undefined)),
         ),
       );
     };
@@ -1046,144 +1052,154 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return Effect.sync(() => reconcileRuntimeIdleTimer(event));
       }
 
-      return withBindingWriteLock(
-        event.threadId,
-        Effect.gen(function* () {
-          if (event.type === "turn.started" && event.turnId !== undefined) {
-            getDispatchState(event.threadId).outstandingTurnIds.add(String(event.turnId));
-          }
-          if (
-            (event.type === "turn.completed" || event.type === "turn.aborted") &&
-            event.turnId !== undefined &&
-            (dispatchStateByThread.get(event.threadId)?.inFlightGenerations.size ?? 0) > 0
-          ) {
-            recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
-          }
-          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-          if (!binding) {
-            reconcileRuntimeIdleTimer(event);
-            return;
-          }
-          if (binding.provider !== event.provider) {
-            return;
-          }
-          if (
-            event.lifecycleGeneration !== undefined &&
-            binding.lifecycleGeneration !== event.lifecycleGeneration
-          ) {
-            // The pump gate lets a stale terminal event through only when it
-            // can safely settle the thread: no current generation exists, or
-            // the event still names the turn the binding has active. Mirror
-            // that acceptance here, otherwise the accepted event is journaled
-            // and published but the durable binding keeps the dead turn active
-            // forever and the thread stays a reconciliation candidate.
-            const staleTerminalSettlesThread =
-              isTerminalRuntimeEvent(event) &&
-              (lifecycle.currentGeneration(event.threadId) === undefined ||
-                (event.turnId !== undefined &&
-                  runtimeActiveTurnId(binding.runtimePayload) === String(event.turnId)));
-            if (!staleTerminalSettlesThread) {
+      return Effect.gen(function* () {
+        const liveResumeCursor = yield* captureResumeCursorFromActiveSession(event);
+        yield* withBindingWriteLock(
+          event.threadId,
+          Effect.gen(function* () {
+            if (event.type === "turn.started" && event.turnId !== undefined) {
+              getDispatchState(event.threadId).outstandingTurnIds.add(String(event.turnId));
+            }
+            if (
+              (event.type === "turn.completed" || event.type === "turn.aborted") &&
+              event.turnId !== undefined &&
+              (dispatchStateByThread.get(event.threadId)?.inFlightGenerations.size ?? 0) > 0
+            ) {
+              recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
+            }
+            const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+            if (!binding) {
+              reconcileRuntimeIdleTimer(event);
               return;
             }
-          }
+            if (binding.provider !== event.provider) {
+              return;
+            }
+            if (
+              event.lifecycleGeneration !== undefined &&
+              binding.lifecycleGeneration !== event.lifecycleGeneration
+            ) {
+              // The pump gate lets a stale terminal event through only when it
+              // can safely settle the thread: no current generation exists, or
+              // the event still names the turn the binding has active. Mirror
+              // that acceptance here, otherwise the accepted event is journaled
+              // and published but the durable binding keeps the dead turn active
+              // forever and the thread stays a reconciliation candidate.
+              const staleTerminalSettlesThread =
+                isTerminalRuntimeEvent(event) &&
+                (lifecycle.currentGeneration(event.threadId) === undefined ||
+                  (event.turnId !== undefined &&
+                    runtimeActiveTurnId(binding.runtimePayload) === String(event.turnId)));
+              if (!staleTerminalSettlesThread) {
+                return;
+              }
+            }
 
-          const currentActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
-          if (
-            event.type === "turn.started" &&
-            !isStartedTurnApplicable({
-              activeTurnId: currentActiveTurnId,
-              eventTurnId: event.turnId === undefined ? undefined : String(event.turnId),
-            })
-          ) {
-            return;
-          }
-          if (event.type === "turn.completed" || event.type === "turn.aborted") {
-            const applicability = classifyTerminalTurnApplicability({
-              activeTurnId: currentActiveTurnId,
-              eventTurnId: event.turnId === undefined ? undefined : String(event.turnId),
-              hasAmbiguousTurns: hasAmbiguousTerminalTurn(event.threadId),
-            });
-            if (!applicability.applicable) {
-              if (event.turnId !== undefined) {
+            const currentActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
+            if (
+              event.type === "turn.started" &&
+              !isStartedTurnApplicable({
+                activeTurnId: currentActiveTurnId,
+                eventTurnId: event.turnId === undefined ? undefined : String(event.turnId),
+              })
+            ) {
+              return;
+            }
+            if (event.type === "turn.completed" || event.type === "turn.aborted") {
+              const applicability = classifyTerminalTurnApplicability({
+                activeTurnId: currentActiveTurnId,
+                eventTurnId: event.turnId === undefined ? undefined : String(event.turnId),
+                hasAmbiguousTurns: hasAmbiguousTerminalTurn(event.threadId),
+              });
+              if (!applicability.applicable) {
+                if (event.turnId !== undefined) {
+                  dispatchStateByThread
+                    .get(event.threadId)
+                    ?.outstandingTurnIds.delete(String(event.turnId));
+                  cleanupDispatchState(event.threadId);
+                }
+                if (applicability.reason === "ambiguous-missing-turn-id") {
+                  yield* Effect.logWarning("provider.session.ambiguous_terminal_event_ignored", {
+                    threadId: event.threadId,
+                    eventType: event.type,
+                  });
+                }
+                return;
+              }
+              if (event.turnId === undefined && applicability.resolvedTurnId !== undefined) {
+                recordRecentlyCompletedTurn(event.threadId, applicability.resolvedTurnId);
+              }
+              if (applicability.resolvedTurnId !== undefined) {
                 dispatchStateByThread
                   .get(event.threadId)
-                  ?.outstandingTurnIds.delete(String(event.turnId));
+                  ?.outstandingTurnIds.delete(applicability.resolvedTurnId);
                 cleanupDispatchState(event.threadId);
               }
-              if (applicability.reason === "ambiguous-missing-turn-id") {
-                yield* Effect.logWarning("provider.session.ambiguous_terminal_event_ignored", {
-                  threadId: event.threadId,
-                  eventType: event.type,
-                });
+            }
+            const activeTurnId =
+              event.type === "turn.started"
+                ? (event.turnId ?? null)
+                : event.type === "thread.state.changed" && event.payload.state === "compacted"
+                  ? (event.turnId ?? currentActiveTurnId)
+                  : event.type === "turn.completed" ||
+                      event.type === "turn.aborted" ||
+                      (event.type === "thread.state.changed" &&
+                        (event.payload.state === "archived" ||
+                          event.payload.state === "closed" ||
+                          event.payload.state === "error")) ||
+                      event.type === "session.exited" ||
+                      event.type === "runtime.error" ||
+                      (event.type === "session.state.changed" &&
+                        (event.payload.state === "ready" ||
+                          event.payload.state === "stopped" ||
+                          event.payload.state === "error"))
+                    ? null
+                    : currentActiveTurnId;
+            const lastError = runtimeLastErrorForEvent(event);
+            const resumeCursor = liveResumeCursor ?? binding.resumeCursor;
+
+            yield* directory.upsert({
+              threadId: event.threadId,
+              provider: binding.provider,
+              ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+              ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+              status: runtimeStatusForEvent(event, activeTurnId),
+              ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+              runtimePayload: {
+                activeTurnId,
+                lastRuntimeEvent: event.type,
+                lastRuntimeEventAt: event.createdAt,
+                ...(lastError !== undefined ? { lastError } : {}),
+                ...(runtimeEventRetiredGatewayTurnAuthority(event)
+                  ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
+                  : {}),
+              },
+            });
+            if (liveResumeCursor !== undefined && liveResumeCursor !== null) {
+              runtimeCursorWriteVersion += 1;
+              latestRuntimeCursorWriteByThread.set(event.threadId, {
+                version: runtimeCursorWriteVersion,
+                resumeCursor: liveResumeCursor,
+              });
+            }
+            if (event.type === "session.exited") {
+              const dispatchState = dispatchStateByThread.get(event.threadId);
+              if (dispatchState) {
+                // Invalidate adapter calls that were already in flight when the
+                // session exited, then retain only the generations needed for
+                // their eventual settlement/cleanup.
+                dispatchState.latestGeneration = dispatchState.nextGeneration + 1;
+                dispatchState.nextGeneration = dispatchState.latestGeneration;
+                dispatchState.outstandingTurnIds.clear();
+                dispatchState.successfulResults.clear();
               }
-              return;
-            }
-            if (event.turnId === undefined && applicability.resolvedTurnId !== undefined) {
-              recordRecentlyCompletedTurn(event.threadId, applicability.resolvedTurnId);
-            }
-            if (applicability.resolvedTurnId !== undefined) {
-              dispatchStateByThread
-                .get(event.threadId)
-                ?.outstandingTurnIds.delete(applicability.resolvedTurnId);
+              recentlyCompletedTurnsByThread.delete(event.threadId);
               cleanupDispatchState(event.threadId);
             }
-          }
-          const activeTurnId =
-            event.type === "turn.started"
-              ? (event.turnId ?? null)
-              : event.type === "thread.state.changed" && event.payload.state === "compacted"
-                ? (event.turnId ?? currentActiveTurnId)
-                : event.type === "turn.completed" ||
-                    event.type === "turn.aborted" ||
-                    (event.type === "thread.state.changed" &&
-                      (event.payload.state === "archived" ||
-                        event.payload.state === "closed" ||
-                        event.payload.state === "error")) ||
-                    event.type === "session.exited" ||
-                    event.type === "runtime.error" ||
-                    (event.type === "session.state.changed" &&
-                      (event.payload.state === "ready" ||
-                        event.payload.state === "stopped" ||
-                        event.payload.state === "error"))
-                  ? null
-                  : currentActiveTurnId;
-          const lastError = runtimeLastErrorForEvent(event);
-          const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
-
-          yield* directory.upsert({
-            threadId: event.threadId,
-            provider: binding.provider,
-            ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-            ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-            status: runtimeStatusForEvent(event, activeTurnId),
-            ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-            runtimePayload: {
-              activeTurnId,
-              lastRuntimeEvent: event.type,
-              lastRuntimeEventAt: event.createdAt,
-              ...(lastError !== undefined ? { lastError } : {}),
-              ...(runtimeEventRetiredGatewayTurnAuthority(event)
-                ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
-                : {}),
-            },
-          });
-          if (event.type === "session.exited") {
-            const dispatchState = dispatchStateByThread.get(event.threadId);
-            if (dispatchState) {
-              // Invalidate adapter calls that were already in flight when the
-              // session exited, then retain only the generations needed for
-              // their eventual settlement/cleanup.
-              dispatchState.latestGeneration = dispatchState.nextGeneration + 1;
-              dispatchState.nextGeneration = dispatchState.latestGeneration;
-              dispatchState.outstandingTurnIds.clear();
-              dispatchState.successfulResults.clear();
-            }
-            recentlyCompletedTurnsByThread.delete(event.threadId);
-            cleanupDispatchState(event.threadId);
-          }
-          reconcileRuntimeIdleTimer(event);
-        }),
-      ).pipe(
+            reconcileRuntimeIdleTimer(event);
+          }),
+        );
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider.session.runtime_binding_update_failed", {
             threadId: event.threadId,
@@ -2806,6 +2822,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const runStopAll = () =>
       Effect.gen(function* () {
         const stoppedAt = new Date().toISOString();
+        const runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
         const activeSessionByThreadId = new Map(
           (yield* Effect.forEach(adapters, (adapter) =>
             adapter
@@ -2829,7 +2846,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const latestSession = (yield* adapter.listSessions()).find(
                   (candidate) => candidate.threadId === session.threadId,
                 );
-                yield* markThreadStopped(session.threadId, stoppedAt, latestSession ?? session);
+                const queuedCursorWrite = latestRuntimeCursorWriteByThread.get(session.threadId);
+                const queuedResumeCursor =
+                  queuedCursorWrite !== undefined &&
+                  queuedCursorWrite.version > runtimeCursorWriteBaseline
+                    ? queuedCursorWrite.resumeCursor
+                    : undefined;
+                const stoppedSession = latestSession ?? session;
+                const resumeCursor =
+                  latestSession?.resumeCursor ?? queuedResumeCursor ?? session.resumeCursor;
+                yield* markThreadStopped(
+                  session.threadId,
+                  stoppedAt,
+                  resumeCursor !== undefined && resumeCursor !== stoppedSession.resumeCursor
+                    ? { ...stoppedSession, resumeCursor }
+                    : stoppedSession,
+                );
               }),
               started,
             ),
