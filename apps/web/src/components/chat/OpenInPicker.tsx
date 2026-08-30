@@ -5,8 +5,8 @@
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode } from "react";
-import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
+import { useState, type ReactNode } from "react";
+import { useEditorLaunchers, type EditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -100,7 +100,114 @@ function OpenInPickerWithConfig(props: OpenInPickerProps) {
   );
 }
 
-function OpenInPickerContent({
+function OpenInPickerContent({ primaryAction, ...props }: OpenInPickerContentProps) {
+  return primaryAction ? (
+    <PrimaryActionOpenInPicker {...props} primaryAction={primaryAction} />
+  ) : (
+    <EditorActionOpenInPicker {...props} />
+  );
+}
+
+interface OpenInPickerFrameProps {
+  labelMode: "responsive" | "always";
+  groupLabel: string;
+  menuLabel: string;
+  primaryDisabled: boolean;
+  primaryIcon: ReactNode;
+  onPrimaryOpen: () => void;
+  onMenuOpenChange?: (open: boolean) => void;
+  menuContent: ReactNode;
+}
+
+function OpenInPickerFrame(props: OpenInPickerFrameProps) {
+  return (
+    <ChatHeaderSplitGroup label={props.groupLabel}>
+      <ChatHeaderButton
+        tone="outline"
+        className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
+        disabled={props.primaryDisabled}
+        onClick={props.onPrimaryOpen}
+      >
+        {props.primaryIcon}
+        <span
+          className={cn(
+            "font-normal",
+            props.labelMode === "always"
+              ? "ml-0.5"
+              : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
+          )}
+        >
+          Open
+        </span>
+      </ChatHeaderButton>
+      <ChatHeaderSplitDivider />
+      <Menu {...(props.onMenuOpenChange ? { onOpenChange: props.onMenuOpenChange } : {})}>
+        <MenuTrigger
+          render={
+            <ChatHeaderIconButton
+              label={props.menuLabel}
+              tone="outline"
+              className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
+            />
+          }
+        >
+          <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+        </MenuTrigger>
+        {props.menuContent}
+      </Menu>
+    </ChatHeaderSplitGroup>
+  );
+}
+
+function EditorActionOpenInPicker({
+  keybindings,
+  availableEditors,
+  openInTarget,
+  labelMode: labelModeProp,
+  defaultEditor,
+  additionalMenuItems,
+  menuEditorOrder,
+  groupLabel: groupLabelProp,
+  menuLabel: menuLabelProp,
+}: OpenInPickerContentProps) {
+  const labelMode = labelModeProp ?? "responsive";
+  const groupLabel = groupLabelProp ?? "Open in editor";
+  const menuLabel = menuLabelProp ?? "Editor options";
+  const launchers = useEditorLaunchers({
+    keybindings,
+    availableEditors,
+    openInTarget,
+    defaultEditor,
+  });
+  const primaryIcon = launchers.primaryOption?.Icon ? (
+    <launchers.primaryOption.Icon aria-hidden="true" className="size-3.5" />
+  ) : null;
+
+  return (
+    <OpenInPickerFrame
+      labelMode={labelMode}
+      groupLabel={groupLabel}
+      menuLabel={menuLabel}
+      primaryDisabled={!launchers.preferredEditor || !openInTarget}
+      primaryIcon={primaryIcon}
+      onPrimaryOpen={() => launchers.openInEditor(launchers.preferredEditor)}
+      menuContent={
+        <OpenInPickerMenuPopup
+          launchers={launchers}
+          openInTarget={openInTarget}
+          {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
+          {...(menuEditorOrder ? { menuEditorOrder } : {})}
+        />
+      }
+    />
+  );
+}
+
+type PrimaryActionOpenInPickerProps = Omit<OpenInPickerContentProps, "primaryAction"> & {
+  primaryAction: NonNullable<OpenInPickerProps["primaryAction"]>;
+};
+
+function PrimaryActionOpenInPicker({
   keybindings,
   availableEditors,
   openInTarget,
@@ -111,19 +218,82 @@ function OpenInPickerContent({
   menuEditorOrder,
   groupLabel: groupLabelProp,
   menuLabel: menuLabelProp,
-}: OpenInPickerContentProps) {
-  const labelMode = labelModeProp ?? "responsive";
-  const groupLabel = groupLabelProp ?? "Open in editor";
-  const menuLabel = menuLabelProp ?? "Editor options";
+}: PrimaryActionOpenInPickerProps) {
+  const [launcherMenuMounted, setLauncherMenuMounted] = useState(false);
+  const handleMenuOpenChange = (open: boolean) => {
+    if (open) setLauncherMenuMounted(true);
+  };
 
-  const {
-    options,
-    preferredEditor,
-    primaryOption,
-    openFavoriteShortcutLabel,
-    setDefaultEditor,
-    openInEditor,
-  } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
+  return (
+    <OpenInPickerFrame
+      labelMode={labelModeProp ?? "responsive"}
+      groupLabel={groupLabelProp ?? "Open in editor"}
+      menuLabel={menuLabelProp ?? "Editor options"}
+      primaryDisabled={primaryAction.disabled ?? false}
+      primaryIcon={primaryAction.icon ?? null}
+      onPrimaryOpen={primaryAction.onClick}
+      onMenuOpenChange={handleMenuOpenChange}
+      menuContent={
+        launcherMenuMounted ? (
+          <OpenInPickerMenuWithLaunchers
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            openInTarget={openInTarget}
+            {...(defaultEditor ? { defaultEditor } : {})}
+            {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
+            {...(menuEditorOrder ? { menuEditorOrder } : {})}
+          />
+        ) : null
+      }
+    />
+  );
+}
+
+function OpenInPickerMenuWithLaunchers({
+  keybindings,
+  availableEditors,
+  openInTarget,
+  defaultEditor,
+  additionalMenuItems,
+  menuEditorOrder,
+}: Pick<
+  OpenInPickerContentProps,
+  | "keybindings"
+  | "availableEditors"
+  | "openInTarget"
+  | "defaultEditor"
+  | "additionalMenuItems"
+  | "menuEditorOrder"
+>) {
+  const launchers = useEditorLaunchers({
+    keybindings,
+    availableEditors,
+    openInTarget,
+    defaultEditor,
+  });
+  return (
+    <OpenInPickerMenuPopup
+      launchers={launchers}
+      openInTarget={openInTarget}
+      {...(additionalMenuItems !== undefined ? { additionalMenuItems } : {})}
+      {...(menuEditorOrder ? { menuEditorOrder } : {})}
+    />
+  );
+}
+
+function OpenInPickerMenuPopup({
+  launchers,
+  openInTarget,
+  additionalMenuItems,
+  menuEditorOrder,
+}: {
+  launchers: EditorLaunchers;
+  openInTarget: string | null;
+  additionalMenuItems?: ReactNode;
+  menuEditorOrder?: ReadonlyArray<EditorId>;
+}) {
+  const { options, preferredEditor, openFavoriteShortcutLabel, setDefaultEditor, openInEditor } =
+    launchers;
   const displayedOptions = menuEditorOrder
     ? [
         ...menuEditorOrder.flatMap((editorId) => options.filter(({ value }) => value === editorId)),
@@ -131,85 +301,41 @@ function OpenInPickerContent({
       ]
     : options;
 
-  const primaryDisabled = primaryAction
-    ? (primaryAction.disabled ?? false)
-    : !preferredEditor || !openInTarget;
-  const primaryIcon =
-    primaryAction?.icon ??
-    (primaryOption?.Icon ? <primaryOption.Icon aria-hidden="true" className="size-3.5" /> : null);
-  const handlePrimaryOpen = primaryAction?.onClick ?? (() => openInEditor(preferredEditor));
-
   return (
-    <ChatHeaderSplitGroup label={groupLabel}>
-      <ChatHeaderButton
-        tone="outline"
-        className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={primaryDisabled}
-        onClick={handlePrimaryOpen}
+    <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
+      {displayedOptions.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+      <MenuRadioGroup
+        value={preferredEditor ?? ""}
+        onValueChange={(value) => setDefaultEditor(value as EditorId)}
       >
-        {primaryIcon}
-        <span
-          className={cn(
-            "font-normal",
-            labelMode === "always"
-              ? "ml-0.5"
-              : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
-          )}
-        >
-          Open
-        </span>
-      </ChatHeaderButton>
-      <ChatHeaderSplitDivider />
-      <Menu>
-        <MenuTrigger
-          render={
-            <ChatHeaderIconButton
-              label={menuLabel}
-              tone="outline"
-              className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
-            />
-          }
-        >
-          <ChevronDownIcon aria-hidden="true" className="size-3.5" />
-        </MenuTrigger>
-        <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-          {displayedOptions.length === 0 && (
-            <MenuItem disabled>No installed editors found</MenuItem>
-          )}
-          <MenuRadioGroup
-            value={preferredEditor ?? ""}
-            onValueChange={(value) => setDefaultEditor(value as EditorId)}
+        {displayedOptions.map(({ label, Icon, value }) => (
+          <MenuRadioItem
+            key={value}
+            preserveChildLayout
+            trailing={
+              value === preferredEditor && openFavoriteShortcutLabel ? (
+                <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
+              ) : null
+            }
+            value={value}
+            disabled={!openInTarget}
+            onClick={() => openInEditor(value)}
           >
-            {displayedOptions.map(({ label, Icon, value }) => (
-              <MenuRadioItem
-                key={value}
-                preserveChildLayout
-                trailing={
-                  value === preferredEditor && openFavoriteShortcutLabel ? (
-                    <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
-                  ) : null
-                }
-                value={value}
-                disabled={!openInTarget}
-                onClick={() => openInEditor(value)}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0">
-                    <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                  </span>
-                  <span className="truncate">{label}</span>
-                </span>
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
-          {additionalMenuItems ? (
-            <>
-              <MenuSeparator />
-              {additionalMenuItems}
-            </>
-          ) : null}
-        </ComposerPickerMenuPopup>
-      </Menu>
-    </ChatHeaderSplitGroup>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0">
+                <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+              </span>
+              <span className="truncate">{label}</span>
+            </span>
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+      {additionalMenuItems ? (
+        <>
+          <MenuSeparator />
+          {additionalMenuItems}
+        </>
+      ) : null}
+    </ComposerPickerMenuPopup>
   );
 }

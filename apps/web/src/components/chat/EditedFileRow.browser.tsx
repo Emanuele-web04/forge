@@ -108,6 +108,19 @@ afterEach(() => {
 });
 
 describe("EditedFileRow", () => {
+  it("defers editor preference listeners until its launcher menu is opened", async () => {
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    await render(editedFileRow({ openFile: () => true, workspaceRoot: WORKSPACE_ROOT }));
+    const preferenceListenerCalls = () =>
+      addEventListener.mock.calls.filter(
+        ([eventName]) => eventName === "storage" || eventName === "synara:local_storage_change",
+      );
+
+    expect(preferenceListenerCalls()).toHaveLength(0);
+    await page.getByRole("button", { name: `Open ${FILE_PATH} options` }).click();
+    await vi.waitFor(() => expect(preferenceListenerCalls()).toHaveLength(2));
+  });
+
   it("keeps row review, Review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
     const onReview = vi.fn();
     const openFile = vi.fn(() => true);
@@ -215,7 +228,18 @@ describe("EditedFileRow", () => {
     expect(openInEditor).not.toHaveBeenCalled();
   });
 
-  it("opens a workspace-relative missing file only in-app and stays contained when narrow", async () => {
+  it("does not fall back externally when the in-app opener reports a missing file", async () => {
+    const openFile = vi.fn(() => false);
+    const openInEditor = vi.fn().mockResolvedValue(undefined);
+    restoreNativeApi = installNativeApi(openInEditor);
+    await render(editedFileRow({ openFile, workspaceRoot: WORKSPACE_ROOT }));
+
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    expect(openFile).toHaveBeenCalledWith(FILE_PATH);
+    expect(openInEditor).not.toHaveBeenCalled();
+  });
+
+  it("disables relative Open actions without a workspace root and stays contained when narrow", async () => {
     const openFile = vi.fn(() => false);
     const openInEditor = vi.fn().mockResolvedValue(undefined);
     restoreNativeApi = installNativeApi(openInEditor);
@@ -231,10 +255,8 @@ describe("EditedFileRow", () => {
       { container: host },
     );
     try {
-      await page.getByRole("button", { name: "Open", exact: true }).click();
-      expect(openFile).toHaveBeenCalledWith(
-        "a/very/long/path/that/does/not/exist/EditedFileRow.tsx",
-      );
+      expect(page.getByRole("button", { name: "Open", exact: true }).element()).toBeDisabled();
+      expect(openFile).not.toHaveBeenCalled();
       expect(openInEditor).not.toHaveBeenCalled();
 
       const row = screen.container.querySelector<HTMLElement>("[data-edited-file-row='true']");

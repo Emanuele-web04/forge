@@ -50,8 +50,9 @@ export function EditedFileRow(props: EditedFileRowProps) {
   );
   const isDeleted = props.fileKind === "deleted";
   const launcherTarget = isDeleted ? null : absolutePath;
-  const canOpenInApp =
-    !isDeleted && workspaceFileOpener !== null && (relativePath !== null || absolutePath !== null);
+  const hasInAppTarget =
+    absolutePath !== null || (props.workspaceRoot !== undefined && relativePath !== null);
+  const canOpenInApp = !isDeleted && workspaceFileOpener !== null && hasInAppTarget;
   const hasDiffStat = props.additions + props.deletions > 0;
 
   return (
