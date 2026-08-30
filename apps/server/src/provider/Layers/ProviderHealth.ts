@@ -2165,6 +2165,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         new Map(),
       );
       const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
+      const refreshNeedsFollowUpRef = yield* Ref.make(false);
       const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
         makeAlreadyRunningError: (provider) =>
           new ServerProviderUpdateError({
@@ -2473,6 +2474,10 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               revisionRetries += 1;
               continue;
             }
+            // Keep the joined refresh bounded, but queue one final cycle so a
+            // second settings mutation cannot leave the newest provider state
+            // waiting for an unrelated future refresh.
+            yield* Ref.set(refreshNeedsFollowUpRef, true);
             const currentStatuses = yield* Ref.get(statusesRef);
             return yield* projectStatusesForCurrentSettings(currentStatuses);
           }
@@ -2506,7 +2511,15 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return inFlight;
           }
           const refreshFiber = yield* Effect.gen(function* () {
-            const refreshExit = yield* Effect.exit(refreshNow);
+            const refreshExit = yield* Effect.exit(
+              Effect.gen(function* () {
+                const statuses = yield* refreshNow;
+                if (!(yield* Ref.getAndSet(refreshNeedsFollowUpRef, false))) {
+                  return statuses;
+                }
+                return yield* refreshNow;
+              }),
+            );
             if (Exit.isSuccess(refreshExit)) {
               return refreshExit.value;
             }

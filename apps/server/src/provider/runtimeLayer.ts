@@ -7,7 +7,7 @@ import {
   ProviderCredentials,
   ProviderCredentialsLive,
 } from "../providerCredentials";
-import { ServerSettingsLive, ServerSettingsService } from "../serverSettings";
+import { ServerSettingsService } from "../serverSettings";
 import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
@@ -118,9 +118,6 @@ export function makeServerProviderLayer(
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
-      // Skill toggles live in server settings; the shared ServerSettingsLive
-      // layer is memoized so this reuses the instance built at the top level.
-      Layer.provide(ServerSettingsLive),
     );
     return Layer.mergeAll(
       providerServiceLayer,
@@ -128,9 +125,5 @@ export function makeServerProviderLayer(
       adapterRegistryLayer,
       providerSessionDirectoryLayer,
     );
-  }).pipe(
-    Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)),
-    Effect.provide(ServerSettingsLive),
-    Layer.unwrap,
-  );
+  }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 }

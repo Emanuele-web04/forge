@@ -63,18 +63,25 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
-  it("keeps a disabled custom-path provider unavailable", () => {
+  it("makes a disabled provider unavailable before its health status refreshes", () => {
     expect(
       normalizeProviderStatusForLocalConfig({
         provider: "opencode",
-        status: { ...BASE_STATUS, provider: "opencode", message: "OpenCode is disabled." },
+        status: {
+          ...READY_STATUS,
+          provider: "opencode",
+          message: "OpenCode is ready.",
+        },
         customBinaryPath: "/custom/bin/opencode",
         disabled: true,
       }),
     ).toEqual({
-      ...BASE_STATUS,
       provider: "opencode",
-      message: "OpenCode is disabled.",
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: BASE_STATUS.checkedAt,
+      message: "Provider is disabled in Synara settings.",
     });
   });
 

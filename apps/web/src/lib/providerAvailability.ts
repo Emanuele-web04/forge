@@ -35,7 +35,14 @@ export function normalizeProviderStatusForLocalConfig(input: {
     return null;
   }
   if (input.disabled) {
-    return status;
+    return {
+      provider: input.provider,
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: status.checkedAt,
+      message: "Provider is disabled in Synara settings.",
+    };
   }
 
   const customBinaryPath = normalizeCustomBinaryPath(input.customBinaryPath);

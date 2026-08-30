@@ -567,7 +567,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
     );
 
-    it.effect("retries a joined refresh after provider enablement changes its revision", () =>
+    it.effect("runs a final probe when settings change during the bounded retry", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -576,13 +576,21 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const commands: string[] = [];
         let releaseFirst!: () => void;
         let markFirstStarted!: () => void;
+        let releaseSecond!: () => void;
+        let markSecondStarted!: () => void;
         const firstReleased = new Promise<void>((resolve) => {
           releaseFirst = resolve;
         });
         const firstStarted = new Promise<void>((resolve) => {
           markFirstStarted = resolve;
         });
-        let shouldBlock = true;
+        const secondReleased = new Promise<void>((resolve) => {
+          releaseSecond = resolve;
+        });
+        const secondStarted = new Promise<void>((resolve) => {
+          markSecondStarted = resolve;
+        });
+        let codexVersionAttempts = 0;
         const spawnerLayer = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make((command) => {
@@ -594,16 +602,24 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             const result = input.args.includes("--version")
               ? { stdout: `${input.command} 1.0.0\n`, stderr: "", code: 0 }
               : { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
-            if (!shouldBlock) {
+            if (input.command !== "codex" || !input.args.includes("--version")) {
               return Effect.succeed(mockHandle(result));
             }
-            shouldBlock = false;
-            markFirstStarted();
+            codexVersionAttempts += 1;
+            if (codexVersionAttempts > 2) {
+              return Effect.succeed(mockHandle(result));
+            }
+            const isFirstAttempt = codexVersionAttempts === 1;
+            if (isFirstAttempt) {
+              markFirstStarted();
+            } else {
+              markSecondStarted();
+            }
             return Effect.succeed(
               mockHandle(result, {
-                exitCode: Effect.promise(() => firstReleased).pipe(
-                  Effect.as(ChildProcessSpawner.ExitCode(0)),
-                ),
+                exitCode: Effect.promise(() =>
+                  isFirstAttempt ? firstReleased : secondReleased,
+                ).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
               }),
             );
           }),
@@ -630,12 +646,20 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           yield* serverSettings.updateSettings({ providers: { opencode: { enabled: true } } });
           const joinedRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
           releaseFirst();
+          yield* Effect.promise(() => secondStarted);
+          yield* serverSettings.updateSettings({ providers: { pi: { enabled: true } } });
+          releaseSecond();
           const statuses = yield* Fiber.join(joinedRefresh);
           yield* Fiber.join(firstRefresh);
 
           assert.ok(commands.some((command) => command.includes("opencode")));
+          assert.ok(commands.some((command) => command.includes("pi")));
           assert.notStrictEqual(
             statuses.find((status) => status.provider === "opencode")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "pi")?.message,
             "Provider is disabled in Synara settings.",
           );
         }).pipe(Effect.provide(layer));

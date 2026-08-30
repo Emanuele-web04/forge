@@ -256,10 +256,17 @@ export function makeServerRuntimeServicesLayer(
  */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+  const runtimeServicesLayer = makeServerRuntimeServicesLayer({
+    agentGatewayCredentialsLayer,
+  });
+  // Provider start/discovery gates must observe the same settings instance as
+  // the RPC layer. Reusing this layer in the final graph lets Effect memoize a
+  // single ServerSettings service instead of capturing private defaults.
+  const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
+    Layer.provideMerge(ServerSettingsLive),
+  );
   return {
-    runtimeServicesLayer: makeServerRuntimeServicesLayer({
-      agentGatewayCredentialsLayer,
-    }),
-    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }),
+    runtimeServicesLayer,
+    providerLayer,
   } as const;
 }
