@@ -5,6 +5,7 @@
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
+import { type ReactNode } from "react";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -16,6 +17,7 @@ import {
   MenuShortcut,
   MenuTrigger,
   MenuItem,
+  MenuSeparator,
 } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
@@ -30,17 +32,10 @@ import {
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 
-export function OpenInPicker({
-  keybindings: keybindingsProp,
-  availableEditors: availableEditorsProp,
-  openInTarget,
-  labelMode: labelModeProp,
-  defaultEditor,
-}: {
+interface OpenInPickerProps {
   // Editor config is optional: callers that already hold it (e.g. the chat
   // header) pass it through, while standalone surfaces (file-preview headers)
-  // omit it and let the picker self-fetch. react-query dedupes by key with an
-  // infinite stale time, so multiple self-fetching pickers share one request.
+  // omit it and let the picker self-fetch.
   keybindings?: ResolvedKeybindingsConfig;
   availableEditors?: ReadonlyArray<EditorId>;
   openInTarget: string | null;
@@ -53,14 +48,73 @@ export function OpenInPicker({
   // mutating the shared preferred-editor setting. The PDF viewer uses this to default
   // to the OS viewer (e.g. Preview) while still listing installed editors.
   defaultEditor?: EditorId;
-}) {
+  // Lets a file surface reuse the installed-editor menu while its main action
+  // stays in-app. Omitting this preserves the normal preferred-editor action.
+  primaryAction?: {
+    onClick: () => void;
+    disabled?: boolean;
+    icon?: ReactNode;
+  };
+  // Surface-specific actions appended after the shared installed-editor list.
+  // OpenInPicker owns the separator so callers cannot create malformed menus.
+  additionalMenuItems?: ReactNode;
+  /** Optional surface-specific display priority; unlisted installed editors follow in catalog order. */
+  menuEditorOrder?: ReadonlyArray<EditorId>;
+  groupLabel?: string;
+  menuLabel?: string;
+}
+
+type OpenInPickerContentProps = OpenInPickerProps & {
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
+};
+
+export function OpenInPicker(props: OpenInPickerProps) {
+  if (props.keybindings !== undefined && props.availableEditors !== undefined) {
+    return (
+      <OpenInPickerContent
+        {...props}
+        keybindings={props.keybindings}
+        availableEditors={props.availableEditors}
+      />
+    );
+  }
+  return <OpenInPickerWithConfig {...props} />;
+}
+
+function OpenInPickerWithConfig(props: OpenInPickerProps) {
+  // The query-owning wrapper mounts only for standalone surfaces. Rows that
+  // receive config from ChatView avoid both the subscription and a QueryClient
+  // dependency in isolated rendering/tests.
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  return (
+    <OpenInPickerContent
+      {...props}
+      keybindings={props.keybindings ?? serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS}
+      availableEditors={
+        props.availableEditors ??
+        serverConfigQuery.data?.availableEditors ??
+        EMPTY_AVAILABLE_EDITORS
+      }
+    />
+  );
+}
+
+function OpenInPickerContent({
+  keybindings,
+  availableEditors,
+  openInTarget,
+  labelMode: labelModeProp,
+  defaultEditor,
+  primaryAction,
+  additionalMenuItems,
+  menuEditorOrder,
+  groupLabel: groupLabelProp,
+  menuLabel: menuLabelProp,
+}: OpenInPickerContentProps) {
   const labelMode = labelModeProp ?? "responsive";
-  // Only subscribe to the config query when the caller did not supply config.
-  const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
-  const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });
-  const keybindings = keybindingsProp ?? serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const availableEditors =
-    availableEditorsProp ?? serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+  const groupLabel = groupLabelProp ?? "Open in editor";
+  const menuLabel = menuLabelProp ?? "Editor options";
 
   const {
     options,
@@ -70,16 +124,33 @@ export function OpenInPicker({
     setDefaultEditor,
     openInEditor,
   } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
+  const displayedOptions = menuEditorOrder
+    ? [
+        ...menuEditorOrder.flatMap((editorId) =>
+          options.filter(({ value }) => value === editorId),
+        ),
+        ...options.filter(({ value }) => !menuEditorOrder.includes(value)),
+      ]
+    : options;
+
+  const primaryDisabled = primaryAction
+    ? (primaryAction.disabled ?? false)
+    : !preferredEditor || !openInTarget;
+  const primaryIcon = primaryAction?.icon ??
+    (primaryOption?.Icon ? (
+      <primaryOption.Icon aria-hidden="true" className="size-3.5" />
+    ) : null);
+  const handlePrimaryOpen = primaryAction?.onClick ?? (() => openInEditor(preferredEditor));
 
   return (
-    <ChatHeaderSplitGroup label="Open in editor">
+    <ChatHeaderSplitGroup label={groupLabel}>
       <ChatHeaderButton
         tone="outline"
         className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={!preferredEditor || !openInTarget}
-        onClick={() => openInEditor(preferredEditor)}
+        disabled={primaryDisabled}
+        onClick={handlePrimaryOpen}
       >
-        {primaryOption?.Icon && <primaryOption.Icon aria-hidden="true" className="size-3.5" />}
+        {primaryIcon}
         <span
           className={cn(
             "font-normal",
@@ -96,7 +167,7 @@ export function OpenInPicker({
         <MenuTrigger
           render={
             <ChatHeaderIconButton
-              label="Editor options"
+              label={menuLabel}
               tone="outline"
               className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
             />
@@ -105,12 +176,14 @@ export function OpenInPicker({
           <ChevronDownIcon aria-hidden="true" className="size-3.5" />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-          {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+          {displayedOptions.length === 0 && (
+            <MenuItem disabled>No installed editors found</MenuItem>
+          )}
           <MenuRadioGroup
             value={preferredEditor ?? ""}
             onValueChange={(value) => setDefaultEditor(value as EditorId)}
           >
-            {options.map(({ label, Icon, value }) => (
+            {displayedOptions.map(({ label, Icon, value }) => (
               <MenuRadioItem
                 key={value}
                 preserveChildLayout
@@ -120,6 +193,7 @@ export function OpenInPicker({
                   ) : null
                 }
                 value={value}
+                disabled={!openInTarget}
                 onClick={() => openInEditor(value)}
               >
                 <span className="flex min-w-0 items-center gap-2">
@@ -131,6 +205,12 @@ export function OpenInPicker({
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
+          {additionalMenuItems ? (
+            <>
+              <MenuSeparator />
+              {additionalMenuItems}
+            </>
+          ) : null}
         </ComposerPickerMenuPopup>
       </Menu>
     </ChatHeaderSplitGroup>

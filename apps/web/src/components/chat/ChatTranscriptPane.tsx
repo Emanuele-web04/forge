@@ -102,6 +102,8 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
+  keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
+  availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupPendingAction?: ComponentProps<
     typeof MessagesTimeline
@@ -174,6 +176,8 @@ export function ChatTranscriptPane({
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
+  keybindings,
+  availableEditors,
   worktreeSetup,
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
@@ -288,6 +292,8 @@ export function ChatTranscriptPane({
             chatFontSizePx={chatFontSizePx}
             timestampFormat={timestampFormat}
             workspaceRoot={workspaceRoot}
+            {...(keybindings ? { keybindings } : {})}
+            {...(availableEditors ? { availableEditors } : {})}
             contentInsetRightPx={contentInsetRightPx}
             contentInsetBottomPx={contentInsetBottomPx}
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}

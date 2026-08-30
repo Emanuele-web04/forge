@@ -309,6 +309,9 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       yield* fs.makeDirectory(path.join(home, "Applications", "Muxy.app"), {
         recursive: true,
       });
+      yield* fs.makeDirectory(path.join(home, "Applications", "iTerm.app"), {
+        recursive: true,
+      });
       yield* fs.makeDirectory(path.join(home, "Applications", "WebStorm.app"), {
         recursive: true,
       });
@@ -346,6 +349,16 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         args: ["-a", "Terminal", "/tmp/workspace"],
       });
 
+      const itermLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "iterm" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(itermLaunch, {
+        command: "open",
+        args: ["-a", "iTerm", "/tmp/workspace"],
+      });
+
       const webstormLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "webstorm" },
         "darwin",
@@ -368,6 +381,7 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       const availableEditors = resolveAvailableEditors("darwin", { HOME: home, PATH: "" });
       assert.equal(availableEditors.includes("ghostty"), true);
       assert.equal(availableEditors.includes("muxy"), true);
+      assert.equal(availableEditors.includes("iterm"), true);
       assert.equal(availableEditors.includes("webstorm"), true);
       assert.equal(availableEditors.includes("pycharm"), true);
     }),

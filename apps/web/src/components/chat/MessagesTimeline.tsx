@@ -4,8 +4,10 @@
 // Exports: MessagesTimeline
 
 import {
+  type EditorId,
   type MessageId,
   type ProviderMentionReference,
+  type ResolvedKeybindingsConfig,
   ThreadId,
   type ThreadGoalAchievement,
   type ThreadMarker,
@@ -77,6 +79,7 @@ import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
+import { EditedFileRow } from "./EditedFileRow";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
@@ -173,6 +176,8 @@ import {
 } from "./threadFind.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
+const EMPTY_EDITOR_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 // Changed-files list in the per-turn card is capped so large turns stay compact;
 // the rest are revealed via an inline "Show more" row.
 const MAX_VISIBLE_CHANGED_FILES = 5;
@@ -507,6 +512,9 @@ interface MessagesTimelineProps {
   chatFontSizePx?: number;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  /** Already-loaded launcher config; avoids one config subscription per changed-file row. */
+  keybindings?: ResolvedKeybindingsConfig;
+  availableEditors?: ReadonlyArray<EditorId>;
   /**
    * Right padding (px) applied to the scroll viewport so transcript rows clear a right-edge
    * overlay (e.g. the docked Environment card). The scrollbar stays pinned to the viewport's
@@ -583,6 +591,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   chatFontSizePx: chatFontSizePxProp,
   timestampFormat,
   workspaceRoot,
+  keybindings,
+  availableEditors,
   emptyStateContent,
   contentInsetRightPx,
   contentInsetBottomPx,
@@ -603,6 +613,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
   const findHighlight = findHighlightProp ?? null;
+  const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
+  const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
   // The timeline remounts per thread (and when the agent-activity detail view
   // closes), but the anchor lives above it and survives those remounts. An
@@ -2350,39 +2362,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     // bail out ("Unexpected terminal kind `logical` for logical test block").
                     const additions = file.additions ?? 0;
                     const deletions = file.deletions ?? 0;
-                    const hasDiffStat = additions + deletions > 0;
                     return (
-                      <button
+                      <EditedFileRow
                         key={file.path}
-                        type="button"
-                        className={cn(
-                          "group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
-                          withFirstReset && "first:border-t-0",
-                        )}
-                        onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
-                      >
-                        <FileEntryIcon
-                          pathValue={file.path}
-                          kind="file"
-                          theme={resolvedTheme}
-                          colorMode="inherit"
-                          className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
-                        />
-                        <span
-                          className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                          style={{ fontSize: chatTypographyStyle.fontSize }}
-                        >
-                          {file.path}
-                        </span>
-                        {hasDiffStat && (
-                          <span
-                            className="font-system-ui ml-auto shrink-0 tabular-nums"
-                            style={{ fontSize: chatTypographyStyle.fontSize }}
-                          >
-                            <DiffStatLabel additions={additions} deletions={deletions} />
-                          </span>
-                        )}
-                      </button>
+                        filePath={file.path}
+                        fileKind={file.kind}
+                        additions={additions}
+                        deletions={deletions}
+                        workspaceRoot={workspaceRoot}
+                        keybindings={editorKeybindings}
+                        availableEditors={installedEditors}
+                        resolvedTheme={resolvedTheme}
+                        fontSize={chatTypographyStyle.fontSize}
+                        withFirstReset={withFirstReset}
+                        onReview={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                      />
                     );
                   };
                   return (
