@@ -1,0 +1,12 @@
+what	why	evidence	result
+Created DELEGATION.md as a single-unit ledger	Plan 07 is sequential and tightly coupled; no natural file-boundary split	DELEGATION.md	recorded
+Created GATES.md with plan acceptance criteria	Surface each binary gate with a runnable check	GATES.md	recorded
+Implemented all Plan 07 source files	Closed every pending task in the previous todo list	apps/web/src/* (FeedbackDialog, Sidebar, SidebarBugReportButton, feedbackDialogStore, feedbackGithubIssue, __root.tsx)	verified
+Ran focused Vitest suite	Exercise prompt builder, store, sidebar button, and dialog form	cd apps/web && bun run test (4 files, 15/15 tests)	passed
+Ran full workspace verification gate	Project rule: bun fmt/lint/typecheck must pass before completion	bun fmt, bun lint, bun typecheck	passed
+Ran React Doctor changed-scope scan	Catch React regressions from UI edits	npx react-doctor@latest --verbose --scope changed	score 79/100; remaining Sidebar.tsx prefer-useReducer warning is pre-existing
+Committed local feature and tests	Preserve verified state on branch without pushing	git commit	branch head 0720523d6f1d0670a9db744f4db6f474100e4ae4
+Reviewed and fixed prompt security issues	Remove pre-confirmation remote search, secure temp files, quote-safe command, tighten confirmation, sanitize diagnostics, expand secret/path redaction	feedbackGithubIssue.ts, feedbackGithubIssue.test.ts	fixed and tests updated
+Hardened FeedbackDialog concurrency and accessibility	Add synchronous ref guards and role="group" to prevent double-submit and improve screen-reader semantics	FeedbackDialog.tsx, FeedbackDialog.test.tsx	fixed and tests updated
+Simplified project ID handling and added search-palette bug action	Drop redundant alias chain, add "Report a bug" palette action to provide an app-owned bug path	Sidebar.tsx, SidebarSearchPalette.tsx, __root.tsx	fixed
+Ran final verification	Confirm the changed-scope work is clean	bun fmt; bun lint; bun typecheck; cd apps/web && bun run test	all passed
