@@ -431,6 +431,21 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
+  it.effect("falls back to opening macOS targets when metadata lookup fails", () =>
+    Effect.gen(function* () {
+      const targetPath = `/${"unavailable".repeat(500)}`;
+      const launch = yield* resolveEditorLaunch(
+        { cwd: targetPath, editor: "file-manager" },
+        "darwin",
+      );
+
+      assert.deepEqual(launch, {
+        command: "open",
+        args: [targetPath],
+      });
+    }),
+  );
+
   it.effect("maps file-manager editor to Windows and Linux open commands", () =>
     Effect.gen(function* () {
       const windowsLaunch = yield* resolveEditorLaunch(

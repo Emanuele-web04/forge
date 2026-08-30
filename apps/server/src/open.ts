@@ -147,10 +147,17 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
   }
 }
 
+function shouldRevealInFinder(target: string): boolean {
+  try {
+    return statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+  } catch {
+    return false;
+  }
+}
+
 function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
   const command = fileManagerCommandForPlatform(platform);
-  const shouldReveal =
-    platform === "darwin" && statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+  const shouldReveal = platform === "darwin" && shouldRevealInFinder(target);
 
   return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
