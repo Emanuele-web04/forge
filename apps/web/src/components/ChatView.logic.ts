@@ -1343,8 +1343,16 @@ export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
-}): "Loading" | "Thinking" {
-  return input.isSendBusy && !input.turnTakenOver ? "Loading" : "Thinking";
+  isConnecting?: boolean;
+  providerName?: string;
+}): "Loading" | "Thinking" | `Starting ${string}…` {
+  if (input.isSendBusy && !input.turnTakenOver) {
+    return "Loading";
+  }
+  if (input.isConnecting && input.providerName) {
+    return `Starting ${input.providerName}…`;
+  }
+  return "Thinking";
 }
 
 /**

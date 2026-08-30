@@ -7,6 +7,7 @@ import {
   chunkCollapsedTurnItems,
   chunkWorkEntries,
   computeMessageDurationStart,
+  computeMessageTurnStart,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
@@ -177,6 +178,75 @@ describe("computeMessageDurationStart", () => {
 
   it("returns empty map for empty input", () => {
     expect(computeMessageDurationStart([])).toEqual(new Map());
+  });
+});
+
+describe("computeMessageTurnStart", () => {
+  it("anchors every assistant to the nearest preceding user message", () => {
+    const result = computeMessageTurnStart([
+      { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
+      {
+        id: "a1",
+        role: "assistant",
+        createdAt: "2026-01-01T00:00:30Z",
+        completedAt: "2026-01-01T00:00:30Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        createdAt: "2026-01-01T00:00:55Z",
+        completedAt: "2026-01-01T00:00:55Z",
+      },
+    ]);
+
+    expect(result).toEqual(
+      new Map([
+        ["u1", "2026-01-01T00:00:00Z"],
+        ["a1", "2026-01-01T00:00:00Z"],
+        ["a2", "2026-01-01T00:00:00Z"],
+      ]),
+    );
+  });
+
+  it("resets the boundary on a new user message", () => {
+    const result = computeMessageTurnStart([
+      { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
+      {
+        id: "a1",
+        role: "assistant",
+        createdAt: "2026-01-01T00:00:30Z",
+        completedAt: "2026-01-01T00:00:30Z",
+      },
+      { id: "u2", role: "user", createdAt: "2026-01-01T00:01:00Z" },
+      {
+        id: "a2",
+        role: "assistant",
+        createdAt: "2026-01-01T00:01:20Z",
+        completedAt: "2026-01-01T00:01:20Z",
+      },
+    ]);
+
+    expect(result).toEqual(
+      new Map([
+        ["u1", "2026-01-01T00:00:00Z"],
+        ["a1", "2026-01-01T00:00:00Z"],
+        ["u2", "2026-01-01T00:01:00Z"],
+        ["a2", "2026-01-01T00:01:00Z"],
+      ]),
+    );
+  });
+
+  it("falls back to the message's own createdAt when there is no user", () => {
+    const result = computeMessageTurnStart([
+      {
+        id: "a1",
+        role: "assistant",
+        createdAt: "2026-01-01T00:00:30Z",
+        completedAt: "2026-01-01T00:00:30Z",
+      },
+    ]);
+
+    expect(result).toEqual(new Map([["a1", "2026-01-01T00:00:30Z"]]));
   });
 });
 
@@ -1142,6 +1212,56 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal).toBeDefined();
     expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
     expect(terminal!.collapsedWorkElapsed).toBe("23m");
+  });
+
+  it("is byte-identical when the turn settles after the active turn leaves running", () => {
+    // Simulate the video shape: the terminal is answered after the session has
+    // already left the running state; a later re-fold must not change the label.
+    const entries = [
+      userEntry("u1", "2026-01-01T00:00:00Z"),
+      workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
+      assistantEntry("a1", "2026-01-01T00:00:20Z", {
+        turnId: "t1",
+        text: "The provider run failed",
+        completedAt: "2026-01-01T00:00:20Z",
+      }),
+      workEntry("w2", "2026-01-01T00:00:30Z", "retry work"),
+      assistantEntry("a2", "2026-01-01T00:01:00Z", {
+        turnId: "t2",
+        text: "All done",
+        completedAt: "2026-01-01T00:01:00Z",
+      }),
+    ];
+
+    const liveRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t2"),
+      timelineEntries: entries,
+    });
+
+    const settledRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: false,
+      activeTurnInProgress: false,
+      timelineEntries: entries,
+    });
+
+    const liveTerminal = messageRow(liveRows, "a2");
+    const settledTerminal = messageRow(settledRows, "a2");
+    expect(liveTerminal).toBeDefined();
+    expect(settledTerminal).toBeDefined();
+    expect(settledTerminal!.collapsedWorkElapsed).toBe("1m");
+    // If this were recomputed while the turn was live, the terminal would not yet
+    // be collapsed; once it is, the value is stable and does not change.
+    const recomputedRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: false,
+      activeTurnInProgress: false,
+      timelineEntries: entries,
+    });
+    expect(messageRow(recomputedRows, "a2")!.collapsedWorkElapsed).toBe("1m");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {

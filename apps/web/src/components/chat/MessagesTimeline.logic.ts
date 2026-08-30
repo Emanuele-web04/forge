@@ -364,6 +364,31 @@ export function computeMessageDurationStart(
   return result;
 }
 
+/**
+ * Stable turn start for each message: the `createdAt` of the nearest preceding
+ * user message (or the message's own `createdAt` if there is none). Unlike
+ * `computeMessageDurationStart`, this does not advance past completed assistant
+ * messages, so an assistant's turn boundary stays fixed to the user message that
+ * opened the turn.
+ */
+export function computeMessageTurnStart(
+  messages: ReadonlyArray<TimelineDurationMessage>,
+): Map<string, string> {
+  const result = new Map<string, string>();
+  let lastUserCreatedAt: string | null = null;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      result.set(message.id, message.createdAt);
+      lastUserCreatedAt = message.createdAt;
+      continue;
+    }
+    result.set(message.id, lastUserCreatedAt ?? message.createdAt);
+  }
+
+  return result;
+}
+
 export function normalizeCompactToolLabel(value: string): string {
   return normalizeCompactToolLabelValue(value);
 }
@@ -568,6 +593,7 @@ export function deriveMessagesTimelineRows(input: {
     entry.kind === "message" ? [entry.message] : [],
   );
   const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
+  const turnStartByMessageId = computeMessageTurnStart(timelineMessages);
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
 
@@ -732,6 +758,7 @@ export function deriveMessagesTimelineRows(input: {
     terminalAssistantMessageIds,
     activeTurnInProgress: input.activeTurnInProgress ?? false,
     activeTurnId: input.activeTurnId ?? null,
+    turnStartByMessageId,
   });
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
@@ -797,9 +824,11 @@ function collapseSettledTurns(
     terminalAssistantMessageIds: ReadonlySet<string>;
     activeTurnInProgress: boolean;
     activeTurnId: TurnId | null;
+    turnStartByMessageId: ReadonlyMap<string, string>;
   },
 ): void {
-  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
+  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId, turnStartByMessageId } =
+    options;
   const lastTerminalAssistantMessageId = activeTurnInProgress
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
@@ -863,17 +892,23 @@ function collapseSettledTurns(
         // narration/work outside the final "Worked for..." disclosure.
         continue;
       }
+      if (prev.kind === "message-segment") {
+        // Segments are slices of a streamed message; they are not full rows to
+        // fold, but earlier rows behind them still belong to this turn.
+        continue;
+      }
       break;
     }
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
     // The disclosure folds everything back to the user boundary, so "Worked
-    // for" must start where the folded segment starts. The terminal row's own
-    // durationStart advances past intermediate *completed* assistant messages
-    // (e.g. a failed attempt before a retry), which would report only the tail
-    // of the turn instead of the full run.
-    let collapsedStart = row.durationStart;
+    // for" must start where the folded segment starts. `turnStartByMessageId`
+    // is derived directly from the original message list and does not advance
+    // past intermediate completed assistant messages, so the settled duration is
+    // stable even when the set of foldable rows changes between the first settle
+    // and a later re-fold.
+    let collapsedStart = turnStartByMessageId.get(message.id) ?? row.durationStart;
     // All slices of one segmented message share the same ChatMessage, so the
     // message folds once (at its first slice) to keep narration identity stable.
     const foldedSegmentMessageIds = new Set<string>();

@@ -23,6 +23,7 @@ import {
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
   type PinnedMessage,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
@@ -1484,7 +1485,6 @@ export default function ChatView({
   const worktreeSetupResolutionRef = useRef<WorktreeSetupResolution | null>(null);
   const [worktreeSetupPendingAction, setWorktreeSetupPendingAction] =
     useState<WorktreeSetupResolutionAction | null>(null);
-  const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -2517,7 +2517,9 @@ export default function ChatView({
     ],
   );
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = isLocalConnecting || phase === "connecting";
+  const isConnecting = phase === "connecting";
+  const providerDisplayName =
+    PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   // User messages intentionally have no turn id; assistant messages are the stable
   // bridge for deciding which historical work can fold into visible replies.
   // Memoized on purpose: an inline Set would change identity every render and cascade
@@ -12382,7 +12384,12 @@ export default function ChatView({
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
-                    workingLabel={resolveWorkingLabel({ isSendBusy, turnTakenOver })}
+                    workingLabel={resolveWorkingLabel({
+                      isSendBusy,
+                      turnTakenOver,
+                      isConnecting,
+                      providerName: providerDisplayName,
+                    })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
