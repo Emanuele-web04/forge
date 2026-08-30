@@ -686,6 +686,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       startSessionWithOutcome,
       completePriorTranscriptBootstrap,
+      pendingPriorTranscriptBootstraps,
       listSessions,
       sendTurn,
       steerTurn,
@@ -8276,6 +8277,134 @@ describe("ProviderCommandReactor", () => {
     });
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
+
+  it.each(["opencode", "kilo"] as const)(
+    "discards a pending %s transcript recap on explicit session stop",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      harness.pendingPriorTranscriptBootstraps.add(threadId);
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.makeUnsafe(`${provider}-pending-bootstrap-stop`),
+          threadId,
+          createdAt: now,
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-post-stop-fresh-turn`,
+        text: "Start fresh after the explicit stop.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+      expect(sentInput.input).toBe("Start fresh after the explicit stop.");
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "completes an empty pending %s transcript recap after a bare turn",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      harness.pendingPriorTranscriptBootstraps.add(threadId);
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-empty-bootstrap-turn`,
+        text: "There is no earlier transcript left to restore.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+      expect(sentInput.input).toBe("There is no earlier transcript left to restore.");
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "lets the %s sidechat bootstrap satisfy the durable transcript recap",
+    async (provider) => {
+      const threadId = ThreadId.makeUnsafe(`thread-${provider}-sidechat-bootstrap`);
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe(`cmd-${provider}-sidechat-create`),
+          threadId,
+          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: `${provider} sidechat`,
+          modelSelection: { provider, model: "openai/gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [
+            {
+              messageId: asMessageId(`${provider}-sidechat-imported-user`),
+              role: "user",
+              text: "The imported sidechat color is amber.",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId(`${provider}-sidechat-imported-assistant`),
+              role: "assistant",
+              text: "I will retain amber for this sidechat.",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-${provider}-sidechat-turn`),
+          threadId,
+          message: {
+            messageId: asMessageId(`${provider}-sidechat-native-user`),
+            role: "user",
+            text: "Which color did the sidechat retain?",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+      expect(sentInput.input).toContain("<sidechat_context>");
+      expect(sentInput.input).not.toContain("<thread_context>");
+      expect(sentInput.input).toContain("The imported sidechat color is amber.");
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+    },
+  );
 
   it.each(["opencode", "kilo"] as const)(
     "sends the post-idle %s turn bare after native resume succeeds",

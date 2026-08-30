@@ -1461,7 +1461,17 @@ const make = Effect.gen(function* () {
       }),
     );
     if (startOutcome.priorTranscriptBootstrapPending) {
-      freshSessionContextBootstrapThreadIds.add(threadId);
+      if (shouldRegisterContextBootstrap) {
+        freshSessionContextBootstrapThreadIds.add(threadId);
+      } else if (
+        (preferredProvider === "opencode" || preferredProvider === "kilo") &&
+        providerService.completePriorTranscriptBootstrap
+      ) {
+        // An explicit stop intentionally discards pending synthetic context.
+        // If its best-effort persistence cleanup was interrupted, finish that
+        // cleanup before starting the fresh session instead of resurrecting it.
+        yield* providerService.completePriorTranscriptBootstrap({ threadId });
+      }
     }
     const startedSession = startOutcome.session;
     // Record the exact selection the session was spawned with so later
@@ -1658,15 +1668,23 @@ const make = Effect.gen(function* () {
         issue: providerPromptOverflowIssue(goalPromptOverheadChars),
       });
     }
+    const hasPendingFreshSessionTranscriptBootstrap = freshSessionContextBootstrapThreadIds.has(
+      input.threadId,
+    );
+    const hasPendingRollbackTranscriptBootstrap = rollbackContextBootstrapThreadIds.has(
+      input.threadId,
+    );
     const hasPendingPriorTranscriptBootstrap =
-      freshSessionContextBootstrapThreadIds.has(input.threadId) ||
-      rollbackContextBootstrapThreadIds.has(input.threadId);
+      hasPendingFreshSessionTranscriptBootstrap || hasPendingRollbackTranscriptBootstrap;
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
-      !hasPendingPriorTranscriptBootstrap;
+      !hasPendingRollbackTranscriptBootstrap &&
+      (!hasPendingFreshSessionTranscriptBootstrap ||
+        selectedProvider === "opencode" ||
+        selectedProvider === "kilo");
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
@@ -2056,14 +2074,18 @@ const make = Effect.gen(function* () {
     ) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
-    if (
+    const retiresPriorTranscriptBootstrap =
       shouldBootstrapPriorTranscriptContext &&
       input.reviewTarget === undefined &&
       pendingContextBootstrapAttempt === undefined &&
-      (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent)
-    ) {
+      (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent);
+    const specializedBootstrapCompletesFreshSessionContext =
+      input.reviewTarget === undefined &&
+      pendingContextBootstrapAttempt === undefined &&
+      (handoffBootstrapText !== null || sidechatBootstrapText !== null);
+    if (retiresPriorTranscriptBootstrap || specializedBootstrapCompletesFreshSessionContext) {
       if (
-        priorTranscriptBootstrapText !== null &&
+        hasPendingFreshSessionTranscriptBootstrap &&
         (selectedProvider === "opencode" || selectedProvider === "kilo") &&
         providerService.completePriorTranscriptBootstrap
       ) {
@@ -2081,7 +2103,9 @@ const make = Effect.gen(function* () {
         );
       }
       freshSessionContextBootstrapThreadIds.delete(input.threadId);
-      rollbackContextBootstrapThreadIds.delete(input.threadId);
+      if (retiresPriorTranscriptBootstrap) {
+        rollbackContextBootstrapThreadIds.delete(input.threadId);
+      }
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
     return startedTurn;
@@ -3692,6 +3716,26 @@ const make = Effect.gen(function* () {
     }
     clearPendingContextBootstraps(thread.id);
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
+    const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
+      ? thread.session.providerName
+      : thread.modelSelection.provider;
+    if (
+      (stoppedProvider === "opencode" || stoppedProvider === "kilo") &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
+      yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "provider command reactor could not discard transcript bootstrap during session stop",
+            {
+              threadId: thread.id,
+              provider: stoppedProvider,
+              cause: Cause.pretty(cause),
+            },
+          ),
+        ),
+      );
+    }
 
     const providerThreadId =
       providerThread !== null
