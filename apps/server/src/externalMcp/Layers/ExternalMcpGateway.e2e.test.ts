@@ -508,10 +508,7 @@ describe("external MCP gateway stdio flow", () => {
           summary: "Finished from external MCP.",
         });
 
-        const longText = Array.from(
-          { length: 25_007 },
-          (_, index) => String(index % 10),
-        ).join("");
+        const longText = Array.from({ length: 25_007 }, (_, index) => String(index % 10)).join("");
         const currentDetail = details.get(threadId)!;
         details.set(threadId, {
           ...currentDetail,
@@ -543,9 +540,7 @@ describe("external MCP gateway stdio flow", () => {
         expect(errors).toEqual([]);
         const messagePages = outputLines.slice(3, 6).map(toolPayload);
         expect(messagePages.map((page) => page.effectiveMaxMessageChars)).toEqual([
-          10_000,
-          10_000,
-          10_000,
+          10_000, 10_000, 10_000,
         ]);
         expect(
           messagePages
