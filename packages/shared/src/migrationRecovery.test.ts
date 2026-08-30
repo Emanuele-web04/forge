@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
   migrationBackupDirectory,
+  migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
   parseMigrationRecoveryResumeState,
 } from "./migrationRecovery";
@@ -13,6 +14,9 @@ describe("migration recovery paths", () => {
       "/data/state.sqlite.migration-recovery.json",
     );
     expect(migrationBackupDirectory("/data/state.sqlite")).toBe("/data/state.sqlite.backups");
+    expect(migrationBackupProvenancePath("/data/state.sqlite")).toBe(
+      "/data/state.sqlite.migration-backup.json",
+    );
   });
 });
 

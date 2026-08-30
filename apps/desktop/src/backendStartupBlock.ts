@@ -1,6 +1,11 @@
 // FILE: backendStartupBlock.ts
 // Purpose: Classifies expected backend startup blocks that need user action, not crash retries.
 
+import {
+  parseMigrationDivergenceConsentChallenge,
+  type MigrationDivergenceConsentChallenge,
+} from "@synara/shared/migrationSafety";
+
 const MAX_STARTUP_OUTPUT_CHARS = 16_384;
 
 export type BackendStartupBlock =
@@ -10,6 +15,13 @@ export type BackendStartupBlock =
     }
   | {
       readonly kind: "migration-recovery-required";
+    }
+  | {
+      readonly kind: "migration-divergence-consent-required";
+      readonly challenge: MigrationDivergenceConsentChallenge;
+    }
+  | {
+      readonly kind: "migration-runtime-identity-mismatch";
     };
 
 export class BackendStartupBlockDetector {
@@ -23,6 +35,20 @@ export class BackendStartupBlockDetector {
     this.output = `${this.output}${text.replace(/\r/g, "")}`;
     if (this.output.length > MAX_STARTUP_OUTPUT_CHARS) {
       this.output = this.output.slice(-MAX_STARTUP_OUTPUT_CHARS);
+    }
+
+    const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
+    if (divergenceChallenge) {
+      this.block = {
+        kind: "migration-divergence-consent-required",
+        challenge: divergenceChallenge,
+      };
+      return;
+    }
+
+    if (this.output.includes("MigrationRuntimeIdentityMismatchError:")) {
+      this.block = { kind: "migration-runtime-identity-mismatch" };
+      return;
     }
 
     if (this.output.includes("MigrationRecoveryRequiredError:")) {

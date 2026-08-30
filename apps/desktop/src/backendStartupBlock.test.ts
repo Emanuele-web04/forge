@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
+import {
+  serializeMigrationDivergenceConsentChallenge,
+  type MigrationDivergenceConsentChallenge,
+} from "@synara/shared/migrationSafety";
 
 import { BackendStartupBlockDetector } from "./backendStartupBlock";
+
+const divergenceChallenge: MigrationDivergenceConsentChallenge = {
+  version: 1,
+  databasePath: "/data/state.sqlite",
+  backupDirectory: "/data/state.sqlite.backups",
+  sourceVersion: "imported-v90-from90",
+  targetVersion: 96,
+  firstDivergedId: 90,
+  expectedName: "ProjectionThreadMessageTextSegments",
+  recordedName: "AuthSessionRenewalPolicy",
+  highWaterMark: 90,
+  lineageFingerprint: "a".repeat(64),
+  consentToken: "b".repeat(64),
+};
 
 describe("BackendStartupBlockDetector", () => {
   it("recognizes a live database owner across output chunks", () => {
@@ -28,6 +46,29 @@ describe("BackendStartupBlockDetector", () => {
     detector.push("MigrationRecoveryRequiredError: Migration recovery is required");
 
     expect(detector.read()).toEqual({ kind: "migration-recovery-required" });
+  });
+
+  it("extracts a divergence consent challenge across output chunks", () => {
+    const detector = new BackendStartupBlockDetector();
+    const serialized = serializeMigrationDivergenceConsentChallenge(divergenceChallenge);
+
+    detector.push(`MigrationDivergenceConsentRequiredError: blocked\n${serialized.slice(0, 80)}`);
+    detector.push(`${serialized.slice(80)}\n    at migrate`);
+
+    expect(detector.read()).toEqual({
+      kind: "migration-divergence-consent-required",
+      challenge: divergenceChallenge,
+    });
+  });
+
+  it("recognizes a migration bundle identity mismatch", () => {
+    const detector = new BackendStartupBlockDetector();
+
+    detector.push(
+      "MigrationRuntimeIdentityMismatchError: desktop and server bundles were built from different migration sources\n",
+    );
+
+    expect(detector.read()).toEqual({ kind: "migration-runtime-identity-mismatch" });
   });
 
   it("ignores unrelated startup failures", () => {

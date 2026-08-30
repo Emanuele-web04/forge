@@ -7,6 +7,10 @@ export function migrationBackupDirectory(dbPath: string): string {
   return `${dbPath}.backups`;
 }
 
+export function migrationBackupProvenancePath(dbPath: string): string {
+  return `${dbPath}.migration-backup.json`;
+}
+
 /**
  * How many times startup may re-run an interrupted migration before it stops
  * trying and demands the explicit operator restore.

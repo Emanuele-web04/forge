@@ -244,6 +244,10 @@
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
     },
+    "./migrationSafety": {
+      "types": "./src/migrationSafety.ts",
+      "import": "./src/migrationSafety.ts"
+    },
     "./threadMentions": {
       "types": "./src/threadMentions.ts",
       "import": "./src/threadMentions.ts"

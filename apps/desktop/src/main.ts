@@ -61,6 +61,11 @@ import {
 import { NetService } from "@synara/shared/Net";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
+import {
+  MIGRATION_DIVERGENCE_CONSENT_ENV,
+  MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
+  type MigrationRuntimeIdentityMismatch,
+} from "@synara/shared/migrationSafety";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
@@ -151,6 +156,11 @@ import {
 } from "./backendSupervisionPolicy";
 import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
+import {
+  embeddedDesktopMigrationRuntimeSourceDigest,
+  inspectDesktopMigrationRuntimeIdentity,
+} from "./migrationBundleIdentity";
+import { MigrationConsentHandoff } from "./migrationConsentHandoff";
 import {
   RENDERER_MAX_AUTOMATIC_RELOADS,
   RendererCrashPolicy,
@@ -373,6 +383,7 @@ const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
+const migrationConsentHandoff = new MigrationConsentHandoff();
 let desktopShutdownComplete = false;
 let desktopProtocolRegistered = false;
 let aboutCommitHashCache: string | null | undefined;
@@ -1106,6 +1117,56 @@ function resolveBackendCwd(): string {
     return resolveAppRoot();
   }
   return OS.homedir();
+}
+
+async function requireCurrentDesktopMigrationBundle(): Promise<boolean> {
+  try {
+    const mismatch = inspectDesktopMigrationRuntimeIdentity({
+      appRoot: resolveAppRoot(),
+      isPackaged: app.isPackaged,
+      embeddedDigest: embeddedDesktopMigrationRuntimeSourceDigest(),
+    });
+    return mismatch ? rejectDesktopMigrationBundleMismatch(mismatch) : true;
+  } catch (error) {
+    return rejectUnverifiableDesktopMigrationBundle(error);
+  }
+}
+
+async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise<false> {
+  const message = formatErrorMessage(error);
+  writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
+  await dialog.showMessageBox({
+    type: "error",
+    title: "Synara could not verify its server build",
+    message: "The migration source could not be checked safely.",
+    detail: `${message}\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
+    buttons: ["Quit"],
+    defaultId: 0,
+    noLink: true,
+  });
+  requestGracefulAppQuit("migration bundle source check failed");
+  return false;
+}
+
+async function rejectDesktopMigrationBundleMismatch(
+  mismatch: MigrationRuntimeIdentityMismatch,
+): Promise<false> {
+  writeDesktopLogHeader(
+    `migration bundle source mismatch expected=${mismatch.expectedDigest} actual=${mismatch.actualDigest}`,
+  );
+  await dialog.showMessageBox({
+    type: "error",
+    title: "Synara's server build is stale",
+    message: "The built migration code does not match this checkout.",
+    detail:
+      `Expected ${mismatch.expectedDigest}, but the desktop bundle contains ` +
+      `${mismatch.actualDigest}.\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
+    buttons: ["Quit"],
+    defaultId: 0,
+    noLink: true,
+  });
+  requestGracefulAppQuit("stale migration bundle");
+  return false;
 }
 
 function desktopMigrationRecoveryPaths(): DesktopMigrationRecoveryPaths {
@@ -3433,6 +3494,8 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
+  const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
+  const migrationDivergenceConsent = migrationConsentHandoff.take();
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -3444,6 +3507,12 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
     ...(app.isPackaged
       ? { [DEVICE_HELPER_SOURCE_DIR_ENV]: Path.join(process.resourcesPath, "device-helper") }
+      : {}),
+    ...(migrationSourceDigest
+      ? { [MIGRATION_RUNTIME_SOURCE_DIGEST_ENV]: migrationSourceDigest }
+      : {}),
+    ...(migrationDivergenceConsent
+      ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
@@ -3583,6 +3652,49 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
   const task = (async () => {
+    if (block.kind === "migration-divergence-consent-required") {
+      const challenge = block.challenge;
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Synara found a different database migration history",
+        message: `Migration ${challenge.firstDivergedId} does not match this build.`,
+        detail:
+          `The database records "${challenge.recordedName}", while this build expects ` +
+          `"${challenge.expectedName}". Continuing will first save an exact backup in:\n` +
+          `${challenge.backupDirectory}\n\nSynara will then rewrite tracker rows from migration ` +
+          `${challenge.firstDivergedId} and replay through ${challenge.targetVersion}. ` +
+          "Older builds may no longer be able to open the upgraded database. No provider or chat process will start until you choose.",
+        buttons: ["Back up and continue", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (result.response === 0) {
+        migrationConsentHandoff.approve(challenge.consentToken);
+        backendLifecycleDialogInFlight = null;
+        await restartBackendAfterCrash("approved migration lineage repair", "lifecycle");
+      } else {
+        requestGracefulAppQuit("migration lineage repair declined");
+      }
+      return;
+    }
+
+    if (block.kind === "migration-runtime-identity-mismatch") {
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's server build does not match",
+        message: "The desktop and server migration code came from different builds.",
+        detail: app.isPackaged
+          ? "Update or reinstall Synara before starting it again. The database was not opened."
+          : "Rebuild with bun run build:desktop before starting Synara again. The database was not opened.",
+        buttons: ["Quit"],
+        defaultId: 0,
+        noLink: true,
+      });
+      requestGracefulAppQuit("migration bundle identity mismatch");
+      return;
+    }
+
     if (block.kind === "migration-recovery-required") {
       const result = await dialog.showMessageBox({
         type: "warning",
@@ -4830,6 +4942,9 @@ if (!hasSingleInstanceLock) {
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
+  if (!(await requireCurrentDesktopMigrationBundle())) {
+    return;
+  }
   // Ahead of the recovery gate on purpose. A startup that blocks below returns
   // early, and every path that could ship the fix for whatever blocked it lives
   // after that return: an install wedged on a bad migration would be unable to
