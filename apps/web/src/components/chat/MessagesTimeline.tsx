@@ -424,7 +424,7 @@ function WorktreeSetupCard({
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
-  workingLabel?: "Loading" | "Thinking" | `Starting ${string}…` | undefined;
+  workingLabel?: string | undefined;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */

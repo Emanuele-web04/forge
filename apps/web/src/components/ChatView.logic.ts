@@ -1345,7 +1345,7 @@ export function resolveWorkingLabel(input: {
   turnTakenOver: boolean;
   isConnecting?: boolean;
   providerName?: string;
-}): "Loading" | "Thinking" | `Starting ${string}…` {
+}): string {
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }

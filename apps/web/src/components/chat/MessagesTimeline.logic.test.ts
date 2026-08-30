@@ -7,7 +7,6 @@ import {
   chunkCollapsedTurnItems,
   chunkWorkEntries,
   computeMessageDurationStart,
-  computeMessageTurnStart,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
@@ -179,25 +178,26 @@ describe("computeMessageDurationStart", () => {
   it("returns empty map for empty input", () => {
     expect(computeMessageDurationStart([])).toEqual(new Map());
   });
-});
 
-describe("computeMessageTurnStart", () => {
-  it("anchors every assistant to the nearest preceding user message", () => {
-    const result = computeMessageTurnStart([
-      { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        completedAt: "2026-01-01T00:00:30Z",
-      },
-      {
-        id: "a2",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:55Z",
-        completedAt: "2026-01-01T00:00:55Z",
-      },
-    ]);
+  it("anchors every assistant to the nearest preceding user message when not advancing on completed assistant", () => {
+    const result = computeMessageDurationStart(
+      [
+        { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
+        {
+          id: "a1",
+          role: "assistant",
+          createdAt: "2026-01-01T00:00:30Z",
+          completedAt: "2026-01-01T00:00:30Z",
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          createdAt: "2026-01-01T00:00:55Z",
+          completedAt: "2026-01-01T00:00:55Z",
+        },
+      ],
+      { advanceOnCompletedAssistant: false },
+    );
 
     expect(result).toEqual(
       new Map([
@@ -206,47 +206,6 @@ describe("computeMessageTurnStart", () => {
         ["a2", "2026-01-01T00:00:00Z"],
       ]),
     );
-  });
-
-  it("resets the boundary on a new user message", () => {
-    const result = computeMessageTurnStart([
-      { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        completedAt: "2026-01-01T00:00:30Z",
-      },
-      { id: "u2", role: "user", createdAt: "2026-01-01T00:01:00Z" },
-      {
-        id: "a2",
-        role: "assistant",
-        createdAt: "2026-01-01T00:01:20Z",
-        completedAt: "2026-01-01T00:01:20Z",
-      },
-    ]);
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-        ["u2", "2026-01-01T00:01:00Z"],
-        ["a2", "2026-01-01T00:01:00Z"],
-      ]),
-    );
-  });
-
-  it("falls back to the message's own createdAt when there is no user", () => {
-    const result = computeMessageTurnStart([
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        completedAt: "2026-01-01T00:00:30Z",
-      },
-    ]);
-
-    expect(result).toEqual(new Map([["a1", "2026-01-01T00:00:30Z"]]));
   });
 });
 

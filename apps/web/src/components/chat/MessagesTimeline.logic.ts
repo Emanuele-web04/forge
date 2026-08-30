@@ -347,6 +347,7 @@ export function resolveThreadFindJumpTarget(
 
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
+  { advanceOnCompletedAssistant = true }: { readonly advanceOnCompletedAssistant?: boolean } = {},
 ): Map<string, string> {
   const result = new Map<string, string>();
   let lastBoundary: string | null = null;
@@ -356,7 +357,7 @@ export function computeMessageDurationStart(
       lastBoundary = message.createdAt;
     }
     result.set(message.id, lastBoundary ?? message.createdAt);
-    if (message.role === "assistant" && message.completedAt) {
+    if (advanceOnCompletedAssistant && message.role === "assistant" && message.completedAt) {
       lastBoundary = message.completedAt;
     }
   }
@@ -366,27 +367,14 @@ export function computeMessageDurationStart(
 
 /**
  * Stable turn start for each message: the `createdAt` of the nearest preceding
- * user message (or the message's own `createdAt` if there is none). Unlike
- * `computeMessageDurationStart`, this does not advance past completed assistant
- * messages, so an assistant's turn boundary stays fixed to the user message that
- * opened the turn.
+ * user message (or the message's own `createdAt` if there is none). This does not
+ * advance past completed assistant messages, so an assistant's turn boundary stays
+ * fixed to the user message that opened the turn.
  */
 export function computeMessageTurnStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Map<string, string> {
-  const result = new Map<string, string>();
-  let lastUserCreatedAt: string | null = null;
-
-  for (const message of messages) {
-    if (message.role === "user") {
-      result.set(message.id, message.createdAt);
-      lastUserCreatedAt = message.createdAt;
-      continue;
-    }
-    result.set(message.id, lastUserCreatedAt ?? message.createdAt);
-  }
-
-  return result;
+  return computeMessageDurationStart(messages, { advanceOnCompletedAssistant: false });
 }
 
 export function normalizeCompactToolLabel(value: string): string {
