@@ -30,6 +30,7 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ProjectSourcesUpdatedPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
@@ -54,6 +55,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { deriveProjectSourcesFromCreated } from "./projectSources.ts";
 import { settleTurnStateFromSession } from "./turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
@@ -457,6 +459,7 @@ export function projectEvent(
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
+          const derivedSources = deriveProjectSourcesFromCreated(payload);
           const existing = nextBase.projects.find((entry) => entry.id === payload.projectId);
           const nextProject = {
             id: payload.projectId,
@@ -467,6 +470,8 @@ export function projectEvent(
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
             spaceId: payload.spaceId ?? null,
+            sources: derivedSources.sources,
+            primarySourceId: derivedSources.primarySourceId,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -502,6 +507,29 @@ export function projectEvent(
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
                   ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
+                  updatedAt: payload.updatedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
+    case "project.sources-updated":
+      return decodeForEvent(
+        ProjectSourcesUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  workspaceRoot: payload.workspaceRoot,
+                  sources: payload.sources,
+                  primarySourceId: payload.primarySourceId,
                   updatedAt: payload.updatedAt,
                 }
               : project,

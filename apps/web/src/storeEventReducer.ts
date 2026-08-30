@@ -5,6 +5,7 @@
 import {
   type OrchestrationEvent,
   type OrchestrationPendingInteraction,
+  ProjectSourceId,
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
@@ -815,7 +816,21 @@ function applyOrchestrationEvent(
     case "space.deleted":
       return removeSpace(state, event.payload.spaceId, event.payload.deletedAt);
 
-    case "project.created":
+    case "project.created": {
+      const sourceInputs = event.payload.sources?.length
+        ? event.payload.sources
+        : [
+            {
+              id: ProjectSourceId.makeUnsafe(`src-${event.payload.projectId}`),
+              path: event.payload.workspaceRoot,
+            },
+          ];
+      const sources = sourceInputs.map((source, sortOrder) => ({
+        ...source,
+        sortOrder,
+        createdAt: event.payload.createdAt,
+        updatedAt: event.payload.updatedAt,
+      }));
       return upsertProject(
         state,
         {
@@ -827,11 +842,14 @@ function applyOrchestrationEvent(
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
           spaceId: event.payload.spaceId ?? null,
+          sources,
+          primarySourceId: event.payload.primarySourceId ?? sources[0]!.id,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
         "id-only",
       );
+    }
 
     case "project.meta-updated": {
       const existingProject = state.projects.find(
@@ -857,6 +875,33 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
+          sources: existingProject.sources,
+          primarySourceId: existingProject.primarySourceId,
+          createdAt: existingProject.createdAt ?? event.payload.updatedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+        "id-only",
+      );
+    }
+
+    case "project.sources-updated": {
+      const existingProject = state.projects.find(
+        (project) => project.id === event.payload.projectId,
+      );
+      if (!existingProject) return state;
+      return upsertProject(
+        state,
+        {
+          id: existingProject.id,
+          kind: existingProject.kind,
+          title: existingProject.remoteName,
+          workspaceRoot: event.payload.workspaceRoot,
+          defaultModelSelection: existingProject.defaultModelSelection,
+          scripts: existingProject.scripts,
+          isPinned: existingProject.isPinned ?? false,
+          spaceId: existingProject.spaceId ?? null,
+          sources: event.payload.sources,
+          primarySourceId: event.payload.primarySourceId,
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },

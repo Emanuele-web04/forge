@@ -596,31 +596,39 @@ export default function BranchToolbar({
                 ) : null}
               </MenuGroup>
 
-              <MenuSeparator />
+              {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
+              {hasServerThread ? (
+                <>
+                  <MenuSeparator />
 
-              <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
-                  <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                  <DisclosureChevron
-                    open={rateLimitsOpen}
-                    className="text-[var(--color-text-foreground-secondary)]"
-                  />
-                </MenuItem>
-                <CollapsiblePanel>
-                  <ProviderUsagePanelContent
-                    provider={activeProvider}
-                    rateLimits={usageSummary.rateLimits}
-                    usageLines={usageSummary.usageLines}
-                    notice={usageSummary.usageNotice}
-                    isLoading={usageSummary.isLoading}
-                    learnMoreHref={usageSummary.learnMoreHref}
-                    showTitle={false}
-                    showLearnMore={true}
-                    className="px-2 pb-1 pt-1"
-                  />
-                </CollapsiblePanel>
-              </Collapsible>
+                  <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
+                    <MenuItem
+                      closeOnClick={false}
+                      onClick={() => setRateLimitsOpen((open) => !open)}
+                    >
+                      <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                      <DisclosureChevron
+                        open={rateLimitsOpen}
+                        className="text-[var(--color-text-foreground-secondary)]"
+                      />
+                    </MenuItem>
+                    <CollapsiblePanel>
+                      <ProviderUsagePanelContent
+                        provider={activeProvider}
+                        rateLimits={usageSummary.rateLimits}
+                        usageLines={usageSummary.usageLines}
+                        notice={usageSummary.usageNotice}
+                        isLoading={usageSummary.isLoading}
+                        learnMoreHref={usageSummary.learnMoreHref}
+                        showTitle={false}
+                        showLearnMore={true}
+                        className="px-2 pb-1 pt-1"
+                      />
+                    </CollapsiblePanel>
+                  </Collapsible>
+                </>
+              ) : null}
             </ComposerPickerMenuPopup>
           </Menu>
         ) : isPanel ? (

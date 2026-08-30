@@ -23,12 +23,13 @@ import type { Space } from "../types";
 import { useVoidSpace } from "../voidSpaceStore";
 import { cn } from "~/lib/utils";
 
-import { FolderClosed } from "./FolderClosed";
 import {
   CreateGitHubProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
 } from "./CreateGitHubProjectFields";
 import { ProjectSourceSegmentedPicker } from "./ProjectSourceSegmentedPicker";
+import { ProjectSourceList } from "./ProjectSourceList";
+import { validateSourceListDraft } from "./ProjectSourceList.logic";
 import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";
@@ -43,7 +44,6 @@ import {
   dialogFieldLabelClassName,
 } from "./ui/dialog";
 import { ComposerPickerSelectPopup } from "./chat/ComposerPickerMenuPopup";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { CentralIcon } from "~/lib/central-icons";
 
@@ -72,6 +72,7 @@ function resolveDroppedFolder(dataTransfer: DataTransfer): DroppedFolderResult |
 interface CreateLocalProjectSubmitValue {
   readonly source: "local";
   readonly workspaceRoot: string;
+  readonly additionalSourcePaths: ReadonlyArray<string>;
   /** Destination Space; `null` is Void (unassigned). */
   readonly spaceId: SpaceId | null;
   /** True when the path was typed/edited by hand, so a missing folder may be created. */
@@ -106,6 +107,7 @@ export function CreateProjectDialog(props: {
 }) {
   const [source, setSource] = useState<"local" | "github">("local");
   const [path, setPath] = useState("");
+  const [additionalSourcePathsText, setAdditionalSourcePathsText] = useState("");
   const [repositoryInput, setRepositoryInput] = useState("");
   const [destinationParent, setDestinationParent] = useState("");
   const [directoryName, setDirectoryName] = useState("");
@@ -149,6 +151,7 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     setSource("local");
     setPath("");
+    setAdditionalSourcePathsText("");
     setRepositoryInput("");
     setDestinationParent(props.defaultCloneParent);
     setDirectoryName("");
@@ -177,6 +180,12 @@ export function CreateProjectDialog(props: {
   }, [props.githubProvisioningAvailable, source]);
 
   const trimmedPath = path.trim();
+  const additionalSourcePaths = additionalSourcePathsText
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && entry !== trimmedPath);
+  const sourcePathsDraft = [path, ...additionalSourcePathsText.split("\n")];
+  const sourceListValidation = validateSourceListDraft(sourcePathsDraft);
   const parsedRepository = parseGitHubRepositoryInput(repositoryInput);
   const trimmedDestinationParent = destinationParent.trim();
   const trimmedDirectoryName = directoryName.trim();
@@ -243,6 +252,25 @@ export function CreateProjectDialog(props: {
     setIsPickingFolder(false);
   };
 
+  const handleBrowseForAdditionalFolder = async () => {
+    if (isPickingFolder || submitting) return;
+    const api = readNativeApi();
+    if (!api) return setFormError("The app server is unavailable.");
+    setIsPickingFolder(true);
+    try {
+      const picked = await api.dialogs.pickFolder();
+      if (picked) {
+        setAdditionalSourcePathsText((current) =>
+          current.trim() ? `${current.trimEnd()}\n${picked}` : picked,
+        );
+        setFormError(null);
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Unable to open the folder picker.");
+    }
+    setIsPickingFolder(false);
+  };
+
   // While the dialog is open it is the only interactive surface, so accept a
   // folder drop anywhere in the window (capture phase). A tiny drop zone is
   // easy to miss and a stray drop outside it would otherwise vanish silently.
@@ -298,6 +326,10 @@ export function CreateProjectDialog(props: {
       setFormError("Type a folder path, or drop a folder above.");
       return;
     }
+    if (source === "local" && sourceListValidation.errors.length > 0) {
+      setFormError(sourceListValidation.errors[0]!);
+      return;
+    }
     if (source === "github" && !parsedRepository) {
       setFormError("Enter a GitHub repository as owner/repository or a GitHub.com repository URL.");
       return;
@@ -342,6 +374,7 @@ export function CreateProjectDialog(props: {
           {
             source: "local",
             workspaceRoot: trimmedPath,
+            additionalSourcePaths,
             spaceId,
             createIfMissing: trimmedPath !== pickedPath,
           },
@@ -432,27 +465,18 @@ export function CreateProjectDialog(props: {
 
           {source === "local" ? (
             <>
-              <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
-                <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-                  <FolderClosed className="size-4 text-muted-foreground/70" aria-hidden="true" />
-                </InputGroupAddon>
-                <InputGroupInput
-                  id={pathInputId}
-                  value={path}
-                  aria-label="Project folder path"
-                  aria-invalid={formError ? true : undefined}
-                  {...(formError ? { "aria-describedby": errorId } : {})}
-                  placeholder="/path/to/project"
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  onChange={(event) => {
-                    setPath(event.target.value);
-                    setFormError(null);
-                  }}
-                  onKeyDown={submitOnEnter}
-                />
-              </InputGroup>
+              <ProjectSourceList
+                paths={sourcePathsDraft}
+                firstInputId={pathInputId}
+                disabled={submitting || isPickingFolder}
+                onBrowseForFolder={isElectron ? () => void handleBrowseForAdditionalFolder() : undefined}
+                onChange={(nextPaths) => {
+                  setPath(nextPaths[0] ?? "");
+                  setAdditionalSourcePathsText(nextPaths.slice(1).join("\n"));
+                  setPickedPath(null);
+                  setFormError(null);
+                }}
+              />
 
               {isElectron ? (
                 <div className="space-y-2">

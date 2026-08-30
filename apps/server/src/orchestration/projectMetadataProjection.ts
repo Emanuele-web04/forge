@@ -4,10 +4,17 @@ import { Effect, Option } from "effect";
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import type { ProjectionProjectRepositoryShape } from "../persistence/Services/ProjectionProjects.ts";
 import type { ProjectionStateRepositoryShape } from "../persistence/Services/ProjectionState.ts";
+import { deriveProjectSourcesFromCreated } from "./projectSources.ts";
 
 export type ProjectMetadataOrchestrationEvent = Extract<
   OrchestrationEvent,
-  { type: "project.created" | "project.meta-updated" | "project.deleted" }
+  {
+    type:
+      | "project.created"
+      | "project.meta-updated"
+      | "project.sources-updated"
+      | "project.deleted";
+  }
 >;
 
 export const PROJECT_METADATA_SNAPSHOT_PROJECTORS = [
@@ -27,7 +34,8 @@ export const applyProjectMetadataProjection = (input: {
 }): Effect.Effect<void, ProjectionRepositoryError> =>
   Effect.gen(function* () {
     switch (input.event.type) {
-      case "project.created":
+      case "project.created": {
+        const derivedSources = deriveProjectSourcesFromCreated(input.event.payload);
         yield* input.projectionProjectRepository.upsert({
           projectId: input.event.payload.projectId,
           kind: input.event.payload.kind ?? "project",
@@ -37,11 +45,14 @@ export const applyProjectMetadataProjection = (input: {
           scripts: input.event.payload.scripts,
           isPinned: input.event.payload.isPinned ?? false,
           spaceId: input.event.payload.spaceId ?? null,
+          sources: derivedSources.sources,
+          primarySourceId: derivedSources.primarySourceId,
           createdAt: input.event.payload.createdAt,
           updatedAt: input.event.payload.updatedAt,
           deletedAt: null,
         });
         break;
+      }
 
       case "project.meta-updated": {
         const existingRow = yield* input.projectionProjectRepository.getById({
@@ -69,6 +80,22 @@ export const applyProjectMetadataProjection = (input: {
             ...(input.event.payload.spaceId !== undefined
               ? { spaceId: input.event.payload.spaceId }
               : {}),
+            updatedAt: input.event.payload.updatedAt,
+          });
+        }
+        break;
+      }
+
+      case "project.sources-updated": {
+        const existingRow = yield* input.projectionProjectRepository.getById({
+          projectId: input.event.payload.projectId,
+        });
+        if (Option.isSome(existingRow)) {
+          yield* input.projectionProjectRepository.upsert({
+            ...existingRow.value,
+            workspaceRoot: input.event.payload.workspaceRoot,
+            sources: input.event.payload.sources,
+            primarySourceId: input.event.payload.primarySourceId,
             updatedAt: input.event.payload.updatedAt,
           });
         }

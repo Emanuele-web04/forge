@@ -21,8 +21,9 @@ export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
  * Matches `PickerTriggerButton` sizing (ui-sm label) so the project / environment / branch
  * row in the empty-state footer reads as one set. Pair with a `size-3.5` leading icon and a
  * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
+ * Capsule radius so the hover fill reads as a pill, matching the other toolbar chips.
  */
-export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 ${ELEVATED_HOVER_SURFACE_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 ${ELEVATED_HOVER_SURFACE_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =

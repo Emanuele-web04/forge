@@ -48,6 +48,8 @@ export type ProjectNormalizationInput = Pick<
   | "scripts"
   | "isPinned"
   | "spaceId"
+  | "sources"
+  | "primarySourceId"
   | "createdAt"
   | "updatedAt"
 >;
@@ -373,6 +375,9 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  const sources = previous?.sources && deepEqualJson(previous.sources, incoming.sources)
+    ? previous.sources
+    : [...incoming.sources];
   const expanded =
     previous?.expanded ??
     (rememberedUiState.expandedProjectCount > 0
@@ -394,7 +399,9 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.sources === sources &&
+    previous.primarySourceId === incoming.primarySourceId
   ) {
     return previous;
   }
@@ -414,6 +421,8 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
+    sources,
+    primarySourceId: incoming.primarySourceId,
   } satisfies Project;
 }
 
