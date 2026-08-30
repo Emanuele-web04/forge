@@ -143,6 +143,7 @@ const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
   buildProviderChildEnvironment({ provider: providerChildKind(provider) });
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
+const MAX_REFRESH_REVISION_RETRIES = 1;
 export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
 
 function formatProviderUpdateTimeout(timeoutMs: number): string {
@@ -2456,6 +2457,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         );
 
       const refreshNow = Effect.gen(function* () {
+        let revisionRetries = 0;
         while (true) {
           const refreshRevision = (yield* serverSettings.getSnapshot).revision;
           // Drop the cached Claude subscription probe so switching accounts (login
@@ -2467,7 +2469,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             // A caller that joined this refresh expects the settings mutation it
             // just made to be reflected. Retry in the same shared fiber so an
             // enable cannot resolve with the stale pre-mutation probe.
-            continue;
+            if (revisionRetries < MAX_REFRESH_REVISION_RETRIES) {
+              revisionRetries += 1;
+              continue;
+            }
+            const currentStatuses = yield* Ref.get(statusesRef);
+            return yield* projectStatusesForCurrentSettings(currentStatuses);
           }
           const previousRawStatuses = yield* Ref.get(statusesRef);
           const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
@@ -2607,12 +2614,17 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             provider,
             reason: reason instanceof Error ? reason.message : String(reason),
           });
-        const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(toUpdateError));
-        if (!isProviderEnabledForSettings(provider, settings)) {
-          return yield* new ServerProviderUpdateError({
+        const providerIsEnabled = serverSettings.getSettings.pipe(
+          Effect.mapError(toUpdateError),
+          Effect.map((settings) => isProviderEnabledForSettings(provider, settings)),
+        );
+        const disabledError = () =>
+          new ServerProviderUpdateError({
             provider,
             reason: "Provider is disabled in Synara settings.",
           });
+        if (!(yield* providerIsEnabled)) {
+          return yield* disabledError();
         }
         const capabilities = yield* getProviderMaintenanceCapabilities(provider).pipe(
           Effect.mapError(toUpdateError),
@@ -2626,6 +2638,19 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         }
 
         const run = Effect.gen(function* () {
+          if (!(yield* providerIsEnabled)) {
+            const finishedAt = yield* nowIso;
+            yield* setProviderUpdateState(
+              provider,
+              makeUpdateState({
+                status: "failed",
+                startedAt: null,
+                finishedAt,
+                message: "Provider was disabled before its queued update could start.",
+              }),
+            );
+            return yield* disabledError();
+          }
           const startedAt = yield* nowIso;
           yield* setProviderUpdateState(
             provider,
