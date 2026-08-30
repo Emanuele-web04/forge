@@ -63,23 +63,47 @@ const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
-// Per-remote consecutive failure count. Exported for unit testing the TTL policy.
-export const consecutiveUpstreamRefreshFailures = new Map<string, number>();
+export interface StatusUpstreamRefreshCacheTimeToLive {
+  (
+    exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
+    key?: { readonly remoteName: string },
+  ): Duration.Duration;
+}
 
-/** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
-export function statusUpstreamRefreshCacheTimeToLive(
-  exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
-  key?: { readonly remoteName: string },
-): Duration.Duration {
-  if (Exit.isSuccess(exit) && exit.value === "refreshed") {
-    return STATUS_UPSTREAM_REFRESH_INTERVAL;
-  }
-  const failures = key ? (consecutiveUpstreamRefreshFailures.get(key.remoteName) ?? 0) : 0;
-  const backoff = Math.min(
-    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
-    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
-  );
-  return Duration.millis(backoff);
+/**
+ * Per-remote exponential backoff for failed `git fetch` upstream refreshes.
+ * The failure count lives inside this factory so each `Cache` instance owns its
+ * own state; the returned `timeToLive` updates the count on every failure and
+ * resets it on the first successful refresh.
+ */
+export function makeStatusUpstreamRefreshCacheTimeToLive() {
+  const consecutiveFailures = new Map<string, number>();
+
+  return {
+    getFailureCount(remoteName: string): number {
+      return consecutiveFailures.get(remoteName) ?? 0;
+    },
+    timeToLive(
+      exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
+      key?: { readonly remoteName: string },
+    ): Duration.Duration {
+      if (Exit.isSuccess(exit) && exit.value === "refreshed") {
+        if (key) {
+          consecutiveFailures.delete(key.remoteName);
+        }
+        return STATUS_UPSTREAM_REFRESH_INTERVAL;
+      }
+      const failures = key ? (consecutiveFailures.get(key.remoteName) ?? 0) : 0;
+      if (key) {
+        consecutiveFailures.set(key.remoteName, failures + 1);
+      }
+      const backoff = Math.min(
+        Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
+        Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
+      );
+      return Duration.millis(backoff);
+    },
+  };
 }
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -1026,6 +1050,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       ).pipe(Effect.asVoid);
     };
 
+    const upstreamRefreshPolicy = makeStatusUpstreamRefreshCacheTimeToLive();
+
     const statusUpstreamRefreshCache = yield* Cache.makeWith({
       capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
       lookup: (cacheKey: StatusUpstreamRefreshCacheKey) =>
@@ -1035,14 +1061,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           upstreamBranch: cacheKey.upstreamBranch,
         }).pipe(
           Effect.as("refreshed" as const),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              consecutiveUpstreamRefreshFailures.delete(cacheKey.remoteName);
-            }),
-          ),
           Effect.catch((cause) => {
-            const failures = consecutiveUpstreamRefreshFailures.get(cacheKey.remoteName) ?? 0;
-            consecutiveUpstreamRefreshFailures.set(cacheKey.remoteName, failures + 1);
+            const failures = upstreamRefreshPolicy.getFailureCount(cacheKey.remoteName);
             const logFields = {
               cause,
               cwd: cacheKey.cwd,
@@ -1065,7 +1085,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       // Keep successful refreshes warm; cache failures with exponential backoff
       // per remote so unreachable remotes neither re-fetch nor re-log every
       // git.status (#515, quick noise wins).
-      timeToLive: statusUpstreamRefreshCacheTimeToLive,
+      timeToLive: upstreamRefreshPolicy.timeToLive,
     });
 
     const refreshStatusUpstreamIfStale = (cwd: string): Effect.Effect<void, GitCommandError> =>
