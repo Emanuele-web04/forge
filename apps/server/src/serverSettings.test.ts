@@ -45,6 +45,7 @@ describe("ServerSettingsService", () => {
           enableProviderUpdateChecks: false,
           providers: {
             codex: {
+              enabled: false,
               binaryPath: "/usr/local/bin/codex",
               customModels: ["gpt-custom"],
             },
@@ -57,6 +58,7 @@ describe("ServerSettingsService", () => {
 
     expect(result.updated.enableAssistantStreaming).toBe(true);
     expect(result.updated.enableProviderUpdateChecks).toBe(false);
+    expect(result.updated.providers.codex.enabled).toBe(false);
     expect(result.updated.providers.codex.binaryPath).toBe("/usr/local/bin/codex");
     expect(result.parsed).toMatchObject({
       revision: 1,
@@ -66,6 +68,7 @@ describe("ServerSettingsService", () => {
         enableProviderUpdateChecks: false,
         providers: {
           codex: {
+            enabled: false,
             binaryPath: "/usr/local/bin/codex",
             customModels: ["gpt-custom"],
           },

@@ -40,7 +40,11 @@ import {
 } from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
-import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import {
+  reconcileServerProviderStatuses,
+  serverQueryKeys,
+  serverSettingsQueryOptions,
+} from "./lib/serverReactQuery";
 import {
   DEFAULT_UI_DENSITY,
   UI_DENSITY_MODES,
@@ -291,6 +295,9 @@ export const AppSettingsSchema = Schema.Struct({
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
   hiddenProviders: Schema.Array(PersistedProviderKind).pipe(withDefaults(() => [])),
+  // Server-backed provider shutdown policy. Unlike `hiddenProviders`, entries here
+  // cannot run discovery, health checks, updates, or new turns until re-enabled.
+  disabledProviders: Schema.Array(PersistedProviderKind).pipe(withDefaults(() => [])),
   // Local-only UI preference: top-level provider order in Settings and the composer picker.
   providerOrder: Schema.Array(PersistedProviderKind).pipe(
     withDefaults(() => [...DEFAULT_PROVIDER_ORDER]),
@@ -570,9 +577,16 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
+    disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     hiddenModels: [],
   };
+}
+
+export function getServerDisabledProviders(
+  settings: Pick<ServerSettingsView, "providers">,
+): ProviderKind[] {
+  return DEFAULT_PROVIDER_ORDER.filter((provider) => !settings.providers[provider].enabled);
 }
 
 function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
@@ -606,6 +620,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
+    disabledProviders: getServerDisabledProviders(settings),
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
@@ -635,11 +650,14 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
-    hasOwn(patch, "piAgentDir")
+    hasOwn(patch, "piAgentDir") ||
+    hasOwn(patch, "disabledProviders")
   );
 }
 
-function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
+export function appSettingsPatchToServerSettingsPatch(
+  patch: Partial<AppSettings>,
+): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
@@ -664,7 +682,6 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       model,
     };
   }
-
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
@@ -771,6 +788,19 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "piBinaryPath") ? { binaryPath: patch.piBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
+  }
+  if (hasOwn(patch, "disabledProviders")) {
+    const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
+    const enabledPatches = Object.fromEntries(
+      DEFAULT_PROVIDER_ORDER.map((provider) => [
+        provider,
+        {
+          ...providers[provider],
+          enabled: !disabledProviders.has(provider),
+        },
+      ]),
+    ) as MutableServerSettingsProvidersPatch;
+    Object.assign(providers, enabledPatches);
   }
 
   if (Object.keys(providers).length > 0) {
@@ -1288,22 +1318,33 @@ export function useAppSettings() {
           : {}),
       }),
     );
-    if (touchesProviderDiscoverySettings(patch)) {
-      void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
-    }
-
     const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
     if (isServerSettingsPatchEmpty(serverPatch)) {
       return;
     }
 
-    void ensureNativeApi()
-      .server.updateSettings(serverPatch)
+    const api = ensureNativeApi();
+    void api.server
+      .updateSettings(serverPatch)
       .then((nextSettings) => {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+        if (hasOwn(patch, "disabledProviders")) {
+          void api.server
+            .refreshProviders()
+            .then((result) => reconcileServerProviderStatuses(queryClient, result.providers))
+            .catch(() =>
+              queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() }),
+            );
+        }
+        if (touchesProviderDiscoverySettings(patch)) {
+          void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+        }
       })
       .catch(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+        if (touchesProviderDiscoverySettings(patch)) {
+          void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+        }
       });
   };
 

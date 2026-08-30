@@ -10,6 +10,7 @@ import {
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -1184,17 +1185,15 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const settingsSnapshot = yield* serverSettings.getSnapshot;
-    if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
+    const settings = yield* serverSettings.getSettings;
+    if (!settings.providers[preferredProvider].enabled) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
+        issue: `${PROVIDER_DISPLAY_NAMES[preferredProvider]} is disabled in Settings > Providers. Re-enable it to continue this thread.`,
       });
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(
-      settingsSnapshot.settings,
-    );
+    const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,

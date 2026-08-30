@@ -4,10 +4,12 @@
 // Exports: Vitest suites for appSettings.ts
 
 import { Schema } from "effect";
+import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  appSettingsPatchToServerSettingsPatch,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
@@ -23,6 +25,7 @@ import {
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  getServerDisabledProviders,
   isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
@@ -36,6 +39,49 @@ import {
   resolveFollowUpDispatchMode,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
+
+describe("server-backed provider enablement", () => {
+  it("reads disabled providers from the server settings view", () => {
+    expect(
+      getServerDisabledProviders({
+        ...DEFAULT_SERVER_SETTINGS_VIEW,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+          opencode: {
+            ...DEFAULT_SERVER_SETTINGS_VIEW.providers.opencode,
+            enabled: false,
+          },
+          pi: {
+            ...DEFAULT_SERVER_SETTINGS_VIEW.providers.pi,
+            enabled: false,
+          },
+        },
+      }),
+    ).toEqual(["opencode", "pi"]);
+  });
+
+  it("persists disable and re-enable patches for every provider", () => {
+    const disabledPatch = appSettingsPatchToServerSettingsPatch({
+      disabledProviders: ["opencode", "pi"],
+    });
+    expect(disabledPatch.providers?.opencode?.enabled).toBe(false);
+    expect(disabledPatch.providers?.pi?.enabled).toBe(false);
+    expect(disabledPatch.providers?.codex?.enabled).toBe(true);
+
+    const reenabledPatch = appSettingsPatchToServerSettingsPatch({ disabledProviders: [] });
+    expect(reenabledPatch.providers?.opencode?.enabled).toBe(true);
+    expect(reenabledPatch.providers?.pi?.enabled).toBe(true);
+
+    const combinedPatch = appSettingsPatchToServerSettingsPatch({
+      disabledProviders: [],
+      openCodeBinaryPath: "/custom/opencode",
+    });
+    expect(combinedPatch.providers?.opencode).toMatchObject({
+      binaryPath: "/custom/opencode",
+      enabled: true,
+    });
+  });
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {
