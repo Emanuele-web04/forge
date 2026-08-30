@@ -29,19 +29,15 @@ describe("source desktop launch", () => {
     const { child, result, spawnProcess } = captureSourceDesktopSpawn(environment);
 
     expect(result).toBe(child);
-    expect(spawnProcess).toHaveBeenCalledWith(
-      "/runtime/electron",
-      ["dist-electron/main.js"],
-      {
-        cwd: "/workspace/apps/desktop",
-        env: {
-          PATH: "/usr/bin",
-          SYNARA_DESKTOP_FLAVOR: "development",
-          SYNARA_HOME: join("/Users/tester", ".synara-dev"),
-        },
-        stdio: "inherit",
+    expect(spawnProcess).toHaveBeenCalledWith("/runtime/electron", ["dist-electron/main.js"], {
+      cwd: "/workspace/apps/desktop",
+      env: {
+        PATH: "/usr/bin",
+        SYNARA_DESKTOP_FLAVOR: "development",
+        SYNARA_HOME: join("/Users/tester", ".synara-dev"),
       },
-    );
+      stdio: "inherit",
+    });
     expect(environment).toEqual({
       ELECTRON_RUN_AS_NODE: "1",
       PATH: "/usr/bin",

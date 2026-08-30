@@ -1,10 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-  resolveSynaraDesktopFlavor,
-  synaraDesktopIdentity,
-} from "@synara/shared/desktopIdentity";
+import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 
 function sourceDesktopEnvironment(environment, homeDirectory) {
   const flavor = resolveSynaraDesktopFlavor({
@@ -16,8 +13,7 @@ function sourceDesktopEnvironment(environment, homeDirectory) {
     ...environment,
     SYNARA_DESKTOP_FLAVOR: flavor,
     SYNARA_HOME:
-      environment.SYNARA_HOME?.trim() ||
-      join(homeDirectory, identity.defaultHomeDirectoryName),
+      environment.SYNARA_HOME?.trim() || join(homeDirectory, identity.defaultHomeDirectoryName),
   };
   delete childEnvironment.ELECTRON_RUN_AS_NODE;
   return childEnvironment;
