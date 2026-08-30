@@ -658,12 +658,14 @@ function resolveClaudeAutoModeModel(
     return { status: "matched", model: exactMatch };
   }
 
-  const normalizedRequestedModelIds = new Set(
-    [...requestedModelIds].map(stripSupportedClaudeContextWindowQualifier),
+  const unqualifiedRequestedModelIds = new Set(
+    [...requestedModelIds].filter(
+      (modelId) => stripSupportedClaudeContextWindowQualifier(modelId) === modelId,
+    ),
   );
   const normalizedMatches = discoveredModels.filter((model) =>
     claudeModelIdentifiers(model).some((identifier) =>
-      normalizedRequestedModelIds.has(stripSupportedClaudeContextWindowQualifier(identifier)),
+      unqualifiedRequestedModelIds.has(stripSupportedClaudeContextWindowQualifier(identifier)),
     ),
   );
   const firstMatch = normalizedMatches[0];

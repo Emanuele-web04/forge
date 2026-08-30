@@ -8676,6 +8676,43 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("does not normalize an explicit context-window request to a bare model", () => {
+    const { layer } = makeClaudeModelCatalogHarness([
+      {
+        value: "claude-opus-5",
+        displayName: "Claude Opus 5",
+        description: "Claude Opus 5",
+        supportsAutoMode: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-opus-5[1m]",
+          },
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.include(
+          providerValidationIssue(result.failure),
+          "was not returned by Claude model discovery",
+        );
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("rejects Auto when the selected Claude model omits capability metadata", () => {
     const query = new FakeClaudeQuery();
     (
