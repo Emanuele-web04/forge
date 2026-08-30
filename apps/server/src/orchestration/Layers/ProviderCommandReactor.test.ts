@@ -8542,6 +8542,52 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it("preserves pending transcript context for an idle-stopped OpenCode session", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-idle-stopped-seed",
+      text: "The idle-stopped session must retain cobalt.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+    harness.pendingPriorTranscriptBootstraps.add(threadId);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-opencode-idle-stopped"),
+        threadId,
+        session: {
+          threadId,
+          status: "stopped",
+          providerName: "opencode",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-idle-stopped-follow-up",
+      text: "Which color must the idle-stopped session retain?",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    const resumedInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    expect(resumedInput.input).toContain("<thread_context>");
+    expect(resumedInput.input).toContain("The idle-stopped session must retain cobalt.");
+    expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+  });
+
   it.each(["opencode", "kilo"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
@@ -8684,6 +8730,105 @@ describe("ProviderCommandReactor", () => {
       await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
     },
   );
+
+  it("does not retry a stale OpenCode resume when cursor cleanup fails", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-cleanup-failure-seed",
+      text: "Keep native context until cleanup succeeds.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "opencode",
+          method: "session.update",
+          detail: "Session not found",
+        }),
+      ),
+    );
+    harness.clearSessionResumeCursor.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderValidationError({
+          operation: "test.clearSessionResumeCursor",
+          issue: "injected cursor cleanup failure",
+        }),
+      ),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-cleanup-failure-follow-up",
+      text: "Do not retry past failed cleanup.",
+      createdAt: now,
+    });
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains OpenCode transcript bootstrap state when durable completion fails", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-completion-failure-seed",
+      text: "The durable bootstrap value is amber.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-completion-failure-first",
+      text: "Restore the durable value.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    harness.completePriorTranscriptBootstrap.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderValidationError({
+          operation: "test.completePriorTranscriptBootstrap",
+          issue: "injected durable completion failure",
+        }),
+      ),
+    );
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "opencode-completion-failure-terminal",
+      provider: "opencode",
+      type: "completed",
+    });
+    await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "opencode-completion-failure-retry",
+      text: "Retry after durable completion failed.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+
+    const retryInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
+    expect(retryInput.input).toContain("<thread_context>");
+    expect(retryInput.input).toContain("The durable bootstrap value is amber.");
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "opencode-completion-retry-terminal",
+      provider: "opencode",
+      type: "completed",
+    });
+    await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 2);
+    expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+  });
 
   it.each(["opencode", "kilo"] as const)(
     "does not discard the %s resume cursor for a transient session update failure",

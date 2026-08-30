@@ -1038,7 +1038,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("reports native resume and persists bootstrap state until completion", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-start-outcome");
+      const upsertSpy = vi.spyOn(directory, "upsert");
 
       const initial = yield* provider.startSessionWithOutcome!(
         threadId,
@@ -1049,6 +1051,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         },
         { registerPriorTranscriptBootstrapOnFreshStart: true },
       );
+      assert.equal(upsertSpy.mock.calls.length, 1);
+      const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(
+        asRuntimePayloadRecord(initialBinding?.runtimePayload).priorTranscriptBootstrapPending,
+        true,
+      );
+      upsertSpy.mockRestore();
       yield* provider.stopRuntimeSession!({ threadId });
       const resumed = yield* provider.startSessionWithOutcome!(threadId, {
         provider: "codex",

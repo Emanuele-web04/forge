@@ -735,6 +735,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly providerOptions?: unknown;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
+        readonly runtimePayload?: Record<string, unknown>;
       },
     ) =>
       directory.upsert({
@@ -746,7 +747,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ? { lifecycleGeneration: extra.lifecycleGeneration }
           : {}),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session, extra),
+          ...extra?.runtimePayload,
+        },
       });
 
     const markThreadStopped = (
@@ -1785,18 +1789,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   modelSelection: input.modelSelection,
                   providerOptions: effectiveProviderOptions,
                   lifecycleGeneration: lease.generation,
-                }).pipe(
-                  Effect.andThen(
-                    directory.upsert({
-                      threadId,
-                      provider: session.provider,
-                      runtimePayload: {
-                        [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
-                        [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
-                      },
-                    }),
-                  ),
-                ),
+                  runtimePayload: {
+                    [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                    [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
+                  },
+                }),
               );
               lease.commit();
               if (
