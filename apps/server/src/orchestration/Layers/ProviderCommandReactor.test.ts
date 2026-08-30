@@ -444,7 +444,9 @@ describe("ProviderCommandReactor", () => {
         }
       }),
     );
-    const clearSessionResumeCursor = vi.fn((input: unknown) =>
+    const clearSessionResumeCursor = vi.fn<
+      NonNullable<ProviderServiceShape["clearSessionResumeCursor"]>
+    >((input) =>
       Effect.sync(() => {
         const preserveActiveRuntime =
           typeof input === "object" &&
@@ -534,9 +536,7 @@ describe("ProviderCommandReactor", () => {
               ProviderServiceShape["stopRuntimeSession"]
             >,
           }),
-      clearSessionResumeCursor: clearSessionResumeCursor as NonNullable<
-        ProviderServiceShape["clearSessionResumeCursor"]
-      >,
+      clearSessionResumeCursor,
       listSessions,
       getCapabilities: (_provider) =>
         Effect.succeed({
