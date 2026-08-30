@@ -55,6 +55,7 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
+  SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
@@ -257,6 +258,14 @@ import {
   sendAppSnapError,
   sendAppSnapState,
 } from "./appSnapIpc";
+
+const requestedSourceBuildMarker = process.env.SYNARA_SOURCE_DESKTOP_BUILD_MARKER;
+if (
+  requestedSourceBuildMarker !== undefined &&
+  requestedSourceBuildMarker !== SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+) {
+  throw new Error("The source desktop launcher and built main are incompatible. Rebuild Synara.");
+}
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their

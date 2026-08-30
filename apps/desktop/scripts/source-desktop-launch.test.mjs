@@ -2,9 +2,10 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { SYNARA_SOURCE_DESKTOP_BUILD_MARKER } from "@synara/shared/desktopIdentity";
 import { spawnSourceDesktop } from "./source-desktop-launch.mjs";
 
-function captureSourceDesktopSpawn(environment) {
+function captureSourceDesktopSpawn(environment, overrides = {}) {
   const child = { on: vi.fn() };
   const spawnProcess = vi.fn(() => child);
 
@@ -13,14 +14,17 @@ function captureSourceDesktopSpawn(environment) {
     electronPath: "/runtime/electron",
     environment,
     homeDirectory: "/Users/tester",
+    platform: "darwin",
+    readBuiltMain: () => SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
     spawnProcess,
+    ...overrides,
   });
 
   return { child, result, spawnProcess };
 }
 
 describe("source desktop launch", () => {
-  it("pins a safe spawned home even when the built main is stale", () => {
+  it("spawns current source builds with an isolated development environment", () => {
     const environment = {
       ELECTRON_RUN_AS_NODE: "1",
       PATH: "/usr/bin",
@@ -35,6 +39,7 @@ describe("source desktop launch", () => {
         PATH: "/usr/bin",
         SYNARA_DESKTOP_FLAVOR: "development",
         SYNARA_HOME: join("/Users/tester", ".synara-dev"),
+        SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
       },
       stdio: "inherit",
     });
@@ -45,14 +50,35 @@ describe("source desktop launch", () => {
   });
 
   it("preserves an explicit Synara home", () => {
-    const { spawnProcess } = captureSourceDesktopSpawn({
-      SYNARA_HOME: "/tmp/custom-synara-home",
-    });
+    const readWindowsEnvironment = vi.fn(() => ({
+      SYNARA_HOME: "C:\\Users\\tester\\persisted-synara-home",
+    }));
+    const { spawnProcess } = captureSourceDesktopSpawn(
+      { SYNARA_HOME: "/tmp/custom-synara-home" },
+      { platform: "win32", readWindowsEnvironment },
+    );
 
     expect(spawnProcess.mock.calls[0][2].env).toMatchObject({
       SYNARA_DESKTOP_FLAVOR: "development",
       SYNARA_HOME: "/tmp/custom-synara-home",
     });
+    expect(readWindowsEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("preserves a persisted Windows Synara home", () => {
+    const { spawnProcess } = captureSourceDesktopSpawn(
+      {},
+      {
+        platform: "win32",
+        readWindowsEnvironment: () => ({
+          SYNARA_HOME: "C:\\Users\\tester\\persisted-synara-home",
+        }),
+      },
+    );
+
+    expect(spawnProcess.mock.calls[0][2].env.SYNARA_HOME).toBe(
+      "C:\\Users\\tester\\persisted-synara-home",
+    );
   });
 
   it("preserves Canary flavor and storage defaults", () => {
@@ -64,5 +90,22 @@ describe("source desktop launch", () => {
       SYNARA_DESKTOP_FLAVOR: "canary",
       SYNARA_HOME: join("/Users/tester", ".synara-canary"),
     });
+  });
+
+  it("rejects stale built desktop output before spawning Electron", () => {
+    const spawnProcess = vi.fn();
+
+    expect(() =>
+      spawnSourceDesktop({
+        desktopDirectory: "/workspace/apps/desktop",
+        electronPath: "/runtime/electron",
+        environment: {},
+        homeDirectory: "/Users/tester",
+        platform: "darwin",
+        readBuiltMain: () => "stale desktop output",
+        spawnProcess,
+      }),
+    ).toThrow(/desktop build is stale/i);
+    expect(spawnProcess).not.toHaveBeenCalled();
   });
 });
