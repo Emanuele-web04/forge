@@ -718,14 +718,11 @@ const make = Effect.gen(function* () {
     return yield* providerService.completePriorTranscriptBootstrap({ threadId }).pipe(
       Effect.as(true),
       Effect.catchCause((cause) =>
-        Effect.logWarning(
-          "provider command reactor could not mark transcript bootstrap complete",
-          {
-            threadId,
-            provider,
-            cause: Cause.pretty(cause),
-          },
-        ).pipe(Effect.as(false)),
+        Effect.logWarning("provider command reactor could not mark transcript bootstrap complete", {
+          threadId,
+          provider,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(false)),
       ),
     );
   });
@@ -745,10 +742,7 @@ const make = Effect.gen(function* () {
       attempt.completeDurablePriorTranscript &&
       providerService.completePriorTranscriptBootstrap
     ) {
-      const completed = yield* persistPriorTranscriptBootstrapCompletion(
-        threadId,
-        event.provider,
-      );
+      const completed = yield* persistPriorTranscriptBootstrapCompletion(threadId, event.provider);
       if (!completed) {
         return;
       }
