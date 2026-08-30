@@ -1681,6 +1681,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
+              yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
               // A provider start that never returns holds this thread's
               // lifecycle lock and the caller's command slot forever. Bound it,
               // retire whatever the adapter may have half-spawned, and fail

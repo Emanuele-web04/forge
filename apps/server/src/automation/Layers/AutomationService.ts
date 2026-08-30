@@ -1398,7 +1398,11 @@ export const AutomationServiceLive = Layer.effect(
       trigger: AutomationRun["trigger"],
       scheduledFor: string,
       now: string,
-      scheduleAdvance?: { readonly nextRunAt: string | null; readonly disable: boolean },
+      scheduleAdvance?: {
+        readonly nextRunAt: string | null;
+        readonly disable: boolean;
+        readonly consumeIteration?: boolean;
+      },
       deferredUntil?: string | null,
       threadIdOverride?: ThreadId | null,
     ) =>
@@ -3152,17 +3156,19 @@ export const AutomationServiceLive = Layer.effect(
           });
         }
         if (disabledReason) {
-          const { run, inserted } = yield* createPendingRun(
+          const claimedRun = yield* claimPendingRun(
             definition,
             { type: "scheduled" },
             scheduledFor,
             now,
-            { threadIdOverride: null },
+            { nextRunAt, disable: false, consumeIteration: false },
+            undefined,
+            null,
           );
-          const skipped = inserted
-            ? yield* markScheduledRunSkipped(run, disabledReason, now)
+          yield* publishDefinition(definition.id);
+          const skipped = Option.isSome(claimedRun)
+            ? yield* markScheduledRunSkipped(claimedRun.value, disabledReason, now)
             : null;
-          yield* advanceScheduledDefinition(definition, nextRunAt, now);
           return skipped
             ? Option.some<AutomationRunNowResult>({ run: skipped })
             : Option.none<AutomationRunNowResult>();
