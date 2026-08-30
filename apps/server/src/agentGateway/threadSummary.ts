@@ -101,6 +101,7 @@ export interface AgentThreadMessageSummary {
 
 export interface AgentThreadSingleMessagePage {
   readonly index: number;
+  readonly messageId: string;
   readonly offsetChars: number;
   readonly endOffsetChars: number;
   readonly totalChars: number;
@@ -157,11 +158,15 @@ function assertMessageCoordinates(input: {
   readonly cursor?: string | undefined;
   readonly messageIndex?: number | undefined;
   readonly messageOffsetChars?: number | undefined;
+  readonly messageId?: string | undefined;
   readonly totalMessages: number;
 }): void {
   if (input.messageIndex === undefined) {
     if (input.messageOffsetChars !== undefined) {
       throw new Error('"messageOffsetChars" requires "messageIndex".');
+    }
+    if (input.messageId !== undefined) {
+      throw new Error('"messageId" requires "messageIndex".');
     }
     return;
   }
@@ -182,22 +187,55 @@ function assertMessageCoordinates(input: {
   ) {
     throw new Error('"messageOffsetChars" must be a non-negative integer.');
   }
+  if ((input.messageOffsetChars ?? 0) > 0 && input.messageId === undefined) {
+    throw new Error('"messageId" is required when "messageOffsetChars" is greater than 0.');
+  }
+}
+
+function splitsSurrogatePair(text: string, offsetChars: number): boolean {
+  if (offsetChars <= 0 || offsetChars >= text.length) return false;
+  const previousCodeUnit = text.charCodeAt(offsetChars - 1);
+  const nextCodeUnit = text.charCodeAt(offsetChars);
+  return (
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff
+  );
+}
+
+function unicodeSafeEndOffset(text: string, requestedEndOffsetChars: number): number {
+  return splitsSurrogatePair(text, requestedEndOffsetChars)
+    ? requestedEndOffsetChars - 1
+    : requestedEndOffsetChars;
 }
 
 function paginateSingleMessage(input: {
   readonly messages: ReadonlyArray<OrchestrationMessage>;
   readonly messageIndex: number;
   readonly messageOffsetChars: number;
+  readonly messageId?: string | undefined;
   readonly maxChars: number;
 }): AgentThreadMessagePage {
   const message = input.messages[input.messageIndex]!;
   const totalChars = message.text.length;
+  if (input.messageId !== undefined && message.id !== input.messageId) {
+    throw new Error(
+      `Message index ${input.messageIndex} now identifies message "${message.id}"; expected "${input.messageId}". Re-read the thread before continuing.`,
+    );
+  }
   if (input.messageOffsetChars > 0 && input.messageOffsetChars >= totalChars) {
     throw new Error(
       `Message offset ${input.messageOffsetChars} is no longer valid for message ${input.messageIndex} (current length ${totalChars}). Re-read the message from offset 0.`,
     );
   }
-  const endOffsetChars = Math.min(input.messageOffsetChars + input.maxChars, totalChars);
+  if (splitsSurrogatePair(message.text, input.messageOffsetChars)) {
+    throw new Error(
+      `Message offset ${input.messageOffsetChars} splits a Unicode character in message ${input.messageIndex}. Re-read from the previous reported boundary.`,
+    );
+  }
+  const requestedEndOffsetChars = Math.min(input.messageOffsetChars + input.maxChars, totalChars);
+  const endOffsetChars = unicodeSafeEndOffset(message.text, requestedEndOffsetChars);
   const nextOffsetChars = endOffsetChars < totalChars ? endOffsetChars : undefined;
   return {
     messages: [
@@ -213,6 +251,7 @@ function paginateSingleMessage(input: {
     effectiveMaxMessageChars: input.maxChars,
     messagePage: {
       index: input.messageIndex,
+      messageId: message.id,
       offsetChars: input.messageOffsetChars,
       endOffsetChars,
       totalChars,
@@ -255,6 +294,7 @@ export function paginateThreadMessages(input: {
   readonly maxMessageChars?: number | undefined;
   readonly messageIndex?: number | undefined;
   readonly messageOffsetChars?: number | undefined;
+  readonly messageId?: string | undefined;
 }): AgentThreadMessagePage {
   const limit = boundedInteger(
     input.messageLimit,
@@ -273,6 +313,7 @@ export function paginateThreadMessages(input: {
     cursor: input.cursor,
     messageIndex: input.messageIndex,
     messageOffsetChars: input.messageOffsetChars,
+    messageId: input.messageId,
     totalMessages: total,
   });
   if (input.messageIndex !== undefined) {
@@ -280,6 +321,7 @@ export function paginateThreadMessages(input: {
       messages: input.messages,
       messageIndex: input.messageIndex,
       messageOffsetChars: input.messageOffsetChars ?? 0,
+      messageId: input.messageId,
       maxChars,
     });
   }
@@ -340,6 +382,7 @@ export function summarizeThreadDetail(input: {
   readonly maxMessageChars?: number | undefined;
   readonly messageIndex?: number | undefined;
   readonly messageOffsetChars?: number | undefined;
+  readonly messageId?: string | undefined;
 }): AgentThreadDetail {
   const { thread } = input;
   const page = paginateThreadMessages({
@@ -349,6 +392,7 @@ export function summarizeThreadDetail(input: {
     maxMessageChars: input.maxMessageChars,
     messageIndex: input.messageIndex,
     messageOffsetChars: input.messageOffsetChars,
+    messageId: input.messageId,
   });
   return {
     threadId: thread.id,

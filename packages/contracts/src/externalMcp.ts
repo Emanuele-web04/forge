@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, MessageId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind, RuntimeMode } from "./orchestration";
 
 export const EXTERNAL_MCP_AUDIENCE = "synara.external-mcp" as const;
@@ -148,6 +148,7 @@ export const ExternalMcpReadTaskInput = Schema.Struct({
   ),
   messageIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   messageOffsetChars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  messageId: Schema.optional(MessageId),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpReadTaskInput = typeof ExternalMcpReadTaskInput.Type;
 

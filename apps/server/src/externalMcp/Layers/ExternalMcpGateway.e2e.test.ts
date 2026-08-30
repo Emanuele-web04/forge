@@ -449,6 +449,7 @@ describe("external MCP gateway stdio flow", () => {
           type: "integer",
           minimum: 0,
         });
+        expect(readTaskProperties?.messageId).toMatchObject({ type: "string" });
 
         const prompt = "Implement the external MCP end-to-end proof.";
         stdin.write(
@@ -529,6 +530,7 @@ describe("external MCP gateway stdio flow", () => {
                   threadId,
                   messageIndex: 1,
                   messageOffsetChars,
+                  messageId: "message-external-e2e-result",
                   maxMessageChars: 10_000,
                 },
               },
@@ -550,6 +552,7 @@ describe("external MCP gateway stdio flow", () => {
         expect(messagePages.map((page) => page.messagePage)).toEqual([
           {
             index: 1,
+            messageId: "message-external-e2e-result",
             offsetChars: 0,
             endOffsetChars: 10_000,
             totalChars: 25_007,
@@ -557,6 +560,7 @@ describe("external MCP gateway stdio flow", () => {
           },
           {
             index: 1,
+            messageId: "message-external-e2e-result",
             offsetChars: 10_000,
             endOffsetChars: 20_000,
             totalChars: 25_007,
@@ -564,6 +568,7 @@ describe("external MCP gateway stdio flow", () => {
           },
           {
             index: 1,
+            messageId: "message-external-e2e-result",
             offsetChars: 20_000,
             endOffsetChars: 25_007,
             totalChars: 25_007,

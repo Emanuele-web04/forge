@@ -135,16 +135,18 @@ describe("paginateThreadMessages", () => {
   });
 
   it("recovers a long message exactly from bounded slices", () => {
-    const longText = Array.from({ length: 25_007 }, (_, index) => String(index % 10)).join("");
+    const longText = `${"a".repeat(9_999)}😀${"b".repeat(15_006)}`;
     const messages = [makeMessage(0, longText)];
     const slices: string[] = [];
     let messageOffsetChars = 0;
+    let messageId: string | undefined;
 
     while (true) {
       const page = paginateThreadMessages({
         messages,
         messageIndex: 0,
         messageOffsetChars,
+        messageId,
         maxMessageChars: 10_000,
       });
       slices.push(page.messages[0]?.text ?? "");
@@ -152,6 +154,7 @@ describe("paginateThreadMessages", () => {
       assert.equal(page.effectiveMaxMessageChars, 10_000);
       assert.equal(page.messagePage?.index, 0);
       assert.equal(page.messagePage?.offsetChars, messageOffsetChars);
+      messageId = page.messagePage?.messageId;
       const nextOffset = page.messagePage?.nextOffsetChars;
       if (nextOffset === undefined) break;
       messageOffsetChars = nextOffset;
@@ -177,12 +180,43 @@ describe("paginateThreadMessages", () => {
           messages,
           messageIndex: 0,
           messageOffsetChars: 20_000,
+          messageId: "m-0",
         }),
       /Message offset 20000 is no longer valid/,
     );
     assert.throws(
       () => paginateThreadMessages({ messages, cursor: "1", messageIndex: 0 }),
       /cursor.*cannot be combined.*messageIndex/,
+    );
+
+    const emojiMessage = makeMessage(0, `${"a".repeat(9_999)}😀tail`);
+    assert.throws(
+      () =>
+        paginateThreadMessages({
+          messages: [emojiMessage],
+          messageIndex: 0,
+          messageOffsetChars: 10_000,
+          messageId: "m-0",
+          maxMessageChars: 10_000,
+        }),
+      /splits a Unicode character/,
+    );
+
+    const firstPage = paginateThreadMessages({
+      messages: [makeMessage(0, "x".repeat(25_000))],
+      messageIndex: 0,
+      maxMessageChars: 10_000,
+    });
+    assert.throws(
+      () =>
+        paginateThreadMessages({
+          messages: [makeMessage(1, "y".repeat(25_000))],
+          messageIndex: 0,
+          messageOffsetChars: firstPage.messagePage?.nextOffsetChars,
+          messageId: firstPage.messagePage?.messageId,
+          maxMessageChars: 10_000,
+        }),
+      /now identifies message "m-1".*expected "m-0"/,
     );
   });
 

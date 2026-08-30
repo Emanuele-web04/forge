@@ -456,7 +456,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one long message losslessly, pass messageIndex, start messageOffsetChars at 0, then follow messagePage.nextOffsetChars.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one long message losslessly, pass messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.",
       inputSchema: {
         type: "object",
         properties: {
@@ -479,6 +479,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             minimum: 0,
             description:
               "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
+          },
+          messageId: {
+            type: "string",
+            description:
+              "Message identity returned in messagePage; required with continuation offsets greater than 0.",
           },
         },
         required: ["threadId"],
@@ -509,6 +514,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             maxMessageChars: input.maxMessageChars,
             messageIndex: input.messageIndex,
             messageOffsetChars: input.messageOffsetChars,
+            messageId: input.messageId,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),

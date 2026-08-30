@@ -1511,6 +1511,7 @@ describe("AgentGateway", () => {
         type: "integer",
         minimum: 0,
       });
+      assert.deepInclude(readThreadProperties?.messageId, { type: "string" });
 
       const setThreadGoal = tools.find((tool) => tool.name === "synara_set_thread_goal");
       assert.include(
@@ -4973,6 +4974,7 @@ describe("AgentGateway", () => {
       const harness = yield* makeHarness;
       const slices: string[] = [];
       let messageOffsetChars = 0;
+      let messageId: string | undefined;
 
       while (true) {
         const response = yield* harness.callTool({
@@ -4982,6 +4984,7 @@ describe("AgentGateway", () => {
             threadId: shell.id,
             messageIndex: 0,
             messageOffsetChars,
+            ...(messageId === undefined ? {} : { messageId }),
             maxMessageChars: 10_000,
           },
         });
@@ -4990,8 +4993,12 @@ describe("AgentGateway", () => {
         slices.push((result.messages as Array<{ text: string }>)[0]?.text ?? "");
         assert.equal(result.effectiveMessageLimit, 1);
         assert.equal(result.effectiveMaxMessageChars, 10_000);
-        const nextOffsetChars = (result.messagePage as { nextOffsetChars?: number })
-          .nextOffsetChars;
+        const messagePage = result.messagePage as {
+          messageId: string;
+          nextOffsetChars?: number;
+        };
+        messageId = messagePage.messageId;
+        const nextOffsetChars = messagePage.nextOffsetChars;
         if (nextOffsetChars === undefined) break;
         messageOffsetChars = nextOffsetChars;
       }
@@ -4999,15 +5006,26 @@ describe("AgentGateway", () => {
       assert.equal(slices.join(""), longText);
       harness.setThreadDetail({
         ...detail,
-        messages: [{ ...detail.messages[0]!, text: "shorter now" }],
+        messages: [
+          {
+            ...detail.messages[0]!,
+            id: MessageId.makeUnsafe("message-replacement"),
+            text: "x".repeat(25_007),
+          },
+        ],
       });
       const stale = yield* harness.callTool({
         token: "token-parent",
         name: "synara_read_thread",
-        args: { threadId: shell.id, messageIndex: 0, messageOffsetChars: 20_000 },
+        args: {
+          threadId: shell.id,
+          messageIndex: 0,
+          messageOffsetChars: 20_000,
+          messageId,
+        },
       });
       assert.isTrue(isToolError(stale.result));
-      assert.include(toolErrorText(stale.result), "no longer valid");
+      assert.include(toolErrorText(stale.result), "now identifies message");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

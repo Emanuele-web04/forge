@@ -288,7 +288,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
-      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then follow messagePage.nextOffsetChars.`,
+      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -317,6 +317,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             description:
               "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
           },
+          messageId: {
+            type: "string",
+            description:
+              "Message identity returned in messagePage; required with continuation offsets greater than 0.",
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
@@ -331,6 +336,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const maxMessageChars = readNumberArg(args, "maxMessageChars");
         const messageIndex = readNumberArg(args, "messageIndex");
         const messageOffsetChars = readNumberArg(args, "messageOffsetChars");
+        const messageId = readStringArg(args, "messageId");
         const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -348,6 +354,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             maxMessageChars,
             messageIndex,
             messageOffsetChars,
+            messageId,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
