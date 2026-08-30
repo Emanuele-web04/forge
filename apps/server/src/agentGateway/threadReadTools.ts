@@ -288,7 +288,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
-      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.`,
+      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one settled long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.`,
       inputSchema: {
         type: "object",
         properties: {

@@ -456,7 +456,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one long message losslessly, pass messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one settled long message losslessly, pass messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.",
       inputSchema: {
         type: "object",
         properties: {

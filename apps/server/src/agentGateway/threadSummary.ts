@@ -224,6 +224,11 @@ function paginateSingleMessage(input: {
       `Message index ${input.messageIndex} now identifies message "${message.id}"; expected "${input.messageId}". Re-read the thread before continuing.`,
     );
   }
+  if (message.streaming) {
+    throw new Error(
+      `Message ${input.messageIndex} is still streaming. Retry after it settles to read it losslessly.`,
+    );
+  }
   if (input.messageOffsetChars > 0 && input.messageOffsetChars >= totalChars) {
     throw new Error(
       `Message offset ${input.messageOffsetChars} is no longer valid for message ${input.messageIndex} (current length ${totalChars}). Re-read the message from offset 0.`,

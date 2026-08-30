@@ -218,6 +218,15 @@ describe("paginateThreadMessages", () => {
         }),
       /now identifies message "m-1".*expected "m-0"/,
     );
+
+    assert.throws(
+      () =>
+        paginateThreadMessages({
+          messages: [{ ...makeMessage(0, "in progress"), streaming: true }],
+          messageIndex: 0,
+        }),
+      /still streaming.*Retry after it settles/,
+    );
   });
 
   it("ignores garbage cursors", () => {
