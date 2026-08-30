@@ -186,9 +186,7 @@ export const SqlitePersistenceMemory = Layer.provideMerge(
 );
 
 export const layerConfig = Layer.unwrap(
-  Effect.map(
-    Effect.service(ServerConfig),
-    ({ dbPath, migrationDivergenceConsent }) =>
-      makeSqlitePersistenceLive(dbPath, { divergenceConsent: migrationDivergenceConsent }),
+  Effect.map(Effect.service(ServerConfig), ({ dbPath, migrationDivergenceConsent }) =>
+    makeSqlitePersistenceLive(dbPath, { divergenceConsent: migrationDivergenceConsent }),
   ),
 );

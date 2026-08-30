@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 
 export const MIGRATION_DIVERGENCE_CONSENT_ENV = "SYNARA_MIGRATION_DIVERGENCE_CONSENT";
 export const MIGRATION_RUNTIME_SOURCE_DIGEST_ENV = "SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST";
-export const MIGRATION_RUNTIME_SOURCE_RELATIVE_PATH =
-  "apps/server/src/persistence/Migrations.ts";
+export const MIGRATION_RUNTIME_SOURCE_RELATIVE_PATH = "apps/server/src/persistence/Migrations.ts";
 export const MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX =
   "SYNARA_MIGRATION_DIVERGENCE_CONSENT_REQUIRED=";
 
@@ -36,10 +35,7 @@ export function findMigrationRuntimeIdentityMismatch(input: {
   readonly launcherDigest?: string | undefined;
   readonly sourceText?: string | undefined;
 }): MigrationRuntimeIdentityMismatch | null {
-  if (
-    input.launcherDigest !== undefined &&
-    input.launcherDigest !== input.embeddedDigest
-  ) {
+  if (input.launcherDigest !== undefined && input.launcherDigest !== input.embeddedDigest) {
     return {
       kind: "launcher-bundle",
       expectedDigest: input.launcherDigest,
@@ -70,10 +66,7 @@ export function parseMigrationDivergenceConsentChallenge(
 ): MigrationDivergenceConsentChallenge | null {
   let searchFrom = 0;
   for (;;) {
-    const prefixIndex = output.indexOf(
-      MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX,
-      searchFrom,
-    );
+    const prefixIndex = output.indexOf(MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX, searchFrom);
     if (prefixIndex === -1) return null;
 
     const payloadStart = prefixIndex + MIGRATION_DIVERGENCE_CONSENT_REQUIRED_PREFIX.length;

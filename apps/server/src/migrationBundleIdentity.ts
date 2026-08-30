@@ -75,9 +75,9 @@ function readMigrationSourceIfPresent(cwd: string): string | undefined {
 
 function isSynaraSourceCheckout(cwd: string): boolean {
   try {
-    const packageJson = JSON.parse(
-      fs.readFileSync(path.resolve(cwd, "package.json"), "utf8"),
-    ) as { readonly name?: unknown };
+    const packageJson = JSON.parse(fs.readFileSync(path.resolve(cwd, "package.json"), "utf8")) as {
+      readonly name?: unknown;
+    };
     return packageJson.name === "@synara/monorepo";
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;

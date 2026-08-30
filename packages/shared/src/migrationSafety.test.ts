@@ -66,16 +66,12 @@ describe("migration runtime source identity", () => {
     const embeddedDigest = migrationRuntimeSourceDigest("embedded");
     const launcherDigest = migrationRuntimeSourceDigest("launcher");
 
-    expect(
-      findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest }),
-    ).toEqual({
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest })).toEqual({
       kind: "launcher-bundle",
       expectedDigest: launcherDigest,
       actualDigest: embeddedDigest,
     });
-    expect(
-      findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "source" }),
-    ).toEqual({
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "source" })).toEqual({
       kind: "source-bundle",
       expectedDigest: migrationRuntimeSourceDigest("source"),
       actualDigest: embeddedDigest,
@@ -83,11 +79,11 @@ describe("migration runtime source identity", () => {
     expect(
       findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "embedded" }),
     ).toBeNull();
-    expect(
-      findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest: "" })?.kind,
-    ).toBe("launcher-bundle");
-    expect(
-      findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "" })?.kind,
-    ).toBe("source-bundle");
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, launcherDigest: "" })?.kind).toBe(
+      "launcher-bundle",
+    );
+    expect(findMigrationRuntimeIdentityMismatch({ embeddedDigest, sourceText: "" })?.kind).toBe(
+      "source-bundle",
+    );
   });
 });

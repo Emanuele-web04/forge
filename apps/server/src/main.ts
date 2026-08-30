@@ -73,9 +73,7 @@ const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
 function consumeProcessEnvironmentValue(environmentKey: string): string | undefined {
   const matchingKeys =
     process.platform === "win32"
-      ? Object.keys(process.env).filter(
-          (key) => key.toUpperCase() === environmentKey,
-        )
+      ? Object.keys(process.env).filter((key) => key.toUpperCase() === environmentKey)
       : [environmentKey];
   let value: string | undefined;
 

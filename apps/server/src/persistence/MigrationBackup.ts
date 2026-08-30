@@ -259,10 +259,7 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
   const inspectedHighWaterMark = Math.max(...inspectedNames.keys(), 0);
   // This is the same post-alias predicate the reconciler uses. Sharing it keeps
   // "this database needs consent" and "this database will be replayed" aligned.
-  const firstDiverged = findFirstMigrationLineageDivergence(
-    inspectedNames,
-    inspectedHighWaterMark,
-  );
+  const firstDiverged = findFirstMigrationLineageDivergence(inspectedNames, inspectedHighWaterMark);
   if (firstDiverged !== undefined) {
     const [firstDivergedId, expectedName] = firstDiverged;
     // Shared-lineage divergence is rejected before the migrator mutates data.
@@ -488,8 +485,7 @@ function isMigrationBackupPartial(dbBasename: string): (name: string) => boolean
  */
 function isAtomicMigrationJsonPartial(basename: string): (name: string) => boolean {
   const partialPrefix = `${basename}.`;
-  return (name) =>
-    name !== basename && name.startsWith(partialPrefix) && name.endsWith(".partial");
+  return (name) => name !== basename && name.startsWith(partialPrefix) && name.endsWith(".partial");
 }
 
 const BUNDLE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
@@ -789,14 +785,9 @@ function migrationRecoveryPayload(dbPath: string, backup: MigrationBackupResult)
 }
 
 const writeRecoveryMarker = (dbPath: string, payload: Record<string, unknown>) =>
-  attemptPromise(() =>
-    writePrivateJsonFile(migrationRecoveryMarkerPath(dbPath), payload),
-  );
+  attemptPromise(() => writePrivateJsonFile(migrationRecoveryMarkerPath(dbPath), payload));
 
-const writeCompletedMigrationProvenance = (
-  dbPath: string,
-  payload: Record<string, unknown>,
-) =>
+const writeCompletedMigrationProvenance = (dbPath: string, payload: Record<string, unknown>) =>
   attemptPromise(() =>
     writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
       ...payload,
@@ -1020,9 +1011,7 @@ async function readMigrationBackupRecord(
   const canonicalBackupDirectory = await fs.realpath(backupDirectory);
   const canonicalBackupPath = await fs.realpath(backupPath);
   if (path.dirname(canonicalBackupPath) !== canonicalBackupDirectory) {
-    throw new Error(
-      `${recordLabel} backup escapes its canonical directory: ${backupPath}`,
-    );
+    throw new Error(`${recordLabel} backup escapes its canonical directory: ${backupPath}`);
   }
   return {
     markerPath: recordPath,

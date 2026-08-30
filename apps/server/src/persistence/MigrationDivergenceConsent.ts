@@ -53,9 +53,7 @@ export function createMigrationDivergenceConsentChallenge(
   };
 }
 
-function formatConsentRequiredMessage(
-  challenge: MigrationDivergenceConsentChallenge,
-): string {
+function formatConsentRequiredMessage(challenge: MigrationDivergenceConsentChallenge): string {
   return (
     `Migration ${challenge.firstDivergedId} in ${challenge.databasePath} is recorded as ` +
     `"${challenge.recordedName}" but this build expects "${challenge.expectedName}". ` +
