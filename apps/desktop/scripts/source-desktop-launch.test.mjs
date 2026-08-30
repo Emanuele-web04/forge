@@ -95,18 +95,23 @@ describe("source desktop launch", () => {
     });
   });
 
-  it("passes the smoke profile override to the spawned desktop", () => {
+  it("guards and spawns the smoke desktop with its isolated environment", () => {
     const smokeHome = "/tmp/synara-desktop-smoke";
     const smokeUserData = join(smokeHome, "electron-user-data");
-    const { spawnProcess } = captureSourceDesktopSpawn({
-      SYNARA_HOME: smokeHome,
-      [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: smokeUserData,
-    });
+    const stdio = ["pipe", "pipe", "pipe"];
+    const { spawnProcess } = captureSourceDesktopSpawn(
+      {
+        SYNARA_HOME: smokeHome,
+        [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: smokeUserData,
+      },
+      { stdio },
+    );
 
     expect(spawnProcess.mock.calls[0][2].env).toMatchObject({
       SYNARA_HOME: smokeHome,
       [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: smokeUserData,
     });
+    expect(spawnProcess.mock.calls[0][2].stdio).toBe(stdio);
   });
 
   it("rejects stale built desktop output before spawning Electron", () => {

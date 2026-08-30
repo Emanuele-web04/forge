@@ -73,6 +73,7 @@ export function spawnSourceDesktop({
   readBuiltMain = readFileSync,
   readWindowsEnvironment = readWindowsPersistentEnvironment,
   spawnProcess,
+  stdio = "inherit",
 }) {
   assertCurrentSourceDesktopBuild(desktopDirectory, readBuiltMain);
   return spawnProcess(electronPath, ["dist-electron/main.js"], {
@@ -83,6 +84,6 @@ export function spawnSourceDesktop({
       platform,
       readWindowsEnvironment,
     }),
-    stdio: "inherit",
+    stdio,
   });
 }
