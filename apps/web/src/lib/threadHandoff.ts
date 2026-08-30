@@ -19,6 +19,7 @@ import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
+import { isCompletedContextCompaction } from "./contextWindow";
 import { findProviderStatus, isProviderUsable } from "./providerAvailability";
 import { randomUUID } from "./utils";
 
@@ -145,13 +146,32 @@ export function buildThreadHandoffImportedMessages(
 export function buildThreadHandoffImportedActivities(
   thread: Pick<Thread, "activities">,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  return thread.activities.filter(isImportableThreadActivity).map((activity) => {
-    const { sequence: _sequence, ...rest } = activity;
-    return {
-      ...rest,
-      id: EventId.makeUnsafe(randomUUID()),
-    };
-  });
+  // Activity appends are not transactional. Start context history at the latest
+  // durable boundary so a partial handoff can never persist already-invalid usage.
+  let latestCompactionIndex = -1;
+  for (let index = thread.activities.length - 1; index >= 0; index -= 1) {
+    const activity = thread.activities[index];
+    if (activity && isCompletedContextCompaction(activity)) {
+      latestCompactionIndex = index;
+      break;
+    }
+  }
+
+  return thread.activities
+    .filter(
+      (activity, index) =>
+        isImportableThreadActivity(activity) &&
+        (latestCompactionIndex < 0 ||
+          (activity.kind !== "context-window.updated" && activity.kind !== "context-compaction") ||
+          index >= latestCompactionIndex),
+    )
+    .map((activity) => {
+      const { sequence: _sequence, ...rest } = activity;
+      return {
+        ...rest,
+        id: EventId.makeUnsafe(randomUUID()),
+      };
+    });
 }
 
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {

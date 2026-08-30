@@ -362,6 +362,12 @@ interface ClaudeSessionContext {
   contextUsageControlEnabled: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   tokenUsageState: ClaudeTokenUsageState;
+  // Assistant snapshots report one API call at a time. Keep their processed-token
+  // accounting separately from the current context size so compaction can clear
+  // the meter without resetting the cumulative counter used by profile stats.
+  processedTokenTotal: number;
+  processedUsageObservedSinceResult: boolean;
+  cumulativeTokenAccountingActive: boolean;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // Original API model id the runtime rerouted away from (safeguard refusal
@@ -2722,8 +2728,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           result?.usage,
           claudeEffectiveContextBudget(context),
         );
-        const totalProcessedTokens =
+        const resultProcessedTokens =
           accumulatedSnapshot?.totalProcessedTokens ?? accumulatedSnapshot?.usedTokens;
+        if (resultProcessedTokens !== undefined && !context.processedUsageObservedSinceResult) {
+          context.processedTokenTotal += resultProcessedTokens;
+        }
+        context.processedUsageObservedSinceResult = false;
+        const totalProcessedTokens =
+          context.processedTokenTotal > 0 ? context.processedTokenTotal : resultProcessedTokens;
         const liveSnapshot = liveContextUsage
           ? snapshotFromClaudeContextUsage(liveContextUsage, totalProcessedTokens)
           : undefined;
@@ -2740,6 +2752,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : lastGoodUsage
               ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
               : accumulatedSnapshot;
+        if (usageSnapshot?.totalProcessedTokens !== undefined) {
+          context.cumulativeTokenAccountingActive = true;
+        }
 
         // A safeguard reroute only applies to the turn that just finished.
         // Restore the user-selected model so subsequent turns do not silently
@@ -2994,6 +3009,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           contextUsageControlEnabled: false,
           lastKnownTokenUsage: undefined,
           tokenUsageState: "current",
+          processedTokenTotal: 0,
+          processedUsageObservedSinceResult: false,
+          cumulativeTokenAccountingActive: false,
           lastAssistantUuid: undefined,
           lastThreadStartedId: undefined,
           rerouteOriginalApiModelId: undefined,
@@ -3662,16 +3680,27 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // this reflects the actual prompt + output size for this single API call.
         const perCallUsage = (message.message as { usage?: unknown } | undefined)?.usage;
         if (perCallUsage) {
+          const normalizedPerCallUsage = normalizeClaudeTokenUsage(
+            perCallUsage as Record<string, unknown>,
+            claudeEffectiveContextBudget(context),
+          );
+          if (normalizedPerCallUsage) {
+            context.processedTokenTotal +=
+              normalizedPerCallUsage.totalProcessedTokens ?? normalizedPerCallUsage.usedTokens;
+            context.processedUsageObservedSinceResult = true;
+          }
           if (context.tokenUsageState === "skip-compaction-call") {
             context.tokenUsageState = "awaiting-fresh-assistant";
           } else {
             yield* maybeEmitContextUsageWarning(context, perCallUsage as Record<string, unknown>);
-            const normalizedPerCallUsage = normalizeClaudeTokenUsage(
-              perCallUsage as Record<string, unknown>,
-              claudeEffectiveContextBudget(context),
-            );
             if (normalizedPerCallUsage) {
-              context.lastKnownTokenUsage = normalizedPerCallUsage;
+              const currentUsage = context.cumulativeTokenAccountingActive
+                ? {
+                    ...normalizedPerCallUsage,
+                    totalProcessedTokens: context.processedTokenTotal,
+                  }
+                : normalizedPerCallUsage;
+              context.lastKnownTokenUsage = currentUsage;
               context.tokenUsageState = "current";
               const usageStamp = yield* makeEventStamp();
               yield* offerRuntimeEvent(context, {
@@ -3683,7 +3712,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(context.turnState
                   ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
                   : {}),
-                payload: { usage: normalizedPerCallUsage },
+                payload: { usage: currentUsage },
                 providerRefs: nativeProviderRefs(context),
                 raw: {
                   source: "claude.sdk.message",
@@ -5389,6 +5418,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             contextUsageControlEnabled: true,
             lastKnownTokenUsage: undefined,
             tokenUsageState: "current",
+            processedTokenTotal: 0,
+            processedUsageObservedSinceResult: false,
+            cumulativeTokenAccountingActive: false,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
             rerouteOriginalApiModelId: undefined,

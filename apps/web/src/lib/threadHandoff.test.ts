@@ -101,7 +101,7 @@ describe("threadHandoff", () => {
     ).toHaveLength(4);
   });
 
-  it("imports usage and compaction boundaries without the source provider's configured window", () => {
+  it("drops usage invalidated by the latest compaction before handoff appends", () => {
     const activity = (
       kind: string,
       payload: OrchestrationThreadActivity["payload"] = {},
@@ -120,13 +120,14 @@ describe("threadHandoff", () => {
         activity("context-window.configured"),
         activity("context-window.updated"),
         activity("context-compaction", { state: "compacted" }),
+        activity("context-window.updated", { usedTokens: 20_000 }),
         activity("tool.started"),
       ],
     });
 
     expect(imported.map(({ kind }) => kind)).toEqual([
-      "context-window.updated",
       "context-compaction",
+      "context-window.updated",
     ]);
   });
 

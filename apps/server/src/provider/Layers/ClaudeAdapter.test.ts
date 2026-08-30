@@ -8640,6 +8640,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (freshUsage?.type === "thread.token-usage.updated") {
         assert.equal(freshUsage.turnId, nextTurn.turnId);
         assert.equal(freshUsage.payload.usage.usedTokens, 20_000);
+        assert.equal(freshUsage.payload.usage.totalProcessedTokens, 360_000);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

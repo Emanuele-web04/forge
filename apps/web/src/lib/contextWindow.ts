@@ -58,7 +58,7 @@ const KNOWN_CONTEXT_WINDOW_MAX_TOKENS = {
   "1m": 1_000_000,
 } as const;
 
-function isCompletedContextCompaction(activity: OrchestrationThreadActivity): boolean {
+export function isCompletedContextCompaction(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind !== "context-compaction") {
     return false;
   }
