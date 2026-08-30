@@ -64,6 +64,73 @@ const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
 
+// Cap per-message text in the in-memory read model. A single huge message (the
+// largest in the user's DB is 864 KB) otherwise stays duplicated in `text` and in
+// `message_text_segments`. The 512 KB limit matches the durable provider runtime
+// event journal cap and is large enough that ordinary messages are untouched.
+const MAX_IN_MEMORY_MESSAGE_TEXT_BYTES = 512 * 1024;
+
+const messageTextEncoder = new TextEncoder();
+const messageTextDecoder = new TextDecoder("utf-8", { fatal: true });
+
+function compactInMemoryMessageText(text: string): string {
+  if (text.length === 0) {
+    return text;
+  }
+
+  const bytes = messageTextEncoder.encode(text);
+  if (bytes.length <= MAX_IN_MEMORY_MESSAGE_TEXT_BYTES) {
+    return text;
+  }
+
+  const marker = `\n\n[synara: message text truncated; original ${bytes.length} bytes]`;
+  const markerBytes = messageTextEncoder.encode(marker);
+  const target = Math.max(0, MAX_IN_MEMORY_MESSAGE_TEXT_BYTES - markerBytes.length);
+
+  if (target === 0) {
+    return marker;
+  }
+
+  // Find the longest valid UTF-8 prefix that fits under the byte budget.
+  let low = 0;
+  let high = target;
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    try {
+      messageTextDecoder.decode(bytes.subarray(0, mid));
+      low = mid;
+    } catch {
+      high = mid - 1;
+    }
+  }
+
+  const prefix = messageTextDecoder.decode(bytes.subarray(0, low));
+  return `${prefix}${marker}`;
+}
+
+function compactMessageTextSegments(
+  segments: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
+  compactedText: string,
+): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
+  if (segments === undefined || segments.length === 0) {
+    return undefined;
+  }
+
+  const joined = segments.map((segment) => segment.text).join("");
+  if (joined === compactedText) {
+    return segments;
+  }
+
+  return [
+    {
+      sequence: segments[0]!.sequence,
+      startedAt: segments[0]!.startedAt,
+      endedAt: segments.at(-1)!.endedAt,
+      text: compactedText,
+    },
+  ];
+}
+
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
@@ -1041,12 +1108,14 @@ export function projectEvent(
         let cappedMessages: ReadonlyArray<OrchestrationMessage>;
         if (existingIndex >= 0) {
           const entry = thread.messages[existingIndex]!;
-          const resolvedText = message.streaming
-            ? `${entry.text}${message.text}`
-            : message.text.length > 0
-              ? message.text
-              : entry.text;
-          const nextSegments =
+          const resolvedText = compactInMemoryMessageText(
+            message.streaming
+              ? `${entry.text}${message.text}`
+              : message.text.length > 0
+                ? message.text
+                : entry.text,
+          );
+          const rawSegments =
             message.role === "assistant"
               ? deriveNextMessageTextSegments(entry.textSegments, {
                   // For streaming deltas the segment owns only this delta's
@@ -1059,6 +1128,7 @@ export function projectEvent(
                   updatedAt: payload.updatedAt,
                 })
               : undefined;
+          const nextSegments = compactMessageTextSegments(rawSegments, resolvedText);
           const nextMessages = thread.messages.slice();
           const entryWithoutTextSegments = { ...entry };
           delete entryWithoutTextSegments.textSegments;
@@ -1079,10 +1149,11 @@ export function projectEvent(
           };
           cappedMessages = nextMessages;
         } else {
-          const nextSegments =
+          const resolvedText = compactInMemoryMessageText(message.text);
+          const rawSegments =
             message.role === "assistant"
               ? deriveNextMessageTextSegments(undefined, {
-                  text: message.text,
+                  text: resolvedText,
                   streaming: message.streaming,
                   segmentStartedAt: payload.segmentStartedAt,
                   sequence: payload.segmentSequence ?? event.sequence,
@@ -1090,22 +1161,19 @@ export function projectEvent(
                   updatedAt: payload.updatedAt,
                 })
               : undefined;
+          const nextSegments = compactMessageTextSegments(rawSegments, resolvedText);
+          const compactedMessage = {
+            ...message,
+            text: resolvedText,
+            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+          };
           cappedMessages =
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  {
-                    ...message,
-                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
-                  },
+                  compactedMessage,
                 ]
-              : [
-                  ...thread.messages,
-                  {
-                    ...message,
-                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
-                  },
-                ];
+              : [...thread.messages, compactedMessage];
         }
 
         return {
