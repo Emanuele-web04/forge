@@ -47,6 +47,7 @@ import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
+  invalidateProviderUsageQueries,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
   serverConfigQueryOptions,
@@ -2171,6 +2172,7 @@ function EventRouter() {
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
       if (didProviderEnablementChange(previousSettings, payload.settings)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+        void invalidateProviderUsageQueries(queryClient);
       }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,

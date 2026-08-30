@@ -14,7 +14,6 @@ import type {
   MessageId,
   PinnedMessage,
   ProjectId,
-  ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
   ThreadMarker,
@@ -96,8 +95,6 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
-  /** Active provider for the usage row (same chip the header used to show). */
-  activeProvider: ProviderKind;
   /**
    * Whether the active thread is a Studio chat. Studio chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
@@ -216,7 +213,6 @@ export function EnvironmentPanel({
   keybindings,
   availableEditors,
   activeThreadId,
-  activeProvider,
   isStudioChat,
   studioFolderPath: studioFolderPathProp,
   showGitActions,
@@ -375,7 +371,7 @@ export function EnvironmentPanel({
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
         dangling rule. Visibility is gated on the per-section AppSettings flags.
       */}
-      {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
+      {settings.showEnvironmentUsage ? <EnvironmentUsageSection /> : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <EnvironmentLabeledSection label="Repository">

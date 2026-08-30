@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasReconciledServerProviderStatuses,
+  invalidateProviderUsageQueries,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
@@ -216,6 +217,21 @@ describe("serverAllProviderUsageQueryOptions", () => {
     const options = serverAllProviderUsageQueryOptions();
 
     expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
+  });
+
+  it("invalidates batch and provider-scoped caches after enablement changes", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.providerUsage("codex", null), null);
+
+    await invalidateProviderUsageQueries(queryClient);
+
+    expect(
+      queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))?.isInvalidated,
+    ).toBe(true);
   });
 });
 

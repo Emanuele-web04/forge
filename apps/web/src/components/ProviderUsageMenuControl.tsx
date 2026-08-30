@@ -1,7 +1,12 @@
 // FILE: ProviderUsageMenuControl.tsx
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
+  type ServerGetProviderUsageSnapshotResult,
+} from "@synara/contracts";
+import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -25,10 +30,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface ProviderUsageMenuModel {
   menuTitle: string;
-  primaryRow: ProviderUsageDisplayRow;
+  primaryRow: ProviderUsageDisplayRow | null;
+  rows: ReadonlyArray<ProviderUsageDisplayRow>;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines: ReadonlyArray<OpenUsageUsageLine>;
   notice: string | undefined;
+  emptyMessage: string | undefined;
   isLoading: boolean;
 }
 
@@ -36,28 +43,48 @@ export interface ProviderUsageMenuModel {
 // defeat the memo and rebuild every thread on each streaming flush.
 const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
 
-export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
+function providerUsageEmptyMessage(
+  provider: ProviderKind,
+  snapshot: ServerGetProviderUsageSnapshotResult | undefined,
+): string | undefined {
+  switch (snapshot?.status) {
+    case "needs-auth":
+      return snapshot.detail ?? providerUsageNeedsAuthDetail(provider);
+    case "unsupported":
+      return snapshot.detail ?? "Live usage is not available for this provider configuration.";
+    case "error":
+      return snapshot.detail ?? "Usage is currently unavailable.";
+    default:
+      return undefined;
+  }
+}
+
+export function useProviderUsageMenuModel(
+  provider: ProviderKind,
+  input: {
+    providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  } = {},
+): ProviderUsageMenuModel {
   const { settings } = useAppSettings();
   const threads = useStore(selectAccountRateLimitThreads);
   const usageSummary = useProviderUsageSummary({
     provider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    providerSnapshot: input.providerSnapshot,
     fetchOpenUsageData: false,
   });
   const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const primaryRow = selectPrimaryProviderUsageDisplayRow(usageRows);
 
-  if (!primaryRow) {
-    return null;
-  }
-
   return {
     menuTitle: `${PROVIDER_DISPLAY_NAMES[provider]} usage`,
     primaryRow,
+    rows: usageRows,
     rateLimits: usageSummary.rateLimits,
     usageLines: usageSummary.usageLines,
     notice: usageSummary.usageNotice,
+    emptyMessage: providerUsageEmptyMessage(provider, input.providerSnapshot),
     isLoading: usageSummary.isLoading,
   };
 }
@@ -83,6 +110,7 @@ export function ProviderUsageMenuPopup({
           rateLimits={model.rateLimits}
           usageLines={model.usageLines}
           notice={model.notice}
+          emptyMessage={model.emptyMessage}
           isLoading={model.isLoading}
           showUsageLines={false}
           showTitle={false}
@@ -96,7 +124,7 @@ export function ProviderUsageMenuPopup({
 export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
   const model = useProviderUsageMenuModel(provider);
 
-  if (!model) {
+  if (!model.primaryRow) {
     return null;
   }
 
