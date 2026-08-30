@@ -144,6 +144,7 @@ const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const MAX_REFRESH_REVISION_RETRIES = 1;
+const REFRESH_REVISION_RESCHEDULE_DELAY_MS = 100;
 export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
 
 function formatProviderUpdateTimeout(timeoutMs: number): string {
@@ -2504,8 +2505,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
 
       // Keep a single refresh in flight so repeated config reads do not spawn
       // overlapping CLI probes while the cache already gives us a usable answer.
-      const ensureRefreshFiber: Effect.Effect<Fiber.Fiber<ProviderStatuses, never>> = Effect.gen(
-        function* () {
+      function ensureRefreshFiber(): Effect.Effect<Fiber.Fiber<ProviderStatuses, never>> {
+        return Effect.gen(function* () {
           const inFlight = yield* Ref.get(refreshFiberRef);
           if (inFlight) {
             return inFlight;
@@ -2527,18 +2528,36 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             // foreground refresh fails after startup.
             const rawStatuses = yield* Ref.get(statusesRef);
             return yield* projectStatusesForCurrentSettings(rawStatuses);
-          }).pipe(Effect.ensuring(Ref.set(refreshFiberRef, null)), Effect.forkIn(refreshScope));
+          }).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* Ref.set(refreshFiberRef, null);
+                if (!(yield* Ref.getAndSet(refreshNeedsFollowUpRef, false))) {
+                  return;
+                }
+                // The bounded follow-up was dirtied too. Debounce one more
+                // shared refresh so a sustained settings burst cannot keep the
+                // current callers stuck or spin CLI probes without a pause.
+                yield* Effect.sleep(Duration.millis(REFRESH_REVISION_RESCHEDULE_DELAY_MS)).pipe(
+                  Effect.andThen(ensureRefreshFiber().pipe(Effect.asVoid)),
+                  Effect.forkIn(refreshScope),
+                  Effect.asVoid,
+                );
+              }),
+            ),
+            Effect.forkIn(refreshScope),
+          );
           yield* Ref.set(refreshFiberRef, refreshFiber);
           return refreshFiber;
-        },
-      );
+        });
+      }
 
       yield* serverSettings.streamChanges.pipe(
         Stream.runForEach(() => publishProjectedStatuses().pipe(Effect.asVoid)),
         Effect.forkIn(refreshScope),
       );
 
-      const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber.pipe(
+      const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber().pipe(
         Effect.flatMap(Fiber.join),
       );
 

@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Duration, Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -567,29 +567,25 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
     );
 
-    it.effect("runs a final probe when settings change during the bounded retry", () =>
+    it.effect("queues another bounded refresh when the follow-up also becomes stale", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "provider-health-enable-race-",
         });
         const commands: string[] = [];
-        let releaseFirst!: () => void;
-        let markFirstStarted!: () => void;
-        let releaseSecond!: () => void;
-        let markSecondStarted!: () => void;
-        const firstReleased = new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        });
-        const firstStarted = new Promise<void>((resolve) => {
-          markFirstStarted = resolve;
-        });
-        const secondReleased = new Promise<void>((resolve) => {
-          releaseSecond = resolve;
-        });
-        const secondStarted = new Promise<void>((resolve) => {
-          markSecondStarted = resolve;
-        });
+        const makeProbeGate = () => {
+          let release!: () => void;
+          let markStarted!: () => void;
+          const released = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const started = new Promise<void>((resolve) => {
+            markStarted = resolve;
+          });
+          return { release, released, markStarted, started };
+        };
+        const probeGates = Array.from({ length: 5 }, makeProbeGate);
         let codexVersionAttempts = 0;
         const spawnerLayer = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
@@ -605,21 +601,18 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (input.command !== "codex" || !input.args.includes("--version")) {
               return Effect.succeed(mockHandle(result));
             }
+            const attemptIndex = codexVersionAttempts;
             codexVersionAttempts += 1;
-            if (codexVersionAttempts > 2) {
+            const gate = probeGates[attemptIndex];
+            gate?.markStarted();
+            if (!gate || attemptIndex >= 4) {
               return Effect.succeed(mockHandle(result));
-            }
-            const isFirstAttempt = codexVersionAttempts === 1;
-            if (isFirstAttempt) {
-              markFirstStarted();
-            } else {
-              markSecondStarted();
             }
             return Effect.succeed(
               mockHandle(result, {
-                exitCode: Effect.promise(() =>
-                  isFirstAttempt ? firstReleased : secondReleased,
-                ).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+                exitCode: Effect.promise(() => gate.released).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(0)),
+                ),
               }),
             );
           }),
@@ -642,24 +635,40 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           const providerHealth = yield* ProviderHealth;
           const serverSettings = yield* ServerSettingsService;
           const firstRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
-          yield* Effect.promise(() => firstStarted);
+          yield* Effect.promise(() => probeGates[0]!.started);
           yield* serverSettings.updateSettings({ providers: { opencode: { enabled: true } } });
           const joinedRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
-          releaseFirst();
-          yield* Effect.promise(() => secondStarted);
+          probeGates[0]!.release();
+          yield* Effect.promise(() => probeGates[1]!.started);
           yield* serverSettings.updateSettings({ providers: { pi: { enabled: true } } });
-          releaseSecond();
-          const statuses = yield* Fiber.join(joinedRefresh);
+          probeGates[1]!.release();
+          yield* Effect.promise(() => probeGates[2]!.started);
+          yield* serverSettings.updateSettings({ providers: { grok: { enabled: true } } });
+          probeGates[2]!.release();
+          yield* Effect.promise(() => probeGates[3]!.started);
+          yield* serverSettings.updateSettings({ providers: { droid: { enabled: true } } });
+          probeGates[3]!.release();
+          yield* Fiber.join(joinedRefresh);
           yield* Fiber.join(firstRefresh);
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust(Duration.millis(100));
+          yield* Effect.promise(() => probeGates[4]!.started);
+          const statuses = yield* providerHealth.refresh;
 
           assert.ok(commands.some((command) => command.includes("opencode")));
           assert.ok(commands.some((command) => command.includes("pi")));
+          assert.ok(commands.some((command) => command.includes("grok")));
+          assert.ok(commands.some((command) => command.includes("droid")));
           assert.notStrictEqual(
             statuses.find((status) => status.provider === "opencode")?.message,
             "Provider is disabled in Synara settings.",
           );
           assert.notStrictEqual(
             statuses.find((status) => status.provider === "pi")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "droid")?.message,
             "Provider is disabled in Synara settings.",
           );
         }).pipe(Effect.provide(layer));
