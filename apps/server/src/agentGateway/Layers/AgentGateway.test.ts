@@ -34,6 +34,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -779,6 +780,28 @@ function makeHarnessLayer(
       ),
   } as unknown as (typeof GitCore)["Service"]);
 
+  const gitManagerLayer = Layer.succeed(GitManager, {
+    resolvePullRequest: ({ reference }: { reference: string }) =>
+      Effect.succeed({
+        pullRequest: {
+          number: 841,
+          title: "Fix created-at thread ordering",
+          url:
+            reference.startsWith("http://") || reference.startsWith("https://")
+              ? reference
+              : "https://github.com/Emanuele-web04/synara/pull/841",
+          baseBranch: "main",
+          headBranch: "fix/created-at-thread-order",
+          state: "open",
+          isDraft: false,
+          mergeability: "mergeable",
+          additions: 12,
+          deletions: 4,
+          changedFiles: 2,
+        },
+      }),
+  } as unknown as (typeof GitManager)["Service"]);
+
   const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
     listModels: ({ provider }: { provider: string }) => {
       const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
@@ -1130,6 +1153,7 @@ function makeHarnessLayer(
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
     Layer.provide(gitLayer),
+    Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
     Layer.provide(ServerSettingsService.layerTest()),
@@ -1437,7 +1461,7 @@ describe("AgentGateway", () => {
             tools: Array<{
               name: string;
               description?: string;
-              inputSchema: { properties?: Record<string, unknown> };
+              inputSchema: { properties?: Record<string, unknown>; required?: string[] };
             }>;
           };
         }
@@ -1459,6 +1483,7 @@ describe("AgentGateway", () => {
         "synara_send_message",
         "synara_interrupt_thread",
         "synara_set_thread_title",
+        "synara_set_thread_pull_request",
         "synara_set_thread_archived",
         "synara_set_thread_goal",
         "synara_create_automation",
@@ -1529,6 +1554,13 @@ describe("AgentGateway", () => {
       assert.property(setThreadGoal?.inputSchema.properties, "blocked");
       assert.include(setThreadGoal?.description ?? "", "achieved: true");
       assert.include(setThreadGoal?.description ?? "", "blocked: true");
+
+      const setThreadPullRequest = tools.find(
+        (tool) => tool.name === "synara_set_thread_pull_request",
+      );
+      assert.include(setThreadPullRequest?.description ?? "", "own deliverable");
+      assert.include(setThreadPullRequest?.description ?? "", "only reviews");
+      assert.deepEqual(setThreadPullRequest?.inputSchema.required, ["reference"]);
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");
@@ -4834,6 +4866,37 @@ describe("AgentGateway", () => {
         type: "thread.meta.update",
         threadId: "thread-child",
         goal: "",
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("associates a resolved pull request with the calling thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_pull_request",
+        args: { reference: "https://github.com/Emanuele-web04/synara/pull/841" },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const result = toolResultJson(response.result);
+      assert.equal(result.threadId, "thread-parent");
+      assert.deepInclude(result.pullRequest as Record<string, unknown>, {
+        number: 841,
+        headBranch: "fix/created-at-thread-order",
+        state: "open",
+      });
+      const dispatched = harness.dispatched[0] as unknown as Record<string, unknown>;
+      assert.deepInclude(dispatched, {
+        type: "thread.meta.update",
+        threadId: "thread-parent",
+      });
+      assert.deepInclude(dispatched.lastKnownPr as Record<string, unknown>, {
+        number: 841,
+        headBranch: "fix/created-at-thread-order",
+        state: "open",
       });
     }).pipe(Effect.provide(gatewayLayer));
   });

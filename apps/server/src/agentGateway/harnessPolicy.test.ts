@@ -16,6 +16,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
+    assert.include(policy, "synara_set_thread_pull_request");
+    assert.include(policy, "current thread's own deliverable");
+    assert.include(policy, "only reviews, references, or discusses");
     assert.include(policy, "Use the browser_* tools");
     assert.include(policy, "exact thread-scoped Electron page Synara surfaces to the user");
     assert.include(policy, "continue in the background");
