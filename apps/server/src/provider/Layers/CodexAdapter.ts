@@ -910,6 +910,114 @@ function mapItemLifecycle(
   };
 }
 
+type CodexHookRunStatus = "completed" | "failed" | "blocked" | "stopped";
+
+function toCodexHookRunStatus(value: unknown): CodexHookRunStatus | undefined {
+  return value === "completed" ||
+    value === "failed" ||
+    value === "blocked" ||
+    value === "stopped"
+    ? value
+    : undefined;
+}
+
+function toHookOutcome(
+  status: CodexHookRunStatus | undefined,
+): "success" | "error" | "cancelled" {
+  if (status === "completed") return "success";
+  if (status === "blocked" || status === "stopped") return "cancelled";
+  return "error";
+}
+
+function hookRunOutput(run: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(run.entries)) {
+    return undefined;
+  }
+  const output = run.entries
+    .flatMap((entry) => {
+      const record = asObject(entry);
+      const text = asTrimmedString(record?.text);
+      if (!text) return [];
+      const kind = asTrimmedString(record?.kind);
+      return [kind ? `${kind}: ${text}` : text];
+    })
+    .join("\n");
+  return output ? sanitizeUnmappedProviderDetail(output) : undefined;
+}
+
+function withSanitizedHookRaw(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    raw: {
+      source: eventRawSource(event),
+      method: event.method,
+      payload: { synaraSanitized: true },
+    },
+  };
+}
+
+function mapCodexHookEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): ProviderRuntimeEvent | undefined {
+  if (event.method !== "hook/started" && event.method !== "hook/completed") {
+    return undefined;
+  }
+  const run = asObject(asObject(event.payload)?.run);
+  const hookId = asTrimmedString(run?.id);
+  const hookEvent = asTrimmedString(run?.eventName);
+  if (!run || !hookId || !hookEvent) {
+    return undefined;
+  }
+  const hookName =
+    asTrimmedString(run.sourcePath) ?? asTrimmedString(run.handlerType) ?? hookEvent;
+  const statusMessage = sanitizeUnmappedProviderDetail(asTrimmedString(run.statusMessage));
+  const data = sanitizeUnmappedProviderData(run);
+  const base = withSanitizedHookRaw(event, canonicalThreadId);
+
+  if (event.method === "hook/started") {
+    return {
+      ...base,
+      type: "hook.started",
+      payload: {
+        hookId,
+        hookName,
+        hookEvent,
+        ...(statusMessage ? { statusMessage } : {}),
+        data,
+      },
+    };
+  }
+
+  const status = toCodexHookRunStatus(run.status);
+  const durationCandidate = asNumber(run.durationMs);
+  const durationMs =
+    durationCandidate !== undefined &&
+    Number.isInteger(durationCandidate) &&
+    durationCandidate >= 0
+      ? durationCandidate
+      : undefined;
+  const output = hookRunOutput(run);
+  return {
+    ...base,
+    type: "hook.completed",
+    payload: {
+      hookId,
+      hookName,
+      hookEvent,
+      outcome: toHookOutcome(status),
+      ...(status ? { status } : {}),
+      ...(statusMessage ? { statusMessage } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(output ? { output } : {}),
+      data,
+    },
+  };
+}
+
 function mapUnmappedCodexEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -951,6 +1059,10 @@ function mapToRuntimeEvents(
   const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId);
   if (generatedImageEndEvent) {
     return [generatedImageEndEvent];
+  }
+  const hookEvent = mapCodexHookEvent(event, canonicalThreadId);
+  if (hookEvent) {
+    return [hookEvent];
   }
 
   if (event.kind === "error") {

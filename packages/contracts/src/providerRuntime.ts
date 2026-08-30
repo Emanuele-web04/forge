@@ -621,6 +621,8 @@ const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
   hookName: TrimmedNonEmptyStringSchema,
   hookEvent: TrimmedNonEmptyStringSchema,
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookStartedPayload = typeof HookStartedPayload.Type;
 
@@ -634,11 +636,19 @@ export type HookProgressPayload = typeof HookProgressPayload.Type;
 
 const HookCompletedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
+  hookName: Schema.optional(TrimmedNonEmptyStringSchema),
+  hookEvent: Schema.optional(TrimmedNonEmptyStringSchema),
   outcome: Schema.Literals(["success", "error", "cancelled"]),
+  status: Schema.optional(
+    Schema.Literals(["completed", "failed", "blocked", "stopped"]),
+  ),
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  durationMs: Schema.optional(NonNegativeInt),
   output: Schema.optional(Schema.String),
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
   exitCode: Schema.optional(Schema.Int),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookCompletedPayload = typeof HookCompletedPayload.Type;
 
