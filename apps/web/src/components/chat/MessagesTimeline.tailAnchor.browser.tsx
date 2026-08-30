@@ -71,6 +71,8 @@ interface HarnessHandle {
   showWorkingHeader: () => void;
   finishTurn: () => void;
   clearAnchor: () => void;
+  /** Simulate the user taking ownership of the scroll mid-slide. */
+  detach: () => void;
   listRef: React.RefObject<LegendListRef | null>;
 }
 
@@ -81,6 +83,7 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   const [followLiveOutput, setFollowLiveOutput] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [activeTurnStartedAt, setActiveTurnStartedAt] = useState<string | null>(null);
+  const tailAnchorScrollInFlightRef = useRef(false);
 
   handleRef.current = {
     listRef,
@@ -125,6 +128,10 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
     clearAnchor: () => {
       setTailAnchorMessageId(null);
     },
+    detach: () => {
+      tailAnchorScrollInFlightRef.current = false;
+      setFollowLiveOutput(false);
+    },
   };
 
   return (
@@ -136,6 +143,7 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
         activeTurnStartedAt={activeTurnStartedAt}
         listRef={listRef}
         tailAnchorMessageId={tailAnchorMessageId}
+        tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
         followLiveOutput={followLiveOutput}
         timelineEntries={entries}
         turnDiffSummaryByAssistantMessageId={new Map()}
@@ -333,6 +341,48 @@ describe("MessagesTimeline tail anchor", () => {
       // The anchored message has scrolled up and out of the way of the live tail.
       const overflowOffset = anchorTopOffsetPx(handle(), SECOND_SENT_MESSAGE_ID);
       expect(overflowOffset === null || overflowOffset < 0).toBe(true);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("stops the tail-anchor slide and does not follow the live tail after user scroll takes over", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
+
+    try {
+      const handle = () => {
+        if (!handleRef.current) throw new Error("harness not mounted");
+        return handleRef.current;
+      };
+
+      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
+      await settleFrames(3);
+      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+      await expect
+        .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
+        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+
+      handle().send(FIRST_SENT_MESSAGE_ID);
+      // Give the anchor slide a couple of frames to start.
+      await settleFrames(3);
+
+      // Simulate the user taking scroll ownership mid-slide, exactly as ChatView
+      // does when it detaches auto-follow on a wheel/touch/pointer gesture.
+      handle().detach();
+      const distanceAfterDetach = distanceFromBottomPx(handle());
+
+      // Stream enough content to overflow the reserve. If the tail-anchor hook
+      // incorrectly kept following, the viewport would stick to the bottom.
+      handle().growStream(FIRST_STREAMING_MESSAGE_ID, 10);
+      for (let frame = 0; frame < 24; frame += 1) {
+        await settleFrames(1);
+        expect(distanceFromBottomPx(handle())).toBeGreaterThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX / 2);
+      }
+
+      // The content grew below the viewport, so the distance from the bottom
+      // must have increased from the moment the user detached.
+      expect(distanceFromBottomPx(handle())).toBeGreaterThan(distanceAfterDetach);
     } finally {
       await screen.unmount();
     }
