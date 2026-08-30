@@ -22,7 +22,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         VALUES
           (
             'thread-kilo', 'project-1', 'Kilo thread', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-            '{"provider":"kilo","model":"kilo/kilo-auto/free"}',
+            '{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"variant":"thread-variant","agent":"thread-agent"}}}',
             '{"sourceThreadId":"thread-src","sourceProvider":"kilo","importedAt":"2026-01-01T00:00:00Z","bootstrapStatus":"completed"}'
           ),
           (
@@ -39,7 +39,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         )
         VALUES (
           'project-1', 'Project', '/tmp/project', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-          '{"provider":"kilo","model":"kilo/kilo-auto/free"}'
+          '{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"variant":"project-variant"}}}'
         )
       `;
 
@@ -60,7 +60,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       yield* sql`
         INSERT INTO automation_definitions (
           automation_id, project_id, name, prompt, schedule_json, enabled,
-          model_selection_json, runtime_mode, interaction_mode, worktree_mode,
+          model_selection_json, provider_options_json, runtime_mode, interaction_mode, worktree_mode,
           mode, stop_on_error, minimum_interval_seconds, retry_policy_json,
           misfire_policy, acknowledged_risks_json, iteration_count,
           created_at, updated_at
@@ -68,7 +68,9 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         VALUES (
           'automation-1', 'project-1', 'Kilo automation', 'do things',
           '{"type":"interval","everySeconds":3600}', 1,
-          '{"provider":"kilo","model":"kilo/kilo-auto/free"}', 'full-access', 'default',
+          '{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"agent":"automation-agent"}}}',
+          '{"kilo":{"binaryPath":"/opt/kilo","serverUrl":"http://127.0.0.1:4096"}}',
+          'full-access', 'default',
           'disabled', 'standalone', 0, 60, '{"type":"none"}', 'coalesce', '[]', 0,
           '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
         )
@@ -94,13 +96,13 @@ layer("098_MigrateKiloToOpenCode", (it) => {
           (
             'event-1', 'thread', 'thread-kilo', 1, 'thread.created',
             '2026-01-01T00:00:00Z', 'client',
-            '{"threadId":"thread-kilo","modelSelection":{"provider":"kilo","model":"kilo/kilo-auto/free"},"handoff":{"sourceThreadId":"thread-src","sourceProvider":"kilo","importedAt":"2026-01-01T00:00:00Z","bootstrapStatus":"completed"}}',
+            '{"threadId":"thread-kilo","modelSelection":{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"variant":"event-variant"}}},"providerOptions":{"kilo":{"binaryPath":"/event/kilo"}},"handoff":{"sourceThreadId":"thread-src","sourceProvider":"kilo","importedAt":"2026-01-01T00:00:00Z","bootstrapStatus":"completed"}}',
             '{}'
           ),
           (
             'event-2', 'project', 'project-1', 1, 'project.meta-updated',
             '2026-01-01T00:00:00Z', 'client',
-            '{"projectId":"project-1","defaultModelSelection":{"provider":"kilo","model":"kilo/kilo-auto/free"}}',
+            '{"projectId":"project-1","defaultModelSelection":{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"agent":"event-agent"}}}}',
             '{}'
           ),
           (
@@ -124,11 +126,15 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         readonly handoff: string;
       }>`
         SELECT
-          json_extract(model_selection_json, '$.provider') AS "modelSelection",
+          model_selection_json AS "modelSelection",
           json_extract(handoff_json, '$.sourceProvider') AS "handoff"
         FROM projection_threads WHERE thread_id = 'thread-kilo'
       `;
-      assert.strictEqual(kiloThread?.modelSelection, "opencode");
+      assert.deepStrictEqual(JSON.parse(kiloThread?.modelSelection ?? "null"), {
+        provider: "opencode",
+        model: "kilo/kilo-auto/free",
+        options: { opencode: { variant: "thread-variant", agent: "thread-agent" } },
+      });
       assert.strictEqual(kiloThread?.handoff, "opencode");
 
       const [codexThread] = yield* sql<{ readonly provider: string }>`
@@ -137,11 +143,15 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       `;
       assert.strictEqual(codexThread?.provider, "codex");
 
-      const [project] = yield* sql<{ readonly provider: string }>`
-        SELECT json_extract(default_model_selection_json, '$.provider') AS "provider"
+      const [project] = yield* sql<{ readonly modelSelection: string }>`
+        SELECT default_model_selection_json AS "modelSelection"
         FROM projection_projects WHERE project_id = 'project-1'
       `;
-      assert.strictEqual(project?.provider, "opencode");
+      assert.deepStrictEqual(JSON.parse(project?.modelSelection ?? "null"), {
+        provider: "opencode",
+        model: "kilo/kilo-auto/free",
+        options: { opencode: { variant: "project-variant" } },
+      });
 
       const [session] = yield* sql<{ readonly provider: string }>`
         SELECT provider_name AS "provider"
@@ -159,11 +169,26 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.strictEqual(runtimeBinding?.provider, "opencode");
       assert.strictEqual(runtimeBinding?.adapterKey, "opencode");
 
-      const [automation] = yield* sql<{ readonly provider: string }>`
-        SELECT json_extract(model_selection_json, '$.provider') AS "provider"
+      const [automation] = yield* sql<{
+        readonly modelSelection: string;
+        readonly providerOptions: string;
+      }>`
+        SELECT
+          model_selection_json AS "modelSelection",
+          provider_options_json AS "providerOptions"
         FROM automation_definitions WHERE automation_id = 'automation-1'
       `;
-      assert.strictEqual(automation?.provider, "opencode");
+      assert.deepStrictEqual(JSON.parse(automation?.modelSelection ?? "null"), {
+        provider: "opencode",
+        model: "kilo/kilo-auto/free",
+        options: { opencode: { agent: "automation-agent" } },
+      });
+      assert.deepStrictEqual(JSON.parse(automation?.providerOptions ?? "null"), {
+        opencode: {
+          binaryPath: "/opt/kilo",
+          serverUrl: "http://127.0.0.1:4096",
+        },
+      });
 
       const [runtimeEvent] = yield* sql<{ readonly provider: string }>`
         SELECT json_extract(event_json, '$.provider') AS "provider"
@@ -182,8 +207,17 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         eventProviders.map((row) => [row.eventId, JSON.parse(row.payload) as Record<string, any>]),
       );
       assert.strictEqual(payloads.get("event-1")?.modelSelection.provider, "opencode");
+      assert.deepStrictEqual(payloads.get("event-1")?.modelSelection.options, {
+        opencode: { variant: "event-variant" },
+      });
+      assert.deepStrictEqual(payloads.get("event-1")?.providerOptions, {
+        opencode: { binaryPath: "/event/kilo" },
+      });
       assert.strictEqual(payloads.get("event-1")?.handoff.sourceProvider, "opencode");
       assert.strictEqual(payloads.get("event-2")?.defaultModelSelection.provider, "opencode");
+      assert.deepStrictEqual(payloads.get("event-2")?.defaultModelSelection.options, {
+        opencode: { agent: "event-agent" },
+      });
       assert.strictEqual(payloads.get("event-3")?.provider, "opencode");
       assert.strictEqual(payloads.get("event-3")?.providerName, "opencode");
       assert.strictEqual(payloads.get("event-4")?.modelSelection.provider, "codex");
