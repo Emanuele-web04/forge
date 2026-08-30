@@ -17,10 +17,7 @@ import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
-import {
-  useCopyFileContentsToClipboard,
-  useCopyPathToClipboard,
-} from "~/hooks/useCopyToClipboard";
+import { useCopyFileContentsToClipboard, useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
