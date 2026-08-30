@@ -241,11 +241,120 @@ type ClaudeAutoSessionStartExpectation =
   | { readonly status: "started"; readonly model: string }
   | { readonly status: "rejected"; readonly issue: RegExp };
 
-function verifyClaudeAutoSessionStart(input: {
+type ClaudeAutoSessionStartCase = {
+  readonly name: string;
   readonly models: Array<ModelInfo>;
   readonly requestedModel: string;
   readonly expected: ClaudeAutoSessionStartExpectation;
-}) {
+};
+
+const CLAUDE_AUTO_SESSION_START_CASES: Array<ClaudeAutoSessionStartCase> = [
+  {
+    name: "starts Auto when Claude discovers only supported context-window variants",
+    requestedModel: "claude-opus-5",
+    models: [
+      {
+        value: "default",
+        resolvedModel: "claude-opus-5[1m]",
+        displayName: "Default (recommended)",
+        description: "Default Claude model",
+        supportsAutoMode: true,
+      },
+      {
+        value: "opus[1m]",
+        resolvedModel: "claude-opus-5[1m]",
+        displayName: "Claude Opus 5 (1M context)",
+        description: "Claude Opus 5",
+        supportsAutoMode: true,
+      },
+    ],
+    expected: { status: "started", model: "claude-opus-5" },
+  },
+  {
+    name: "keeps exact Claude Auto capability matches authoritative",
+    requestedModel: "claude-opus-5",
+    models: [
+      {
+        value: "claude-opus-5",
+        displayName: "Claude Opus 5",
+        description: "Claude Opus 5",
+        supportsAutoMode: true,
+      },
+      {
+        value: "claude-opus-5[1m]",
+        displayName: "Claude Opus 5 (1M context)",
+        description: "Claude Opus 5",
+        supportsAutoMode: false,
+      },
+    ],
+    expected: { status: "started", model: "claude-opus-5" },
+  },
+  {
+    name: "rejects conflicting normalized Claude Auto capability matches",
+    requestedModel: "claude-opus-5",
+    models: [
+      {
+        value: "opus[1m]",
+        resolvedModel: "claude-opus-5[1m]",
+        displayName: "Claude Opus 5 (1M context)",
+        description: "Claude Opus 5",
+        supportsAutoMode: true,
+      },
+      {
+        value: "claude-opus-5[200k]",
+        displayName: "Claude Opus 5 (200K context)",
+        description: "Claude Opus 5",
+        supportsAutoMode: false,
+      },
+    ],
+    expected: { status: "rejected", issue: /conflicting Auto mode capability metadata/u },
+  },
+  {
+    name: "rejects false Auto capability after context-window normalization",
+    requestedModel: "claude-opus-5",
+    models: [
+      {
+        value: "opus[1m]",
+        resolvedModel: "claude-opus-5[1m]",
+        displayName: "Claude Opus 5 (1M context)",
+        description: "Claude Opus 5",
+        supportsAutoMode: false,
+      },
+    ],
+    expected: {
+      status: "rejected",
+      issue: /^Claude model "Claude Opus 5 \(1M context\)" does not support Auto mode\.$/u,
+    },
+  },
+  {
+    name: "reports a model absent when only an unsupported qualifier resembles it",
+    requestedModel: "claude-opus-5",
+    models: [
+      {
+        value: "claude-opus-5[preview]",
+        displayName: "Claude Opus 5 Preview",
+        description: "Claude Opus 5 preview",
+        supportsAutoMode: true,
+      },
+    ],
+    expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
+  },
+  {
+    name: "does not normalize an explicit context-window request to a bare model",
+    requestedModel: "claude-opus-5[1m]",
+    models: [
+      {
+        value: "claude-opus-5",
+        displayName: "Claude Opus 5",
+        description: "Claude Opus 5",
+        supportsAutoMode: true,
+      },
+    ],
+    expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
+  },
+];
+
+function verifyClaudeAutoSessionStart(input: ClaudeAutoSessionStartCase) {
   const { layer } = makeClaudeModelCatalogHarness(input.models);
   return Effect.gen(function* () {
     const adapter = yield* ClaudeAdapter;
@@ -8525,127 +8634,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect(
-    "starts Auto when Claude discovers only supported context-window variants",
-    () =>
-      verifyClaudeAutoSessionStart({
-        requestedModel: "claude-opus-5",
-        models: [
-          {
-            value: "default",
-            resolvedModel: "claude-opus-5[1m]",
-            displayName: "Default (recommended)",
-            description: "Default Claude model",
-            supportsAutoMode: true,
-          },
-          {
-            value: "opus[1m]",
-            resolvedModel: "claude-opus-5[1m]",
-            displayName: "Claude Opus 5 (1M context)",
-            description: "Claude Opus 5",
-            supportsAutoMode: true,
-          },
-        ],
-        expected: { status: "started", model: "claude-opus-5" },
-      }),
-  );
-
-  it.effect("keeps exact Claude Auto capability matches authoritative", () =>
-    verifyClaudeAutoSessionStart({
-      requestedModel: "claude-opus-5",
-      models: [
-        {
-          value: "claude-opus-5",
-          displayName: "Claude Opus 5",
-          description: "Claude Opus 5",
-          supportsAutoMode: true,
-        },
-        {
-          value: "claude-opus-5[1m]",
-          displayName: "Claude Opus 5 (1M context)",
-          description: "Claude Opus 5",
-          supportsAutoMode: false,
-        },
-      ],
-      expected: { status: "started", model: "claude-opus-5" },
-    }),
-  );
-
-  it.effect("rejects conflicting normalized Claude Auto capability matches", () =>
-    verifyClaudeAutoSessionStart({
-      requestedModel: "claude-opus-5",
-      models: [
-        {
-          value: "opus[1m]",
-          resolvedModel: "claude-opus-5[1m]",
-          displayName: "Claude Opus 5 (1M context)",
-          description: "Claude Opus 5",
-          supportsAutoMode: true,
-        },
-        {
-          value: "claude-opus-5[200k]",
-          displayName: "Claude Opus 5 (200K context)",
-          description: "Claude Opus 5",
-          supportsAutoMode: false,
-        },
-      ],
-      expected: { status: "rejected", issue: /conflicting Auto mode capability metadata/u },
-    }),
-  );
-
-  it.effect(
-    "rejects false Auto capability after context-window normalization",
-    () =>
-      verifyClaudeAutoSessionStart({
-        requestedModel: "claude-opus-5",
-        models: [
-          {
-            value: "opus[1m]",
-            resolvedModel: "claude-opus-5[1m]",
-            displayName: "Claude Opus 5 (1M context)",
-            description: "Claude Opus 5",
-            supportsAutoMode: false,
-          },
-        ],
-        expected: {
-          status: "rejected",
-          issue: /^Claude model "Claude Opus 5 \(1M context\)" does not support Auto mode\.$/u,
-        },
-      }),
-  );
-
-  it.effect(
-    "reports a model absent when only an unsupported qualifier resembles it",
-    () =>
-      verifyClaudeAutoSessionStart({
-        requestedModel: "claude-opus-5",
-        models: [
-          {
-            value: "claude-opus-5[preview]",
-            displayName: "Claude Opus 5 Preview",
-            description: "Claude Opus 5 preview",
-            supportsAutoMode: true,
-          },
-        ],
-        expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
-      }),
-  );
-
-  it.effect(
-    "does not normalize an explicit context-window request to a bare model",
-    () =>
-      verifyClaudeAutoSessionStart({
-        requestedModel: "claude-opus-5[1m]",
-        models: [
-          {
-            value: "claude-opus-5",
-            displayName: "Claude Opus 5",
-            description: "Claude Opus 5",
-            supportsAutoMode: true,
-          },
-        ],
-        expected: { status: "rejected", issue: /was not returned by Claude model discovery/u },
-      }),
+  it.effect.each(CLAUDE_AUTO_SESSION_START_CASES)("$name", (input) =>
+    verifyClaudeAutoSessionStart(input),
   );
 
   it.effect("rejects Auto when the selected Claude model omits capability metadata", () => {
