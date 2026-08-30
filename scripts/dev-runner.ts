@@ -12,7 +12,10 @@ import {
   optionalBooleanFlag,
   type BooleanFlagInput,
 } from "@synara/shared/cli";
-import { synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
+import {
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -27,10 +30,6 @@ const MAX_PORT = 65535;
 export const DEFAULT_SYNARA_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(homedir(), ".synara"),
 );
-const DEFAULT_DESKTOP_DEV_HOME = Effect.map(Effect.service(Path.Path), (path) =>
-  path.join(homedir(), synaraDesktopIdentity("development").defaultHomeDirectoryName),
-);
-
 const MODE_ARGS = {
   dev: [
     "run",
@@ -137,6 +136,7 @@ export function resolveOffset(config: {
 function resolveBaseDir(
   baseDir: string | undefined,
   mode: DevMode,
+  requestedDesktopFlavor?: string | undefined,
 ): Effect.Effect<string, never, Path.Path> {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -146,7 +146,14 @@ function resolveBaseDir(
       return path.resolve(configured);
     }
 
-    return yield* mode === "dev:desktop" ? DEFAULT_DESKTOP_DEV_HOME : DEFAULT_SYNARA_HOME;
+    if (mode === "dev:desktop") {
+      const flavor = resolveSynaraDesktopFlavor({
+        isDevelopment: true,
+        requestedFlavor: requestedDesktopFlavor,
+      });
+      return path.join(homedir(), synaraDesktopIdentity(flavor).defaultHomeDirectoryName);
+    }
+    return yield* DEFAULT_SYNARA_HOME;
   });
 }
 
@@ -182,7 +189,11 @@ export function createDevRunnerEnv({
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
-    const resolvedBaseDir = yield* resolveBaseDir(synaraHome, mode);
+    const resolvedBaseDir = yield* resolveBaseDir(
+      synaraHome,
+      mode,
+      baseEnv.SYNARA_DESKTOP_FLAVOR,
+    );
     const configuredHost = host ?? "127.0.0.1";
     // Brackets are URL syntax, not valid listen-host syntax. Keep the bind host
     // portable while adding brackets back only when constructing an IPv6 URL.

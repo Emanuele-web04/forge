@@ -31,12 +31,16 @@ export interface SynaraDesktopIdentity {
 export function resolveSynaraDesktopFlavor(input: {
   readonly isDevelopment: boolean;
   readonly requestedFlavor?: string | undefined;
+  readonly allowDevelopmentOverride?: boolean | undefined;
 }): SynaraDesktopFlavor {
   const requestedFlavor = input.requestedFlavor?.trim().toLowerCase();
   if (requestedFlavor === "canary") {
     return "canary";
   }
-  if (requestedFlavor === "development") {
+  if (
+    requestedFlavor === "development" &&
+    (input.isDevelopment || input.allowDevelopmentOverride === true)
+  ) {
     return "development";
   }
   return input.isDevelopment ? "development" : "production";
