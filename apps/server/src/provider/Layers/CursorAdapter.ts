@@ -219,6 +219,10 @@ interface CursorSessionContext {
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
   latestSessionCostUsd: number | undefined;
+  // The runtime is registered before load replay settles so stop/restart can
+  // close it without waiting for the replay hard cap. Turns wait here until
+  // startup configuration has completed under the thread lock.
+  sessionConfigReady: Deferred.Deferred<void> | undefined;
   stopped: boolean;
 }
 
@@ -659,6 +663,10 @@ export function makeCursorAdapter(
         ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
+          ctx.sessionConfigReady = undefined;
+        }
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -673,8 +681,9 @@ export function makeCursorAdapter(
         });
       });
 
-    const startSession: CursorAdapterShape["startSession"] = (input) =>
-      withThreadLock(
+    const startSession: CursorAdapterShape["startSession"] = (input) => {
+      let registeredCtx: CursorSessionContext | undefined;
+      const setup = withThreadLock(
         input.threadId,
         Effect.gen(function* () {
           if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -966,6 +975,7 @@ export function makeCursorAdapter(
             ),
           );
 
+          const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -1004,6 +1014,7 @@ export function makeCursorAdapter(
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
+            sessionConfigReady,
             stopped: false,
           };
 
@@ -1138,57 +1149,103 @@ export function makeCursorAdapter(
 
           ctx.notificationFiber = nf;
 
-          // Fork the event drain before configuration can activate the shared
-          // load-replay gate. Keep the session unregistered until configuration
-          // settles so an immediate turn cannot race these state-dependent reads.
-          yield* applyRequestedSessionConfiguration({
-            runtime: acp,
-            runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
-            modelSelection: cursorModelSelection,
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-            onModelSelectionNotice: (notice) =>
-              emitCursorModelSelectionNotice({
-                threadId: input.threadId,
-                lifecycleGeneration: input.lifecycleGeneration,
-                turnId: undefined,
-                notice,
-              }),
-          });
-
           sessions.set(input.threadId, ctx);
+          registeredCtx = ctx;
           sessionScopeTransferred = true;
 
-          yield* offerRuntimeEvent(input.lifecycleGeneration, {
-            type: "session.started",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { resume: started.initializeResult },
-          });
-          yield* offerRuntimeEvent(input.lifecycleGeneration, {
-            type: "session.state.changed",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { state: "ready", reason: "Cursor ACP session ready" },
-          });
-          yield* offerRuntimeEvent(input.lifecycleGeneration, {
-            type: "thread.started",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { providerThreadId: started.sessionId },
-          });
-
-          return session;
+          return { ctx, session, started, cursorModelSelection, sessionConfigReady };
         }).pipe(Effect.scoped),
       );
+
+      return Effect.gen(function* () {
+        const { ctx, session, started, cursorModelSelection, sessionConfigReady } = yield* setup;
+        // The replay wait deliberately runs without the per-thread lock. The
+        // registered context lets stop/restart close the scope and release the
+        // gate immediately instead of waiting for its hard cap.
+        yield* ctx.acp.awaitLoadReplayReady.pipe(
+          Effect.mapError((cause) =>
+            ctx.stopped
+              ? new ProviderAdapterSessionNotFoundError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                })
+              : mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
+          ),
+        );
+
+        yield* withThreadLock(
+          input.threadId,
+          Effect.gen(function* () {
+            if (ctx.stopped || sessions.get(input.threadId) !== ctx) {
+              return yield* new ProviderAdapterSessionNotFoundError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              });
+            }
+            yield* applyRequestedSessionConfiguration({
+              runtime: ctx.acp,
+              runtimeMode: input.runtimeMode,
+              interactionMode: undefined,
+              modelSelection: cursorModelSelection,
+              mapError: ({ cause, method }) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+              onModelSelectionNotice: (notice) =>
+                emitCursorModelSelectionNotice({
+                  threadId: input.threadId,
+                  lifecycleGeneration: input.lifecycleGeneration,
+                  turnId: undefined,
+                  notice,
+                }),
+            });
+            yield* Deferred.succeed(sessionConfigReady, undefined);
+            ctx.sessionConfigReady = undefined;
+
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "session.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { resume: started.initializeResult },
+            });
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { state: "ready", reason: "Cursor ACP session ready" },
+            });
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
+              type: "thread.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { providerThreadId: started.sessionId },
+            });
+          }),
+        );
+
+        return session;
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) || registeredCtx === undefined
+            ? Effect.void
+            : Effect.ignore(stopSessionInternal(registeredCtx)),
+        ),
+      );
+    };
 
     const sendTurn: CursorAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.await(ctx.sessionConfigReady);
+        }
+        if (ctx.stopped) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;

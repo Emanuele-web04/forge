@@ -987,8 +987,9 @@ export function makeGrokAdapter(
         }
       });
 
-    const startSession: GrokAdapterShape["startSession"] = (input) =>
-      withThreadLock(
+    const startSession: GrokAdapterShape["startSession"] = (input) => {
+      let registeredCtx: GrokSessionContext | undefined;
+      const setup = withThreadLock(
         input.threadId,
         Effect.gen(function* () {
           if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1577,16 +1578,40 @@ export function makeGrokAdapter(
 
           ctx.notificationFiber = notificationFiber;
           sessions.set(input.threadId, ctx);
+          registeredCtx = ctx;
           sessionScopeTransferred = true;
 
-          // Startup finalization runs after the consumer fork so replay emitted
-          // while it is in flight keeps draining. The session is already registered,
-          // and the start-scope finalizer no longer owns the session scope, so any failure
-          // OR interruption of the remaining startup steps must tear the session
-          // down explicitly instead of leaking a live child.
-          yield* Effect.gen(function* () {
+          return { ctx, session, started, grokModelSelection, sessionConfigReady };
+        }).pipe(Effect.scoped),
+      );
+
+      return Effect.gen(function* () {
+        const { ctx, session, started, grokModelSelection, sessionConfigReady } = yield* setup;
+        // The replay wait deliberately runs without the per-thread lock. The
+        // registered context lets stop/restart close the scope and release the
+        // gate immediately instead of waiting for its hard cap.
+        yield* ctx.acp.awaitLoadReplayReady.pipe(
+          Effect.mapError((cause) =>
+            ctx.stopped
+              ? new ProviderAdapterSessionNotFoundError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                })
+              : mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
+          ),
+        );
+
+        yield* withThreadLock(
+          input.threadId,
+          Effect.gen(function* () {
+            if (ctx.stopped || sessions.get(input.threadId) !== ctx) {
+              return yield* new ProviderAdapterSessionNotFoundError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              });
+            }
             yield* applyRequestedModelSelection({
-              runtime: acp,
+              runtime: ctx.acp,
               modelSelection: grokModelSelection,
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1617,15 +1642,18 @@ export function makeGrokAdapter(
               threadId: input.threadId,
               payload: { providerThreadId: started.sessionId },
             });
-          }).pipe(
-            Effect.onExit((exit) =>
-              Exit.isSuccess(exit) ? Effect.void : Effect.ignore(stopSessionInternal(ctx)),
-            ),
-          );
+          }),
+        );
 
-          return session;
-        }).pipe(Effect.scoped),
+        return session;
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) || registeredCtx === undefined
+            ? Effect.void
+            : Effect.ignore(stopSessionInternal(registeredCtx)),
+        ),
       );
+    };
 
     // Idle-progress watchdog escape hatch: force-fail a turn whose grok child
     // is alive but has gone completely silent. Mirrors the prompt-fiber
