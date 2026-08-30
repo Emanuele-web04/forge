@@ -126,9 +126,7 @@ function OpenInPickerContent({
   } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
   const displayedOptions = menuEditorOrder
     ? [
-        ...menuEditorOrder.flatMap((editorId) =>
-          options.filter(({ value }) => value === editorId),
-        ),
+        ...menuEditorOrder.flatMap((editorId) => options.filter(({ value }) => value === editorId)),
         ...options.filter(({ value }) => !menuEditorOrder.includes(value)),
       ]
     : options;
@@ -136,10 +134,9 @@ function OpenInPickerContent({
   const primaryDisabled = primaryAction
     ? (primaryAction.disabled ?? false)
     : !preferredEditor || !openInTarget;
-  const primaryIcon = primaryAction?.icon ??
-    (primaryOption?.Icon ? (
-      <primaryOption.Icon aria-hidden="true" className="size-3.5" />
-    ) : null);
+  const primaryIcon =
+    primaryAction?.icon ??
+    (primaryOption?.Icon ? <primaryOption.Icon aria-hidden="true" className="size-3.5" /> : null);
   const handlePrimaryOpen = primaryAction?.onClick ?? (() => openInEditor(preferredEditor));
 
   return (

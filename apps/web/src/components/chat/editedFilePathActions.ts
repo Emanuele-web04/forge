@@ -26,9 +26,7 @@ export function resolveEditedFilePathTargets(
   if (isLocalAbsolutePath(trimmedPath)) {
     return {
       absolutePath: trimmedPath,
-      relativePath: workspaceRoot
-        ? workspaceRelativePathOf(trimmedPath, workspaceRoot)
-        : null,
+      relativePath: workspaceRoot ? workspaceRelativePathOf(trimmedPath, workspaceRoot) : null,
     };
   }
 
@@ -38,9 +36,7 @@ export function resolveEditedFilePathTargets(
 
   const relativePath = trimmedPath.replace(/\\/g, "/");
   return {
-    absolutePath: workspaceRoot
-      ? joinWorkspaceRelativePath(workspaceRoot, relativePath)
-      : null,
+    absolutePath: workspaceRoot ? joinWorkspaceRelativePath(workspaceRoot, relativePath) : null,
     relativePath,
   };
 }

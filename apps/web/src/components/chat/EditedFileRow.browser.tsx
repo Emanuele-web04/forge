@@ -249,9 +249,7 @@ describe("EditedFileRow", () => {
         })
         .click();
       expect(page.getByRole("menuitemradio", { name: "Finder" }).element()).toBeDisabled();
-      expect(
-        page.getByRole("menuitem", { name: "Copy absolute path" }).element(),
-      ).toBeDisabled();
+      expect(page.getByRole("menuitem", { name: "Copy absolute path" }).element()).toBeDisabled();
       expect(
         page.getByRole("menuitem", { name: "Copy relative path" }).element(),
       ).not.toBeDisabled();
