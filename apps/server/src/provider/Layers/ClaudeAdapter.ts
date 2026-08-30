@@ -2733,9 +2733,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.tokenUsageState = "awaiting-fresh-assistant";
         }
         const accountingOnlyUsage =
-          totalProcessedTokens !== undefined
-            ? { usedTokens: 0, totalProcessedTokens }
-            : undefined;
+          totalProcessedTokens !== undefined ? { usedTokens: 0, totalProcessedTokens } : undefined;
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
           context.tokenUsageState !== "current"
             ? accountingOnlyUsage
