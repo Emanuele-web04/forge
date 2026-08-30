@@ -177,6 +177,21 @@ describe("BackendStartupBlockDetector", () => {
     expect(detector.read()).toEqual({ kind: "migration-startup-block-invalid" });
   });
 
+  it("rejects a valid structured block before parsing when it exceeds the safety cap", () => {
+    const detector = new BackendStartupBlockDetector();
+    const oversizedBlock: MigrationSchemaTooNewStartupBlock = {
+      ...schemaTooNewBlock,
+      recovery: {
+        ...schemaTooNewBlock.recovery,
+        backupPath: `/data/${"x".repeat(1_050_000)}.sqlite`,
+      },
+    };
+
+    detector.push(serializeMigrationSchemaTooNewStartupBlock(oversizedBlock));
+
+    expect(detector.read()).toEqual({ kind: "migration-startup-block-invalid" });
+  });
+
   it("ignores unrelated startup failures", () => {
     const detector = new BackendStartupBlockDetector();
 
