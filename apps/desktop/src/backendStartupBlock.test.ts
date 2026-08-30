@@ -182,8 +182,10 @@ describe("BackendStartupBlockDetector", () => {
     const oversizedBlock: MigrationSchemaTooNewStartupBlock = {
       ...schemaTooNewBlock,
       recovery: {
-        ...schemaTooNewBlock.recovery,
+        kind: "restore-available",
         backupPath: `/data/${"x".repeat(1_050_000)}.sqlite`,
+        provenancePath: "/data/state.sqlite.migration-backup.json",
+        backupMigrationId: 90,
       },
     };
 
