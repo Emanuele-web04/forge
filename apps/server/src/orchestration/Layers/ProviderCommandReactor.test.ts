@@ -935,6 +935,39 @@ describe("ProviderCommandReactor", () => {
     );
   }
 
+  async function emitHarnessTurnTerminal(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly eventId: string;
+      readonly provider: "opencode" | "kilo";
+      readonly type: "completed" | "aborted";
+      readonly threadId?: ThreadId;
+      readonly turnId?: TurnId;
+    },
+  ) {
+    const eventBase = {
+      eventId: asEventId(input.eventId),
+      provider: input.provider,
+      threadId: input.threadId ?? ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: input.turnId ?? asTurnId("turn-1"),
+      providerRefs: {},
+    } as const;
+    await harness.emitRuntimeEvent(
+      input.type === "completed"
+        ? ({
+            ...eventBase,
+            type: "turn.completed",
+            payload: { state: "completed" },
+          } as ProviderRuntimeEvent)
+        : ({
+            ...eventBase,
+            type: "turn.aborted",
+            payload: { reason: "prompt rejected after asynchronous submission" },
+          } as ProviderRuntimeEvent),
+    );
+  }
+
   it("REL-01B gate: delivers intents committed before the reactor subscribes", async () => {
     const harness = await createHarness({ startReactor: false });
     const now = new Date().toISOString();
@@ -8333,7 +8366,71 @@ describe("ProviderCommandReactor", () => {
 
       const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
       expect(sentInput.input).toBe("There is no earlier transcript left to restore.");
-      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-empty-bootstrap-completed`,
+        provider,
+        type: "completed",
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "retains the %s transcript recap when async prompt submission aborts",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const rejectedTurnId = asTurnId(`${provider}-async-bootstrap-rejected`);
+      const retryTurnId = asTurnId(`${provider}-async-bootstrap-retry`);
+      const now = new Date().toISOString();
+      harness.pendingPriorTranscriptBootstraps.add(threadId);
+      harness.sendTurn
+        .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: rejectedTurnId }))
+        .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryTurnId }));
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-async-bootstrap-first-turn`,
+        text: "This message must survive asynchronous prompt rejection.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-async-bootstrap-aborted`,
+        provider,
+        type: "aborted",
+        turnId: rejectedTurnId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-async-bootstrap-retry-turn`,
+        text: "Retry after the asynchronous rejection.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+      const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(retryInput.input).toContain("<thread_context>");
+      expect(retryInput.input).toContain(
+        "This message must survive asynchronous prompt rejection.",
+      );
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-async-bootstrap-retry-completed`,
+        provider,
+        type: "completed",
+        turnId: retryTurnId,
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
       expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
     },
   );
@@ -8401,7 +8498,14 @@ describe("ProviderCommandReactor", () => {
       expect(sentInput.input).toContain("<sidechat_context>");
       expect(sentInput.input).not.toContain("<thread_context>");
       expect(sentInput.input).toContain("The imported sidechat color is amber.");
-      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-sidechat-bootstrap-completed`,
+        provider,
+        type: "completed",
+        threadId,
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
       expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
     },
   );
@@ -8468,7 +8572,13 @@ describe("ProviderCommandReactor", () => {
       expect(followUpInput.input).toContain("<thread_context>");
       expect(followUpInput.input).toContain("The retained codename is heliotrope.");
       expect(followUpInput.input?.match(/What is the retained codename\?/g)).toHaveLength(1);
-      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-rejected-resume-bootstrap-completed`,
+        provider,
+        type: "completed",
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
     },
   );
 
@@ -8502,7 +8612,13 @@ describe("ProviderCommandReactor", () => {
       expect(coldStartInput.input?.match(/Which deployment color did we choose\?/g)).toHaveLength(
         1,
       );
-      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-cold-bootstrap-completed`,
+        provider,
+        type: "completed",
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-cold-next`,
@@ -8559,7 +8675,13 @@ describe("ProviderCommandReactor", () => {
       expect(retryInput.input).toContain("<thread_context>");
       expect(retryInput.input).toContain("Keep the release channel on delta.");
       expect(retryInput.input?.match(/Which release channel should we use\?/g)).toHaveLength(1);
-      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-stale-resume-bootstrap-completed`,
+        provider,
+        type: "completed",
+      });
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
     },
   );
 
