@@ -337,6 +337,8 @@ export interface AcpSessionRuntimeShape {
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>>;
   readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
+  /** Waits for session/load replay suppression to settle or reach its hard cap. */
+  readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
   ) => Effect.Effect<Acp.PromptResponse, AcpErrors.AcpError>;
@@ -1347,6 +1349,7 @@ const makeAcpSessionRuntime = (
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       getAvailableCommands: Ref.get(availableCommandsRef),
+      awaitLoadReplayReady,
       prompt: (payload) =>
         getStartedState.pipe(
           Effect.flatMap((started) => {

@@ -466,6 +466,55 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("preserves the fork RPC timeout after replay reaches its hard cap", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 100,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "0,50,100,150,199",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 1_000,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect(
     "assigns distinct fallback assistant item ids across separate runtime instances",
     () => {
