@@ -227,7 +227,6 @@ describe("EditedFileRow", () => {
       editedFileRow({
         openFile,
         filePath: "a/very/long/path/that/does/not/exist/EditedFileRow.tsx",
-        workspaceRoot: undefined,
       }),
       { container: host },
     );

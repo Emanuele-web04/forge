@@ -2362,11 +2362,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     // bail out ("Unexpected terminal kind `logical` for logical test block").
                     const additions = file.additions ?? 0;
                     const deletions = file.deletions ?? 0;
+                    const fileKind = file.kind ?? "modified";
                     return (
                       <EditedFileRow
                         key={file.path}
                         filePath={file.path}
-                        fileKind={file.kind}
+                        fileKind={fileKind}
                         additions={additions}
                         deletions={deletions}
                         workspaceRoot={workspaceRoot}
