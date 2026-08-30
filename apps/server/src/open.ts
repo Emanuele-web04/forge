@@ -147,6 +147,15 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
   }
 }
 
+function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
+  const command = fileManagerCommandForPlatform(platform);
+  const shouldReveal =
+    platform === "darwin" &&
+    statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+
+  return { command, args: shouldReveal ? ["-R", target] : [target] };
+}
+
 // Terminal integrations should receive a directory even when the source target is file:line:column.
 function resolveTerminalWorkingDirectory(target: string): string {
   const targetPath = parseTargetPathAndPosition(target)?.path ?? target;
@@ -402,7 +411,7 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     return yield* new OpenError({ message: `Unsupported editor: ${input.editor}` });
   }
 
-  return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
+  return resolveFileManagerLaunch(input.cwd, platform);
 });
 
 function editorLaunchesEqual(left: EditorLaunch, right: EditorLaunch): boolean {
