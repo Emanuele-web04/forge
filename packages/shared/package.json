@@ -156,6 +156,18 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./projectSources": {
+      "types": "./src/projectSources.ts",
+      "import": "./src/projectSources.ts"
+    },
+    "./threadRoots": {
+      "types": "./src/threadRoots.ts",
+      "import": "./src/threadRoots.ts"
+    },
+    "./workspaceRootsPreamble": {
+      "types": "./src/workspaceRootsPreamble.ts",
+      "import": "./src/workspaceRootsPreamble.ts"
+    },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",
       "import": "./src/threadHierarchy.ts"

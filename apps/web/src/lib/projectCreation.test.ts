@@ -54,6 +54,27 @@ function makeApi(dispatchCommand: ReturnType<typeof vi.fn>): NativeApi {
 }
 
 describe("createOrRecoverProjectFromPath", () => {
+  it("dispatches every selected folder with the first one as primary", async () => {
+    const dispatchCommand = vi.fn();
+    const api = makeApi(dispatchCommand);
+    dispatchCommand.mockResolvedValue(undefined);
+    await createOrRecoverProjectFromPath({
+      api,
+      workspaceRoot: "/repos/frontend",
+      sourcePaths: ["/repos/backend"],
+      loadSnapshot: async () => null,
+      maxAttempts: 1,
+      delayMs: 0,
+    }).catch(() => undefined);
+    const command = dispatchCommand.mock.calls[0]?.[0];
+    expect(command?.type).toBe("project.create");
+    if (command?.type !== "project.create") throw new Error("Expected project.create");
+    expect(command.sources?.map((source) => source.path)).toEqual([
+      "/repos/frontend",
+      "/repos/backend",
+    ]);
+    expect(command.primarySourceId).toBe(command.sources?.[0]?.id);
+  });
   afterEach(() => {
     useSpacesUiStore.getState().setActiveSpaceId(null);
   });

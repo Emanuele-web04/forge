@@ -54,6 +54,15 @@ export const ProviderSessionStartInput = Schema.Struct({
   provider: Schema.optional(ProviderKind),
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  additionalRoots: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        path: TrimmedNonEmptyString,
+        label: TrimmedNonEmptyString,
+        isGitRepo: Schema.Boolean,
+      }),
+    ),
+  ),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   forkSourceResumeCursor: Schema.optional(Schema.Unknown),

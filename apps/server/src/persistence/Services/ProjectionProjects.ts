@@ -11,6 +11,8 @@ import {
   ModelSelection,
   ProjectId,
   ProjectKind,
+  ProjectSource,
+  ProjectSourceId,
   ProjectScript,
   SpaceId,
 } from "@synara/contracts";
@@ -28,6 +30,10 @@ export const ProjectionProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.NullOr(SpaceId).pipe(Schema.withDecodingDefault(() => null)),
+  sources: Schema.optional(Schema.Array(ProjectSource)).pipe(Schema.withDecodingDefault(() => [])),
+  primarySourceId: Schema.optional(Schema.NullOr(ProjectSourceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

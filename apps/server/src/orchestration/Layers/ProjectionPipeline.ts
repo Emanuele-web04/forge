@@ -152,6 +152,7 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "space.deleted",
   "project.created",
   "project.meta-updated",
+  "project.sources-updated",
   "project.deleted",
 ]);
 
@@ -500,6 +501,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     switch (event.type) {
       case "project.created":
       case "project.meta-updated":
+      case "project.sources-updated":
       case "project.deleted":
         return applyProjectMetadataProjection({ event, projectionProjectRepository }).pipe(
           Effect.asVoid,
@@ -2429,6 +2431,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         );
       case "project.created":
       case "project.meta-updated":
+      case "project.sources-updated":
       case "project.deleted":
         return applyProjectMetadataProjection({ event, projectionProjectRepository });
     }
