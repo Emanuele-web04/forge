@@ -22,6 +22,7 @@ import {
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
+import { gitHardenedConfigEnvironment, hardenGitInvocationArgs } from "../gitInvocationSecurity.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
@@ -1071,14 +1072,19 @@ export function decodePullRequestListJson(
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
-      try: (signal) =>
-        runProcess("gh", input.args, {
+      try: (signal) => {
+        const inheritedEnv = { ...process.env, ...input.env };
+        return runProcess("gh", input.args, {
           cwd: input.cwd,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           signal,
           // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
           // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env: { ...process.env, ...input.env, GH_HOST: GITHUB_HOST },
+          env: {
+            ...inheritedEnv,
+            ...gitHardenedConfigEnvironment(inheritedEnv),
+            GH_HOST: GITHUB_HOST,
+          },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
           ...(input.allowNonZeroExit !== undefined
@@ -1087,7 +1093,8 @@ const makeGitHubCli = Effect.sync(() => {
           ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
           ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
-        }),
+        });
+      },
       catch: (error) => normalizeGitHubCliError("execute", error),
     });
 
@@ -1109,7 +1116,7 @@ const makeGitHubCli = Effect.sync(() => {
   }) =>
     Effect.tryPromise({
       try: (signal) =>
-        runProcess("git", gitInput.args, {
+        runProcess("git", hardenGitInvocationArgs(gitInput.args), {
           cwd: gitInput.cwd,
           timeoutMs: gitInput.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           signal,

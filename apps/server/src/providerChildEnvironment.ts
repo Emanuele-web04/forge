@@ -11,8 +11,12 @@ export type ProviderChildKind =
   | "droid"
   | "grok"
   | "kilo"
+  | "kilo-server"
   | "opencode"
-  | "pi";
+  | "opencode-server"
+  | "pi"
+  | "pi-shell"
+  | "worktree-setup";
 
 const PROVIDER_CREDENTIAL_KEYS = new Set([
   "ANTHROPIC_API_KEY",
@@ -57,12 +61,29 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   cursor: new Set(["CURSOR_API_KEY"]),
   droid: new Set(["FACTORY_API_KEY"]),
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
-  // These profiles deliberately support arbitrary upstream model providers.
-  acp: "all",
-  codex: "all",
-  kilo: "all",
-  opencode: "all",
-  pi: "all",
+  // Generic ACP startup must preserve only the exact credentials granted by
+  // its provider-specific caller. A missing spawn environment is not authority
+  // to inherit every provider credential from the Synara server.
+  acp: new Set(),
+  // The Codex process boundary grants either OpenAI or the active custom
+  // provider's configured env_key explicitly.
+  codex: new Set(),
+  // Health, maintenance, and usage probes do not contact upstream model APIs.
+  kilo: new Set(),
+  opencode: new Set(),
+  pi: new Set(),
+  // The long-lived OpenCode-compatible daemons discover and serve arbitrary
+  // upstream model providers. Isolate their exceptional broad grant from the
+  // short-lived CLI probes above until the daemon pool is provider-keyed.
+  "kilo-server": "all",
+  "opencode-server": "all",
+  // Pi's model registry is multi-provider, but commands launched by the model
+  // are a separate trust boundary and do not need the model API credentials.
+  "pi-shell": new Set(),
+  // A saved setup command can execute repository-controlled lifecycle code
+  // (for example through a package-manager install). Never expose provider
+  // credentials to that process implicitly.
+  "worktree-setup": new Set(),
 };
 
 const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
@@ -81,6 +102,7 @@ export function buildProviderChildEnvironment(input: {
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly inheritedSynaraKeys?: ReadonlyArray<string>;
   readonly inheritedNativeCapabilityKeys?: ReadonlyArray<string>;
+  readonly additionalCredentialKeys?: ReadonlyArray<string>;
   readonly overrides?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
   const baseEnv = {
@@ -90,6 +112,9 @@ export function buildProviderChildEnvironment(input: {
   const allowedSynaraKeys = new Set(input.inheritedSynaraKeys ?? []);
   const allowedNativeCapabilities = new Set(input.inheritedNativeCapabilityKeys ?? []);
   const credentialGrants = PROVIDER_CREDENTIAL_GRANTS[input.provider];
+  const additionalCredentialGrants = new Set(
+    (input.additionalCredentialKeys ?? []).map((key) => key.trim().toUpperCase()),
+  );
   const childEnv: NodeJS.ProcessEnv = {};
 
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -106,7 +131,8 @@ export function buildProviderChildEnvironment(input: {
     if (
       isProviderCredentialKey(key) &&
       credentialGrants !== "all" &&
-      !credentialGrants.has(key.toUpperCase())
+      !credentialGrants.has(key.toUpperCase()) &&
+      !additionalCredentialGrants.has(key.toUpperCase())
     ) {
       continue;
     }

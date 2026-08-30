@@ -5,7 +5,7 @@
 
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -163,9 +163,13 @@ describe("Pi Bash process supervision", () => {
     const teardownStarted = new Promise<void>((resolve) => {
       observeTeardown = resolve;
     });
+    let spawnOptions: SpawnOptions | undefined;
     const supervisor = makePiBashProcessSupervisor({
       getShellConfig: () => ({ shell: "/bin/sh", args: ["-c"] }),
-      spawnProcess: () => child,
+      spawnProcess: (_command, _args, options) => {
+        spawnOptions = options;
+        return child;
+      },
       teardownProcessTree: async (input) => {
         observeTeardown();
         await exitProof;
@@ -178,8 +182,16 @@ describe("Pi Bash process supervision", () => {
     const abortController = new AbortController();
     const command = supervisor.operations.exec("sleep 10", "/tmp", {
       signal: abortController.signal,
+      env: {
+        PATH: "/usr/bin",
+        OPENAI_API_KEY: "provider-secret",
+        SYNARA_AUTH_TOKEN: "control-plane-secret",
+      },
       onData: () => undefined,
     });
+    expect(spawnOptions?.env).toMatchObject({ PATH: "/usr/bin" });
+    expect(spawnOptions?.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(spawnOptions?.env?.SYNARA_AUTH_TOKEN).toBeUndefined();
     let settled = false;
     void command.then(
       () => {

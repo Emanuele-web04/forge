@@ -7,7 +7,11 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 
-import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
+import {
+  parseCodexConfigActiveProviderEnvKey,
+  parseCodexConfigModelProvider,
+  readCodexConfigContent,
+} from "@synara/shared/codexConfig";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
@@ -714,15 +718,20 @@ export async function buildCodexProcessEnv(
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
       : baseEnv;
+  const codexConfig = readCodexConfigContent(configuredEnv) ?? "";
+  const activeProvider = parseCodexConfigModelProvider(codexConfig);
+  const providerEnvKey = parseCodexConfigActiveProviderEnvKey(codexConfig);
+  if (providerEnvKey) {
+    registerProviderCredentialKey(providerEnvKey);
+  }
+  const grantedCredentialKey =
+    activeProvider === undefined || activeProvider === "openai" ? "OPENAI_API_KEY" : providerEnvKey;
   const platform = input.platform ?? process.platform;
   const effectiveEnv = buildProviderChildEnvironment({
     provider: "codex",
     baseEnv: configuredEnv,
+    additionalCredentialKeys: grantedCredentialKey ? [grantedCredentialKey] : [],
   });
-  const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
-  if (providerEnvKey) {
-    registerProviderCredentialKey(providerEnvKey);
-  }
 
   if (platform === "darwin" || platform === "linux") {
     try {

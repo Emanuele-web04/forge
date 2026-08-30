@@ -57,6 +57,24 @@ afterEach(() => {
 });
 
 describe("collectProviderUsageSnapshots caching", () => {
+  it("exposes only the OpenAI key to the Codex usage boundary", async () => {
+    fetchMock.mockResolvedValue(okSnapshot(NOW_MS));
+
+    await collectProviderUsageSnapshots({
+      ...makeCtx(NOW_MS),
+      env: {
+        TEST_USAGE_ACCOUNT: "account-a",
+        OPENAI_API_KEY: "active-openai-secret",
+        ANTHROPIC_API_KEY: "unrelated-provider-secret",
+      },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0].env).toMatchObject({
+      OPENAI_API_KEY: "active-openai-secret",
+    });
+    expect(fetchMock.mock.calls[0]?.[0].env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
   it("serves a fresh snapshot from cache without re-fetching", async () => {
     fetchMock.mockResolvedValue(okSnapshot(NOW_MS));
 

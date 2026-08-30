@@ -11,6 +11,7 @@ import {
   requiresWebSocketAuthentication,
   shouldRejectAuthMutationOrigin,
   shouldRejectUntrustedRequestOrigin,
+  shouldRejectWebSocketRequestOrigin,
 } from "./trustedOrigins";
 
 const config = {
@@ -49,7 +50,7 @@ describe("trustedOrigins", () => {
     ).toBe(true);
   });
 
-  it("rejects unrelated browser origins but allows non-browser requests without Origin", () => {
+  it("rejects unrelated and absent browser origins at the origin classifier", () => {
     expect(
       isTrustedAppOrigin({
         origin: "https://example.test",
@@ -63,7 +64,7 @@ describe("trustedOrigins", () => {
         requestOrigin: "http://127.0.0.1:58090",
         config,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("trusts same-origin hosts only when local, configured, or wildcard-bound", () => {
@@ -155,32 +156,45 @@ describe("trustedOrigins", () => {
     ).toBe(false);
   });
 
-  it("requires websocket authentication for every non-loopback exposure", () => {
+  it("requires websocket authentication except for explicit loopback development", () => {
     expect(
       requiresWebSocketAuthentication({
         host: "127.0.0.1",
         authToken: undefined,
         publicUrl: undefined,
+        devUrl: new URL("http://localhost:5173/"),
       }),
     ).toBe(false);
     expect(
-      requiresWebSocketAuthentication({ host: "::1", authToken: undefined, publicUrl: undefined }),
-    ).toBe(false);
+      requiresWebSocketAuthentication({
+        host: "::1",
+        authToken: undefined,
+        publicUrl: undefined,
+        devUrl: undefined,
+      }),
+    ).toBe(true);
     expect(
       requiresWebSocketAuthentication({
         host: "0.0.0.0",
         authToken: undefined,
         publicUrl: undefined,
+        devUrl: undefined,
       }),
     ).toBe(true);
     expect(
-      requiresWebSocketAuthentication({ host: "::", authToken: undefined, publicUrl: undefined }),
+      requiresWebSocketAuthentication({
+        host: "::",
+        authToken: undefined,
+        publicUrl: undefined,
+        devUrl: undefined,
+      }),
     ).toBe(true);
     expect(
       requiresWebSocketAuthentication({
         host: "192.168.1.50",
         authToken: undefined,
         publicUrl: undefined,
+        devUrl: undefined,
       }),
     ).toBe(true);
     expect(
@@ -188,6 +202,7 @@ describe("trustedOrigins", () => {
         host: "127.0.0.1",
         authToken: "secret",
         publicUrl: undefined,
+        devUrl: new URL("http://localhost:5173/"),
       }),
     ).toBe(true);
     expect(
@@ -195,8 +210,33 @@ describe("trustedOrigins", () => {
         host: "127.0.0.1",
         authToken: undefined,
         publicUrl: new URL("https://synara.example.test/"),
+        devUrl: undefined,
       }),
     ).toBe(true);
+  });
+
+  it("requires an Origin header only for the unauthenticated development socket", () => {
+    expect(
+      shouldRejectWebSocketRequestOrigin({
+        rawOrigin: undefined,
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRejectWebSocketRequestOrigin({
+        rawOrigin: "http://localhost:5173",
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRejectWebSocketRequestOrigin({
+        rawOrigin: undefined,
+        requestOrigin: "http://127.0.0.1:58090",
+        config: { ...config, devUrl: undefined },
+      }),
+    ).toBe(false);
   });
 
   it("requires browser mutations to have a trusted origin or explicit bearer provenance", () => {

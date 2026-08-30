@@ -1,6 +1,7 @@
 import type { ProjectScript } from "@synara/contracts";
 
 import { runProcess } from "./processRunner.ts";
+import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
 
 const WORKTREE_SETUP_TIMEOUT_MS = 10 * 60_000;
 
@@ -27,6 +28,7 @@ export async function runWorktreeSetupScript(
     process.platform === "win32" ? ["/d", "/s", "/c", script.command] : ["-lc", script.command];
   await runProcess(shell, args, {
     cwd,
+    env: buildProviderChildEnvironment({ provider: "worktree-setup" }),
     timeoutMs: WORKTREE_SETUP_TIMEOUT_MS,
     maxBufferBytes: 8 * 1024 * 1024,
     ...(signal ? { signal } : {}),

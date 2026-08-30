@@ -67,6 +67,9 @@ function buildProviderContext(
     env: buildProviderChildEnvironment({
       provider: providerChildKind(provider),
       baseEnv: ctx.env,
+      // The Codex usage fetcher distinguishes API-key auth from ChatGPT auth,
+      // but does not contact model APIs with this credential.
+      ...(provider === "codex" ? { additionalCredentialKeys: ["OPENAI_API_KEY"] } : {}),
     }),
   };
 }

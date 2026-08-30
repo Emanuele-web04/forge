@@ -101,8 +101,8 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["codex", "kilo", "opencode", "pi"] as const)(
-    "preserves upstream credential discovery for multi-provider %s",
+  it.each(["kilo-server", "opencode-server"] as const)(
+    "preserves upstream credential discovery for the multi-provider %s boundary",
     (provider) => {
       const env = buildProviderChildEnvironment({
         provider,
@@ -116,6 +116,38 @@ describe("buildProviderChildEnvironment", () => {
       expect(env.ANTHROPIC_API_KEY).toBe("anthropic-secret");
       expect(env.GEMINI_API_KEY).toBe("gemini-secret");
       expect(env.OPENAI_API_KEY).toBe("openai-secret");
+    },
+  );
+
+  it("grants Codex only its explicitly selected provider credential", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "codex",
+      baseEnv: {
+        OPENAI_API_KEY: "openai-secret",
+        ANTHROPIC_API_KEY: "selected-custom-secret",
+        GEMINI_API_KEY: "unrelated-gemini-secret",
+      },
+      additionalCredentialKeys: ["ANTHROPIC_API_KEY"],
+    });
+
+    expect(env).toEqual({
+      ANTHROPIC_API_KEY: "selected-custom-secret",
+    });
+  });
+
+  it.each(["acp", "kilo", "opencode", "pi", "pi-shell", "worktree-setup"] as const)(
+    "does not grant provider credentials to the %s fallback profile",
+    (provider) => {
+      const env = buildProviderChildEnvironment({
+        provider,
+        baseEnv: {
+          PATH: "/usr/bin",
+          OPENAI_API_KEY: "openai-secret",
+          ANTHROPIC_API_KEY: "anthropic-secret",
+        },
+      });
+
+      expect(env).toEqual({ PATH: "/usr/bin" });
     },
   );
 

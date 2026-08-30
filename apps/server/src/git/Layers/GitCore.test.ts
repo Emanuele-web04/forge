@@ -1218,6 +1218,46 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.skipIf(process.platform === "win32")(
+      "does not execute configured hooks while creating a managed worktree",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const hooksPath = path.join(tmp, "repository-hooks");
+          const branchHookPath = path.join(hooksPath, "reference-transaction");
+          const checkoutHookPath = path.join(hooksPath, "post-checkout");
+          const branchMarkerPath = path.join(tmp, "reference-transaction-ran");
+          const checkoutMarkerPath = path.join(tmp, "post-checkout-ran");
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.makeDirectory(hooksPath, { recursive: true });
+          yield* writeTextFile(
+            branchHookPath,
+            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(branchMarkerPath)}\n`,
+          );
+          yield* writeTextFile(
+            checkoutHookPath,
+            `#!/bin/sh\nprintf '%s\\n' ran > ${JSON.stringify(checkoutMarkerPath)}\n`,
+          );
+          yield* Effect.promise(() => fs.chmod(branchHookPath, 0o700));
+          yield* Effect.promise(() => fs.chmod(checkoutHookPath, 0o700));
+          yield* git(tmp, ["config", "core.hooksPath", hooksPath]);
+
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-no-hooks");
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "wt-no-hooks-branch",
+          });
+
+          expect(existsSync(branchMarkerPath)).toBe(false);
+          expect(existsSync(checkoutMarkerPath)).toBe(false);
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath });
+        }),
+    );
+
     it.effect("copies checkout changes and .worktreeinclude files into a detached worktree", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

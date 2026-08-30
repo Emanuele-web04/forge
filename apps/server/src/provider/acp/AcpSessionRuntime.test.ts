@@ -6,6 +6,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import {
   assistantItemId,
   awaitAcpChildExit,
+  buildAcpSpawnEnvironment,
   decodeSetSessionConfigOptionResponse,
   makeAcpIncomingFrameGuard,
   runAcpFreshSessionSetup,
@@ -13,6 +14,31 @@ import {
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
+
+describe("buildAcpSpawnEnvironment", () => {
+  it("preserves an exact launcher credential grant without restoring unrelated credentials", () => {
+    expect(
+      buildAcpSpawnEnvironment({
+        PATH: "/usr/bin",
+        ANTHROPIC_API_KEY: "launcher-grant",
+        SYNARA_AUTH_TOKEN: "control-plane-secret",
+      }),
+    ).toEqual({
+      PATH: "/usr/bin",
+      ANTHROPIC_API_KEY: "launcher-grant",
+    });
+  });
+
+  it("strips all provider credentials from the ambient fallback", () => {
+    expect(
+      buildAcpSpawnEnvironment(undefined, {
+        PATH: "/usr/bin",
+        ANTHROPIC_API_KEY: "anthropic-secret",
+        OPENAI_API_KEY: "openai-secret",
+      }),
+    ).toEqual({ PATH: "/usr/bin" });
+  });
+});
 
 describe("makeAcpIncomingFrameGuard", () => {
   const encode = (value: string) => new TextEncoder().encode(value);

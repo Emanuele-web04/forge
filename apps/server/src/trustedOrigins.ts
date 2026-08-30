@@ -5,6 +5,8 @@
 // Exports: normalizeCorsOrigin, isTrustedAppOrigin,
 //          shouldRejectUntrustedRequestOrigin
 
+import { timingSafeEqual } from "node:crypto";
+
 import {
   SYNARA_CANARY_DESKTOP_ORIGIN,
   SYNARA_DESKTOP_ORIGIN,
@@ -75,18 +77,18 @@ export function isTrustedAppOrigin(input: {
   readonly config: ServerConfigShape;
 }) {
   return (
-    !input.origin ||
-    input.origin === input.config.publicUrl?.origin ||
-    (input.origin === input.requestOrigin &&
-      isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
-    input.origin === input.config.devUrl?.origin ||
-    DESKTOP_APP_CORS_ORIGINS.has(input.origin)
+    input.origin !== null &&
+    (input.origin === input.config.publicUrl?.origin ||
+      (input.origin === input.requestOrigin &&
+        isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
+      input.origin === input.config.devUrl?.origin ||
+      DESKTOP_APP_CORS_ORIGINS.has(input.origin))
   );
 }
 
-// WebSocket handshakes must reject browser origins that are present but invalid,
-// opaque (`Origin: null`), or unrelated. Requests without an Origin header are
-// CLI/non-browser style and remain allowed for local tooling.
+// Browser-facing requests must reject origins that are present but invalid,
+// opaque (`Origin: null`), or unrelated. Authenticated non-browser requests may
+// omit Origin; the explicit unauthenticated dev socket is stricter below.
 export function shouldRejectUntrustedRequestOrigin(input: {
   readonly rawOrigin: string | ReadonlyArray<string> | undefined;
   readonly requestOrigin: string;
@@ -118,9 +120,52 @@ export function shouldRejectAuthMutationOrigin(input: {
   return shouldRejectUntrustedRequestOrigin(input);
 }
 
-/** Remote-reachable sockets always require a real authenticated session. */
+/**
+ * Built and remotely exposed servers require a real authenticated session.
+ * The only unauthenticated mode left is the explicit Vite development server,
+ * whose browser sockets must still present a trusted Origin header.
+ */
 export function requiresWebSocketAuthentication(
-  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">,
+  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl"> &
+    Partial<Pick<ServerConfigShape, "devUrl">>,
 ): boolean {
-  return Boolean(config.authToken) || Boolean(config.publicUrl) || !isLoopbackHost(config.host);
+  return (
+    Boolean(config.authToken) ||
+    Boolean(config.publicUrl) ||
+    !isLoopbackHost(config.host) ||
+    config.devUrl === undefined
+  );
+}
+
+/** Legacy compatibility credential accepted only on a loopback-only server. */
+export function isLegacyLoopbackTokenAccepted(input: {
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly token: string | null;
+}): boolean {
+  const expected = input.config.authToken;
+  if (
+    !isLoopbackHost(input.config.host) ||
+    input.config.publicUrl ||
+    !expected?.trim() ||
+    input.token === null
+  ) {
+    return false;
+  }
+  const expectedBytes = Buffer.from(expected);
+  const receivedBytes = Buffer.from(input.token);
+  return (
+    expectedBytes.byteLength === receivedBytes.byteLength &&
+    timingSafeEqual(expectedBytes, receivedBytes)
+  );
+}
+
+export function shouldRejectWebSocketRequestOrigin(input: {
+  readonly rawOrigin: string | ReadonlyArray<string> | undefined;
+  readonly requestOrigin: string;
+  readonly config: ServerConfigShape;
+}): boolean {
+  if (input.rawOrigin === undefined && !requiresWebSocketAuthentication(input.config)) {
+    return true;
+  }
+  return shouldRejectUntrustedRequestOrigin(input);
 }

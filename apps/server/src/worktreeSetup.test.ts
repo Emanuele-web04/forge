@@ -46,6 +46,21 @@ describe("worktree setup", () => {
     expect(options).toMatchObject({ cwd: "/tmp/new-worktree" });
   });
 
+  it("does not expose provider or Synara credentials to repository setup code", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "provider-secret");
+    vi.stubEnv("SYNARA_AUTH_TOKEN", "control-plane-secret");
+
+    try {
+      await runWorktreeSetupScript(scripts, "/tmp/new-worktree");
+
+      const [, , options] = vi.mocked(runProcess).mock.calls[0]!;
+      expect(options?.env?.OPENAI_API_KEY).toBeUndefined();
+      expect(options?.env?.SYNARA_AUTH_TOKEN).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("forwards the abort signal so interruption can kill the setup process", async () => {
     const controller = new AbortController();
 

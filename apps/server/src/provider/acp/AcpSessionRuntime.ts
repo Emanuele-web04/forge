@@ -25,7 +25,10 @@ import * as AcpErrors from "./AcpErrors.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
-import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import {
+  buildProviderChildEnvironment,
+  isProviderCredentialKey,
+} from "../../providerChildEnvironment.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -46,6 +49,21 @@ import {
 const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
+
+export function buildAcpSpawnEnvironment(
+  suppliedEnv: NodeJS.ProcessEnv | undefined,
+  ambientEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const exactEnv = suppliedEnv ? { ...suppliedEnv } : undefined;
+  return buildProviderChildEnvironment({
+    provider: "acp",
+    baseEnv: exactEnv ?? ambientEnv,
+    // Provider-specific ACP launchers already reduced this environment. Keep
+    // only credentials present in that exact capability set; an ambient
+    // fallback receives no provider credentials.
+    additionalCredentialKeys: exactEnv ? Object.keys(exactEnv).filter(isProviderCredentialKey) : [],
+  });
+}
 
 export type AcpSessionStartupStep =
   | "initialize"
@@ -801,10 +819,7 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
-    const env = buildProviderChildEnvironment({
-      provider: "acp",
-      baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
-    });
+    const env = buildAcpSpawnEnvironment(options.spawn.env);
     const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
       cwd: options.spawn.cwd,
       env,
