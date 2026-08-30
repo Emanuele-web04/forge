@@ -3466,7 +3466,7 @@ layer("AutomationService", (it) => {
       }),
   );
 
-  it.effect("defers stop evaluation until its provider is re-enabled", () =>
+  it.effect("defers stop evaluation until the router's fallback provider is re-enabled", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -3475,10 +3475,27 @@ layer("AutomationService", (it) => {
       const automationTurnId = TurnId.makeUnsafe("turn-stop-provider-disabled");
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
 
+      yield* serverSettings.updateSettings({
+        textGenerationModelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          kilo: { enabled: false },
+          opencode: { enabled: false },
+        },
+      });
+
       const created = yield* service.create({
         ...createInput("local"),
         mode: "heartbeat",
         targetThreadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
         completionPolicy: aiCompletionPolicy("the PR is ready"),
       });
       const { run } = yield* service.runNow({ automationId: created.id });
@@ -3487,8 +3504,6 @@ layer("AutomationService", (it) => {
         threadId: targetThreadId,
         turnId: automationTurnId,
       });
-      yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
-
       yield* service.reconcileThread({ threadId: targetThreadId });
       yield* realDelay(25);
 

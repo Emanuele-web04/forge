@@ -40,7 +40,10 @@ import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
-import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
+import {
+  hasDedicatedTextGenerationProvider,
+  resolveTextGenerationInputForSelection,
+} from "../../git/textGenerationSelection.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { threadHasInFlightTurn } from "../../orchestration/commandInvariants.ts";
@@ -623,7 +626,10 @@ export const AutomationServiceLive = Layer.effect(
             definition.providerOptions,
           );
           const provider =
-            directInput?.modelSelection.provider ?? settings.textGenerationModelSelection.provider;
+            directInput?.modelSelection.provider ??
+            (hasDedicatedTextGenerationProvider(settings.textGenerationModelSelection.provider)
+              ? settings.textGenerationModelSelection.provider
+              : "codex");
           return settings.providers[provider].enabled
             ? null
             : `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`;

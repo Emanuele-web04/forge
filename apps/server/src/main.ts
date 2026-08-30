@@ -402,7 +402,7 @@ const makeServerProgram = (input: CliInput) =>
         readonly claudeAgent: { readonly enabled: boolean; readonly binaryPath?: string };
       };
     }) =>
-      Effect.sync(() =>
+      Effect.promise(() =>
         claudeKeepalive.reconcile({
           enabled: settings.providers.claudeAgent.enabled,
           ...(settings.providers.claudeAgent.binaryPath !== undefined
@@ -419,7 +419,7 @@ const makeServerProgram = (input: CliInput) =>
     yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
     yield* Stream.fromQueue(claudeKeepaliveSettingsChanges).pipe(
       Stream.runForEach(reconcileClaudeKeepalive),
-      Effect.ensuring(Effect.sync(claudeKeepalive.stop)),
+      Effect.ensuring(Effect.promise(() => claudeKeepalive.stop())),
       Effect.forkChild,
     );
 
