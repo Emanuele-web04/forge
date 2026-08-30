@@ -662,6 +662,69 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("migrates numbered terminal workspace defaults without changing custom rules", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        {
+          key: "mod+1",
+          command: "terminal.workspace.terminal",
+          when: "terminalWorkspaceOpen",
+        },
+        { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
+        {
+          key: "mod+1",
+          command: "thread.jump.1",
+          when: "!terminalFocus && !terminalWorkspaceOpen",
+        },
+        {
+          key: "mod+shift+3",
+          command: "thread.jump.3",
+          when: "!terminalFocus && !terminalWorkspaceOpen",
+        },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+1" &&
+            entry.command === "terminal.workspace.terminal" &&
+            entry.when === "terminalWorkspaceOpen",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+2" &&
+            entry.command === "terminal.workspace.chat" &&
+            entry.when === "terminalWorkspaceOpen",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+1" &&
+            entry.command === "thread.jump.1" &&
+            entry.when === "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+shift+3" &&
+            entry.command === "thread.jump.3" &&
+            entry.when === "!terminalFocus && !terminalWorkspaceOpen",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("accepts synced composer picker keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
