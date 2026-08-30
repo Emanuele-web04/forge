@@ -81,6 +81,9 @@ export const makeAcpLoadReplayGate = (
         if (current._tag === "Ready" || current._tag === "Released") {
           return;
         }
+        if (current._tag !== "Suppressing") {
+          continue;
+        }
 
         const now = yield* Clock.currentTimeMillis;
         const quietForMs = now - current.lastSuppressedAt;
