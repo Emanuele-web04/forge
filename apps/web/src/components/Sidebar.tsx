@@ -386,7 +386,11 @@ import {
 } from "./chat/ComposerPickerMenuPopup";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
+import {
+  hasThreadDragType,
+  parseThreadDragPayload,
+  THREAD_DRAG_MIME,
+} from "../threadDrag";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import {
@@ -516,6 +520,10 @@ type ThreadFolderRemovalState = {
   folder: SidebarThreadFolder;
   mode: ThreadFolderRemovalMode;
 };
+
+function threadFolderDropKey(projectId: ProjectId, folderId: string | null): string {
+  return `${projectId}:${folderId ?? "project-root"}`;
+}
 
 // Sidebar right-click menus (project rows, Space tabs) share one chrome; see
 // sidebarContextMenuStyles.
@@ -1650,6 +1658,11 @@ export default function Sidebar() {
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
   const pendingThreadFolderArchiveIdsRef = useRef(new Set<string>());
+  const sidebarThreadDragIdsRef = useRef<readonly ThreadId[]>([]);
+  const [sidebarThreadDragProjectId, setSidebarThreadDragProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [threadFolderDropTargetKey, setThreadFolderDropTargetKey] = useState<string | null>(null);
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -3001,6 +3014,102 @@ export default function Sidebar() {
       removeFromSelection(eligibleIds);
     },
     [assignThreadsToFolder, removeFromSelection],
+  );
+
+  const clearSidebarThreadDrag = useCallback(() => {
+    sidebarThreadDragIdsRef.current = [];
+    setSidebarThreadDragProjectId(null);
+    setThreadFolderDropTargetKey(null);
+  }, []);
+
+  const resolveSidebarThreadDropIds = useCallback(
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId): ThreadId[] => {
+      if (!hasThreadDragType(event.dataTransfer)) return [];
+      const payload = parseThreadDragPayload(event.dataTransfer);
+      const rememberedIds = sidebarThreadDragIdsRef.current;
+      const candidateIds =
+        rememberedIds.length > 0 &&
+        (!payload || rememberedIds.some((threadId) => threadId === payload.threadId))
+          ? rememberedIds
+          : payload
+            ? [payload.threadId]
+            : [];
+      return candidateIds.filter((threadId) => {
+        const thread = getThreadFromState(useStore.getState(), threadId);
+        return thread?.projectId === projectId && (thread.parentThreadId ?? null) === null;
+      });
+    },
+    [],
+  );
+
+  const handleThreadFolderDragOver = useCallback(
+    (
+      event: ReactDragEvent<HTMLElement>,
+      projectId: ProjectId,
+      targetFolderId: string | null,
+    ) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      // A folder owns its whole subtree as a drop target. Blocking the project-root
+      // parent prevents dropping on the current folder from accidentally extracting it.
+      if (targetFolderId !== null) event.stopPropagation();
+      const threadIds = resolveSidebarThreadDropIds(event, projectId);
+      const assignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
+      const acceptsDrop = threadIds.some(
+        (threadId) => (assignments[threadId] ?? null) !== targetFolderId,
+      );
+      if (!acceptsDrop) {
+        event.dataTransfer.dropEffect = "none";
+        setThreadFolderDropTargetKey(null);
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setThreadFolderDropTargetKey(threadFolderDropKey(projectId, targetFolderId));
+    },
+    [resolveSidebarThreadDropIds],
+  );
+
+  const handleThreadFolderDragLeave = useCallback(
+    (
+      event: ReactDragEvent<HTMLElement>,
+      projectId: ProjectId,
+      targetFolderId: string | null,
+    ) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      const relatedTarget = event.relatedTarget as Node | null;
+      if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
+      const key = threadFolderDropKey(projectId, targetFolderId);
+      setThreadFolderDropTargetKey((current) => (current === key ? null : current));
+    },
+    [],
+  );
+
+  const handleThreadFolderDrop = useCallback(
+    (
+      event: ReactDragEvent<HTMLElement>,
+      projectId: ProjectId,
+      targetFolderId: string | null,
+    ) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const threadIds = resolveSidebarThreadDropIds(event, projectId);
+      const assignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
+      const movableIds = threadIds.filter(
+        (threadId) => (assignments[threadId] ?? null) !== targetFolderId,
+      );
+      if (movableIds.length > 0) {
+        moveThreadsToFolder(movableIds, targetFolderId);
+        if (targetFolderId !== null) setThreadFolderCollapsed(targetFolderId, false);
+      }
+      clearSidebarThreadDrag();
+    },
+    [
+      clearSidebarThreadDrag,
+      moveThreadsToFolder,
+      resolveSidebarThreadDropIds,
+      setThreadFolderCollapsed,
+    ],
   );
 
   const runThreadFolderRemoval = useCallback(
@@ -4939,6 +5048,22 @@ export default function Sidebar() {
                 draggable
                 onDragStart={(event) => {
                   const dragImage = event.currentTarget as HTMLElement | null;
+                  const candidateIds = selectedThreadIds.has(thread.id)
+                    ? [...selectedThreadIds]
+                    : [thread.id];
+                  const draggableFolderThreadIds = candidateIds.filter((threadId) => {
+                    const candidate = getThreadFromState(useStore.getState(), threadId);
+                    return (
+                      candidate !== undefined &&
+                      candidate.projectId === thread.projectId &&
+                      (candidate.parentThreadId ?? null) === null
+                    );
+                  });
+                  sidebarThreadDragIdsRef.current = draggableFolderThreadIds;
+                  setSidebarThreadDragProjectId(
+                    draggableFolderThreadIds.length > 0 ? thread.projectId : null,
+                  );
+                  setThreadFolderDropTargetKey(null);
                   event.dataTransfer.effectAllowed = "move";
                   event.dataTransfer.setData(
                     THREAD_DRAG_MIME,
@@ -4953,6 +5078,7 @@ export default function Sidebar() {
                     );
                   }
                 }}
+                onDragEnd={clearSidebarThreadDrag}
                 onClick={(event) => {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
@@ -5056,17 +5182,31 @@ export default function Sidebar() {
     );
     const open = collapsedThreadFolderIds[folder.id] !== true || containsActiveThread;
     const FolderIcon = open ? FolderOpen : FolderClosed;
+    const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
+    const dropActive = threadFolderDropTargetKey === dropTargetKey;
     return (
-      <div key={folder.id} className="group/thread-folder w-full">
+      <div
+        key={folder.id}
+        className="group/thread-folder w-full"
+        onDragEnter={(event) =>
+          handleThreadFolderDragOver(event, folder.projectId, folder.id)
+        }
+        onDragOver={(event) => handleThreadFolderDragOver(event, folder.projectId, folder.id)}
+        onDragLeave={(event) =>
+          handleThreadFolderDragLeave(event, folder.projectId, folder.id)
+        }
+        onDrop={(event) => handleThreadFolderDrop(event, folder.projectId, folder.id)}
+      >
         <SidebarMenuSubItem className="w-full">
           <SidebarMenuSubButton
             render={<button type="button" />}
             size="sm"
             aria-expanded={open}
             className={cn(
-              "h-7 w-full translate-x-0 gap-1.5 rounded-lg pr-2 pl-2 text-left",
+              "-ml-1.5 h-7 w-[calc(100%+0.375rem)] translate-x-0 gap-1.5 rounded-md border border-border/35 bg-muted/20 pr-2 pl-2 text-left",
               SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
               SIDEBAR_ROW_HOVER_CLASS_NAME,
+              dropActive && "border-info/65 bg-info/14 text-foreground ring-1 ring-info/45",
             )}
             onClick={() => setThreadFolderCollapsed(folder.id, open)}
             onContextMenu={(event) => {
@@ -5078,8 +5218,8 @@ export default function Sidebar() {
               });
             }}
           >
-            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/72" aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/76">
+            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/85" aria-hidden />
+            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/82">
               {folder.name}
             </span>
             <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42">
@@ -5090,7 +5230,7 @@ export default function Sidebar() {
         </SidebarMenuSubItem>
         <div className={disclosureShellClassName(open)}>
           <div className={DISCLOSURE_INNER_CLASS}>
-            <div className={cn("pl-3", disclosureContentClassName(open))}>
+            <div className={cn("pl-4", disclosureContentClassName(open))}>
               {entries.map((entry) =>
                 renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
               )}
@@ -5135,6 +5275,13 @@ export default function Sidebar() {
       if (!folderId || !activeFolderIds.has(folderId)) continue;
       threadCountByFolderId.set(folderId, (threadCountByFolderId.get(folderId) ?? 0) + 1);
     }
+    const projectRootDropKey = threadFolderDropKey(project.id, null);
+    const projectRootDropActive = threadFolderDropTargetKey === projectRootDropKey;
+    const showProjectRootDropTarget =
+      sidebarThreadDragProjectId === project.id &&
+      sidebarThreadDragIdsRef.current.some(
+        (threadId) => folderIdByThreadId[threadId] !== undefined,
+      );
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -5365,7 +5512,25 @@ export default function Sidebar() {
                 SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
                 disclosureContentClassName(project.expanded),
               )}
+              onDragEnter={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragOver={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragLeave={(event) => handleThreadFolderDragLeave(event, project.id, null)}
+              onDrop={(event) => handleThreadFolderDrop(event, project.id, null)}
             >
+              {showProjectRootDropTarget ? (
+                <SidebarMenuSubItem className="w-full">
+                  <div
+                    className={cn(
+                      "mx-1 flex h-7 items-center gap-1.5 rounded-md border border-dashed border-border/60 px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 transition-colors",
+                      projectRootDropActive &&
+                        "border-info/70 bg-info/14 text-foreground ring-1 ring-info/45",
+                    )}
+                  >
+                    <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden />
+                    <span>Move to project root</span>
+                  </div>
+                </SidebarMenuSubItem>
+              ) : null}
               {projectThreadFolders.map((folder) =>
                 renderThreadFolder(
                   folder,

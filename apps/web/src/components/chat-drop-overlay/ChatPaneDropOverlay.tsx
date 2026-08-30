@@ -8,13 +8,13 @@ import { type ThreadId } from "@synara/contracts";
 
 import { type SplitDirection, type SplitDropSide } from "../../splitViewStore";
 import { cn } from "../../lib/utils";
+import {
+  hasThreadDragType,
+  parseThreadDragPayload,
+  type ThreadDragPayload,
+} from "../../threadDrag";
 
-// Custom MIME so external file drops on the composer (which listen for `Files`) cannot trigger us.
-export const THREAD_DRAG_MIME = "application/x-synara-thread";
-
-export interface ThreadDragPayload {
-  threadId: ThreadId;
-}
+export { THREAD_DRAG_MIME } from "../../threadDrag";
 
 export type DropZone = "top" | "bottom" | "left" | "right";
 
@@ -112,30 +112,6 @@ export function dropZoneToDirectionSide(zone: DropZone): {
   return { direction: "horizontal", side: "second" };
 }
 
-function isThreadDrag(event: ReactDragEvent): boolean {
-  const types = event.dataTransfer.types;
-  for (let index = 0; index < types.length; index += 1) {
-    if (types[index] === THREAD_DRAG_MIME) return true;
-  }
-  return false;
-}
-
-function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null {
-  try {
-    const raw = event.dataTransfer.getData(THREAD_DRAG_MIME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ThreadDragPayload>;
-    if (typeof parsed.threadId === "string") {
-      return {
-        threadId: parsed.threadId as ThreadId,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
 // Applies the same thread constraints for hover feedback and the final drop.
 export function isThreadDragPayloadAllowed(
   payload: ThreadDragPayload,
@@ -203,7 +179,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   const getAllowedZoneForEvent = (event: ReactDragEvent<HTMLDivElement>) => {
     const zone = getZoneForEvent(event);
     if (!zone) return null;
-    const payload = parseThreadDragPayload(event);
+    const payload = parseThreadDragPayload(event.dataTransfer);
     if (
       payload &&
       !isThreadDragPayloadAllowed(payload, {
@@ -216,7 +192,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!isThreadDrag(event)) return;
+    if (!hasThreadDragType(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     rectRef.current = wrapperRef.current?.getBoundingClientRect() ?? null;
@@ -227,7 +203,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!isThreadDrag(event)) return;
+    if (!hasThreadDragType(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     const zone = getAllowedZoneForEvent(event);
@@ -236,7 +212,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!isThreadDrag(event)) return;
+    if (!hasThreadDragType(event.dataTransfer)) return;
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     const related = event.relatedTarget as Node | null;
@@ -245,11 +221,11 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!isThreadDrag(event)) return;
+    if (!hasThreadDragType(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     const zone = getZoneForEvent(event);
-    const payload = parseThreadDragPayload(event);
+    const payload = parseThreadDragPayload(event.dataTransfer);
 
     resetOverlayState();
 
