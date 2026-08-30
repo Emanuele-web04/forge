@@ -30,8 +30,12 @@ export function resolveSynaraDesktopFlavor(input: {
   readonly isDevelopment: boolean;
   readonly requestedFlavor?: string | undefined;
 }): SynaraDesktopFlavor {
-  if (input.requestedFlavor?.trim().toLowerCase() === "canary") {
+  const requestedFlavor = input.requestedFlavor?.trim().toLowerCase();
+  if (requestedFlavor === "canary") {
     return "canary";
+  }
+  if (requestedFlavor === "development") {
+    return "development";
   }
   return input.isDevelopment ? "development" : "production";
 }
@@ -59,7 +63,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
       origin: SYNARA_DESKTOP_ORIGIN,
       entryUrl: SYNARA_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-dev",
-      defaultHomeDirectoryName: ".synara",
+      defaultHomeDirectoryName: ".synara-dev",
       usesScriptedUpdates: false,
     };
   }
