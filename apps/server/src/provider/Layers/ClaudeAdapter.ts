@@ -627,6 +627,59 @@ function toMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
+type ClaudeAutoModeModelResolution =
+  | { readonly status: "matched"; readonly model: ModelInfo }
+  | { readonly status: "absent" }
+  | { readonly status: "conflicting" };
+
+function stripSupportedClaudeContextWindowQualifier(modelId: string): string {
+  const qualifierMatch = /\[([^\]]+)\]$/u.exec(modelId);
+  if (
+    !qualifierMatch ||
+    !Object.hasOwn(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, qualifierMatch[1] ?? "")
+  ) {
+    return modelId;
+  }
+  return modelId.slice(0, qualifierMatch.index);
+}
+
+function claudeModelIdentifiers(model: ModelInfo): ReadonlyArray<string> {
+  return model.resolvedModel === undefined ? [model.value] : [model.value, model.resolvedModel];
+}
+
+function resolveClaudeAutoModeModel(
+  discoveredModels: ReadonlyArray<ModelInfo>,
+  requestedModelIds: ReadonlySet<string>,
+): ClaudeAutoModeModelResolution {
+  const exactMatch = discoveredModels.find((model) =>
+    claudeModelIdentifiers(model).some((identifier) => requestedModelIds.has(identifier)),
+  );
+  if (exactMatch) {
+    return { status: "matched", model: exactMatch };
+  }
+
+  const normalizedRequestedModelIds = new Set(
+    [...requestedModelIds].map(stripSupportedClaudeContextWindowQualifier),
+  );
+  const normalizedMatches = discoveredModels.filter((model) =>
+    claudeModelIdentifiers(model).some((identifier) =>
+      normalizedRequestedModelIds.has(stripSupportedClaudeContextWindowQualifier(identifier)),
+    ),
+  );
+  const firstMatch = normalizedMatches[0];
+  if (!firstMatch) {
+    return { status: "absent" };
+  }
+  if (
+    normalizedMatches.some(
+      (model) => model.supportsAutoMode !== firstMatch.supportsAutoMode,
+    )
+  ) {
+    return { status: "conflicting" };
+  }
+  return { status: "matched", model: firstMatch };
+}
+
 function toError(cause: unknown, fallback: string): Error {
   return cause instanceof Error ? cause : new Error(toMessage(cause, fallback));
 }
@@ -1809,10 +1862,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: input.operation,
-              issue: toMessage(
-                cause,
-                `Could not verify that Claude model "${requestedModel}" supports Auto mode.`,
-              ),
+              issue:
+                `Claude model capability discovery failed while verifying Auto mode support for "${requestedModel}": ` +
+                toMessage(cause, "unknown discovery error"),
             }),
         }).pipe(
           // ProviderService gives session startup 60 seconds. Let cold startup
@@ -1839,18 +1891,26 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             (model): model is string => model !== undefined,
           ),
         );
-        const selectedModel = discoveredModels.find(
-          (model) =>
-            requestedModels.has(model.value) ||
-            (model.resolvedModel !== undefined && requestedModels.has(model.resolvedModel)),
-        );
-        if (selectedModel?.supportsAutoMode !== true) {
+        const resolution = resolveClaudeAutoModeModel(discoveredModels, requestedModels);
+        if (resolution.status === "absent") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: input.operation,
-            issue: selectedModel
-              ? `Claude model "${selectedModel.displayName}" does not support Auto mode.`
-              : `Could not verify that Claude model "${requestedModel}" supports Auto mode.`,
+            issue: `Claude model "${requestedModel}" was not returned by Claude model discovery, so Auto mode support cannot be verified.`,
+          });
+        }
+        if (resolution.status === "conflicting") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: input.operation,
+            issue: `Claude model "${requestedModel}" has conflicting Auto mode capability metadata across context-window variants.`,
+          });
+        }
+        if (resolution.model.supportsAutoMode !== true) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: input.operation,
+            issue: `Claude model "${resolution.model.displayName}" does not support Auto mode.`,
           });
         }
       });
