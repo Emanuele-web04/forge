@@ -5,7 +5,7 @@ import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthSessionId, DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
+import { AuthSessionId } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
@@ -32,7 +32,7 @@ import {
   ProviderAdapterRegistry,
   type ProviderAdapterRegistryShape,
 } from "./provider/Services/ProviderAdapterRegistry";
-import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings";
+import { ServerSettingsService } from "./serverSettings";
 
 const currentSessionId = AuthSessionId.makeUnsafe("11111111-1111-4111-8111-111111111111");
 const otherSessionId = AuthSessionId.makeUnsafe("22222222-2222-4222-8222-222222222222");
@@ -117,7 +117,7 @@ async function withAuthEffectServer(
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
   overrides?: {
     readonly providerAdapterRegistry?: ProviderAdapterRegistryShape;
-    readonly serverSettings?: ServerSettingsShape;
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
   },
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -136,11 +136,7 @@ async function withAuthEffectServer(
               listProviders: () => Effect.succeed([]),
             },
           ),
-          Layer.succeed(
-            ServerSettingsService,
-            overrides?.serverSettings ??
-              ({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) } as ServerSettingsShape),
-          ),
+          overrides?.serverSettingsLayer ?? ServerSettingsService.layerTest(),
           ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
@@ -361,13 +357,6 @@ describe("authEffectRouteLayer", () => {
 describe("binaryUploadEffectRouteLayer", () => {
   it("rejects voice uploads before transcription when the provider is disabled", async () => {
     const transcribeVoice = vi.fn(() => Effect.succeed({ text: "unexpected" }));
-    const disabledSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      providers: {
-        ...DEFAULT_SERVER_SETTINGS.providers,
-        codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
-      },
-    };
     await withAuthEffectServer(
       { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape,
       makeServerAuth({ count: 0 }),
@@ -400,9 +389,9 @@ describe("binaryUploadEffectRouteLayer", () => {
           getByProvider: () => Effect.succeed({ provider: "codex", transcribeVoice } as never),
           listProviders: () => Effect.succeed(["codex"]),
         },
-        serverSettings: {
-          getSettings: Effect.succeed(disabledSettings),
-        } as ServerSettingsShape,
+        serverSettingsLayer: ServerSettingsService.layerTest({
+          providers: { codex: { enabled: false } },
+        }),
       },
     );
   });
