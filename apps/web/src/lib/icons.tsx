@@ -108,6 +108,10 @@ export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
+/** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */
+export const DragHandleIcon: LucideIcon = centralIconWrapper("dot-grid-2x3");
+/** Sliders glyph for "customize this surface" entries. */
+export const CustomizeIcon: LucideIcon = centralIconWrapper("settings-slider-three");
 export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);

@@ -38,6 +38,12 @@ import {
   normalizeHiddenProviders,
   normalizeProviderOrder,
 } from "./providerOrdering";
+import {
+  DEFAULT_SIDEBAR_NAV_ORDER,
+  normalizeHiddenSidebarNavItems,
+  normalizeSidebarNavOrder,
+  SIDEBAR_NAV_ITEM_IDS,
+} from "./sidebarNavOrdering";
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import {
@@ -94,6 +100,8 @@ export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_a
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
+
+const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
@@ -231,6 +239,14 @@ export const AppSettingsSchema = Schema.Struct({
   // optional Studio tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
+  // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
+  // An item whose route is currently active stays visible regardless (mirrors
+  // `hiddenProviders`), so hiding a surface never strands the user mid-route.
+  sidebarNavOrder: Schema.Array(SidebarNavItemId).pipe(
+    withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
+  ),
+  hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
   // Whether the per-run threads standalone automations create appear in the sidebar
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
@@ -579,6 +595,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
+    sidebarNavOrder: normalizeSidebarNavOrder(settings.sidebarNavOrder),
+    hiddenSidebarNavItems: normalizeHiddenSidebarNavItems(settings.hiddenSidebarNavItems),
     hiddenModels: [],
   };
 }

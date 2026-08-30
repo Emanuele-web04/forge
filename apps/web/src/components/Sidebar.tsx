@@ -10,6 +10,8 @@ import {
   CircleQuestionIcon,
   ClockIcon,
   CopyIcon,
+  CustomizeIcon,
+  DragHandleIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
@@ -65,13 +67,19 @@ import {
   type CollisionDetection,
   PointerSensor,
   type DragStartEvent,
+  closestCenter,
   closestCorners,
   pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -99,6 +107,11 @@ import {
   type SidebarThreadSortOrder,
   useAppSettings,
 } from "../appSettings";
+import {
+  normalizeHiddenSidebarNavItems,
+  normalizeSidebarNavOrder,
+  type SidebarNavItemId,
+} from "../sidebarNavOrdering";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -251,6 +264,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
@@ -370,6 +384,7 @@ import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
+import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
@@ -858,9 +873,12 @@ const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).sl
 function SidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
+  onCustomizeSidebar,
 }: {
   onOpenShortcuts: () => void;
   onOpenFeedback: () => void;
+  /** Null hides the entry (e.g. on surfaces without the primary nav block). */
+  onCustomizeSidebar: (() => void) | null;
 }) {
   // `openCount` keys the dialog so each open remounts the accordion — its rows
   // capture `defaultOpen` in mount state, so a stale mount would ignore a
@@ -911,6 +929,15 @@ function SidebarHelpMenu({
           </MenuGroup>
           <MenuSeparator />
           <MenuGroup>
+            {onCustomizeSidebar ? (
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={onCustomizeSidebar}
+              >
+                <SidebarContextMenuIcon icon={CustomizeIcon} />
+                <span>Customize sidebar</span>
+              </MenuItem>
+            ) : null}
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
               <SidebarContextMenuIcon icon={KeyboardIcon} />
               <span>Keybindings</span>
@@ -1072,6 +1099,85 @@ function SidebarPrimaryAction({
         ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+}
+
+/** Everything a primary nav row needs, keyed by `SidebarNavItemId` so persisted
+ *  order/visibility settings can drive both the live rows and the customize card. */
+type SidebarNavItemDescriptor = {
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly iconClassName?: string;
+  readonly label: string;
+  readonly active: boolean;
+  readonly badge: SidebarActionBadge | null;
+  readonly onClick: () => void;
+  readonly onMouseEnter?: () => void;
+  readonly onFocus?: () => void;
+};
+
+/** One row of the nav customize card: visibility checkbox + label + drag handle. */
+function SidebarNavCustomizeRow({
+  id,
+  icon: Icon,
+  iconClassName,
+  label,
+  visible,
+  onVisibleChange,
+}: {
+  id: SidebarNavItemId;
+  icon: ComponentType<{ className?: string }>;
+  iconClassName?: string;
+  label: string;
+  visible: boolean;
+  onVisibleChange: (visible: boolean) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn("relative list-none", isDragging && "z-20 opacity-80")}
+    >
+      <div
+        className={cn(
+          SIDEBAR_HEADER_ROW_CLASS_NAME,
+          SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+          "cursor-default",
+        )}
+      >
+        <Checkbox
+          checked={visible}
+          onCheckedChange={(checked) => onVisibleChange(Boolean(checked))}
+          aria-label={visible ? `Hide ${label} from the sidebar` : `Show ${label} in the sidebar`}
+        />
+        <SidebarLeadingIcon size="sm" tone="text-inherit">
+          <SidebarGlyph
+            icon={Icon}
+            variant="leading"
+            {...(iconClassName ? { className: iconClassName } : {})}
+          />
+        </SidebarLeadingIcon>
+        <span className="truncate">{label}</span>
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          className="ml-auto inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground active:cursor-grabbing"
+          aria-label={`Reorder ${label}`}
+          {...attributes}
+          {...listeners}
+        >
+          <DragHandleIcon className="size-3.5" />
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -3655,6 +3761,122 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
+  // --- Primary nav customization: persisted order + visibility, edited in a card. ---
+  const sidebarNavOrder = useMemo(
+    () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+    [appSettings.sidebarNavOrder],
+  );
+  const hiddenSidebarNavItems = useMemo(
+    () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
+    [appSettings.hiddenSidebarNavItems],
+  );
+  const [isCustomizingNav, setIsCustomizingNav] = useState(false);
+  const [navCustomizeMenuPosition, setNavCustomizeMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const navCustomizeMenuAnchor = useMemo(
+    () => (navCustomizeMenuPosition ? createClientPointMenuAnchor(navCustomizeMenuPosition) : null),
+    [navCustomizeMenuPosition],
+  );
+  const sidebarNavDescriptors = useMemo<Record<SidebarNavItemId, SidebarNavItemDescriptor>>(
+    () => ({
+      newThread: {
+        icon: NewThreadIcon,
+        iconClassName: "size-3.5",
+        label: "New thread",
+        active: false,
+        badge: null,
+        onClick: handlePrimaryNewThread,
+        onMouseEnter: prefetchModelsForPrimaryNewThread,
+        onFocus: prefetchModelsForPrimaryNewThread,
+      },
+      kanban: {
+        icon: KanbanIcon,
+        label: "Kanban",
+        active: isOnKanban,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/kanban" });
+        },
+      },
+      pullRequests: {
+        icon: IoIosGitCompare,
+        label: "Pull requests",
+        active: isOnPullRequests,
+        badge: pullRequestsReviewBadge,
+        onClick: () => {
+          void navigate({
+            to: "/pull-requests",
+            search: { involvement: "all", state: "open" },
+          });
+        },
+      },
+      automations: {
+        icon: ClockIcon,
+        label: "Automations",
+        active: isOnAutomations,
+        badge: automationAttentionBadge,
+        onClick: () => {
+          void navigate({ to: "/automations" });
+        },
+      },
+    }),
+    [
+      automationAttentionBadge,
+      handlePrimaryNewThread,
+      isOnAutomations,
+      isOnKanban,
+      isOnPullRequests,
+      navigate,
+      prefetchModelsForPrimaryNewThread,
+      pullRequestsReviewBadge,
+    ],
+  );
+  // A hidden item whose route is currently active stays visible so the current
+  // surface never loses its sidebar row (mirrors the hidden-provider rule).
+  const visibleSidebarNavIds = useMemo(
+    () =>
+      sidebarNavOrder.filter(
+        (id) => !hiddenSidebarNavItems.has(id) || sidebarNavDescriptors[id].active,
+      ),
+    [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
+  );
+  const handleNavOrderDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      const fromIndex = order.indexOf(active.id as SidebarNavItemId);
+      const toIndex = order.indexOf(over.id as SidebarNavItemId);
+      if (fromIndex < 0 || toIndex < 0) return;
+      updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
+    },
+    [appSettings.sidebarNavOrder, updateSettings],
+  );
+  const handleNavItemVisibleChange = useCallback(
+    (id: SidebarNavItemId, visible: boolean) => {
+      const hidden = normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems).filter(
+        (entry) => entry !== id,
+      );
+      updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, id] });
+    },
+    [appSettings.hiddenSidebarNavItems, updateSettings],
+  );
+  const handleNavContextMenu = useCallback((event: MouseEvent) => {
+    if (!readNativeApi()) return;
+    event.preventDefault();
+    setNavCustomizeMenuPosition({ x: event.clientX, y: event.clientY });
+  }, []);
+  useEffect(() => {
+    if (!isCustomizingNav) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsCustomizingNav(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isCustomizingNav]);
+
   // Trees need child (subagent) threads too; the flat display list stays
   // root-only for pinned rows and other non-tree consumers.
   const sidebarThreadsByProjectId = useMemo(
@@ -5857,60 +6079,90 @@ export default function Sidebar() {
               className="sidebar-surface-enter"
             >
               {/* Primary sidebar actions stay limited to features we currently ship. */}
-              <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-                <SidebarMenu className="gap-0.5">
-                  {isOnStudio ? (
-                    <>
+              {!isOnStudio && isCustomizingNav ? (
+                <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+                  {/* Customize mode: the nav block lifts into a raised card (same chrome as
+                      the Environment panel/composer) with per-item visibility + reorder. */}
+                  <div className={cn(ENVIRONMENT_PANEL_SURFACE_CLASS_NAME, "p-1.5")}>
+                    <div className="flex items-center justify-between ps-2 pe-1 pt-0.5 pb-1">
+                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Customize</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[length:var(--app-font-size-ui,12px)] text-primary hover:text-primary"
+                        onClick={() => setIsCustomizingNav(false)}
+                      >
+                        Done
+                      </Button>
+                    </div>
+                    <DndContext
+                      sensors={projectDnDSensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                      onDragEnd={handleNavOrderDragEnd}
+                    >
+                      <SortableContext
+                        items={sidebarNavOrder}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <ul className="flex w-full min-w-0 flex-col gap-0.5">
+                          {sidebarNavOrder.map((id) => {
+                            const item = sidebarNavDescriptors[id];
+                            return (
+                              <SidebarNavCustomizeRow
+                                key={id}
+                                id={id}
+                                icon={item.icon}
+                                {...(item.iconClassName
+                                  ? { iconClassName: item.iconClassName }
+                                  : {})}
+                                label={item.label}
+                                visible={!hiddenSidebarNavItems.has(id)}
+                                onVisibleChange={(visible) =>
+                                  handleNavItemVisibleChange(id, visible)
+                                }
+                              />
+                            );
+                          })}
+                        </ul>
+                      </SortableContext>
+                    </DndContext>
+                  </div>
+                </SidebarGroup>
+              ) : (
+                <SidebarGroup
+                  className="px-1.5 pt-1 pb-1.5"
+                  onContextMenu={isOnStudio ? undefined : handleNavContextMenu}
+                >
+                  <SidebarMenu className="gap-0.5">
+                    {isOnStudio ? (
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
                         iconClassName="size-3.5"
                         label="New studio chat"
                         onClick={handleCreateStudioChat}
                       />
-                    </>
-                  ) : (
-                    <>
-                      <SidebarPrimaryAction
-                        icon={NewThreadIcon}
-                        iconClassName="size-3.5"
-                        label="New thread"
-                        onClick={handlePrimaryNewThread}
-                        onMouseEnter={prefetchModelsForPrimaryNewThread}
-                        onFocus={prefetchModelsForPrimaryNewThread}
-                      />
-                      <SidebarPrimaryAction
-                        icon={KanbanIcon}
-                        label="Kanban"
-                        active={isOnKanban}
-                        onClick={() => {
-                          void navigate({ to: "/kanban" });
-                        }}
-                      />
-                      <SidebarPrimaryAction
-                        icon={IoIosGitCompare}
-                        label="Pull requests"
-                        active={isOnPullRequests}
-                        badge={pullRequestsReviewBadge}
-                        onClick={() => {
-                          void navigate({
-                            to: "/pull-requests",
-                            search: { involvement: "all", state: "open" },
-                          });
-                        }}
-                      />
-                      <SidebarPrimaryAction
-                        icon={ClockIcon}
-                        label="Automations"
-                        active={isOnAutomations}
-                        badge={automationAttentionBadge}
-                        onClick={() => {
-                          void navigate({ to: "/automations" });
-                        }}
-                      />
-                    </>
-                  )}
-                </SidebarMenu>
-              </SidebarGroup>
+                    ) : (
+                      visibleSidebarNavIds.map((id) => {
+                        const item = sidebarNavDescriptors[id];
+                        return (
+                          <SidebarPrimaryAction
+                            key={id}
+                            icon={item.icon}
+                            {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
+                            label={item.label}
+                            active={item.active}
+                            badge={item.badge}
+                            onClick={item.onClick}
+                            {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+                            {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+                          />
+                        );
+                      })
+                    )}
+                  </SidebarMenu>
+                </SidebarGroup>
+              )}
 
               {isOnStudio ? (
                 // Studio is "just chats": a labeled Studio block holding a flat list of threads
@@ -6296,6 +6548,13 @@ export default function Sidebar() {
                       void navigate({ to: "/settings", search: { section: "shortcuts" } })
                     }
                     onOpenFeedback={openFeedbackDialog}
+                    onCustomizeSidebar={
+                      isOnStudio || isOnSettings
+                        ? null
+                        : () => {
+                            setIsCustomizingNav(true);
+                          }
+                    }
                   />
                 )}
               </div>
@@ -6546,6 +6805,38 @@ export default function Sidebar() {
               >
                 <ProjectContextMenuIcon icon={XIcon} />
                 <span>Remove</span>
+              </MenuItem>
+            </MenuGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      ) : null}
+
+      {navCustomizeMenuPosition && navCustomizeMenuAnchor ? (
+        <Menu
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setNavCustomizeMenuPosition(null);
+            }
+          }}
+        >
+          <ComposerPickerMenuPopup
+            anchor={navCustomizeMenuAnchor}
+            align="start"
+            side="bottom"
+            sideOffset={0}
+            className={SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME}
+          >
+            <MenuGroup>
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() => {
+                  setNavCustomizeMenuPosition(null);
+                  setIsCustomizingNav(true);
+                }}
+              >
+                <SidebarContextMenuIcon icon={CustomizeIcon} />
+                <span>Customize</span>
               </MenuItem>
             </MenuGroup>
           </ComposerPickerMenuPopup>
