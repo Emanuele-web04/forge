@@ -16,10 +16,7 @@ const VISIBLE_FILE_PATHS = Array.from(
   { length: 5 },
   (_, index) => `apps/web/src/visible-${index + 1}.tsx`,
 );
-const OVERFLOW_FILE_PATHS = [
-  "apps/web/src/overflow-1.tsx",
-  "apps/web/src/overflow-2.tsx",
-];
+const OVERFLOW_FILE_PATHS = ["apps/web/src/overflow-1.tsx", "apps/web/src/overflow-2.tsx"];
 
 const TIMELINE_ENTRIES: TimelineEntry[] = [
   {
