@@ -14,9 +14,7 @@ export interface AcpLoadReplayTimeoutEvidence {
 export interface AcpLoadReplayGateOptions {
   readonly quietMs: number;
   readonly hardTimeoutMs: number;
-  readonly onHardTimeout: (
-    evidence: AcpLoadReplayTimeoutEvidence,
-  ) => Effect.Effect<void, never>;
+  readonly onHardTimeout: (evidence: AcpLoadReplayTimeoutEvidence) => Effect.Effect<void, never>;
 }
 
 export interface AcpLoadReplayGate {
@@ -99,10 +97,7 @@ export const makeAcpLoadReplayGate = (
         const untilQuietMs = options.quietMs - quietForMs;
         const untilHardTimeoutMs = options.hardTimeoutMs - elapsedMs;
         yield* Effect.sleep(
-          Math.max(
-            1,
-            Math.min(untilQuietMs, untilHardTimeoutMs, REPLAY_SETTLE_POLL_MAX_MS),
-          ),
+          Math.max(1, Math.min(untilQuietMs, untilHardTimeoutMs, REPLAY_SETTLE_POLL_MAX_MS)),
         );
       }
     });
@@ -144,8 +139,7 @@ export const makeAcpLoadReplayGate = (
       ),
       isSuppressing: Ref.get(state).pipe(
         Effect.map(
-          (current) =>
-            current._tag === "WaitingForConsumer" || current._tag === "Suppressing",
+          (current) => current._tag === "WaitingForConsumer" || current._tag === "Suppressing",
         ),
       ),
       awaitReady: Deferred.await(ready),

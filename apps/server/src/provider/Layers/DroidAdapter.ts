@@ -606,10 +606,7 @@ export function makeDroidAdapter(
         }),
       );
 
-    const noteSuppressedDroidRuntimeEvent = (
-      ctx: DroidSessionContext,
-      eventTag: string,
-    ) =>
+    const noteSuppressedDroidRuntimeEvent = (ctx: DroidSessionContext, eventTag: string) =>
       Effect.gen(function* () {
         if (!isDroidAcpDebugEnabled()) {
           return;

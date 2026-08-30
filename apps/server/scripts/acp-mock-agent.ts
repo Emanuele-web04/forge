@@ -360,9 +360,7 @@ app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params
         },
       })
       .pipe(
-        Effect.tap(() =>
-          Effect.sync(() => scheduleLoadReplayUpdates(client, requestedSessionId)),
-        ),
+        Effect.tap(() => Effect.sync(() => scheduleLoadReplayUpdates(client, requestedSessionId))),
         Effect.as({
           modes: modeState(),
           configOptions: configOptions(),

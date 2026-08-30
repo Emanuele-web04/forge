@@ -854,10 +854,7 @@ export function makeGrokAdapter(
         }
       });
 
-    const noteSuppressedGrokRuntimeEvent = (
-      ctx: GrokSessionContext,
-      eventTag: string,
-    ) =>
+    const noteSuppressedGrokRuntimeEvent = (ctx: GrokSessionContext, eventTag: string) =>
       Effect.gen(function* () {
         if (!isGrokAcpDebugEnabled()) {
           return;
