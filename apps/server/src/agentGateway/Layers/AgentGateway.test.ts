@@ -1512,6 +1512,7 @@ describe("AgentGateway", () => {
         minimum: 0,
       });
       assert.deepInclude(readThreadProperties?.messageId, { type: "string" });
+      assert.deepInclude(readThreadProperties?.messageVersion, { type: "string" });
 
       const setThreadGoal = tools.find((tool) => tool.name === "synara_set_thread_goal");
       assert.include(
@@ -4972,9 +4973,20 @@ describe("AgentGateway", () => {
     );
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
+      const summaryResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread",
+        args: { threadId: shell.id },
+      });
+      assert.isFalse(isToolError(summaryResponse.result), toolErrorText(summaryResponse.result));
+      const summaryMessage = (
+        toolResultJson(summaryResponse.result).messages as Array<{
+          messageId: string;
+          messageVersion: string;
+        }>
+      )[0]!;
       const slices: string[] = [];
       let messageOffsetChars = 0;
-      let messageId: string | undefined;
 
       while (true) {
         const response = yield* harness.callTool({
@@ -4984,7 +4996,8 @@ describe("AgentGateway", () => {
             threadId: shell.id,
             messageIndex: 0,
             messageOffsetChars,
-            ...(messageId === undefined ? {} : { messageId }),
+            messageId: summaryMessage.messageId,
+            messageVersion: summaryMessage.messageVersion,
             maxMessageChars: 10_000,
           },
         });
@@ -4995,9 +5008,11 @@ describe("AgentGateway", () => {
         assert.equal(result.effectiveMaxMessageChars, 10_000);
         const messagePage = result.messagePage as {
           messageId: string;
+          messageVersion: string;
           nextOffsetChars?: number;
         };
-        messageId = messagePage.messageId;
+        assert.equal(messagePage.messageId, summaryMessage.messageId);
+        assert.equal(messagePage.messageVersion, summaryMessage.messageVersion);
         const nextOffsetChars = messagePage.nextOffsetChars;
         if (nextOffsetChars === undefined) break;
         messageOffsetChars = nextOffsetChars;
@@ -5021,7 +5036,8 @@ describe("AgentGateway", () => {
           threadId: shell.id,
           messageIndex: 0,
           messageOffsetChars: 20_000,
-          messageId,
+          messageId: summaryMessage.messageId,
+          messageVersion: summaryMessage.messageVersion,
         },
       });
       assert.isTrue(isToolError(stale.result));

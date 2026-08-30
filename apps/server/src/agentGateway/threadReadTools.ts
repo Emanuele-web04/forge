@@ -288,7 +288,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
-      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one settled long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.`,
+      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -309,7 +309,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           messageIndex: {
             type: "integer",
             minimum: 0,
-            description: "Stable transcript index of one message to read losslessly.",
+            description:
+              "Current transcript index of one message to read losslessly; messageId and messageVersion detect stale coordinates.",
           },
           messageOffsetChars: {
             type: "integer",
@@ -320,7 +321,12 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           messageId: {
             type: "string",
             description:
-              "Message identity returned in messagePage; required with continuation offsets greater than 0.",
+              "Message identity returned in each message summary; required with messageIndex.",
+          },
+          messageVersion: {
+            type: "string",
+            description:
+              "Opaque version returned in each message summary; required with messageIndex so slices stay bound to one snapshot.",
           },
         },
         required: ["threadId"],
@@ -337,6 +343,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const messageIndex = readNumberArg(args, "messageIndex");
         const messageOffsetChars = readNumberArg(args, "messageOffsetChars");
         const messageId = readStringArg(args, "messageId");
+        const messageVersion = readStringArg(args, "messageVersion");
         const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -355,6 +362,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             messageIndex,
             messageOffsetChars,
             messageId,
+            messageVersion,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),

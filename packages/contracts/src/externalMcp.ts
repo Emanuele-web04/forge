@@ -149,6 +149,7 @@ export const ExternalMcpReadTaskInput = Schema.Struct({
   messageIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   messageOffsetChars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   messageId: Schema.optional(MessageId),
+  messageVersion: Schema.optional(TrimmedNonEmptyString),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpReadTaskInput = typeof ExternalMcpReadTaskInput.Type;
 

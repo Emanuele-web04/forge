@@ -456,7 +456,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one settled long message losslessly, pass messageIndex, start messageOffsetChars at 0, then pass messagePage.messageId with each messagePage.nextOffsetChars.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.",
       inputSchema: {
         type: "object",
         properties: {
@@ -472,7 +472,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           messageIndex: {
             type: "integer",
             minimum: 0,
-            description: "Stable transcript index of one message to read losslessly.",
+            description:
+              "Current transcript index of one message to read losslessly; messageId and messageVersion detect stale coordinates.",
           },
           messageOffsetChars: {
             type: "integer",
@@ -483,7 +484,12 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           messageId: {
             type: "string",
             description:
-              "Message identity returned in messagePage; required with continuation offsets greater than 0.",
+              "Message identity returned in each message summary; required with messageIndex.",
+          },
+          messageVersion: {
+            type: "string",
+            description:
+              "Opaque version returned in each message summary; required with messageIndex so slices stay bound to one snapshot.",
           },
         },
         required: ["threadId"],
@@ -515,6 +521,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             messageIndex: input.messageIndex,
             messageOffsetChars: input.messageOffsetChars,
             messageId: input.messageId,
+            messageVersion: input.messageVersion,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),

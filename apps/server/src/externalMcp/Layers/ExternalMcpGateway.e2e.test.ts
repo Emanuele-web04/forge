@@ -450,6 +450,7 @@ describe("external MCP gateway stdio flow", () => {
           minimum: 0,
         });
         expect(readTaskProperties?.messageId).toMatchObject({ type: "string" });
+        expect(readTaskProperties?.messageVersion).toMatchObject({ type: "string" });
 
         const prompt = "Implement the external MCP end-to-end proof.";
         stdin.write(
@@ -518,11 +519,27 @@ describe("external MCP gateway stdio flow", () => {
           ),
         });
 
+        stdin.write(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id: 4,
+            method: "tools/call",
+            params: { name: "synara_read_task", arguments: { threadId } },
+          })}\n`,
+        );
+        yield* Effect.promise(() => waitForOutput(outputLines, 4));
+        const summaryMessages = toolPayload(outputLines[3]!).messages as Array<{
+          index: number;
+          messageId: string;
+          messageVersion: string;
+        }>;
+        const assistantSummary = summaryMessages.find((message) => message.index === 1)!;
+
         for (const [index, messageOffsetChars] of [0, 10_000, 20_000].entries()) {
           stdin.write(
             `${JSON.stringify({
               jsonrpc: "2.0",
-              id: index + 4,
+              id: index + 5,
               method: "tools/call",
               params: {
                 name: "synara_read_task",
@@ -530,7 +547,8 @@ describe("external MCP gateway stdio flow", () => {
                   threadId,
                   messageIndex: 1,
                   messageOffsetChars,
-                  messageId: "message-external-e2e-result",
+                  messageId: assistantSummary.messageId,
+                  messageVersion: assistantSummary.messageVersion,
                   maxMessageChars: 10_000,
                 },
               },
@@ -540,7 +558,8 @@ describe("external MCP gateway stdio flow", () => {
         stdin.end();
         yield* Effect.promise(() => serving);
         expect(errors).toEqual([]);
-        const messagePages = outputLines.slice(3, 6).map(toolPayload);
+        const responseById = new Map(outputLines.map((response) => [response.id, response]));
+        const messagePages = [5, 6, 7].map((id) => toolPayload(responseById.get(id)!));
         expect(messagePages.map((page) => page.effectiveMaxMessageChars)).toEqual([
           10_000, 10_000, 10_000,
         ]);
@@ -553,6 +572,7 @@ describe("external MCP gateway stdio flow", () => {
           {
             index: 1,
             messageId: "message-external-e2e-result",
+            messageVersion: assistantSummary.messageVersion,
             offsetChars: 0,
             endOffsetChars: 10_000,
             totalChars: 25_007,
@@ -561,6 +581,7 @@ describe("external MCP gateway stdio flow", () => {
           {
             index: 1,
             messageId: "message-external-e2e-result",
+            messageVersion: assistantSummary.messageVersion,
             offsetChars: 10_000,
             endOffsetChars: 20_000,
             totalChars: 25_007,
@@ -569,6 +590,7 @@ describe("external MCP gateway stdio flow", () => {
           {
             index: 1,
             messageId: "message-external-e2e-result",
+            messageVersion: assistantSummary.messageVersion,
             offsetChars: 20_000,
             endOffsetChars: 25_007,
             totalChars: 25_007,
@@ -648,7 +670,7 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(8);
+        expect(auditRows).toHaveLength(9);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",
