@@ -17,7 +17,6 @@ import {
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
-  PROVIDER_DISPLAY_NAMES,
   type DeviceEvent,
   type GitActionProgressEvent,
   type GitHubProjectProvisionProgressEvent,
@@ -25,7 +24,6 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
-  type ProviderKind,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
@@ -102,6 +100,7 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
@@ -365,18 +364,6 @@ const makeWsRpcHandlersLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
-      const getEnabledProviderAdapter = (provider: ProviderKind) =>
-        serverSettings.getSettings.pipe(
-          Effect.flatMap((settings) =>
-            settings.providers[provider].enabled
-              ? providerAdapterRegistry.getByProvider(provider)
-              : Effect.fail(
-                  new Error(
-                    `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`,
-                  ),
-                ),
-          ),
-        );
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -1751,7 +1738,7 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
-            getEnabledProviderAdapter(input.provider).pipe(
+            getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
               Effect.flatMap((adapter) =>
                 adapter.prewarmVoice
                   ? adapter.prewarmVoice(input)
@@ -1767,7 +1754,11 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverTranscribeVoice]: (input) =>
           rpcEffect(
             voiceUploadAdmissionGate.run(
-              getEnabledProviderAdapter(input.provider).pipe(
+              getEnabledProviderAdapter(
+                input.provider,
+                serverSettings,
+                providerAdapterRegistry,
+              ).pipe(
                 Effect.flatMap((adapter) =>
                   adapter.transcribeVoice
                     ? adapter.transcribeVoice(input)

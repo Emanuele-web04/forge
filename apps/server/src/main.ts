@@ -410,8 +410,14 @@ const makeServerProgram = (input: CliInput) =>
             : {}),
         }),
       );
+    // Attach before reading the initial snapshot. The settings PubSub does not
+    // replay, so reading first could miss a disable/path update in the small
+    // window before the stream consumer subscribes.
+    const claudeKeepaliveSettingsChanges = yield* serverSettings.streamChanges.pipe(
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
     yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
-    yield* serverSettings.streamChanges.pipe(
+    yield* Stream.fromQueue(claudeKeepaliveSettingsChanges).pipe(
       Stream.runForEach(reconcileClaudeKeepalive),
       Effect.ensuring(Effect.sync(claudeKeepalive.stop)),
       Effect.forkChild,
