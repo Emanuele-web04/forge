@@ -405,7 +405,9 @@ const makeServerProgram = (input: CliInput) =>
       Effect.sync(() =>
         claudeKeepalive.reconcile({
           enabled: settings.providers.claudeAgent.enabled,
-          binaryPath: settings.providers.claudeAgent.binaryPath,
+          ...(settings.providers.claudeAgent.binaryPath !== undefined
+            ? { binaryPath: settings.providers.claudeAgent.binaryPath }
+            : {}),
         }),
       );
     yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
