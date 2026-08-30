@@ -1027,6 +1027,7 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
         { registerPriorTranscriptBootstrapOnFreshStart: true },
       );
 
+      assert.equal(outcome.nativeResumeAttempted, true);
       assert.equal(outcome.nativeResumeSucceeded, false);
       assert.equal(outcome.priorTranscriptBootstrapPending, true);
       yield* provider.stopSession({ threadId });
@@ -1065,8 +1066,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
+      assert.equal(initial.nativeResumeAttempted, false);
       assert.equal(initial.nativeResumeSucceeded, false);
       assert.equal(initial.priorTranscriptBootstrapPending, true);
+      assert.equal(resumed.nativeResumeAttempted, true);
       assert.equal(resumed.nativeResumeSucceeded, true);
       assert.equal(resumed.priorTranscriptBootstrapPending, true);
       assert.deepEqual(
@@ -1081,6 +1084,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
+      assert.equal(resumedAfterCompletion.nativeResumeAttempted, true);
       assert.equal(resumedAfterCompletion.nativeResumeSucceeded, true);
       assert.equal(resumedAfterCompletion.priorTranscriptBootstrapPending, false);
 

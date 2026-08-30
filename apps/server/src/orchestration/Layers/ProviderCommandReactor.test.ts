@@ -276,10 +276,10 @@ describe("ProviderCommandReactor", () => {
     >((threadId, sessionInput, outcomeOptions) => {
       const effectiveResumeCursor =
         sessionInput.resumeCursor ?? persistedResumeCursors.get(threadId);
+      const nativeResumeAttempted =
+        effectiveResumeCursor !== undefined && effectiveResumeCursor !== null;
       const nativeResumeSucceeded =
-        effectiveResumeCursor !== undefined &&
-        effectiveResumeCursor !== null &&
-        (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
+        nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
         outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
         !nativeResumeSucceeded
@@ -300,6 +300,7 @@ describe("ProviderCommandReactor", () => {
           persistedResumeCursors.set(threadId, resolvedSession.resumeCursor);
           return {
             session: resolvedSession,
+            nativeResumeAttempted,
             nativeResumeSucceeded,
             priorTranscriptBootstrapPending: pendingPriorTranscriptBootstraps.has(threadId),
           };
@@ -3826,6 +3827,150 @@ describe("ProviderCommandReactor", () => {
     expect(resent?.input).toContain("edited prompt");
     expect(resent?.input).not.toContain("old prompt");
   });
+
+  it.each(["opencode", "kilo"] as const)(
+    "keeps the %s edit recap pending until the replay turn completes",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+        conversationRollback: "restart-session",
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const rejectedTurnId = asTurnId(`${provider}-edit-replay-rejected`);
+      const retryTurnId = asTurnId(`${provider}-edit-replay-retry`);
+      const now = new Date().toISOString();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.messages.import",
+          commandId: CommandId.makeUnsafe(`cmd-import-${provider}-edit-context`),
+          threadId,
+          messages: [
+            {
+              messageId: asMessageId(`${provider}-edit-earlier-user`),
+              role: "user",
+              text: "Earlier question",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId(`${provider}-edit-earlier-assistant`),
+              role: "assistant",
+              text: "Earlier answer",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        }),
+      );
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-edit-target`,
+        text: "old prompt",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      harness.sendTurn.mockClear();
+      harness.sendTurn
+        .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: rejectedTurnId }))
+        .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryTurnId }));
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId(`${provider}-edit-active`),
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-${provider}-edit-session-running`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: provider,
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(`${provider}-edit-active`),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.message.edit-and-resend",
+          commandId: CommandId.makeUnsafe(`cmd-${provider}-edit-and-resend`),
+          threadId,
+          messageId: asMessageId(`${provider}-edit-target`),
+          text: "edited prompt",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const rejectedInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+      expect(rejectedInput.input).toContain("<thread_context>");
+      expect(rejectedInput.input).toContain("Earlier answer");
+      expect(rejectedInput.input).toContain("edited prompt");
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-edit-replay-aborted`,
+        provider,
+        type: "aborted",
+        turnId: rejectedTurnId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-edit-replay-retry-message`,
+        text: "Retry the edited request.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(retryInput.input).toContain("<thread_context>");
+      expect(retryInput.input).toContain("edited prompt");
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-edit-replay-completed`,
+        provider,
+        type: "completed",
+        turnId: retryTurnId,
+      });
+      await waitFor(async () => {
+        const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        );
+        return lifecycleActivities?.length === 1;
+      });
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        turnId: retryTurnId,
+        payload: {
+          provider,
+          nativeHistory: "unavailable",
+          sessionRestarted: false,
+          restartReason: "conversation-rebuilt",
+          recapInjected: true,
+        },
+      });
+    },
+  );
 
   it("keeps queued-message edits queued while an active provider turn continues", async () => {
     const harness = await createHarness();
@@ -8460,6 +8605,11 @@ describe("ProviderCommandReactor", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
       expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-async-bootstrap-retry-turn`,
@@ -8483,6 +8633,25 @@ describe("ProviderCommandReactor", () => {
       });
       await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
       expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
+      await waitFor(async () => {
+        const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        );
+        return lifecycleActivities?.length === 1;
+      });
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        turnId: retryTurnId,
+        payload: {
+          provider,
+          nativeHistory: "unavailable",
+          sessionRestarted: false,
+          restartReason: "fresh-session",
+          recapInjected: true,
+        },
+      });
     },
   );
 
@@ -8590,6 +8759,12 @@ describe("ProviderCommandReactor", () => {
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
       const resumedInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
       expect(resumedInput.input).toBe("What did we call the module?");
+      const resumedThread = await readHarnessThread(harness);
+      expect(
+        resumedThread?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
     },
   );
 
@@ -8670,12 +8845,29 @@ describe("ProviderCommandReactor", () => {
       expect(followUpInput.input).toContain("The retained codename is heliotrope.");
       expect(followUpInput.input?.match(/What is the retained codename\?/g)).toHaveLength(1);
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
       await emitHarnessTurnTerminal(harness, {
         eventId: `${provider}-rejected-resume-bootstrap-completed`,
         provider,
         type: "completed",
       });
       await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        payload: {
+          provider,
+          nativeHistory: "unavailable",
+          sessionRestarted: true,
+          restartReason: "native-resume-failed",
+          recapInjected: true,
+        },
+      });
     },
   );
 
@@ -8686,10 +8878,30 @@ describe("ProviderCommandReactor", () => {
         threadModelSelection: { provider, model: "openai/gpt-5" },
       });
       const now = new Date().toISOString();
+      const coldHistory = `The deployment color is violet. ${"Retained detail. ".repeat(80)}`;
+      let lifecycleDispatchAttempts = 0;
+      let allowLifecycleDispatch = false;
+      harness.interceptEngineDispatch((command) => {
+        if (
+          command.type !== "thread.activity.append" ||
+          command.activity.kind !== "provider.context.changed"
+        ) {
+          return undefined;
+        }
+        lifecycleDispatchAttempts += 1;
+        return allowLifecycleDispatch
+          ? undefined
+          : Effect.fail(
+              new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: "Injected transient accepted-bootstrap lifecycle failure.",
+              }),
+            );
+      });
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-cold-seed`,
-        text: "The deployment color is violet.",
+        text: coldHistory,
         createdAt: now,
       });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -8710,21 +8922,71 @@ describe("ProviderCommandReactor", () => {
         1,
       );
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
-      await emitHarnessTurnTerminal(harness, {
-        eventId: `${provider}-cold-bootstrap-completed`,
-        provider,
-        type: "completed",
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
+      harness.setRuntimeSessionTurnState({
+        threadId: "thread-1",
+        status: "running",
+        activeTurnId: asTurnId("turn-1"),
       });
-      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
-
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-cold-next`,
         text: "Continue with that choice.",
         createdAt: now,
       });
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+      harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `${provider}-cold-bootstrap-completed`,
+        provider,
+        type: "completed",
+      });
+      await waitFor(() => lifecycleDispatchAttempts >= 2);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      allowLifecycleDispatch = true;
+      await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
+      await waitFor(async () => {
+        const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        );
+        return lifecycleActivities?.length === 1;
+      });
+      expect(lifecycleDispatchAttempts).toBe(3);
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        tone: "error",
+        summary: "Native session history was unavailable, so the model continued from a recap.",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          provider,
+          nativeHistory: "unavailable",
+          sessionRestarted: true,
+          restartReason: "fresh-session",
+          recapInjected: true,
+          recapPreviewTruncated: true,
+        },
+      });
+      const lifecyclePayload = lifecycleActivity?.payload as
+        | { recapCharacters?: number; recapPreview?: string }
+        | undefined;
+      expect(lifecyclePayload?.recapCharacters).toBeGreaterThan(600);
+      expect(lifecyclePayload?.recapPreview?.length).toBeLessThanOrEqual(600);
+      expect(lifecyclePayload?.recapPreview).toContain("Retained detail.");
+
       await waitFor(() => harness.sendTurn.mock.calls.length === 3);
       const nextInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
       expect(nextInput.input).toBe("Continue with that choice.");
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toHaveLength(1);
     },
   );
 
@@ -8773,12 +9035,37 @@ describe("ProviderCommandReactor", () => {
       expect(retryInput.input).toContain("Keep the release channel on delta.");
       expect(retryInput.input?.match(/Which release channel should we use\?/g)).toHaveLength(1);
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toEqual([]);
       await emitHarnessTurnTerminal(harness, {
         eventId: `${provider}-stale-resume-bootstrap-completed`,
         provider,
         type: "completed",
       });
       await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
+      await waitFor(async () => {
+        const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        );
+        return lifecycleActivities?.length === 1;
+      });
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        tone: "error",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          provider,
+          nativeHistory: "unavailable",
+          sessionRestarted: true,
+          restartReason: "native-resume-failed",
+          recapInjected: true,
+        },
+      });
     },
   );
 
@@ -8840,6 +9127,11 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+    const firstBootstrapTurnId = asTurnId("opencode-completion-failure-first-turn");
+    const retryBootstrapTurnId = asTurnId("opencode-completion-failure-retry-turn");
+    harness.sendTurn
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: firstBootstrapTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryBootstrapTurnId }));
 
     await dispatchHarnessUserTurn(harness, {
       messageId: "opencode-completion-failure-first",
@@ -8859,6 +9151,7 @@ describe("ProviderCommandReactor", () => {
       eventId: "opencode-completion-failure-terminal",
       provider: "opencode",
       type: "completed",
+      turnId: firstBootstrapTurnId,
     });
     await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 1);
 
@@ -8876,6 +9169,7 @@ describe("ProviderCommandReactor", () => {
       eventId: "opencode-completion-retry-terminal",
       provider: "opencode",
       type: "completed",
+      turnId: retryBootstrapTurnId,
     });
     await waitFor(() => harness.completePriorTranscriptBootstrap.mock.calls.length === 2);
     expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
@@ -8921,6 +9215,75 @@ describe("ProviderCommandReactor", () => {
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
     },
   );
+
+  it("records a consequential cold start when no recap is available for the provider", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    let lifecycleDispatchAttempts = 0;
+    harness.interceptEngineDispatch((command) => {
+      if (
+        command.type !== "thread.activity.append" ||
+        command.activity.kind !== "provider.context.changed"
+      ) {
+        return undefined;
+      }
+      lifecycleDispatchAttempts += 1;
+      return lifecycleDispatchAttempts === 1
+        ? Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: "Injected transient lifecycle activity failure.",
+            }),
+          )
+        : undefined;
+    });
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "codex-context-seed",
+      text: "Keep the migration order stable.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.clearSessionResumeCursor({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "codex-context-cold-start",
+      text: "What should stay stable?",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const coldStartInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    expect(coldStartInput.input).toBe("What should stay stable?");
+
+    await waitFor(async () => {
+      const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      );
+      return lifecycleActivities?.length === 1;
+    });
+    expect(lifecycleDispatchAttempts).toBe(2);
+
+    const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+      (activity) => activity.kind === "provider.context.changed",
+    ) ?? [undefined];
+    expect(lifecycleActivity).toMatchObject({
+      tone: "error",
+      summary: "The session restarted without its native history.",
+      turnId: asTurnId("turn-1"),
+      payload: {
+        provider: "codex",
+        nativeHistory: "unavailable",
+        sessionRestarted: true,
+        restartReason: "native-history-unavailable",
+        recapInjected: false,
+        recapCharacters: 0,
+        recapPreview: null,
+        recapPreviewTruncated: false,
+      },
+    });
+  });
 
   it("starts a fresh session when only projected session state exists", async () => {
     const harness = await createHarness();

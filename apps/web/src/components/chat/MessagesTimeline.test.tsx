@@ -196,6 +196,44 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("renders session-context lifecycle evidence as a compact expandable row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "context-restart-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "context-restart-entry",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Native session history was unavailable, so the model continued from a recap.",
+              tone: "error",
+              activityKind: "provider.context.changed",
+              providerContextLifecycle: {
+                provider: "opencode",
+                nativeHistory: "unavailable",
+                restartReason: "native-resume-failed",
+                sessionRestarted: true,
+                recapInjected: true,
+                recapCharacters: 4_200,
+                recapPreview: "Bounded recap preview",
+                recapPreviewTruncated: true,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
+    expect(markup).not.toContain("Bounded recap preview");
+  });
+
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
