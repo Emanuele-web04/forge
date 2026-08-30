@@ -150,8 +150,7 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
 function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
   const command = fileManagerCommandForPlatform(platform);
   const shouldReveal =
-    platform === "darwin" &&
-    statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+    platform === "darwin" && statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
 
   return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
