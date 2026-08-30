@@ -17,7 +17,7 @@ function getActionButtons(markup: string): string[] {
   const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g) ?? [];
   return buttons.filter(
     (button) =>
-      button.includes("type=\"submit\"") ||
+      button.includes('type="submit"') ||
       button.includes(">Submit") ||
       button.includes(">Sending…") ||
       button.includes(">Draft a GitHub issue") ||
