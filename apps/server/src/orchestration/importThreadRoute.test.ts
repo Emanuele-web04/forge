@@ -183,6 +183,7 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
       handler({ threadId, externalId: "prepared-before-disable" }),
     );
 
+    assert.ok(failure);
     assert.match(failure.message, /OpenCode is disabled/);
     assert.equal(getByProvider.mock.calls.length, 0);
     assert.equal(startSession.mock.calls.length, 0);
