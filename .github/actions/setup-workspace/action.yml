@@ -1,0 +1,50 @@
+name: Setup workspace
+description: Shared checkout, tool setup, dependency install, and caches for Synara CI jobs
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version-file: package.json
+
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: package.json
+
+    - name: Cache Bun and Turbo
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.bun/install/cache
+          .turbo
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-playwright-
+
+    - name: Cache Electron runtime
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/electron
+        key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-electron-
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      run: bun install --frozen-lockfile
