@@ -190,7 +190,6 @@ interface ClaudeResumeState {
   readonly trackedTasks?: ReadonlyArray<ClaudeTrackedTask>;
   readonly processedTokenTotal?: number;
   readonly processedTokenBaselineKnown?: true;
-  readonly cumulativeTokenAccountingActive?: boolean;
 }
 
 interface ClaudeTurnState {
@@ -371,7 +370,6 @@ interface ClaudeSessionContext {
   processedTokenTotal: number;
   processedTokenTurnBaseline: number;
   processedTokenBaselineKnown: boolean;
-  cumulativeTokenAccountingActive: boolean;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // Original API model id the runtime rerouted away from (safeguard refusal
@@ -885,7 +883,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     trackedTasks?: unknown;
     processedTokenTotal?: unknown;
     processedTokenBaselineKnown?: unknown;
-    cumulativeTokenAccountingActive?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -910,7 +907,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     cursor.processedTokenTotal >= 0
       ? cursor.processedTokenTotal
       : undefined;
-  const cumulativeTokenAccountingActive = cursor.cumulativeTokenAccountingActive === true;
   const processedTokenBaselineKnown = cursor.processedTokenBaselineKnown === true;
 
   return {
@@ -923,8 +919,12 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     ...(trackedTasks.length > 0 ? { trackedTasks } : {}),
     ...(processedTokenTotal !== undefined ? { processedTokenTotal } : {}),
     ...(processedTokenBaselineKnown ? { processedTokenBaselineKnown: true } : {}),
-    ...(cumulativeTokenAccountingActive ? { cumulativeTokenAccountingActive: true } : {}),
   };
+}
+
+function withoutProcessedTokenTotal(snapshot: ThreadTokenUsageSnapshot): ThreadTokenUsageSnapshot {
+  const { totalProcessedTokens: _totalProcessedTokens, ...contextUsage } = snapshot;
+  return contextUsage;
 }
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
@@ -2056,9 +2056,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? {
                 processedTokenTotal: context.processedTokenTotal,
                 processedTokenBaselineKnown: true,
-                ...(context.cumulativeTokenAccountingActive
-                  ? { cumulativeTokenAccountingActive: true }
-                  : {}),
               }
             : {}),
         };
@@ -2766,13 +2763,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         const totalProcessedTokens =
           context.processedTokenTotal > 0 ? context.processedTokenTotal : resultProcessedTokens;
-        const accountedAccumulatedSnapshot =
-          accumulatedSnapshot &&
-          totalProcessedTokens !== undefined &&
-          (context.cumulativeTokenAccountingActive ||
-            totalProcessedTokens > accumulatedSnapshot.usedTokens)
+        const accountedAccumulatedSnapshot = accumulatedSnapshot
+          ? context.processedTokenBaselineKnown && totalProcessedTokens !== undefined
             ? { ...accumulatedSnapshot, totalProcessedTokens }
-            : accumulatedSnapshot;
+            : withoutProcessedTokenTotal(accumulatedSnapshot)
+          : undefined;
         const liveSnapshot = liveContextUsage
           ? snapshotFromClaudeContextUsage(liveContextUsage, totalProcessedTokens)
           : undefined;
@@ -2796,9 +2791,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 )
               : accountedAccumulatedSnapshot;
         context.processedTokenTurnBaseline = context.processedTokenTotal;
-        if (usageSnapshot?.totalProcessedTokens !== undefined) {
-          context.cumulativeTokenAccountingActive = true;
-        }
 
         // A safeguard reroute only applies to the turn that just finished.
         // Restore the user-selected model so subsequent turns do not silently
@@ -3056,7 +3048,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           processedTokenTotal: 0,
           processedTokenTurnBaseline: 0,
           processedTokenBaselineKnown: true,
-          cumulativeTokenAccountingActive: false,
           lastAssistantUuid: undefined,
           lastThreadStartedId: undefined,
           rerouteOriginalApiModelId: undefined,
@@ -3739,7 +3730,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           } else {
             yield* maybeEmitContextUsageWarning(context, perCallUsage as Record<string, unknown>);
             if (normalizedPerCallUsage) {
-              const currentUsage = context.cumulativeTokenAccountingActive
+              const currentUsage = context.processedTokenBaselineKnown
                 ? {
                     ...normalizedPerCallUsage,
                     totalProcessedTokens: context.processedTokenTotal,
@@ -5425,9 +5416,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ? {
                     processedTokenTotal: resumeState?.processedTokenTotal ?? 0,
                     processedTokenBaselineKnown: true,
-                    ...(resumeState?.cumulativeTokenAccountingActive
-                      ? { cumulativeTokenAccountingActive: true }
-                      : {}),
                   }
                 : {}),
             },
@@ -5479,9 +5467,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             processedTokenTotal: resumeState?.processedTokenTotal ?? 0,
             processedTokenTurnBaseline: resumeState?.processedTokenTotal ?? 0,
             processedTokenBaselineKnown,
-            cumulativeTokenAccountingActive:
-              processedTokenBaselineKnown &&
-              (resumeState?.cumulativeTokenAccountingActive ?? false),
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
             rerouteOriginalApiModelId: undefined,
@@ -6119,6 +6104,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           threadId: input.threadId,
           resume: forked.sessionId,
           turnCount: Math.max(liveSource?.turns.length ?? 0, sourceState?.turnCount ?? 0),
+          processedTokenTotal: 0,
+          processedTokenBaselineKnown: true,
         };
         return { threadId: input.threadId, resumeCursor };
       });

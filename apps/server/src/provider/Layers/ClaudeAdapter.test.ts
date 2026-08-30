@@ -6086,6 +6086,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             inputTokens: 23863,
             outputTokens: 679,
             maxTokens: 200000,
+            totalProcessedTokens: 24542,
           },
         });
       }
@@ -8648,7 +8649,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       )?.resumeCursor as Record<string, unknown> | undefined;
       assert.equal(resumeCursor?.processedTokenTotal, 370_000);
       assert.equal(resumeCursor?.processedTokenBaselineKnown, true);
-      assert.equal(resumeCursor?.cumulativeTokenAccountingActive, true);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8672,7 +8672,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           threadId: THREAD_ID,
           processedTokenTotal: 350_000,
           processedTokenBaselineKnown: true,
-          cumulativeTokenAccountingActive: true,
         },
       });
       yield* adapter.sendTurn({
@@ -10450,6 +10449,8 @@ describe("ClaudeAdapterLive forkThread", () => {
           threadId: RESUME_THREAD_ID,
           resume: "forked-session-1",
           turnCount: 4,
+          processedTokenTotal: 0,
+          processedTokenBaselineKnown: true,
         },
       });
     }).pipe(
@@ -10545,6 +10546,8 @@ describe("ClaudeAdapterLive forkThread", () => {
         threadId: RESUME_THREAD_ID,
         resume: "forked-session-2",
         turnCount: 4,
+        processedTokenTotal: 0,
+        processedTokenBaselineKnown: true,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
