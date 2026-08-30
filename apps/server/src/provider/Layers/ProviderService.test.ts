@@ -611,7 +611,8 @@ type ShutdownCursorOrderingScenario =
   | "newer-runtime-write"
   | "ignored-runtime-event"
   | "cursorless-runtime-write"
-  | "mid-list-runtime-write";
+  | "mid-list-runtime-write"
+  | "blocked-runtime-write";
 
 function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) {
   return Effect.gen(function* () {
@@ -624,6 +625,7 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const releaseStoppedSessionSweep = yield* Deferred.make<void>();
     const runtimeEventObserved = yield* Deferred.make<void>();
+    const runtimeWriteStarted = yield* Deferred.make<void>();
     const providerTeardownStarted = yield* Deferred.make<void>();
     let shutdownStarted = false;
     let shutdownRequested = false;
@@ -657,7 +659,12 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
                 ? Deferred.await(providerTeardownStarted).pipe(
                     Effect.andThen(directory.upsert(binding)),
                   )
-                : directory.upsert(binding);
+                : scenario === "blocked-runtime-write" && lastRuntimeEvent === "turn.completed"
+                  ? Deferred.succeed(runtimeWriteStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(providerTeardownStarted)),
+                      Effect.andThen(directory.upsert(binding)),
+                    )
+                  : directory.upsert(binding);
             return persist.pipe(
               Effect.tap(() =>
                 scenario !== "ignored-runtime-event" && lastRuntimeEvent === "turn.completed"
@@ -675,7 +682,9 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
     const shutdownSnapshotCursor = { resume: "shutdown-snapshot" };
     const terminalCursor = { resume: "terminal-cursor" };
     const expectedCursor =
-      scenario === "newer-runtime-write" || scenario === "mid-list-runtime-write"
+      scenario === "newer-runtime-write" ||
+      scenario === "mid-list-runtime-write" ||
+      scenario === "blocked-runtime-write"
         ? terminalCursor
         : shutdownSnapshotCursor;
     const registry: typeof ProviderAdapterRegistry.Service = {
@@ -744,6 +753,8 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
             threadId,
             payload: { exitKind: "graceful" },
           });
+        } else if (scenario === "blocked-runtime-write") {
+          yield* Deferred.succeed(providerTeardownStarted, undefined);
         }
         yield* Deferred.await(runtimeEventObserved);
         yield* Deferred.succeed(releaseStoppedSessionSweep, undefined);
@@ -768,6 +779,11 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
         resumeCursor: shutdownSnapshotCursor,
       }));
       yield* codex.waitForRuntimeSubscribers();
+      if (scenario === "blocked-runtime-write") {
+        updateSessionWithTerminalCursor();
+        emitTerminalTurn();
+        yield* Deferred.await(runtimeWriteStarted);
+      }
       shutdownRequested = true;
     }).pipe(Effect.provide(providerLayer));
 
@@ -800,6 +816,10 @@ it.effect("ProviderServiceLive preserves its snapshot across a cursorless shutdo
 
 it.effect("ProviderServiceLive refreshes a session snapshot after a mid-list cursor write", () =>
   verifyShutdownCursorOrdering("mid-list-runtime-write"),
+);
+
+it.effect("ProviderServiceLive starts teardown while an earlier binding write is blocked", () =>
+  verifyShutdownCursorOrdering("blocked-runtime-write"),
 );
 
 it.effect(
@@ -5362,6 +5382,40 @@ it.effect("ProviderServiceLive starts independent provider teardown concurrently
       20,
       "all provider teardown operations to start",
     ).pipe(Effect.ensuring(Deferred.succeed(releaseStops, undefined)));
+    yield* Fiber.join(closing);
+  }),
+);
+
+it.effect("ProviderServiceLive starts adapter teardown when a queued session refresh fails", () =>
+  Effect.gen(function* () {
+    const shutdown = makeProviderServiceLayer();
+    const scope = yield* Scope.make("sequential");
+    const services = yield* Layer.buildWithScope(shutdown.rawLayer, scope);
+    const provider = yield* Effect.service(ProviderService).pipe(Effect.provide(services));
+    const threadId = asThreadId("thread-stopall-refresh-failure");
+    const teardownStarted = yield* Deferred.make<void>();
+
+    yield* provider.startSession(threadId, {
+      provider: "codex",
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    const listSessions = shutdown.codex.listSessions.getMockImplementation();
+    assert.ok(listSessions);
+    let shutdownListCalls = 0;
+    shutdown.codex.listSessions.mockImplementation(() => {
+      shutdownListCalls += 1;
+      return shutdownListCalls === 2
+        ? Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: "codex", threadId }))
+        : listSessions();
+    });
+    shutdown.codex.stopAll.mockImplementation(() =>
+      Deferred.succeed(teardownStarted, undefined).pipe(Effect.asVoid),
+    );
+
+    const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+    yield* Deferred.await(teardownStarted);
     yield* Fiber.join(closing);
   }),
 );

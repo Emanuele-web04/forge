@@ -45,4 +45,38 @@ describe("makeKeyedLock", () => {
 
     expect(lock.activeKeyCount()).toBe(0);
   });
+
+  it("signals after a waiter is queued without waiting for the current holder", async () => {
+    const lock = makeKeyedLock<string>();
+    const release = await Effect.runPromise(Deferred.make<void>());
+    const queued = await Effect.runPromise(Deferred.make<void>());
+    const order: string[] = [];
+
+    const first = Effect.runFork(lock.withLock("thread-1", Deferred.await(release)));
+    await Effect.runPromise(Effect.yieldNow);
+    const second = Effect.runFork(
+      lock.withLockQueued(
+        "thread-1",
+        Effect.sync(() => order.push("second")),
+        queued,
+      ),
+    );
+
+    await Effect.runPromise(Deferred.await(queued));
+    const third = Effect.runFork(
+      lock.withLock(
+        "thread-1",
+        Effect.sync(() => order.push("third")),
+      ),
+    );
+    expect(order).toEqual([]);
+
+    await Effect.runPromise(Deferred.succeed(release, undefined));
+    await Effect.runPromise(Fiber.join(first));
+    await Effect.runPromise(Fiber.join(second));
+    await Effect.runPromise(Fiber.join(third));
+
+    expect(order).toEqual(["second", "third"]);
+    expect(lock.activeKeyCount()).toBe(0);
+  });
 });

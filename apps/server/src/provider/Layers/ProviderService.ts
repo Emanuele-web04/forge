@@ -821,9 +821,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // and sendTurn's post-dispatch write. Without it a terminal event could
     // land between sendTurn's settled-turn check and its "running" upsert and
     // still be overwritten. Lifecycle events are low-frequency, so a per-thread
-    // mutex adds no meaningful contention. Creation is synchronous
-    // (Semaphore.makeUnsafe), so concurrent callers cannot mint two locks.
-    const withBindingWriteLock = makeKeyedLock<ThreadId>().withLock;
+    // mutex adds no meaningful contention. Queue registration is synchronous,
+    // so concurrent callers cannot mint two locks or overtake an earlier write.
+    const bindingWriteLock = makeKeyedLock<ThreadId>();
+    const withBindingWriteLock = bindingWriteLock.withLock;
 
     interface StartedTurnPersistenceInput {
       readonly threadId: ThreadId;
@@ -2822,15 +2823,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const persistActiveSessions = settleConcurrentTeardowns(
           activeSessionWrites,
           ({ adapter, session, started }) =>
-            withBindingWriteLock(
+            bindingWriteLock.withLockQueued(
               session.threadId,
               Effect.gen(function* () {
                 const latestSession = (yield* adapter.listSessions()).find(
                   (candidate) => candidate.threadId === session.threadId,
                 );
-                yield* Deferred.succeed(started, undefined);
                 yield* markThreadStopped(session.threadId, stoppedAt, latestSession ?? session);
               }),
+              started,
             ),
         );
         const persistInactiveSessions = Effect.gen(function* () {
@@ -2846,9 +2847,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.andThen(settleConcurrentTeardowns(adapters, (adapter) => adapter.stopAll())));
 
-        // The active-session write signals after acquiring its per-thread lock,
-        // before touching SQLite. Provider teardown can therefore begin even if
-        // persistence is slow, while terminal events still serialize afterward.
+        // Each active-session write signals after it is queued on its per-thread
+        // lock. Provider teardown can therefore begin without waiting for an
+        // earlier slow write, while terminal events still queue behind the stop
+        // snapshot and become the final writer.
         const shutdownWork: ReadonlyArray<
           Effect.Effect<void, ProviderAdapterError | ProviderSessionDirectoryWriteError, never>
         > = [persistActiveSessions, persistInactiveSessions, stopAdapters];
