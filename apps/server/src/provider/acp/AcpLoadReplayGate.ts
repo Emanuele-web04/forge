@@ -46,6 +46,16 @@ interface ReplayReleased {
 
 type ReplayGateState = WaitingForConsumer | SuppressingReplay | ReplayReady | ReplayReleased;
 
+type ReplaySettleDecision =
+  | { readonly _tag: "Done" }
+  | { readonly _tag: "Retry" }
+  | {
+      readonly _tag: "Opened";
+      readonly elapsedMs: number;
+      readonly reachedHardTimeout: boolean;
+    }
+  | { readonly _tag: "Wait"; readonly delayMs: number };
+
 export const makeAcpLoadReplayGate = (
   options: AcpLoadReplayGateOptions,
 ): Effect.Effect<AcpLoadReplayGate> =>
@@ -70,39 +80,42 @@ export const makeAcpLoadReplayGate = (
       yield* Deferred.await(consumerAttached);
       while (true) {
         const now = yield* Clock.currentTimeMillis;
-        const decision = yield* Ref.modify(state, (current) => {
-          if (current._tag === "Ready" || current._tag === "Released") {
-            return [{ _tag: "Done" } as const, current] as const;
-          }
-          if (current._tag === "WaitingForConsumer") {
-            return [{ _tag: "Retry" } as const, current] as const;
-          }
+        const decision = yield* Ref.modify(
+          state,
+          (current): readonly [ReplaySettleDecision, ReplayGateState] => {
+            if (current._tag === "Ready" || current._tag === "Released") {
+              return [{ _tag: "Done" } as const, current] as const;
+            }
+            if (current._tag === "WaitingForConsumer") {
+              return [{ _tag: "Retry" } as const, current] as const;
+            }
 
-          const quietForMs = now - current.lastSuppressedAt;
-          const elapsedMs = now - current.startedAt;
-          const reachedHardTimeout = elapsedMs >= options.hardTimeoutMs;
-          if (quietForMs >= options.quietMs || reachedHardTimeout) {
+            const quietForMs = now - current.lastSuppressedAt;
+            const elapsedMs = now - current.startedAt;
+            const reachedHardTimeout = elapsedMs >= options.hardTimeoutMs;
+            if (quietForMs >= options.quietMs || reachedHardTimeout) {
+              return [
+                { _tag: "Opened", elapsedMs, reachedHardTimeout } as const,
+                { _tag: "Ready" } satisfies ReplayReady,
+              ] as const;
+            }
+
             return [
-              { _tag: "Opened", elapsedMs, reachedHardTimeout } as const,
-              { _tag: "Ready" } satisfies ReplayReady,
-            ] as const;
-          }
-
-          return [
-            {
-              _tag: "Wait",
-              delayMs: Math.max(
-                1,
-                Math.min(
-                  options.quietMs - quietForMs,
-                  options.hardTimeoutMs - elapsedMs,
-                  REPLAY_SETTLE_POLL_MAX_MS,
+              {
+                _tag: "Wait",
+                delayMs: Math.max(
+                  1,
+                  Math.min(
+                    options.quietMs - quietForMs,
+                    options.hardTimeoutMs - elapsedMs,
+                    REPLAY_SETTLE_POLL_MAX_MS,
+                  ),
                 ),
-              ),
-            } as const,
-            current,
-          ] as const;
-        });
+              } as const,
+              current,
+            ] as const;
+          },
+        );
 
         if (decision._tag === "Done") {
           return;

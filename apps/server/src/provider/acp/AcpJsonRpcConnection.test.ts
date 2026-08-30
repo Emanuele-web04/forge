@@ -177,6 +177,7 @@ describe("AcpSessionRuntime", () => {
           prompt: [{ type: "text", text: "hi" }],
         });
         expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "code" });
 
         // The session/load replay chunks are dropped; only the immediate first
         // prompt's legitimate events arrive after the quiet gate opens.
@@ -194,7 +195,9 @@ describe("AcpSessionRuntime", () => {
               command: bunExe,
               args: [mockAgentPath],
               env: {
+                VITEST: "true",
                 SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
                 SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY: "1",
               },
             },

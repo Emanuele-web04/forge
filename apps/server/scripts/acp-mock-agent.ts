@@ -38,6 +38,7 @@ const loadReplayDelaysMs = (process.env.SYNARA_ACP_LOAD_REPLAY_DELAYS_MS ?? "")
 const rejectPromptDuringLoadReplay =
   process.env.SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY === "1";
 const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY === "1";
+const loadReplayModeId = process.env.SYNARA_ACP_LOAD_REPLAY_MODE_ID?.trim();
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const sessionId = "mock-session-1";
 
@@ -252,14 +253,26 @@ function scheduleLoadReplayUpdates(
   pendingLoadReplayUpdates += loadReplayDelaysMs.length;
   loadReplayDelaysMs.forEach((delayMs, index) => {
     setTimeout(() => {
+      const modeUpdate =
+        index === loadReplayDelaysMs.length - 1 && loadReplayModeId
+          ? client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "current_mode_update",
+                currentModeId: loadReplayModeId,
+              },
+            })
+          : Effect.void;
       void runEffect(
-        client.sessionUpdate({
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: `late replay ${index + 1}` },
-          },
-        }),
+        client
+          .sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `late replay ${index + 1}` },
+            },
+          })
+          .pipe(Effect.andThen(modeUpdate)),
       ).finally(() => {
         pendingLoadReplayUpdates -= 1;
       });

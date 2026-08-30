@@ -896,9 +896,18 @@ const makeAcpSessionRuntime = (
                 Effect.andThen(resolveConfigOptionUpdateWaiters(update.configOptions)),
               )
             : Effect.void;
-        const rememberBoundedState = rememberCommands.pipe(Effect.andThen(rememberConfigOptions));
+        const rememberMode =
+          update.sessionUpdate === "current_mode_update"
+            ? Ref.update(modeStateRef, (current) =>
+                current === undefined ? current : updateModeState(current, update.currentModeId),
+              )
+            : Effect.void;
+        const rememberBoundedState = rememberCommands.pipe(
+          Effect.andThen(rememberConfigOptions),
+          Effect.andThen(rememberMode),
+        );
         const processUpdate = (suppress: boolean) => {
-          // Command and configuration inventories are bounded state, not
+          // Command, configuration, and mode inventories are bounded state, not
           // transcript replay; retain them even while historical session
           // updates are being suppressed.
           if (suppress) {
