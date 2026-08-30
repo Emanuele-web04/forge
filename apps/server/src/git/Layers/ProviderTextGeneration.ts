@@ -2,6 +2,7 @@ import { PROVIDER_DISPLAY_NAMES, type ModelSelection, type ProviderKind } from "
 import { Effect, Layer } from "effect";
 
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -82,7 +83,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         return yield* Effect.fail(
           new TextGenerationError({
             operation,
-            detail: `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`,
+            detail: providerDisabledSettingsMessage(provider),
           }),
         );
       }

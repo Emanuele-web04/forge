@@ -9,7 +9,6 @@ import {
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   MessageId,
-  PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type AutomationAllowedCapability,
   type AutomationCompletionPolicy,
@@ -46,6 +45,7 @@ import {
 } from "../../git/textGenerationSelection.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { threadHasInFlightTurn } from "../../orchestration/commandInvariants.ts";
 import {
   AutomationRepository,
@@ -614,7 +614,7 @@ export const AutomationServiceLive = Layer.effect(
         Effect.map((settings) =>
           settings.providers[definition.modelSelection.provider].enabled
             ? null
-            : `${PROVIDER_DISPLAY_NAMES[definition.modelSelection.provider]} is disabled in Settings > Providers.`,
+            : providerDisabledSettingsMessage(definition.modelSelection.provider),
         ),
         Effect.mapError(toServiceError("Failed to read provider settings.")),
       );
@@ -632,7 +632,7 @@ export const AutomationServiceLive = Layer.effect(
               : "codex");
           return settings.providers[provider].enabled
             ? null
-            : `${PROVIDER_DISPLAY_NAMES[provider]} is disabled in Settings > Providers.`;
+            : providerDisabledSettingsMessage(provider);
         }),
         Effect.mapError(toServiceError("Failed to read completion-evaluation provider settings.")),
       );

@@ -436,22 +436,13 @@ export function createProviderInstallResetPatch(defaults: AppSettings): Partial<
   ) as Partial<AppSettings>;
 }
 
-function setProviderHidden(
+function setProviderListMembership(
   current: ReadonlyArray<ProviderKind>,
   provider: ProviderKind,
-  hidden: boolean,
+  included: boolean,
 ): ProviderKind[] {
   const withoutTarget = current.filter((entry) => entry !== provider);
-  return hidden ? [...withoutTarget, provider] : withoutTarget;
-}
-
-function setProviderDisabled(
-  current: ReadonlyArray<ProviderKind>,
-  provider: ProviderKind,
-  disabled: boolean,
-): ProviderKind[] {
-  const withoutTarget = current.filter((entry) => entry !== provider);
-  return disabled ? [...withoutTarget, provider] : withoutTarget;
+  return included ? [...withoutTarget, provider] : withoutTarget;
 }
 
 function isProviderPickerProviderEnabled(
@@ -1024,7 +1015,7 @@ export function ProvidersSettingsPanel({
                       disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
                       onCheckedChange={(checked) =>
                         void updateProviderEnablement(
-                          setProviderDisabled(
+                          setProviderListMembership(
                             settings.disabledProviders,
                             option.provider,
                             !Boolean(checked),
@@ -1090,7 +1081,7 @@ export function ProvidersSettingsPanel({
                     isHidden={hiddenProviderSet.has(option.provider)}
                     onHiddenChange={(hidden) =>
                       updateSettings({
-                        hiddenProviders: setProviderHidden(
+                        hiddenProviders: setProviderListMembership(
                           settings.hiddenProviders,
                           option.provider,
                           hidden,

@@ -149,75 +149,55 @@ describe("ServerSettingsService", () => {
     expect(result.persisted).not.toContain("opencode-secret");
   });
 
-  it("resolves text generation selection away from disabled providers", async () => {
+  it.each([
+    {
+      name: "resolves text generation selection away from disabled providers",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "antigravity" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.antigravity,
+        },
+        providers: { antigravity: { enabled: false } },
+      },
+      expectedProvider: "codex" as const,
+    },
+    {
+      name: "falls back only to providers with dedicated Git text generation",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "codex" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+        },
+        providers: {
+          codex: { enabled: false },
+          claudeAgent: { enabled: true },
+          cursor: { enabled: false },
+          kilo: { enabled: true },
+        },
+      },
+      expectedProvider: "kilo" as const,
+    },
+    {
+      name: "normalizes enabled but unsupported Git text generation selections",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "claudeAgent" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+        },
+      },
+      expectedProvider: "codex" as const,
+    },
+  ])("$name", async ({ overrides, expectedProvider }) => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* ServerSettingsService;
         return yield* service.getSettings;
-      }).pipe(
-        Effect.provide(
-          ServerSettingsService.layerTest({
-            textGenerationModelSelection: {
-              provider: "antigravity",
-              model: DEFAULT_MODEL_BY_PROVIDER.antigravity,
-            },
-            providers: {
-              antigravity: { enabled: false },
-            },
-          }),
-        ),
-      ),
+      }).pipe(Effect.provide(ServerSettingsService.layerTest(overrides))),
     );
 
-    expect(settings.textGenerationModelSelection.provider).toBe("codex");
-    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
-  });
-
-  it("falls back only to providers with dedicated Git text generation", async () => {
-    const settings = await Effect.runPromise(
-      Effect.gen(function* () {
-        const service = yield* ServerSettingsService;
-        return yield* service.getSettings;
-      }).pipe(
-        Effect.provide(
-          ServerSettingsService.layerTest({
-            textGenerationModelSelection: {
-              provider: "codex",
-              model: DEFAULT_MODEL_BY_PROVIDER.codex,
-            },
-            providers: {
-              codex: { enabled: false },
-              claudeAgent: { enabled: true },
-              cursor: { enabled: false },
-              kilo: { enabled: true },
-            },
-          }),
-        ),
-      ),
+    expect(settings.textGenerationModelSelection.provider).toBe(expectedProvider);
+    expect(settings.textGenerationModelSelection.model).toBe(
+      DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
     );
-
-    expect(settings.textGenerationModelSelection.provider).toBe("kilo");
-    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.kilo);
-  });
-
-  it("normalizes enabled but unsupported Git text generation selections", async () => {
-    const settings = await Effect.runPromise(
-      Effect.gen(function* () {
-        const service = yield* ServerSettingsService;
-        return yield* service.getSettings;
-      }).pipe(
-        Effect.provide(
-          ServerSettingsService.layerTest({
-            textGenerationModelSelection: {
-              provider: "claudeAgent",
-              model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
-            },
-          }),
-        ),
-      ),
-    );
-
-    expect(settings.textGenerationModelSelection.provider).toBe("codex");
-    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 });
