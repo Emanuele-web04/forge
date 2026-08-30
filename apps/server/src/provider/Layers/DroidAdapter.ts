@@ -60,6 +60,7 @@ import { listFactoryPlugins, readFactoryPlugin } from "../FactoryPluginDiscovery
 import { readFactorySessionHistory } from "../FactorySessionHistory.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
+  type ProviderAdapterError,
   ProviderAdapterRequestError,
   ProviderAdapterProcessError,
   ProviderAdapterSessionClosedError,
@@ -170,6 +171,31 @@ function droidAcpTimeoutError(method: string): ProviderAdapterRequestError {
     method,
     detail: `Droid ACP did not respond to ${method} within ${DROID_ACP_REQUEST_TIMEOUT_MS / 1000}s.`,
   });
+}
+
+function runDroidAcpConfigurationAfterReplay<A, E>(input: {
+  readonly runtime: Pick<AcpSessionRuntimeShape, "awaitLoadReplayReady">;
+  readonly threadId: ThreadId;
+  readonly effect: Effect.Effect<A, E>;
+}): Effect.Effect<A, E | ProviderAdapterError> {
+  // Replay readiness owns its separate hard-cap budget. Only the actual
+  // configuration work consumes the ACP request timeout.
+  return input.runtime.awaitLoadReplayReady.pipe(
+    Effect.mapError((cause) =>
+      mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
+    ),
+    Effect.andThen(
+      input.effect.pipe(
+        Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(droidAcpTimeoutError("session/set_config_option")),
+            onSome: Effect.succeed,
+          }),
+        ),
+      ),
+    ),
+  );
 }
 
 function isDroidAcpDebugEnabled(): boolean {
@@ -1256,55 +1282,52 @@ export function makeDroidAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          // Config RPCs run after the consumer fork so replay emitted while they
-          // are in flight keeps draining. The session is already registered and
-          // the start-scope finalizer no longer owns the session scope, so any
-          // failure OR interruption of the remaining startup steps must tear the
-          // session down explicitly instead of leaking a live child.
-          yield* Effect.gen(function* () {
-            if (droidModelSelection?.model) {
-              yield* applyDroidAcpModelSelection({
-                runtime: acp,
-                model: droidModelSelection.model,
-                reasoningEffort: droidModelSelection.options?.reasoningEffort,
-                mapError: ({ cause, method }) =>
-                  mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-              });
-            }
-            // The requested model/effort are applied; turns gated on this
-            // deferred can now prompt without inheriting provider defaults.
-            yield* Deferred.succeed(sessionConfigReady, undefined);
-            ctx.sessionConfigReady = undefined;
+          // The consumer fork activates the shared replay gate; configuration
+          // waits for that gate before reading retained state or issuing RPCs.
+          // The session is already registered and the start-scope finalizer no
+          // longer owns its scope, so any remaining startup failure or
+          // interruption must tear the session down explicitly.
+          yield* runDroidAcpConfigurationAfterReplay({
+            runtime: acp,
+            threadId: input.threadId,
+            effect: Effect.gen(function* () {
+              if (droidModelSelection?.model) {
+                yield* applyDroidAcpModelSelection({
+                  runtime: acp,
+                  model: droidModelSelection.model,
+                  reasoningEffort: droidModelSelection.options?.reasoningEffort,
+                  mapError: ({ cause, method }) =>
+                    mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+                });
+              }
+              // The requested model/effort are applied; turns gated on this
+              // deferred can now prompt without inheriting provider defaults.
+              yield* Deferred.succeed(sessionConfigReady, undefined);
+              ctx.sessionConfigReady = undefined;
 
-            yield* offerRuntimeEvent(input.lifecycleGeneration, {
-              type: "session.started",
-              ...(yield* makeEventStamp()),
-              provider: PROVIDER,
-              threadId: input.threadId,
-              payload: { resume: started.initializeResult },
-            });
-            yield* offerRuntimeEvent(input.lifecycleGeneration, {
-              type: "session.state.changed",
-              ...(yield* makeEventStamp()),
-              provider: PROVIDER,
-              threadId: input.threadId,
-              payload: { state: "ready", reason: "Droid ACP session ready" },
-            });
-            yield* offerRuntimeEvent(input.lifecycleGeneration, {
-              type: "thread.started",
-              ...(yield* makeEventStamp()),
-              provider: PROVIDER,
-              threadId: input.threadId,
-              payload: { providerThreadId: started.sessionId },
-            });
+              yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                type: "session.started",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                payload: { resume: started.initializeResult },
+              });
+              yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                type: "session.state.changed",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                payload: { state: "ready", reason: "Droid ACP session ready" },
+              });
+              yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                type: "thread.started",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                payload: { providerThreadId: started.sessionId },
+              });
+            }),
           }).pipe(
-            Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(droidAcpTimeoutError("session/set_config_option")),
-                onSome: Effect.succeed,
-              }),
-            ),
             Effect.onExit((exit) =>
               Exit.isSuccess(exit) ? Effect.void : Effect.ignore(stopSessionInternal(ctx)),
             ),
@@ -1426,31 +1449,28 @@ export function makeDroidAdapter(
         // Selection changes normally arrive via a session restart, but a turn
         // can still carry an explicit selection; re-assert it over ACP (the
         // shared runtime skips the RPC when the value already matches).
-        yield* Effect.gen(function* () {
-          if (model !== undefined) {
-            yield* applyDroidAcpModelSelection({
+        yield* runDroidAcpConfigurationAfterReplay({
+          runtime: ctx.acp,
+          threadId: input.threadId,
+          effect: Effect.gen(function* () {
+            if (model !== undefined) {
+              yield* applyDroidAcpModelSelection({
+                runtime: ctx.acp,
+                model,
+                reasoningEffort: turnModelSelection?.options?.reasoningEffort,
+                mapError: ({ cause, method }) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+              });
+            }
+            yield* applyDroidAcpInteractionMode({
               runtime: ctx.acp,
-              model,
-              reasoningEffort: turnModelSelection?.options?.reasoningEffort,
+              interactionMode,
+              runtimeMode,
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
             });
-          }
-          yield* applyDroidAcpInteractionMode({
-            runtime: ctx.acp,
-            interactionMode,
-            runtimeMode,
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-          });
+          }),
         }).pipe(
-          Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(droidAcpTimeoutError("session/set_config_option")),
-              onSome: Effect.succeed,
-            }),
-          ),
           Effect.onError((cause) =>
             stopSessionInternal(ctx, {
               exitKind: "error",

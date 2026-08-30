@@ -386,7 +386,14 @@ function applyRequestedSessionConfiguration<E>(input: {
     const requestedModeId = resolveRequestedAcpSessionModeId({
       interactionMode: input.interactionMode,
       runtimeMode: input.runtimeMode,
-      modeState: yield* input.runtime.getModeState,
+      modeState: yield* input.runtime.getModeState.pipe(
+        Effect.mapError((cause) =>
+          input.mapError({
+            cause,
+            method: "session/set_mode",
+          }),
+        ),
+      ),
       aliases: CURSOR_ACP_SESSION_MODE_ALIASES,
     });
     if (!requestedModeId) {

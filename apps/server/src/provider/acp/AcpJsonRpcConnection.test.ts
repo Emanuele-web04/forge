@@ -217,6 +217,96 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("settles load replay before checking whether a mode write is a no-op", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        // The load response starts in ask mode, then replay reports code mode.
+        // Waiting before reading retained state makes this ask request a real
+        // write instead of incorrectly treating it as an early no-op.
+        yield* runtime.setMode("ask");
+
+        const modeRequest = requestEvents.find(
+          (event) => event.method === "session/set_config_option" && event.status === "started",
+        );
+        expect(modeRequest?.payload).toMatchObject({ configId: "mode", value: "ask" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "ask" });
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  });
+
+  it.effect("settles load replay before applying session configuration", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        yield* runtime.setModel("composer-2");
+
+        expect(yield* runtime.getConfigOptions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "model", currentValue: "composer-2" }),
+          ]),
+        );
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("forwards provider session metadata when loading a session", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {

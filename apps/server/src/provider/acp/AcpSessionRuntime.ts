@@ -334,8 +334,11 @@ export interface AcpSessionRuntimeShape {
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
   readonly supportsSessionRecovery: Effect.Effect<boolean, AcpErrors.AcpError>;
-  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
-  readonly getConfigOptions: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>>;
+  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined, AcpErrors.AcpError>;
+  readonly getConfigOptions: Effect.Effect<
+    ReadonlyArray<Acp.SessionConfigOption>,
+    AcpErrors.AcpError
+  >;
   readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
   /** Waits for session/load replay suppression to settle or reach its hard cap. */
   readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
@@ -783,6 +786,8 @@ const makeAcpSessionRuntime = (
         ),
       );
     });
+    const getModeState = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(modeStateRef)));
+    const getConfigOptions = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(configOptionsRef)));
     // Counts every parsed event offered into eventQueue (see
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
     // writer per offer, and readers only need a monotonic snapshot.
@@ -1063,7 +1068,8 @@ const makeAcpSessionRuntime = (
       configId: string,
       value: string | boolean,
     ): Effect.Effect<Acp.SetSessionConfigOptionResponse, AcpErrors.AcpError> =>
-      validateConfigOptionValue(configId, value).pipe(
+      awaitLoadReplayReady.pipe(
+        Effect.andThen(validateConfigOptionValue(configId, value)),
         Effect.flatMap(() => getStartedState),
         Effect.flatMap((started) =>
           Ref.get(configOptionsRef).pipe(
@@ -1346,8 +1352,8 @@ const makeAcpSessionRuntime = (
         return Stream.fromQueue(eventQueue);
       },
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
-      getModeState: Ref.get(modeStateRef),
-      getConfigOptions: Ref.get(configOptionsRef),
+      getModeState,
+      getConfigOptions,
       getAvailableCommands: Ref.get(availableCommandsRef),
       awaitLoadReplayReady,
       prompt: (payload) =>
@@ -1384,12 +1390,12 @@ const makeAcpSessionRuntime = (
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
+        getModeState.pipe(
           Effect.flatMap((modeState) => {
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies Acp.SetSessionModeResponse);
             }
-            return Ref.get(configOptionsRef).pipe(
+            return getConfigOptions.pipe(
               Effect.map((options) =>
                 options.find(
                   (option) =>

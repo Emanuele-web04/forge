@@ -49,7 +49,7 @@ export interface CursorAcpRuntimeInput extends Omit<
 
 export interface CursorAcpModelSelectionErrorContext {
   readonly cause: AcpErrors.AcpError;
-  readonly step: "set-config-option" | "set-model";
+  readonly step: "read-config-options" | "set-config-option" | "set-model";
   readonly configId?: string;
 }
 
@@ -1533,8 +1533,11 @@ export function applyCursorAcpModelSelection<E>(input: {
 }): Effect.Effect<void, E> {
   const notify = (notice: CursorAcpModelSelectionNotice): Effect.Effect<void> =>
     input.onNotice ? input.onNotice(notice) : Effect.void;
+  const readConfigOptions = input.runtime.getConfigOptions.pipe(
+    Effect.mapError((cause) => input.mapError({ cause, step: "read-config-options" })),
+  );
   return Effect.gen(function* () {
-    const initialConfigOptions = yield* input.runtime.getConfigOptions;
+    const initialConfigOptions = yield* readConfigOptions;
     const choices = flattenCursorAcpModelChoices(initialConfigOptions);
     const baseModel = resolveCursorAcpBaseModelId(input.model);
     const mergedOptions = resolveCursorMergedSessionOptions({
@@ -1583,7 +1586,7 @@ export function applyCursorAcpModelSelection<E>(input: {
     // Re-read after setModel: Auto/default often has no fast/effort options,
     // so the first pass would drop fast=true and then write fast=false once
     // GPT/Grok's dedicated toggles appear.
-    const appliedConfigOptions = yield* input.runtime.getConfigOptions;
+    const appliedConfigOptions = yield* readConfigOptions;
     const appliedChoices = flattenCursorAcpModelChoices(appliedConfigOptions);
     const appliedOptions = resolveCursorMergedSessionOptions({
       configOptions: appliedConfigOptions,

@@ -24,6 +24,8 @@ const emitAskQuestion = process.env.SYNARA_ACP_EMIT_ASK_QUESTION === "1";
 const failSessionNewOnce = process.env.SYNARA_ACP_FAIL_SESSION_NEW_ONCE === "1";
 const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const rejectConfigDuringLoadReplay =
+  process.env.SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY === "1";
 const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
@@ -402,6 +404,12 @@ app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
+  if (rejectConfigDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw OfficialAcp.RequestError.invalidParams(
+      { method: "session/set_config_option", params: request },
+      "Session configuration arrived before session/load replay settled",
+    );
+  }
   if (failSetConfigOption) {
     throw OfficialAcp.RequestError.invalidParams(
       {
