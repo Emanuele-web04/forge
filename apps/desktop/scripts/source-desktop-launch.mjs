@@ -48,7 +48,7 @@ function assertCurrentSourceDesktopBuild(desktopDirectory, readBuiltMain) {
   const builtMain = readBuiltMain(builtMainPath, "utf8");
   if (!builtMain.includes(SYNARA_SOURCE_DESKTOP_BUILD_MARKER)) {
     throw new Error(
-      "Source desktop build is stale. Run `bun run start:desktop` to rebuild it before launching.",
+      "Source desktop build is stale. Run `bun run build:desktop`, then launch it again.",
     );
   }
 }
