@@ -32,7 +32,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
-import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
+import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
   makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
@@ -351,6 +351,90 @@ function makeDeterministicRandomService(seed = 0x1234_5678): {
     nextIntUnsafe,
     nextDoubleUnsafe: () => nextIntUnsafe() / 0x1_0000_0000,
   };
+}
+
+function emitAssistantUsage(
+  query: FakeClaudeQuery,
+  sessionId: string,
+  uuid: string,
+  text: string,
+  usage: Record<string, number>,
+): void {
+  query.emit({
+    type: "assistant",
+    session_id: sessionId,
+    uuid,
+    parent_tool_use_id: null,
+    message: {
+      id: uuid,
+      content: [{ type: "text", text }],
+      usage,
+    },
+  } as unknown as SDKMessage);
+}
+
+function emitSuccessResult(
+  query: FakeClaudeQuery,
+  sessionId: string,
+  uuid: string,
+  usage: Record<string, number>,
+): void {
+  query.emit({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    errors: [],
+    session_id: sessionId,
+    uuid,
+    usage,
+  } as unknown as SDKMessage);
+}
+
+function emitCompactionBoundary(query: FakeClaudeQuery, sessionId: string, uuid: string): void {
+  query.emit({
+    type: "system",
+    subtype: "compact_boundary",
+    compact_metadata: { trigger: "manual", pre_tokens: 150_000 },
+    session_id: sessionId,
+    uuid,
+  } as unknown as SDKMessage);
+}
+
+function isCompactionUsageEvent(event: ProviderRuntimeEvent): boolean {
+  return (
+    event.type === "thread.token-usage.updated" ||
+    (event.type === "thread.state.changed" && event.payload.state === "compacted")
+  );
+}
+
+function observeCompactionUsageEvents(adapter: ClaudeAdapterShape, expectedEventCount: number) {
+  return Effect.gen(function* () {
+    const events: Array<ProviderRuntimeEvent> = [];
+    const turnCompleted = yield* Deferred.make<void>();
+    const eventsObserved = yield* Deferred.make<void>();
+    yield* adapter.streamEvents.pipe(
+      Stream.runForEach((event) => {
+        if (event.type === "turn.completed") {
+          return Deferred.succeed(turnCompleted, undefined);
+        }
+        if (!isCompactionUsageEvent(event)) {
+          return Effect.void;
+        }
+        events.push(event);
+        return events.length >= expectedEventCount
+          ? Deferred.succeed(eventsObserved, undefined)
+          : Effect.void;
+      }),
+      Effect.forkChild,
+    );
+    return { events, eventsObserved, turnCompleted };
+  });
+}
+
+function assertTokenUsageEvent(
+  event: ProviderRuntimeEvent | undefined,
+): asserts event is Extract<ProviderRuntimeEvent, { type: "thread.token-usage.updated" }> {
+  assert.equal(event?.type, "thread.token-usage.updated");
 }
 
 async function readFirstPromptText(
@@ -8489,33 +8573,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const events: Array<ProviderRuntimeEvent> = [];
-      const turnCompleted = yield* Deferred.make<void>();
-      const freshUsageObserved = yield* Deferred.make<void>();
-      yield* adapter.streamEvents.pipe(
-        Stream.runForEach((event) =>
-          Effect.gen(function* () {
-            if (event.type === "turn.completed") {
-              yield* Deferred.succeed(turnCompleted, undefined);
-              return;
-            }
-            if (
-              event.type !== "thread.token-usage.updated" &&
-              (event.type !== "thread.state.changed" || event.payload.state !== "compacted")
-            ) {
-              return;
-            }
-            events.push(event);
-            if (
-              event.type === "thread.token-usage.updated" &&
-              event.payload.usage.usedTokens === 20_000
-            ) {
-              yield* Deferred.succeed(freshUsageObserved, undefined);
-            }
-          }),
-        ),
-        Effect.forkChild,
-      );
+      const observation = yield* observeCompactionUsageEvents(adapter, 4);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -8528,21 +8586,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-compact",
-        uuid: "assistant-before-compact",
-        parent_tool_use_id: null,
-        message: {
-          id: "assistant-before-compact",
-          content: [{ type: "text", text: "Preparing to compact" }],
-          usage: {
-            input_tokens: 1,
-            cache_read_input_tokens: 149_999,
-            output_tokens: 0,
-          },
-        },
-      } as unknown as SDKMessage);
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-compact",
+        "assistant-before-compact",
+        "Preparing to compact",
+        { input_tokens: 1, cache_read_input_tokens: 149_999, output_tokens: 0 },
+      );
       harness.query.emit({
         type: "system",
         subtype: "status",
@@ -8550,66 +8600,37 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         session_id: "sdk-session-compact",
         uuid: "status-compacting",
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "system",
-        subtype: "compact_boundary",
-        compact_metadata: { trigger: "manual", pre_tokens: 150_000 },
-        session_id: "sdk-session-compact",
-        uuid: "compact-boundary",
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-compact",
-        uuid: "assistant-compaction-call",
-        parent_tool_use_id: null,
-        message: {
-          id: "assistant-compaction-call",
-          content: [{ type: "text", text: "Compacted" }],
-          usage: {
-            input_tokens: 1,
-            cache_read_input_tokens: 189_999,
-            output_tokens: 0,
-          },
-        },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-compact",
-        uuid: "result-compact",
-        usage: {
-          total_tokens: 350_000,
-          input_tokens: 2,
-          cache_read_input_tokens: 339_998,
-          output_tokens: 0,
-        },
-      } as unknown as SDKMessage);
-      yield* Deferred.await(turnCompleted);
+      emitCompactionBoundary(harness.query, "sdk-session-compact", "compact-boundary");
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-compact",
+        "assistant-compaction-call",
+        "Compacted",
+        { input_tokens: 1, cache_read_input_tokens: 189_999, output_tokens: 0 },
+      );
+      emitSuccessResult(harness.query, "sdk-session-compact", "result-compact", {
+        total_tokens: 350_000,
+        input_tokens: 2,
+        cache_read_input_tokens: 339_998,
+        output_tokens: 0,
+      });
+      yield* Deferred.await(observation.turnCompleted);
 
       const nextTurn = yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
         attachments: [],
       });
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-compact",
-        uuid: "assistant-after-compact",
-        parent_tool_use_id: null,
-        message: {
-          id: "assistant-after-compact",
-          content: [{ type: "text", text: "Fresh response" }],
-          usage: {
-            input_tokens: 1,
-            cache_read_input_tokens: 19_999,
-            output_tokens: 0,
-          },
-        },
-      } as unknown as SDKMessage);
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-compact",
+        "assistant-after-compact",
+        "Fresh response",
+        { input_tokens: 1, cache_read_input_tokens: 19_999, output_tokens: 0 },
+      );
 
-      yield* Deferred.await(freshUsageObserved);
+      yield* Deferred.await(observation.eventsObserved);
+      const { events } = observation;
       assert.deepEqual(
         events.map((event) => event.type),
         [
@@ -8620,35 +8641,28 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         ],
       );
       const firstUsage = events[0];
-      assert.equal(firstUsage?.type, "thread.token-usage.updated");
-      if (firstUsage?.type === "thread.token-usage.updated") {
-        assert.equal(firstUsage.payload.usage.usedTokens, 150_000);
-      }
+      assertTokenUsageEvent(firstUsage);
+      assert.equal(firstUsage.payload.usage.usedTokens, 150_000);
       const compaction = events[1];
       assert.equal(compaction?.type, "thread.state.changed");
       if (compaction?.type === "thread.state.changed") {
         assert.equal(compaction.payload.state, "compacted");
       }
       const accountingUsage = events[2];
-      assert.equal(accountingUsage?.type, "thread.token-usage.updated");
-      if (accountingUsage?.type === "thread.token-usage.updated") {
-        assert.deepEqual(accountingUsage.payload.usage, {
-          usedTokens: 0,
-          totalProcessedTokens: 350_000,
-        });
-      }
+      assertTokenUsageEvent(accountingUsage);
+      assert.deepEqual(accountingUsage.payload.usage, {
+        usedTokens: 0,
+        totalProcessedTokens: 350_000,
+      });
       const freshUsage = events[3];
-      assert.equal(freshUsage?.type, "thread.token-usage.updated");
-      if (freshUsage?.type === "thread.token-usage.updated") {
-        assert.equal(freshUsage.turnId, nextTurn.turnId);
-        assert.equal(freshUsage.payload.usage.usedTokens, 20_000);
-        assert.equal(freshUsage.payload.usage.totalProcessedTokens, 370_000);
-      }
+      assertTokenUsageEvent(freshUsage);
+      assert.equal(freshUsage.turnId, nextTurn.turnId);
+      assert.equal(freshUsage.payload.usage.usedTokens, 20_000);
+      assert.equal(freshUsage.payload.usage.totalProcessedTokens, 370_000);
       const resumeCursor = (yield* adapter.listSessions()).find(
         (candidate) => candidate.threadId === session.threadId,
       )?.resumeCursor as Record<string, unknown> | undefined;
       assert.equal(resumeCursor?.processedTokenTotal, 370_000);
-      assert.equal(resumeCursor?.processedTokenBaselineKnown, true);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8671,7 +8685,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         resumeCursor: {
           threadId: THREAD_ID,
           processedTokenTotal: 350_000,
-          processedTokenBaselineKnown: true,
         },
       });
       yield* adapter.sendTurn({
@@ -8679,46 +8692,31 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "continue",
         attachments: [],
       });
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-resumed-accounting",
-        uuid: "assistant-resumed-accounting",
-        parent_tool_use_id: null,
-        message: {
-          id: "assistant-resumed-accounting",
-          content: [{ type: "text", text: "Fresh response" }],
-          usage: {
-            input_tokens: 1,
-            cache_read_input_tokens: 19_999,
-            output_tokens: 0,
-          },
-        },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-resumed-accounting",
-        uuid: "result-resumed-accounting",
-        usage: { total_tokens: 50_000 },
-      } as unknown as SDKMessage);
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-resumed-accounting",
+        "assistant-resumed-accounting",
+        "Fresh response",
+        { input_tokens: 1, cache_read_input_tokens: 19_999, output_tokens: 0 },
+      );
+      emitSuccessResult(
+        harness.query,
+        "sdk-session-resumed-accounting",
+        "result-resumed-accounting",
+        { total_tokens: 50_000 },
+      );
 
       const usageEvents = Array.from(yield* Fiber.join(usageFiber));
-      assert.equal(usageEvents[0]?.type, "thread.token-usage.updated");
-      if (usageEvents[0]?.type === "thread.token-usage.updated") {
-        assert.deepEqual(usageEvents[0].payload.usage, {
-          usedTokens: 20_000,
-          lastUsedTokens: 20_000,
-          totalProcessedTokens: 370_000,
-          maxTokens: 200_000,
-          inputTokens: 20_000,
-        });
-      }
-      assert.equal(usageEvents[1]?.type, "thread.token-usage.updated");
-      if (usageEvents[1]?.type === "thread.token-usage.updated") {
-        assert.equal(usageEvents[1].payload.usage.totalProcessedTokens, 400_000);
-      }
+      assertTokenUsageEvent(usageEvents[0]);
+      assert.deepEqual(usageEvents[0].payload.usage, {
+        usedTokens: 20_000,
+        lastUsedTokens: 20_000,
+        totalProcessedTokens: 370_000,
+        maxTokens: 200_000,
+        inputTokens: 20_000,
+      });
+      assertTokenUsageEvent(usageEvents[1]);
+      assert.equal(usageEvents[1].payload.usage.totalProcessedTokens, 400_000);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8729,31 +8727,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const events: Array<ProviderRuntimeEvent> = [];
-      const compactionTurnCompleted = yield* Deferred.make<void>();
-      const freshTurnCompleted = yield* Deferred.make<void>();
-      let completedTurns = 0;
-      yield* adapter.streamEvents.pipe(
-        Stream.runForEach((event) =>
-          Effect.gen(function* () {
-            if (event.type === "turn.completed") {
-              completedTurns += 1;
-              yield* Deferred.succeed(
-                completedTurns === 1 ? compactionTurnCompleted : freshTurnCompleted,
-                undefined,
-              );
-              return;
-            }
-            if (
-              event.type === "thread.token-usage.updated" ||
-              (event.type === "thread.state.changed" && event.payload.state === "compacted")
-            ) {
-              events.push(event);
-            }
-          }),
-        ),
-        Effect.forkChild,
-      );
+      const observation = yield* observeCompactionUsageEvents(adapter, 3);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -8766,63 +8740,42 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "/compact",
         attachments: [],
       });
-      harness.query.emit({
-        type: "system",
-        subtype: "compact_boundary",
-        compact_metadata: { trigger: "manual", pre_tokens: 150_000 },
-        session_id: "sdk-session-legacy-compact",
-        uuid: "legacy-compact-boundary",
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-legacy-compact",
-        uuid: "legacy-compaction-call",
-        parent_tool_use_id: null,
-        message: {
-          id: "legacy-compaction-call",
-          content: [{ type: "text", text: "Compacted" }],
-          usage: { total_tokens: 190_000 },
-        },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-legacy-compact",
-        uuid: "legacy-result-compact",
-        usage: { total_tokens: 190_000 },
-      } as unknown as SDKMessage);
+      emitCompactionBoundary(
+        harness.query,
+        "sdk-session-legacy-compact",
+        "legacy-compact-boundary",
+      );
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-legacy-compact",
+        "legacy-compaction-call",
+        "Compacted",
+        { total_tokens: 190_000 },
+      );
+      emitSuccessResult(harness.query, "sdk-session-legacy-compact", "legacy-result-compact", {
+        total_tokens: 190_000,
+      });
 
-      yield* Deferred.await(compactionTurnCompleted);
+      yield* Deferred.await(observation.turnCompleted);
 
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
         attachments: [],
       });
-      harness.query.emit({
-        type: "assistant",
-        session_id: "sdk-session-legacy-compact",
-        uuid: "legacy-fresh-assistant",
-        parent_tool_use_id: null,
-        message: {
-          id: "legacy-fresh-assistant",
-          content: [{ type: "text", text: "Fresh response" }],
-          usage: { total_tokens: 20_000 },
-        },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-legacy-compact",
-        uuid: "legacy-fresh-result",
-        usage: { total_tokens: 50_000 },
-      } as unknown as SDKMessage);
+      emitAssistantUsage(
+        harness.query,
+        "sdk-session-legacy-compact",
+        "legacy-fresh-assistant",
+        "Fresh response",
+        { total_tokens: 20_000 },
+      );
+      emitSuccessResult(harness.query, "sdk-session-legacy-compact", "legacy-fresh-result", {
+        total_tokens: 50_000,
+      });
 
-      yield* Deferred.await(freshTurnCompleted);
+      yield* Deferred.await(observation.eventsObserved);
+      const { events } = observation;
       assert.deepEqual(
         events.map((event) => event.type),
         ["thread.state.changed", "thread.token-usage.updated", "thread.token-usage.updated"],
@@ -10489,7 +10442,6 @@ describe("ClaudeAdapterLive forkThread", () => {
           resume: "forked-session-1",
           turnCount: 4,
           processedTokenTotal: 0,
-          processedTokenBaselineKnown: true,
         },
       });
     }).pipe(
@@ -10586,7 +10538,6 @@ describe("ClaudeAdapterLive forkThread", () => {
         resume: "forked-session-2",
         turnCount: 4,
         processedTokenTotal: 0,
-        processedTokenBaselineKnown: true,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

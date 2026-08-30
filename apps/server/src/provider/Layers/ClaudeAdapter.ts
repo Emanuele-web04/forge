@@ -189,7 +189,6 @@ interface ClaudeResumeState {
   readonly turnCount?: number;
   readonly trackedTasks?: ReadonlyArray<ClaudeTrackedTask>;
   readonly processedTokenTotal?: number;
-  readonly processedTokenBaselineKnown?: true;
 }
 
 interface ClaudeTurnState {
@@ -882,7 +881,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     turnCount?: unknown;
     trackedTasks?: unknown;
     processedTokenTotal?: unknown;
-    processedTokenBaselineKnown?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -907,7 +905,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     cursor.processedTokenTotal >= 0
       ? cursor.processedTokenTotal
       : undefined;
-  const processedTokenBaselineKnown = cursor.processedTokenBaselineKnown === true;
 
   return {
     ...(threadId ? { threadId } : {}),
@@ -918,7 +915,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
       : {}),
     ...(trackedTasks.length > 0 ? { trackedTasks } : {}),
     ...(processedTokenTotal !== undefined ? { processedTokenTotal } : {}),
-    ...(processedTokenBaselineKnown ? { processedTokenBaselineKnown: true } : {}),
   };
 }
 
@@ -2053,10 +2049,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? { trackedTasks: Array.from(context.trackedTasks.values()) }
             : {}),
           ...(context.processedTokenBaselineKnown
-            ? {
-                processedTokenTotal: context.processedTokenTotal,
-                processedTokenBaselineKnown: true,
-              }
+            ? { processedTokenTotal: context.processedTokenTotal }
             : {}),
         };
 
@@ -5398,9 +5391,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
 
           const processedTokenBaselineKnown =
-            input.resumeCursor === undefined ||
-            resumeState?.processedTokenBaselineKnown === true ||
-            resumeState?.processedTokenTotal !== undefined;
+            input.resumeCursor === undefined || resumeState?.processedTokenTotal !== undefined;
           const session: ProviderSession = {
             threadId,
             provider: PROVIDER,
@@ -5418,10 +5409,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               turnCount: resumeState?.turnCount ?? 0,
               ...(trackedTasks.size > 0 ? { trackedTasks: Array.from(trackedTasks.values()) } : {}),
               ...(processedTokenBaselineKnown
-                ? {
-                    processedTokenTotal: resumeState?.processedTokenTotal ?? 0,
-                    processedTokenBaselineKnown: true,
-                  }
+                ? { processedTokenTotal: resumeState?.processedTokenTotal ?? 0 }
                 : {}),
             },
             createdAt: startedAt,
@@ -6110,7 +6098,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           resume: forked.sessionId,
           turnCount: Math.max(liveSource?.turns.length ?? 0, sourceState?.turnCount ?? 0),
           processedTokenTotal: 0,
-          processedTokenBaselineKnown: true,
         };
         return { threadId: input.threadId, resumeCursor };
       });
