@@ -605,6 +605,23 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    const [accountingOnlyUsage] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "thread.token-usage.updated",
+        eventId: "context-usage-accounting-only",
+        provider: "claudeAgent",
+        payload: { usage: { usedTokens: 0, totalProcessedTokens: 340_000 } },
+      }),
+    );
+    expect(accountingOnlyUsage).toMatchObject({
+      kind: "context-window.updated",
+      payload: {
+        usedTokens: 0,
+        totalProcessedTokens: 340_000,
+        provider: "claudeAgent",
+      },
+    });
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",

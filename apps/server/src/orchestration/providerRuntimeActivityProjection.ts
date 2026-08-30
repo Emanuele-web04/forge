@@ -382,7 +382,11 @@ function buildContextWindowActivityPayload(
   const hasPercentUsage =
     typeof usage.usedPercent === "number" && Number.isFinite(usage.usedPercent);
   const hasKnownWindow = typeof usage.maxTokens === "number" && Number.isFinite(usage.maxTokens);
-  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
+  const hasProcessedTokens =
+    typeof usage.totalProcessedTokens === "number" &&
+    Number.isFinite(usage.totalProcessedTokens) &&
+    usage.totalProcessedTokens > 0;
+  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow && !hasProcessedTokens) {
     return undefined;
   }
   // Stamp the emitting provider so token stats can attribute usage to the
