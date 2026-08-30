@@ -607,7 +607,13 @@ it.effect(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored-runtime-event") {
+type ShutdownCursorOrderingScenario =
+  | "newer-runtime-write"
+  | "ignored-runtime-event"
+  | "cursorless-runtime-write"
+  | "mid-list-runtime-write";
+
+function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) {
   return Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-stopall-race-"));
     const dbPath = path.join(tempDir, "orchestration.sqlite");
@@ -618,7 +624,9 @@ function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const releaseStoppedSessionSweep = yield* Deferred.make<void>();
     const runtimeEventObserved = yield* Deferred.make<void>();
+    const providerTeardownStarted = yield* Deferred.make<void>();
     let shutdownStarted = false;
+    let shutdownRequested = false;
 
     const delayedDirectoryLayer = Layer.effect(
       ProviderSessionDirectory,
@@ -640,18 +648,24 @@ function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored
             Deferred.await(releaseStoppedSessionSweep).pipe(
               Effect.andThen(directory.listThreadIds()),
             ),
-          upsert: (binding) =>
-            directory
-              .upsert(binding)
-              .pipe(
-                Effect.tap(() =>
-                  scenario === "newer-runtime-write" &&
-                  asRuntimePayloadRecord(binding.runtimePayload).lastRuntimeEvent ===
-                    "turn.completed"
-                    ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
-                    : Effect.void,
-                ),
+          upsert: (binding) => {
+            const lastRuntimeEvent = asRuntimePayloadRecord(
+              binding.runtimePayload,
+            ).lastRuntimeEvent;
+            const persist =
+              scenario === "cursorless-runtime-write" && lastRuntimeEvent === "provider.stopAll"
+                ? Deferred.await(providerTeardownStarted).pipe(
+                    Effect.andThen(directory.upsert(binding)),
+                  )
+                : directory.upsert(binding);
+            return persist.pipe(
+              Effect.tap(() =>
+                scenario !== "ignored-runtime-event" && lastRuntimeEvent === "turn.completed"
+                  ? Deferred.succeed(runtimeEventObserved, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
               ),
+            );
+          },
         } satisfies ProviderSessionDirectoryShape;
       }),
     ).pipe(Layer.provide(directoryLayer));
@@ -661,7 +675,9 @@ function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored
     const shutdownSnapshotCursor = { resume: "shutdown-snapshot" };
     const terminalCursor = { resume: "terminal-cursor" };
     const expectedCursor =
-      scenario === "newer-runtime-write" ? terminalCursor : shutdownSnapshotCursor;
+      scenario === "newer-runtime-write" || scenario === "mid-list-runtime-write"
+        ? terminalCursor
+        : shutdownSnapshotCursor;
     const registry: typeof ProviderAdapterRegistry.Service = {
       getByProvider: (provider) =>
         provider === "codex"
@@ -670,31 +686,68 @@ function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored
       listProviders: () => Effect.succeed(["codex"]),
     };
 
+    const updateSessionWithTerminalCursor = (): void => {
+      codex.updateSession(threadId, (session) => ({
+        ...session,
+        status: "closed",
+        resumeCursor: terminalCursor,
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+    const emitTerminalTurn = (): void => {
+      codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("event-stopall-terminal-race"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        payload: { state: "completed" },
+      });
+    };
+
+    if (scenario === "mid-list-runtime-write") {
+      const listSessions = codex.listSessions.getMockImplementation();
+      assert.ok(listSessions);
+      let emittedDuringShutdownList = false;
+      codex.listSessions.mockImplementation(() => {
+        const currentSessions = listSessions();
+        if (!shutdownRequested || emittedDuringShutdownList) {
+          return currentSessions;
+        }
+        emittedDuringShutdownList = true;
+        return Effect.gen(function* () {
+          const staleSessions = (yield* currentSessions).map((session) => ({ ...session }));
+          updateSessionWithTerminalCursor();
+          emitTerminalTurn();
+          yield* Deferred.await(runtimeEventObserved);
+          return staleSessions;
+        });
+      });
+    }
+
     codex.stopAll.mockImplementation(() =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         shutdownStarted = true;
         if (scenario === "newer-runtime-write") {
-          codex.updateSession(threadId, (session) => ({
-            ...session,
-            status: "closed",
-            resumeCursor: terminalCursor,
-            updatedAt: new Date().toISOString(),
-          }));
+          updateSessionWithTerminalCursor();
+          emitTerminalTurn();
+        } else if (scenario === "cursorless-runtime-write") {
+          yield* Deferred.succeed(providerTeardownStarted, undefined);
+          yield* codex.stopSession(threadId);
+          emitTerminalTurn();
+        } else if (scenario === "ignored-runtime-event") {
+          codex.emit({
+            type: "session.exited",
+            eventId: asEventId("event-stopall-terminal-race"),
+            provider: "claudeAgent",
+            createdAt: new Date().toISOString(),
+            threadId,
+            payload: { exitKind: "graceful" },
+          });
         }
-        codex.emit({
-          type: scenario === "newer-runtime-write" ? "turn.completed" : "session.exited",
-          eventId: asEventId("event-stopall-terminal-race"),
-          provider: scenario === "newer-runtime-write" ? "codex" : "claudeAgent",
-          createdAt: new Date().toISOString(),
-          threadId,
-          payload:
-            scenario === "newer-runtime-write" ? { state: "completed" } : { exitKind: "graceful" },
-        });
-      }).pipe(
-        Effect.andThen(Deferred.await(runtimeEventObserved)),
-        Effect.andThen(Deferred.succeed(releaseStoppedSessionSweep, undefined)),
-        Effect.asVoid,
-      ),
+        yield* Deferred.await(runtimeEventObserved);
+        yield* Deferred.succeed(releaseStoppedSessionSweep, undefined);
+      }),
     );
 
     const providerLayer = makeProviderServiceLive().pipe(
@@ -715,6 +768,7 @@ function verifyShutdownCursorOrdering(scenario: "newer-runtime-write" | "ignored
         resumeCursor: shutdownSnapshotCursor,
       }));
       yield* codex.waitForRuntimeSubscribers();
+      shutdownRequested = true;
     }).pipe(Effect.provide(providerLayer));
 
     const persisted = yield* Effect.gen(function* () {
@@ -738,6 +792,14 @@ it.effect("ProviderServiceLive preserves a terminal cursor newer than its shutdo
 
 it.effect("ProviderServiceLive retains its shutdown snapshot after an ignored runtime event", () =>
   verifyShutdownCursorOrdering("ignored-runtime-event"),
+);
+
+it.effect("ProviderServiceLive preserves its snapshot across a cursorless shutdown event", () =>
+  verifyShutdownCursorOrdering("cursorless-runtime-write"),
+);
+
+it.effect("ProviderServiceLive refreshes a session snapshot after a mid-list cursor write", () =>
+  verifyShutdownCursorOrdering("mid-list-runtime-write"),
 );
 
 it.effect(
