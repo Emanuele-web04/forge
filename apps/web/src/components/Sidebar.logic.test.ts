@@ -2250,6 +2250,40 @@ describe("sortThreadsForSidebar", () => {
     ]);
   });
 
+  it("keeps createdAt order stable across live and unread completion states", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newest-plain"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-middle-unread"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+          lastVisitedAt: "2026-03-09T10:01:00.000Z",
+        }),
+        {
+          ...makeThread({
+            id: ThreadId.makeUnsafe("thread-oldest-working"),
+            createdAt: "2026-03-09T09:00:00.000Z",
+            updatedAt: "2026-03-09T09:00:00.000Z",
+          }),
+          hasLiveTailWork: true,
+        },
+      ],
+      "created_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-middle-unread"),
+      ThreadId.makeUnsafe("thread-oldest-working"),
+    ]);
+  });
+
   it("floats a finished thread the user has not opened above newer threads", () => {
     const sorted = sortThreadsForSidebar(
       [
