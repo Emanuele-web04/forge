@@ -68,6 +68,31 @@ function writeTrackedDatabase(databasePath: string, migrationId: number): void {
   }
 }
 
+function writeImportedTrackedDatabase(databasePath: string, migrationId: number): void {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(
+      "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    );
+    const insert = database.prepare(
+      "INSERT INTO effect_sql_migrations (migration_id, name) VALUES (?, ?)",
+    );
+    for (const [knownMigrationId, name] of migrationEntries) {
+      if (knownMigrationId > 16) break;
+      insert.run(knownMigrationId, name);
+    }
+    for (
+      let importedMigrationId = 17;
+      importedMigrationId <= migrationId;
+      importedMigrationId += 1
+    ) {
+      insert.run(importedMigrationId, `ImportedMigration${importedMigrationId}`);
+    }
+  } finally {
+    database.close();
+  }
+}
+
 function writeFutureCanonicalDatabase(databasePath: string): number {
   const database = new DatabaseSync(databasePath);
   const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
@@ -234,6 +259,48 @@ describe("completed migration backup recovery", () => {
         latestSupportedMigrationId: 96,
       }),
     ).resolves.toEqual({ kind: "restore-unavailable", reason: "incompatible-backup" });
+  });
+
+  it("allows a restorable imported lineage even when its numeric IDs exceed this build", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = Math.max(...migrationEntries.map(([migrationId]) => migrationId));
+    const databaseMigrationId = latestMigrationId + 20;
+    const importedBackupMigrationId = latestMigrationId + 10;
+    writeTrackedDatabase(databasePath, databaseMigrationId);
+    await fs.mkdir(migrationBackupDirectory(databasePath));
+    const backupPath = generatedBackupPath(databasePath, firstUuid, databaseMigrationId);
+    writeImportedTrackedDatabase(backupPath, importedBackupMigrationId);
+    await writeCompletedProvenance({
+      databasePath,
+      backupPath,
+      targetVersion: databaseMigrationId,
+    });
+
+    await expect(
+      inspectCompletedMigrationBackupForSchemaTooNew(databasePath, {
+        databaseMigrationId,
+        latestSupportedMigrationId: latestMigrationId,
+      }),
+    ).resolves.toMatchObject({
+      kind: "restore-available",
+      backupPath,
+      backupMigrationId: importedBackupMigrationId,
+    });
+
+    await Effect.runPromise(
+      restoreMarkedMigrationBackup(databasePath, {
+        expectedBackupPath: backupPath,
+        expectedProvenancePath: migrationBackupProvenancePath(databasePath),
+      }),
+    );
+    const restored = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations").get(),
+      ).toMatchObject({ migrationId: importedBackupMigrationId });
+    } finally {
+      restored.close();
+    }
   });
 
   it("withholds restore when the exact backup has an incompatible shared lineage", async () => {

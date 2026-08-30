@@ -906,7 +906,7 @@ const restoreSqliteMigrationBackup = (input: {
 
 interface SqliteMigrationBackupInspection {
   readonly migrationId: number;
-  readonly lineageRestorable: boolean;
+  readonly lineage: "canonical" | "imported" | "incompatible";
 }
 
 async function inspectSqliteMigrationBackup(
@@ -1010,7 +1010,12 @@ function inspectMigrationRows(rows: ReadonlyArray<unknown>): SqliteMigrationBack
   const divergence = findFirstMigrationLineageDivergence(recordedNames, migrationId);
   return {
     migrationId,
-    lineageRestorable: divergence === undefined || divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID,
+    lineage:
+      divergence === undefined
+        ? "canonical"
+        : divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID
+          ? "imported"
+          : "incompatible",
   };
 }
 
@@ -1018,10 +1023,10 @@ function assertMigrationBackupCompatible(
   inspection: SqliteMigrationBackupInspection,
   latestSupportedMigrationId: number,
 ): void {
-  if (!inspection.lineageRestorable) {
+  if (inspection.lineage === "incompatible") {
     throw new Error("Migration backup has an unrecognized migration lineage.");
   }
-  if (inspection.migrationId > latestSupportedMigrationId) {
+  if (inspection.lineage === "canonical" && inspection.migrationId > latestSupportedMigrationId) {
     throw new Error(
       `Migration backup schema ${inspection.migrationId} is newer than this build ` +
         `(latest supported migration: ${latestSupportedMigrationId}).`,
@@ -1166,7 +1171,11 @@ export async function inspectCompletedMigrationBackupForSchemaTooNew(
   } catch {
     return { kind: "restore-unavailable", reason: "invalid-backup" };
   }
-  if (!inspection.lineageRestorable || inspection.migrationId > input.latestSupportedMigrationId) {
+  if (
+    inspection.lineage === "incompatible" ||
+    (inspection.lineage === "canonical" &&
+      inspection.migrationId > input.latestSupportedMigrationId)
+  ) {
     return { kind: "restore-unavailable", reason: "incompatible-backup" };
   }
   return {

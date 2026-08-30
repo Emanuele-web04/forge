@@ -51,6 +51,29 @@ export type DesktopMigrationRecoveryDecision =
   | "open-release-page"
   | "open-logs";
 
+export interface DesktopMigrationRecoveryChoice {
+  readonly label: string;
+  readonly decision: DesktopMigrationRecoveryDecision;
+}
+
+export function invalidMigrationStartupRecoveryChoices(input: {
+  readonly canInstallUpdate: boolean;
+  readonly canOpenReleasePage: boolean;
+}): ReadonlyArray<DesktopMigrationRecoveryChoice> {
+  const choices: Array<DesktopMigrationRecoveryChoice> = [];
+  if (input.canInstallUpdate) {
+    choices.push({ label: "Update Synara and restart", decision: "install-update" });
+  }
+  if (input.canOpenReleasePage) {
+    choices.push({ label: "Download latest release", decision: "open-release-page" });
+  }
+  choices.push(
+    { label: "Open logs", decision: "open-logs" },
+    { label: "Quit", decision: "quit" },
+  );
+  return choices;
+}
+
 /**
  * Which recovery action failed, so the prompt can say what actually went wrong
  * instead of blaming the restore for an update that could not be installed.

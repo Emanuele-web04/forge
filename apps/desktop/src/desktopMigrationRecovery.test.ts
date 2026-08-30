@@ -9,6 +9,7 @@ import { MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS } from "@synara/shared/migration
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
+  invalidMigrationStartupRecoveryChoices,
   recoverDesktopMigrationIfRequired,
   requiresDesktopMigrationRecovery,
   resolveDesktopMigrationRecoveryPaths,
@@ -18,6 +19,29 @@ import {
 } from "./desktopMigrationRecovery";
 
 describe("desktop migration recovery", () => {
+  it("offers safe updater escape hatches when structured recovery details are invalid", () => {
+    expect(
+      invalidMigrationStartupRecoveryChoices({
+        canInstallUpdate: true,
+        canOpenReleasePage: true,
+      }),
+    ).toEqual([
+      { label: "Update Synara and restart", decision: "install-update" },
+      { label: "Download latest release", decision: "open-release-page" },
+      { label: "Open logs", decision: "open-logs" },
+      { label: "Quit", decision: "quit" },
+    ]);
+    expect(
+      invalidMigrationStartupRecoveryChoices({
+        canInstallUpdate: false,
+        canOpenReleasePage: false,
+      }),
+    ).toEqual([
+      { label: "Open logs", decision: "open-logs" },
+      { label: "Quit", decision: "quit" },
+    ]);
+  });
+
   it("targets the same production database and bundled restore authority as the server", () => {
     expect(
       resolveDesktopMigrationRecoveryPaths({

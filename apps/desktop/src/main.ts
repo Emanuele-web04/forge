@@ -126,6 +126,7 @@ import {
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
+  invalidMigrationStartupRecoveryChoices,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
   resolveDesktopMigrationRecoveryPaths,
@@ -3672,8 +3673,8 @@ function schemaTooNewRestoreDetail(
   if (restoreCandidate) {
     return (
       `Synara verified the exact pre-migration backup at:\n${restoreCandidate.backupPath}\n\n` +
-      `Its schema is migration ${restoreCandidate.backupMigrationId}, which is within this build's supported range, ` +
-      "and it passed SQLite integrity checking."
+      `Its tracker ends at migration ${restoreCandidate.backupMigrationId}; its shared lineage is compatible ` +
+      "with this build, and it passed SQLite integrity checking."
     );
   }
 
@@ -3797,26 +3798,50 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     if (block.kind === "migration-startup-block-invalid") {
       desktopStartupBlockedForDatabaseRestore = true;
-      for (;;) {
-        const result = await dialog.showMessageBox({
-          type: "error",
-          title: "Synara could not verify migration recovery",
-          message:
-            "The backend stopped for database safety, but its recovery details were invalid.",
-          detail:
-            "Synara will keep the backend and provider processes stopped. Open the logs for the original error, then update or reinstall Synara before trying again.",
-          buttons: ["Open logs", "Quit"],
-          defaultId: 0,
-          cancelId: 1,
-          noLink: true,
-        });
-        if (result.response === 0) {
-          await openDesktopLogDirectory();
-          continue;
-        }
-        requestGracefulAppQuit("invalid migration startup block");
-        return;
-      }
+      await recoverDesktopMigrationIfRequired({
+        requiresRecovery: () => true,
+        markerRemains: () => true,
+        choose: async ({ previousFailure }) => {
+          const releaseUrl = updateState.releaseUrl;
+          const choices = invalidMigrationStartupRecoveryChoices({
+            canInstallUpdate: canInstallUpdateFromRecovery(),
+            canOpenReleasePage: releaseUrl !== null,
+          });
+          const result = await dialog.showMessageBox({
+            type: "error",
+            title:
+              previousFailure === null
+                ? "Synara could not verify migration recovery"
+                : "Synara could not update itself",
+            message:
+              previousFailure === null
+                ? "The backend stopped for database safety, but its recovery details were invalid."
+                : "The newest Synara release could not be installed.",
+            detail:
+              `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+              "Synara will keep the backend and provider processes stopped. The recovery record is not trusted, so restoring from it is disabled; choose one of the safe actions below.",
+            buttons: choices.map((choice) => choice.label),
+            defaultId: 0,
+            cancelId: choices.length - 1,
+            noLink: true,
+          });
+          return choices[result.response]?.decision ?? "quit";
+        },
+        installUpdate: installLatestUpdateForMigrationRecovery,
+        openReleasePage: () => {
+          const releaseUrl = updateState.releaseUrl;
+          if (releaseUrl !== null) void shell.openExternal(releaseUrl);
+        },
+        openLogs: openDesktopLogDirectory,
+        restore: async () => {
+          throw new Error("Invalid migration recovery details cannot authorize a restore.");
+        },
+        requestRestart: () => undefined,
+        requestQuit: (reason) => requestGracefulAppQuit(reason),
+        formatError: formatErrorMessage,
+        log: writeDesktopLogHeader,
+      });
+      return;
     }
 
     if (block.kind === "migration-divergence-consent-required") {

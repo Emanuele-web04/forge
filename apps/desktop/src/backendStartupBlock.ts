@@ -92,6 +92,7 @@ export class BackendStartupBlockDetector {
   }
 
   read(): BackendStartupBlock | null {
+    if (this.block?.kind === "migration-startup-block-invalid") return this.block;
     const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
     if (divergenceChallenge) {
       return {
