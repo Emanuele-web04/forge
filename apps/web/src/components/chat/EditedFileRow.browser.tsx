@@ -123,20 +123,19 @@ afterEach(() => {
 });
 
 describe("EditedFileRow", () => {
-  it("defers editor preference listeners until its launcher menu is opened", async () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
+  it("opens the file in the preferred editor from the always-visible primary action", async () => {
+    const openInEditor = mockOpenInEditor();
     await render(editedFileRow({ openFile: () => true, workspaceRoot: WORKSPACE_ROOT }));
-    const preferenceListenerCalls = () =>
-      addEventListener.mock.calls.filter(
-        ([eventName]) => eventName === "storage" || eventName === "synara:local_storage_change",
-      );
 
-    expect(preferenceListenerCalls()).toHaveLength(0);
-    await openFileOptions();
-    await vi.waitFor(() => expect(preferenceListenerCalls()).toHaveLength(2));
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    // With no stored preference the first catalog editor available wins (Cursor).
+    expect(openInEditor).toHaveBeenCalledWith(
+      "/workspace/synara/apps/web/src/components/chat/EditedFileRow.tsx",
+      "cursor",
+    );
   });
 
-  it("keeps row review, Review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
+  it("keeps row review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
     const onReview = vi.fn();
     const openFile = vi.fn(() => true);
     const openInEditor = mockOpenInEditor();
@@ -145,7 +144,6 @@ describe("EditedFileRow", () => {
       editedFileRow({ openFile, onReview, workspaceRoot: WORKSPACE_ROOT }),
     );
     const pathButton = page.getByRole("button", { name: `Review changes to ${FILE_PATH}` });
-    const reviewButton = page.getByRole("button", { name: "Review", exact: true });
     const openButton = page.getByRole("button", { name: "Open", exact: true });
     const menuButton = page.getByRole("button", {
       name: `Open ${FILE_PATH} options`,
@@ -154,18 +152,15 @@ describe("EditedFileRow", () => {
 
     expect(screen.container.querySelector("button button")).toBeNull();
     await pathButton.click();
-    await reviewButton.click();
-    expect(onReview).toHaveBeenCalledTimes(2);
+    expect(onReview).toHaveBeenCalledTimes(1);
 
     await openButton.click();
-    expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith(FILE_PATH);
-    expect(openInEditor).not.toHaveBeenCalled();
-    expect(onReview).toHaveBeenCalledTimes(2);
+    // The primary action opens the preferred editor, never the in-app viewer.
+    expect(openInEditor).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(onReview).toHaveBeenCalledTimes(1);
 
     pathButton.element().focus();
-    await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(reviewButton.element());
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(openButton.element());
     await userEvent.keyboard("{Tab}");
@@ -239,16 +234,6 @@ describe("EditedFileRow", () => {
     expect(openInEditor).not.toHaveBeenCalled();
   });
 
-  it("does not fall back externally when the in-app opener reports a missing file", async () => {
-    const openFile = vi.fn(() => false);
-    const openInEditor = mockOpenInEditor();
-    await render(editedFileRow({ openFile, workspaceRoot: WORKSPACE_ROOT }));
-
-    await page.getByRole("button", { name: "Open", exact: true }).click();
-    expect(openFile).toHaveBeenCalledWith(FILE_PATH);
-    expect(openInEditor).not.toHaveBeenCalled();
-  });
-
   it("disables relative Open actions without a workspace root and stays contained when narrow", async () => {
     const openFile = vi.fn(() => false);
     mockOpenInEditor();
@@ -270,7 +255,9 @@ describe("EditedFileRow", () => {
       const row = screen.container.querySelector<HTMLElement>("[data-edited-file-row='true']");
       expect(row).not.toBeNull();
       expect(row!.scrollWidth).toBeLessThanOrEqual(row!.clientWidth);
-      expect(page.getByRole("button", { name: "Review", exact: true }).element()).toBeVisible();
+      expect(
+        page.getByRole("button", { name: `Review changes to ${ROOTLESS_FILE_PATH}` }).element(),
+      ).toBeVisible();
 
       await openFileOptions(ROOTLESS_FILE_PATH);
       expect(fileManagerMenuItem().element()).toBeDisabled();

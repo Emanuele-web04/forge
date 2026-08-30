@@ -1,20 +1,19 @@
 // FILE: EditedFileRow.tsx
-// Purpose: Render one changed-file row with sibling review and open actions.
+// Purpose: Render one changed-file row; the row itself opens the review, and a
+// compact always-visible action opens the file in the preferred editor.
 // Layer: Chat changed-files UI
 
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 import type { CSSProperties } from "react";
 
 import { useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
-import { CopyIcon, EyeOpenIcon } from "~/lib/icons";
-import { useWorkspaceFileOpener } from "~/lib/workspaceFileOpener";
+import { CopyIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { MenuItem } from "../ui/menu";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { OpenInPicker } from "./OpenInPicker";
-import { ReviewChangesButton } from "./ReviewChangesButton";
 import { resolveEditedFilePathTargets } from "./editedFilePathActions";
 
 interface EditedFileRowProps {
@@ -42,7 +41,6 @@ const EDITED_FILE_EDITOR_ORDER: ReadonlyArray<EditorId> = [
 ];
 
 export function EditedFileRow(props: EditedFileRowProps) {
-  const workspaceFileOpener = useWorkspaceFileOpener();
   const copyPathToClipboard = useCopyPathToClipboard();
   const { absolutePath, relativePath } = resolveEditedFilePathTargets(
     props.filePath,
@@ -50,16 +48,13 @@ export function EditedFileRow(props: EditedFileRowProps) {
   );
   const isDeleted = props.fileKind === "deleted";
   const launcherTarget = isDeleted ? null : absolutePath;
-  const hasInAppTarget =
-    absolutePath !== null || (props.workspaceRoot !== undefined && relativePath !== null);
-  const canOpenInApp = !isDeleted && workspaceFileOpener !== null && hasInAppTarget;
   const hasDiffStat = props.additions + props.deletions > 0;
 
   return (
     <div
       data-edited-file-row="true"
       className={cn(
-        "@container/header-actions flex w-full min-w-0 items-center gap-1.5 overflow-hidden border-t border-[color:var(--color-border-light)] bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
+        "flex w-full min-w-0 items-center gap-1.5 overflow-hidden border-t border-[color:var(--color-border-light)] bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
         props.withFirstReset && "first:border-t-0",
       )}
     >
@@ -93,26 +88,17 @@ export function EditedFileRow(props: EditedFileRowProps) {
         ) : null}
       </button>
 
-      <ReviewChangesButton
-        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        style={{ fontSize: props.fontSize }}
-        onClick={props.onReview}
-      />
-
+      {/* One compact action pair per row: the preferred editor's own icon (opens the
+          file in that app) plus its picker menu. The whole row already opens the
+          review, so no per-row Review button and no separate in-app open. */}
       <OpenInPicker
+        variant="compact"
         {...(props.keybindings ? { keybindings: props.keybindings } : {})}
         {...(props.availableEditors ? { availableEditors: props.availableEditors } : {})}
         openInTarget={launcherTarget}
         menuEditorOrder={EDITED_FILE_EDITOR_ORDER}
         groupLabel={`Open ${props.filePath}`}
         menuLabel={`Open ${props.filePath} options`}
-        primaryAction={{
-          disabled: !canOpenInApp,
-          icon: <EyeOpenIcon aria-hidden="true" className="size-3.5" />,
-          onClick: () => {
-            workspaceFileOpener?.openFile(props.filePath);
-          },
-        }}
         additionalMenuItems={
           <>
             <MenuItem

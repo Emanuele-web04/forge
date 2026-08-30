@@ -50,6 +50,10 @@ interface OpenInPickerProps {
   // file-preview header both do) is wide enough; "always" keeps it visible
   // regardless, for surfaces that don't establish that container.
   labelMode?: "responsive" | "always";
+  // "split" (default) renders the bordered chat-header split button; "compact"
+  // renders quiet icon-only ghost buttons for dense per-row surfaces (e.g. the
+  // changed-file rows), where labelMode is ignored and the label stays sr-only.
+  variant?: "split" | "compact";
   // Pins the primary "Open" action to a specific editor for this surface without
   // mutating the shared preferred-editor setting. The PDF viewer uses this to default
   // to the OS viewer (e.g. Preview) while still listing installed editors.
@@ -112,6 +116,7 @@ function OpenInPickerContent({ primaryAction, ...props }: OpenInPickerContentPro
 
 interface OpenInPickerFrameProps {
   labelMode: "responsive" | "always";
+  variant: "split" | "compact";
   groupLabel: string;
   menuLabel: string;
   primaryAction: OpenInPickerPrimaryAction;
@@ -119,7 +124,45 @@ interface OpenInPickerFrameProps {
   menuContent: ReactNode;
 }
 
+// Quiet square ghost button shared by both compact controls so the pair reads as
+// one unit; `data-popup-open` keeps the menu trigger highlighted while its menu is up.
+const COMPACT_ACTION_BUTTON_CLASS_NAME =
+  "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-foreground";
+
 function OpenInPickerFrame(props: OpenInPickerFrameProps) {
+  if (props.variant === "compact") {
+    return (
+      <div
+        role="group"
+        aria-label={props.groupLabel}
+        className="flex shrink-0 items-center gap-0.5"
+      >
+        <button
+          type="button"
+          className={COMPACT_ACTION_BUTTON_CLASS_NAME}
+          disabled={props.primaryAction.disabled ?? false}
+          onClick={props.primaryAction.onClick}
+        >
+          {props.primaryAction.icon ?? null}
+          <span className="sr-only">Open</span>
+        </button>
+        <Menu {...(props.onMenuOpenChange ? { onOpenChange: props.onMenuOpenChange } : {})}>
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label={props.menuLabel}
+                className={COMPACT_ACTION_BUTTON_CLASS_NAME}
+              />
+            }
+          >
+            <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+          </MenuTrigger>
+          {props.menuContent}
+        </Menu>
+      </div>
+    );
+  }
   return (
     <ChatHeaderSplitGroup label={props.groupLabel}>
       <ChatHeaderButton
@@ -166,6 +209,7 @@ function EditorActionOpenInPicker(props: OpenInPickerContentProps) {
   return (
     <OpenInPickerFrame
       labelMode={props.labelMode ?? "responsive"}
+      variant={props.variant ?? "split"}
       groupLabel={props.groupLabel ?? "Open in editor"}
       menuLabel={props.menuLabel ?? "Editor options"}
       primaryAction={{
@@ -195,6 +239,7 @@ function PrimaryActionOpenInPicker({ primaryAction, ...props }: PrimaryActionOpe
   return (
     <OpenInPickerFrame
       labelMode={props.labelMode ?? "responsive"}
+      variant={props.variant ?? "split"}
       groupLabel={props.groupLabel ?? "Open in editor"}
       menuLabel={props.menuLabel ?? "Editor options"}
       primaryAction={primaryAction}
