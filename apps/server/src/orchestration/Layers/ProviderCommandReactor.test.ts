@@ -224,6 +224,7 @@ describe("ProviderCommandReactor", () => {
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
     const persistedResumeCursors = new Map<ThreadId, unknown>();
+    const pendingPriorTranscriptBootstraps = new Set<ThreadId>();
     const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
       Effect.succeed(runtimeSessions),
     );
@@ -271,11 +272,17 @@ describe("ProviderCommandReactor", () => {
     });
     const startSessionWithOutcome = vi.fn<
       NonNullable<ProviderServiceShape["startSessionWithOutcome"]>
-    >((threadId, sessionInput) => {
+    >((threadId, sessionInput, outcomeOptions) => {
       const effectiveResumeCursor =
         sessionInput.resumeCursor ?? persistedResumeCursors.get(threadId);
       const nativeResumeAttempted =
         effectiveResumeCursor !== undefined && effectiveResumeCursor !== null;
+      if (
+        outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+        !nativeResumeAttempted
+      ) {
+        pendingPriorTranscriptBootstraps.add(threadId);
+      }
       return startSession(threadId, sessionInput).pipe(
         Effect.map((session) => {
           const resolvedSession = nativeResumeAttempted
@@ -288,10 +295,21 @@ describe("ProviderCommandReactor", () => {
             runtimeSessions[runtimeIndex] = resolvedSession;
           }
           persistedResumeCursors.set(threadId, resolvedSession.resumeCursor);
-          return { session: resolvedSession, nativeResumeAttempted };
+          return {
+            session: resolvedSession,
+            nativeResumeAttempted,
+            priorTranscriptBootstrapPending: pendingPriorTranscriptBootstraps.has(threadId),
+          };
         }),
       );
     });
+    const completePriorTranscriptBootstrap = vi.fn<
+      NonNullable<ProviderServiceShape["completePriorTranscriptBootstrap"]>
+    >(({ threadId }) =>
+      Effect.sync(() => {
+        pendingPriorTranscriptBootstraps.delete(threadId);
+      }),
+    );
     const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -405,6 +423,7 @@ describe("ProviderCommandReactor", () => {
           runtimeSessions.splice(index, 1);
         }
         persistedResumeCursors.delete(threadId);
+        pendingPriorTranscriptBootstraps.delete(threadId);
       }),
     );
     const stopRuntimeSession = vi.fn((input: unknown) =>
@@ -492,6 +511,7 @@ describe("ProviderCommandReactor", () => {
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       startSessionWithOutcome,
+      completePriorTranscriptBootstrap,
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
       startReview,
@@ -662,6 +682,7 @@ describe("ProviderCommandReactor", () => {
       serverSettings,
       startSession,
       startSessionWithOutcome,
+      completePriorTranscriptBootstrap,
       listSessions,
       sendTurn,
       steerTurn,
@@ -4756,7 +4777,7 @@ describe("ProviderCommandReactor", () => {
     if (!defaultStartSession) {
       throw new Error("Harness startSession mock has no implementation.");
     }
-    harness.startSession.mockImplementationOnce((threadId: unknown, input: unknown) =>
+    harness.startSession.mockImplementationOnce((threadId, input) =>
       Effect.promise(() => startSessionGate).pipe(
         Effect.flatMap(() => defaultStartSession(threadId, input)),
       ),
@@ -8279,6 +8300,7 @@ describe("ProviderCommandReactor", () => {
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
 
       expect(harness.startSessionWithOutcome).toHaveBeenCalledTimes(2);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
       const resumedInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
       expect(resumedInput.input).toBe("What did we call the module?");
     },
@@ -8314,6 +8336,7 @@ describe("ProviderCommandReactor", () => {
       expect(coldStartInput.input?.match(/Which deployment color did we choose\?/g)).toHaveLength(
         1,
       );
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-cold-next`,
@@ -8348,7 +8371,7 @@ describe("ProviderCommandReactor", () => {
           new ProviderAdapterRequestError({
             provider,
             method: "session.update",
-            detail: "Session not found",
+            detail: provider === "opencode" ? "Session not found" : "status=404 body={}",
           }),
         ),
       );
@@ -8370,6 +8393,48 @@ describe("ProviderCommandReactor", () => {
       expect(retryInput.input).toContain("<thread_context>");
       expect(retryInput.input).toContain("Keep the release channel on delta.");
       expect(retryInput.input?.match(/Which release channel should we use\?/g)).toHaveLength(1);
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "does not discard the %s resume cursor for a transient session update failure",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider, model: "openai/gpt-5" },
+      });
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-transient-seed`,
+        text: "Keep this native context.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.stopRuntimeSession({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider,
+            method: "session.update",
+            detail: "status=503 body=temporarily unavailable",
+          }),
+        ),
+      );
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-transient-follow-up`,
+        text: "Retry later without losing it.",
+        createdAt: now,
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+
+      expect(harness.startSession).toHaveBeenCalledTimes(2);
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
     },
   );
 

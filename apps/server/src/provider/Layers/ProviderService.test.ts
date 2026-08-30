@@ -990,16 +990,20 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
-  it.effect("reports whether a successful session start restored native context", () =>
+  it.effect("reports native resume and persists bootstrap state until completion", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-start-outcome");
 
-      const initial = yield* provider.startSessionWithOutcome!(threadId, {
-        provider: "codex",
+      const initial = yield* provider.startSessionWithOutcome!(
         threadId,
-        runtimeMode: "full-access",
-      });
+        {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        },
+        { registerPriorTranscriptBootstrapOnFreshStart: true },
+      );
       yield* provider.stopRuntimeSession!({ threadId });
       const resumed = yield* provider.startSessionWithOutcome!(threadId, {
         provider: "codex",
@@ -1008,11 +1012,23 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
 
       assert.equal(initial.nativeResumeAttempted, false);
+      assert.equal(initial.priorTranscriptBootstrapPending, true);
       assert.equal(resumed.nativeResumeAttempted, true);
+      assert.equal(resumed.priorTranscriptBootstrapPending, true);
       assert.deepEqual(
         routing.codex.startSession.mock.calls.at(-1)?.[0]?.resumeCursor,
         initial.session.resumeCursor,
       );
+
+      yield* provider.completePriorTranscriptBootstrap!({ threadId });
+      yield* provider.stopRuntimeSession!({ threadId });
+      const resumedAfterCompletion = yield* provider.startSessionWithOutcome!(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(resumedAfterCompletion.nativeResumeAttempted, true);
+      assert.equal(resumedAfterCompletion.priorTranscriptBootstrapPending, false);
 
       yield* provider.stopSession({ threadId });
     }),

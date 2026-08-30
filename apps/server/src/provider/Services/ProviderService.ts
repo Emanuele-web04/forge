@@ -55,6 +55,16 @@ export interface ProviderRuntimeEventPumpHealth {
 export interface ProviderSessionStartOutcome {
   readonly session: ProviderSession;
   readonly nativeResumeAttempted: boolean;
+  readonly priorTranscriptBootstrapPending: boolean;
+}
+
+export interface ProviderSessionStartOutcomeOptions {
+  /**
+   * Persist a pending transcript bootstrap when this start cannot restore
+   * provider-native context. The caller clears it only after the provider has
+   * accepted the bootstrap turn.
+   */
+  readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
 }
 
 /**
@@ -76,7 +86,13 @@ export interface ProviderServiceShape {
   readonly startSessionWithOutcome?: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    options?: ProviderSessionStartOutcomeOptions,
   ) => Effect.Effect<ProviderSessionStartOutcome, ProviderServiceError>;
+
+  /** Mark a persisted prior-transcript bootstrap as accepted by the provider. */
+  readonly completePriorTranscriptBootstrap?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Send a provider turn.

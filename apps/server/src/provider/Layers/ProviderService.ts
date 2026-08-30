@@ -166,6 +166,10 @@ const ClearSessionResumeCursorInput = Schema.Struct({
   preserveActiveRuntime: Schema.optional(Schema.Boolean),
 });
 
+const CompletePriorTranscriptBootstrapInput = Schema.Struct({
+  threadId: ThreadId,
+});
+
 type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
 type StopRuntimeSessionInput = Parameters<StopRuntimeSession>[0];
 type StopRuntimeSessionEffect = ReturnType<StopRuntimeSession>;
@@ -190,6 +194,7 @@ type InteractionResponse =
  */
 const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
 const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
+const PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING = "priorTranscriptBootstrapPending";
 
 function toValidationError(
   operation: string,
@@ -1664,6 +1669,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const startSessionWithOutcome: NonNullable<ProviderServiceShape["startSessionWithOutcome"]> = (
       threadId,
       rawInput,
+      outcomeOptions,
     ) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
@@ -1700,6 +1706,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   (persistedBinding?.provider === input.provider
                     ? persistedBinding.resumeCursor
                     : undefined));
+            const priorTranscriptBootstrapPending =
+              (persistedBinding?.provider === input.provider &&
+                runtimePayloadRecord(persistedBinding.runtimePayload)[
+                  PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING
+                ] === true) ||
+              (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                !hasResumeCursor(effectiveResumeCursor));
             const adapterStartInput = { ...input };
             delete adapterStartInput.resumeCursor;
             const effectiveProviderOptions =
@@ -1773,6 +1786,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       provider: session.provider,
                       runtimePayload: {
                         [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                        [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
                       },
                     }),
                   ),
@@ -1789,6 +1803,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               return {
                 session,
                 nativeResumeAttempted: hasResumeCursor(effectiveResumeCursor),
+                priorTranscriptBootstrapPending,
               };
             });
 
@@ -1866,6 +1881,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const startSession: ProviderServiceShape["startSession"] = (threadId, input) =>
       startSessionWithOutcome(threadId, input).pipe(Effect.map(({ session }) => session));
+
+    const completePriorTranscriptBootstrap: NonNullable<
+      ProviderServiceShape["completePriorTranscriptBootstrap"]
+    > = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.completePriorTranscriptBootstrap",
+          schema: CompletePriorTranscriptBootstrapInput,
+          payload: rawInput,
+        });
+        yield* withBindingWriteLock(
+          input.threadId,
+          Effect.gen(function* () {
+            const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+            if (!binding) {
+              return;
+            }
+            yield* directory.upsert({
+              threadId: input.threadId,
+              provider: binding.provider,
+              runtimePayload: {
+                [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: false,
+              },
+            });
+          }),
+        );
+      });
 
     const forkThread: NonNullable<ProviderServiceShape["forkThread"]> = (rawInput) =>
       Effect.gen(function* () {
@@ -2988,6 +3030,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     return {
       startSession,
       startSessionWithOutcome,
+      completePriorTranscriptBootstrap,
       forkThread,
       sendTurn,
       steerTurn,
