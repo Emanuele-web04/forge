@@ -670,11 +670,7 @@ function resolveClaudeAutoModeModel(
   if (!firstMatch) {
     return { status: "absent" };
   }
-  if (
-    normalizedMatches.some(
-      (model) => model.supportsAutoMode !== firstMatch.supportsAutoMode,
-    )
-  ) {
+  if (normalizedMatches.some((model) => model.supportsAutoMode !== firstMatch.supportsAutoMode)) {
     return { status: "conflicting" };
   }
   return { status: "matched", model: firstMatch };
