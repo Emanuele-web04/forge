@@ -12,6 +12,19 @@ import { FeedbackDialogForm } from "./FeedbackDialog";
 const noopSubmit = async () => {};
 const noopDraft = async () => {};
 
+function getActionButtons(markup: string): string[] {
+  // Full button tag plus children so we can identify the two main actions.
+  const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g) ?? [];
+  return buttons.filter(
+    (button) =>
+      button.includes("type=\"submit\"") ||
+      button.includes(">Submit") ||
+      button.includes(">Sending…") ||
+      button.includes(">Draft a GitHub issue") ||
+      button.includes(">Opening thread"),
+  );
+}
+
 describe("FeedbackDialogForm", () => {
   it("preselects the Bug chip when initialCategory is bug", () => {
     const markup = renderToStaticMarkup(
@@ -55,20 +68,6 @@ describe("FeedbackDialogForm", () => {
     );
     expect(withoutDraftProp).not.toContain("Draft a GitHub issue with your agent");
   });
-
-  function getActionButtons(markup: string): string[] {
-    // Full button tag plus children so we can identify the two main actions.
-    const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g) ?? [];
-    return buttons.filter(
-      (button) =>
-        button.includes('type="submit"') ||
-        button.includes('type="submit"') ||
-        button.includes(">Submit") ||
-        button.includes(">Sending…") ||
-        button.includes(">Draft a GitHub issue") ||
-        button.includes(">Opening thread"),
-    );
-  }
 
   it("disables submit and draft buttons while sending", () => {
     const markup = renderToStaticMarkup(

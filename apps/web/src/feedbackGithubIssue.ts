@@ -33,7 +33,7 @@ export function redactObviousSecrets(text: string): { text: string; redactedCoun
   let redactedCount = 0;
   let redacted = text;
   for (const pattern of SECRET_PATTERNS) {
-    redacted = redacted.replace(pattern, (match) => {
+    redacted = redacted.replace(pattern, (_match) => {
       redactedCount += 1;
       return "[REDACTED]";
     });
