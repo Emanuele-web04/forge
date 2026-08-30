@@ -1069,6 +1069,16 @@ function EventRouter() {
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
+  const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const sidechatThreadIdSet = useMemo(
+    () =>
+      new Set(
+        serverThreadIds.filter((threadId) =>
+          Boolean(sidebarThreadSummaryById[threadId]?.sidechatSourceThreadId),
+        ),
+      ),
+    [serverThreadIds, sidebarThreadSummaryById],
+  );
   // Stabilize the lease array by content: `serverThreads` re-emits on every
   // streaming update, and an identity-changing lease list would enqueue a no-op
   // subscription reconcile per render onto the serialized subscribe chain.
@@ -1076,6 +1086,7 @@ function EventRouter() {
     visibleThreadIds,
     retainedThreadIds,
     serverThreadIds: serverThreadIdSet,
+    retentionExcludedThreadIds: sidechatThreadIdSet,
   });
   const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
   const subscribedThreadIds = arraysShallowEqual(

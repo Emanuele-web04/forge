@@ -73,6 +73,7 @@ import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/En
 const HEADER_COMPACT_BREAKPOINT = 700;
 
 interface ChatHeaderProps {
+  variant?: "full" | "sidechat-minimal";
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeThreadEntryPoint: ThreadPrimarySurface;
@@ -501,7 +502,7 @@ export function resolveChatHeaderThreadIconKind(
   return entryPoint === "terminal" ? "terminal" : "provider";
 }
 
-export function ChatHeader({
+function FullChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeThreadEntryPoint,
@@ -924,4 +925,44 @@ export function ChatHeader({
       </div>
     </div>
   );
+}
+
+export function SidechatMinimalHeader({
+  title,
+  onClose,
+}: {
+  readonly title: string;
+  readonly onClose?: () => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <MessageCircleIcon
+        className="size-3.5 shrink-0 text-[var(--color-text-accent)]"
+        aria-hidden
+      />
+      <h2
+        className="min-w-0 flex-1 truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
+        title={title}
+      >
+        {title}
+      </h2>
+      {onClose ? (
+        <ChatHeaderIconButton type="button" label="Close side chat" onClick={onClose}>
+          <XIcon className="size-3.5" />
+        </ChatHeaderIconButton>
+      ) : null}
+    </div>
+  );
+}
+
+export function ChatHeader(props: ChatHeaderProps) {
+  if (props.variant === "sidechat-minimal") {
+    return (
+      <SidechatMinimalHeader
+        title={props.activeThreadTitle}
+        {...(props.onCloseThreadPane ? { onClose: props.onCloseThreadPane } : {})}
+      />
+    );
+  }
+  return <FullChatHeader {...props} />;
 }

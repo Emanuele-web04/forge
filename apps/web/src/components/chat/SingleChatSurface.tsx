@@ -968,6 +968,7 @@ export function SingleChatSurface(props: {
         return (
           <DeferredChatView
             threadId={pane.threadId}
+            headerVariant="sidechat-minimal"
             paneScopeId={dockSidechatPaneScopeId(pane.id)}
             deferMount={false}
             surfaceMode="split"

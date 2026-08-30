@@ -27,6 +27,7 @@ import {
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
   automationListRowIcon,
+  automationTargetThreads,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
@@ -89,6 +90,20 @@ const projectId = (value: string) => ProjectId.makeUnsafe(value);
 const threadId = (value: string) => ThreadId.makeUnsafe(value);
 const commandId = (value: string) => CommandId.makeUnsafe(value);
 const messageId = (value: string) => MessageId.makeUnsafe(value);
+
+describe("automationTargetThreads", () => {
+  it("excludes parent-linked side chats from heartbeat target choices", () => {
+    const project = projectId("project-1");
+    const parent = { projectId: project, sidechatSourceThreadId: null, title: "Parent" };
+    const sidechat = {
+      projectId: project,
+      sidechatSourceThreadId: threadId("thread-parent"),
+      title: "Side chat",
+    };
+
+    expect(automationTargetThreads([sidechat, parent], project)).toEqual([parent]);
+  });
+});
 
 describe("reconcileAutomationFormAutoModeSupport", () => {
   it("persists refreshed Claude capability before an Auto automation is submitted", () => {

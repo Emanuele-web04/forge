@@ -323,6 +323,7 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
   readonly visibleThreadIds: readonly ThreadId[];
   readonly retainedThreadIds: readonly ThreadId[];
   readonly serverThreadIds: ReadonlySet<ThreadId>;
+  readonly retentionExcludedThreadIds?: ReadonlySet<ThreadId>;
 }): ThreadId[] {
   const threadIds = new Set<ThreadId>();
   for (const threadId of input.visibleThreadIds) {
@@ -333,6 +334,7 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
   }
   for (const threadId of input.retainedThreadIds) {
     if (threadIds.size >= WS_STREAM_LIMITS.threadPerClient) break;
+    if (input.retentionExcludedThreadIds?.has(threadId)) continue;
     if (input.serverThreadIds.has(threadId)) {
       threadIds.add(threadId);
     }

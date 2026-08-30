@@ -243,6 +243,7 @@ import {
 import {
   createProjectSelector,
   createComposerThreadMentionSourcesSelector,
+  createSidechatSummariesForSourceSelector,
   createThreadSelector,
 } from "../storeSelectors";
 import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
@@ -283,6 +284,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -541,6 +543,7 @@ import {
   type WorkflowSubagentThreadRef,
 } from "./chat/WorkflowRunCard.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
+import { ExpiredSidechatNotice } from "./chat/ExpiredSidechatNotice";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
   scrollTranscriptToSettledEnd,
@@ -1134,6 +1137,7 @@ interface LateComposerSendHandlers {
 
 interface ChatViewProps {
   threadId: ThreadId;
+  headerVariant?: "full" | "sidechat-minimal";
   paneScopeId?: string;
   surfaceMode?: "single" | "split";
   presentationMode?: "default" | "editor";
@@ -1198,6 +1202,7 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
 
 export default function ChatView({
   threadId,
+  headerVariant: headerVariantProp,
   paneScopeId: paneScopeIdProp,
   surfaceMode: surfaceModeProp,
   presentationMode: presentationModeProp,
@@ -1220,6 +1225,7 @@ export default function ChatView({
   // `panicThreshold` is unset) on this entire component, the hottest one in the app.
   // See ChatView.compiler.test.ts.
   const paneScopeId = paneScopeIdProp ?? SINGLE_CHAT_PANE_SCOPE_ID;
+  const headerVariant = headerVariantProp ?? "full";
   const surfaceMode = surfaceModeProp ?? "single";
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
@@ -1389,6 +1395,9 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const sourceThreadSidechats = useStore(
+    useMemo(() => createSidechatSummariesForSourceSelector(threadId), [threadId]),
+  );
   const threadDetailSyncState = useStore((state) =>
     threadId ? (state.threadDetailSyncById?.[threadId] ?? null) : null,
   );
@@ -3160,7 +3169,8 @@ export default function ChatView({
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState;
+  const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
+  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -4557,7 +4567,7 @@ export default function ChatView({
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentEnabled = !isEditorRail;
+  const environmentEnabled = !isEditorRail && headerVariant === "full";
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
@@ -7344,6 +7354,7 @@ export default function ChatView({
       !api ||
       !lateSendHandlers ||
       !activeThread ||
+      activeThread.sidechatExpiredAt ||
       isSendBusy ||
       isConnecting ||
       isVoiceTranscribing ||
@@ -11346,6 +11357,13 @@ export default function ChatView({
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
+    sidechats: activeThread.sidechatSourceThreadId
+      ? null
+      : sourceThreadSidechats.map((sidechat) => ({
+          id: sidechat.id,
+          title: sidechat.title,
+          expiredAt: sidechat.sidechatExpiredAt ?? null,
+        })),
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
@@ -11394,6 +11412,32 @@ export default function ChatView({
   const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
+  const startReplacementSidechat = () => {
+    const sourceThreadId = activeThread?.sidechatSourceThreadId;
+    if (!sourceThreadId) return;
+    void waitForSidechatCreator(sourceThreadId)
+      .then((createSidechat) => {
+        if (!createSidechat) {
+          toastManager.add({
+            type: "warning",
+            title: "Side chat is unavailable",
+            description: "Open the parent chat before starting a replacement side chat.",
+          });
+          return;
+        }
+        return createSidechat();
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not start side chat",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the side chat.",
+        });
+      });
+  };
   // The workflow card already lists its run and member agents, so the generic
   // "N background agents" footer only counts tasks outside the workflow.
   const composerBackgroundTaskCount = workflowRunState
@@ -11432,6 +11476,9 @@ export default function ChatView({
             {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
             <div>
+              {isSidechatExpired ? (
+                <ExpiredSidechatNotice onStartNew={startReplacementSidechat} />
+              ) : null}
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -11552,7 +11599,9 @@ export default function ChatView({
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
                 composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
+                isSidechatExpired && "pointer-events-none opacity-60",
               )}
+              aria-disabled={isSidechatExpired}
             >
               <div
                 className={cn(
@@ -11802,7 +11851,12 @@ export default function ChatView({
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
-                          disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                          disabled={
+                            isComposerApprovalState ||
+                            isConnecting ||
+                            isSendBusy ||
+                            isSidechatExpired
+                          }
                           isRecording={isVoiceRecording}
                           isTranscribing={isVoiceTranscribing}
                           durationLabel={voiceRecordingDurationLabel}
@@ -11855,7 +11909,7 @@ export default function ChatView({
                               type="submit"
                               size="sm"
                               className="h-9 rounded-full px-4 sm:h-8"
-                              disabled={isSendBusy || isConnecting}
+                              disabled={isSendBusy || isConnecting || isSidechatExpired}
                             >
                               {isConnecting || isSendBusy ? "Sending..." : "Refine"}
                             </Button>
@@ -11865,7 +11919,7 @@ export default function ChatView({
                                 type="submit"
                                 size="sm"
                                 className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-                                disabled={isSendBusy || isConnecting}
+                                disabled={isSendBusy || isConnecting || isSidechatExpired}
                               >
                                 {isConnecting || isSendBusy ? "Sending..." : "Implement"}
                               </Button>
@@ -11877,7 +11931,7 @@ export default function ChatView({
                                       variant="default"
                                       className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
                                       aria-label="Implementation actions"
-                                      disabled={isSendBusy || isConnecting}
+                                      disabled={isSendBusy || isConnecting || isSidechatExpired}
                                     />
                                   }
                                 >
@@ -11885,7 +11939,7 @@ export default function ChatView({
                                 </MenuTrigger>
                                 <ComposerPickerMenuPopup align="end" side="top">
                                   <MenuItem
-                                    disabled={isSendBusy || isConnecting}
+                                    disabled={isSendBusy || isConnecting || isSidechatExpired}
                                     onClick={() => void onImplementPlanInNewThread()}
                                   >
                                     Implement in a new thread
@@ -11898,7 +11952,12 @@ export default function ChatView({
                           <>
                             {showVoiceNotesControl ? (
                               <ComposerVoiceButton
-                                disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                                disabled={
+                                  isComposerApprovalState ||
+                                  isConnecting ||
+                                  isSendBusy ||
+                                  isSidechatExpired
+                                }
                                 isRecording={isVoiceRecording}
                                 isTranscribing={isVoiceTranscribing}
                                 durationLabel={voiceRecordingDurationLabel}
@@ -11913,6 +11972,7 @@ export default function ChatView({
                               disabled={
                                 isSendBusy ||
                                 isConnecting ||
+                                isSidechatExpired ||
                                 isVoiceTranscribing ||
                                 isPreparingComposerImages ||
                                 !composerSendState.hasSendableContent
@@ -12014,11 +12074,12 @@ export default function ChatView({
           // right-side chat pane), not flush against the window edges — the editor's
           // own top bar already reserves both desktop window-control gutters. Applying
           // them here just leaves redundant empty space on the sides.
-          !isEditorRail && desktopTopBarTrafficLightGutterClassName,
-          !isEditorRail && desktopTopBarWindowControlsGutterClassName,
+          !isEditorRail && headerVariant === "full" && desktopTopBarTrafficLightGutterClassName,
+          !isEditorRail && headerVariant === "full" && desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader
+          variant={headerVariant}
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}

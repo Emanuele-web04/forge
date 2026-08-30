@@ -36,7 +36,11 @@ function project(input: { id: string; spaceId?: SpaceId | null; kind?: Project["
   };
 }
 
-function thread(input: { id: string; projectId: string }): SidebarThreadSummary {
+function thread(input: {
+  id: string;
+  projectId: string;
+  sidechatSourceThreadId?: ThreadId | null;
+}): SidebarThreadSummary {
   return {
     id: ThreadId.makeUnsafe(input.id),
     projectId: ProjectId.makeUnsafe(input.projectId),
@@ -53,6 +57,7 @@ function thread(input: { id: string; projectId: string }): SidebarThreadSummary 
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    sidechatSourceThreadId: input.sidechatSourceThreadId ?? null,
   };
 }
 
@@ -134,6 +139,28 @@ describe("selecting an empty Space", () => {
         landingSpace: null,
       }),
     ).toEqual({ threadId: voidThread.id, splitViewId: "split-cross-space" });
+  });
+
+  it("does not restore a remembered side chat as a standalone route", () => {
+    const sidechat = thread({ id: "thread-sidechat", projectId: voidThread.projectId });
+
+    expect(
+      resolveChatIndexRestoreRoute({
+        lastThreadRoute: { threadId: sidechat.id },
+        availableSplitViewIds: new Set(),
+        threadIds: [sidechat.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: {
+            projectId: sidechat.projectId,
+            sidechatSourceThreadId: voidThread.id,
+          },
+        },
+        studioProjectIds: new Set(),
+        draftProjectIdByThreadId: new Map(),
+        rememberedSplitViewThreadIds: undefined,
+        landingSpace: null,
+      }),
+    ).toBeNull();
   });
 
   it("drops a split containing a thread from another Space while retaining its focused route", () => {
@@ -264,6 +291,29 @@ describe("resolveSpaceSelectionTarget", () => {
         sortThreads: (threads) => threads,
       }),
     ).toEqual({ kind: "empty", spaceId: workSpaceId });
+  });
+
+  it("never treats a parent-linked side chat as a Space landing", () => {
+    const workProject = project({ id: "project-work", spaceId: workSpaceId });
+    const parent = thread({ id: "thread-parent", projectId: "project-work" });
+    const sidechat = thread({
+      id: "thread-sidechat",
+      projectId: "project-work",
+      sidechatSourceThreadId: parent.id,
+    });
+
+    expect(
+      resolveSpaceSelectionTarget({
+        spaceId: workSpaceId,
+        projects: [workProject],
+        projectById: new Map([[workProject.id, workProject]]),
+        threads: [sidechat, parent],
+        rememberedThreadId: sidechat.id,
+        rememberedProjectId: null,
+        paths,
+        sortThreads: (threads) => threads,
+      }),
+    ).toEqual({ kind: "thread", threadId: parent.id });
   });
 });
 

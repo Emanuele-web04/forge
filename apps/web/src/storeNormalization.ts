@@ -173,6 +173,8 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
+    (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
@@ -1668,6 +1670,8 @@ export function normalizeThreadFromReadModel(
     previous.hasActionableProposedPlan === resolvedHasActionableProposedPlan &&
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
+    (previous.sidechatLastActivityAt ?? null) === (incoming.sidechatLastActivityAt ?? null) &&
+    (previous.sidechatExpiredAt ?? null) === (incoming.sidechatExpiredAt ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
     previous.pinnedMessages === pinnedMessages &&
@@ -1720,6 +1724,8 @@ export function normalizeThreadFromReadModel(
     createBranchFlowCompleted: resolvedCreateBranchFlowCompleted,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: incoming.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
@@ -1828,6 +1834,8 @@ export function normalizeThreadShellSnapshot(
     subagentRole: incoming.subagentRole ?? null,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: incoming.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
     // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those
