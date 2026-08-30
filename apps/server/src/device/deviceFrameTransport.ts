@@ -1,7 +1,7 @@
 /**
  * Device-specific adapter for the shared bounded frame fan-out transport.
  * Keeping this small wrapper preserves the old device names and API while
- * allowing future display streams to use the same backpressure
+ * allowing computer and future display streams to use the same backpressure
  * and keyframe rules.
  */
 import { encodeDeviceFrame } from "@synara/shared/deviceFrame";

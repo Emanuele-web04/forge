@@ -1041,6 +1041,30 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    setEnableComputerControl: (threadId, enabled) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        // Always record the choice, even an explicit false: the flag is tri-state
+        // and an untouched draft follows the new-chat default instead.
+        const base = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (base.enableComputerControl === enabled) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          enableComputerControl: enabled,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     // Keep queued follow-ups with the thread draft so route changes do not hide them.
     enqueueQueuedTurn: (threadId, queuedTurn) => {
       if (threadId.length === 0) {

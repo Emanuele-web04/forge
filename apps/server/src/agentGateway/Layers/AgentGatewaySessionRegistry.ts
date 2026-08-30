@@ -4,6 +4,7 @@ import { Layer } from "effect";
 
 import {
   AgentGatewaySessionRegistry,
+  type AgentGatewayCapability,
   type AgentGatewaySessionIdentity,
   type AgentGatewaySessionRegistryShape,
   type AgentGatewayWriteAuthority,
@@ -45,7 +46,7 @@ export function makeAgentGatewaySessionRegistry(options?: {
         threadId,
         provider,
         issuedAt,
-        capabilities: new Set([
+        capabilities: new Set<AgentGatewayCapability>([
           ...PROVIDER_SESSION_CAPABILITIES,
           ...(issueOptions?.additionalCapabilities ?? []),
         ]),

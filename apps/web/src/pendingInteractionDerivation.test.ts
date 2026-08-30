@@ -256,7 +256,7 @@ describe("derivePendingApprovals", () => {
           requestId: "tool-request-1",
           requestKind: "tool",
           detail: "Allow Synara to launch the calculator?",
-          toolName: "mcp_tool",
+          toolName: "computer_launch_app",
           toolParamsDisplay: [{ name: "app", value: "kcalc", display_name: "app" }],
         },
       }),
@@ -268,7 +268,7 @@ describe("derivePendingApprovals", () => {
         requestKind: "tool",
         createdAt: "2026-02-23T00:00:01.000Z",
         detail: "Allow Synara to launch the calculator?",
-        toolName: "mcp_tool",
+        toolName: "computer_launch_app",
         toolParamsDisplay: [{ name: "app", value: "kcalc", displayName: "app" }],
       },
     ]);

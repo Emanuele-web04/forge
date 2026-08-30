@@ -1,9 +1,9 @@
 // FILE: binaryFrameSource.ts
-// Purpose: Deliver encoded device video frames from
+// Purpose: Deliver encoded frames (device video, computer desktop captures) from
 // the server to a pane's decoder over a dedicated binary WebSocket.
 // Layer: Web transport helper
 // Exports: the shared frame-source mechanism plus the URL builder; the
-// device modules wrap it with their route constants and decoders.
+// device/computer modules wrap it with their route constants and decoders.
 
 import { makeSocketUrl } from "../wsTransport";
 
@@ -46,8 +46,8 @@ interface BinaryFrameSourceOptions<Frame> {
   readonly now?: () => number;
   /**
    * Rebuilding a capture session is expensive (the device route tears down and
-   * recreates a VideoToolbox encoder), so a gate that fires on every dropped frame
-   * must not be allowed
+   * recreates a VideoToolbox encoder; the computer route re-primes compositor
+   * capture), so a gate that fires on every dropped frame must not be allowed
    * to thrash it. One request is in flight at a time and further requests
    * inside this window are dropped rather than queued — the resync already in
    * flight will deliver the keyframe they wanted.
@@ -72,7 +72,7 @@ export interface BinaryFrameSource {
  * dedicated binary WebSocket so a frame burst can never delay an RPC response or
  * a domain-event push, and so a slow consumer drops frames instead of stalling
  * the control plane. The subscription is the URL, so frames start with no
- * handshake message. It keys on the stream rather than the
+ * handshake message. It keys on the stream (device, computer) rather than the
  * thread: two threads watching one source share the same capture output.
  */
 export function binaryFrameSocketUrl(input: {

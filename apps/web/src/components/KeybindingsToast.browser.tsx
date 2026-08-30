@@ -2,6 +2,7 @@ import "../index.css";
 
 import {
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -262,7 +263,8 @@ const worker = setupWorker(
         // socket dying and answers with a full reconnect. That loops forever
         // and fills the run with schema errors about an Exit whose Success
         // value is `{}` where Void was expected.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }

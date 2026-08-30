@@ -382,6 +382,25 @@ describe("deriveReadableToolTitle", () => {
       }),
     ).toBe("Codex Apps: Github Fetch Pr");
   });
+
+  it("formats structured MCP server/tool payloads into readable tool names", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "MCP tool call",
+        fallbackLabel: "MCP tool call",
+        itemType: "mcp_tool_call",
+        payload: {
+          data: {
+            item: {
+              type: "mcpToolCall",
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+    ).toBe("Computer Use: Get App State");
+  });
 });
 
 describe("deriveReadableCommandDisplay", () => {

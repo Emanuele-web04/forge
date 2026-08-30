@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   acquireAgentGatewaySessionLease,
   AGENT_GATEWAY_NO_CAPABILITIES,
+  agentGatewayCapabilitiesFor,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
   startAgentGatewaySessionLeaseExitWatcher,
   withAgentGatewayTurnCancellation,
@@ -273,6 +275,54 @@ describe("AgentGatewaySessionLease", () => {
 
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(revokeSessionToken).toHaveBeenCalledWith("gateway-token");
+  });
+
+  it("derives the computer capability from the session start input", () => {
+    const connectionForThread = vi.fn(() => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: "computer-token",
+    }));
+    const lease = acquireAgentGatewaySessionLease(
+      { connectionForThread, revokeSessionToken: vi.fn() },
+      ThreadId.makeUnsafe("thread-computer"),
+      "codex",
+      { enableComputerControl: true },
+    );
+
+    expect(connectionForThread).toHaveBeenCalledWith("thread-computer", "codex", {
+      additionalCapabilities: ["computer:control"],
+    });
+    lease?.release();
+  });
+
+  it.each([
+    { name: "computer control off", input: { enableComputerControl: false } },
+    { name: "computer control unset", input: {} },
+    { name: "no capabilities", input: AGENT_GATEWAY_NO_CAPABILITIES },
+  ])("issues a base credential with no extra capabilities for $name", ({ input }) => {
+    const connectionForThread = vi.fn(() => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: "base-token",
+    }));
+    const lease = acquireAgentGatewaySessionLease(
+      { connectionForThread, revokeSessionToken: vi.fn() },
+      ThreadId.makeUnsafe("thread-base"),
+      "codex",
+      input,
+    );
+
+    expect(agentGatewayCapabilitiesFor(input)).toEqual([]);
+    expect(connectionForThread).toHaveBeenCalledWith("thread-base", "codex");
+    lease?.release();
+  });
+
+  it("keeps a captured capability input equivalent to the start input it came from", () => {
+    for (const enableComputerControl of [true, false, undefined]) {
+      const startInput = { enableComputerControl, cwd: "/tmp/project" };
+      expect(agentGatewayCapabilitiesFor(captureAgentGatewayCapabilityInput(startInput))).toEqual(
+        agentGatewayCapabilitiesFor(startInput),
+      );
+    }
   });
 
   it("keeps replacement runtimes on independent leases", () => {

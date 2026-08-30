@@ -21,7 +21,9 @@ export interface AgentGatewaySessionLeaseOptions {
  * `agentGatewayCapabilitiesFor` — no adapter edits, and no site can silently
  * miss it.
  */
-export interface AgentGatewayCapabilityInput {}
+export interface AgentGatewayCapabilityInput {
+  readonly enableComputerControl?: boolean | undefined;
+}
 
 /** Lease no optional capabilities. Spelled out so an omission reads as a choice. */
 export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {};
@@ -30,8 +32,9 @@ export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {};
 export function agentGatewayCapabilitiesFor(
   input: AgentGatewayCapabilityInput,
 ): readonly AgentGatewayCapability[] {
-  void input;
-  return [];
+  const capabilities: AgentGatewayCapability[] = [];
+  if (input.enableComputerControl === true) capabilities.push("computer:control");
+  return capabilities;
 }
 
 export function agentGatewaySessionLeaseOptionsFor(
@@ -52,8 +55,7 @@ export function agentGatewaySessionLeaseOptionsFor(
 export function captureAgentGatewayCapabilityInput(
   input: AgentGatewayCapabilityInput,
 ): AgentGatewayCapabilityInput {
-  void input;
-  return {};
+  return { enableComputerControl: input.enableComputerControl === true };
 }
 
 type AgentGatewaySessionLeaseCredentials = Pick<

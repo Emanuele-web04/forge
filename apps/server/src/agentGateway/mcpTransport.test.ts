@@ -538,3 +538,76 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
     }),
   );
 });
+
+function listedTools(body: unknown): ReadonlyArray<Record<string, unknown>> {
+  const result = (body as { result?: { tools?: ReadonlyArray<Record<string, unknown>> } }).result;
+  return result?.tools ?? [];
+}
+
+describe("makeAgentGatewayMcpTransport tools/list", () => {
+  const ok = () => Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] });
+  const catalog: ReadonlyArray<ToolEntry> = [
+    {
+      definition: {
+        name: "synara_read_thread",
+        description: "Read a thread",
+        inputSchema: { type: "object" },
+      },
+      requiredCapability: "thread:read",
+      handler: ok,
+    },
+    {
+      definition: {
+        name: "computer_click",
+        description: "Click",
+        inputSchema: { type: "object" },
+        annotations: { title: "Click" },
+        _meta: { "anthropic/alwaysLoad": true },
+      },
+      requiredCapability: "computer:control",
+      handler: ok,
+    },
+  ];
+  const listBody = { jsonrpc: "2.0", id: "list", method: "tools/list" };
+
+  it.effect("omits tools the caller's session was never granted", () =>
+    Effect.gen(function* () {
+      // A session without computer:control can never call these tools; listing
+      // them would cost the model prompt tokens and a guaranteed denial.
+      const transport = makeTransport({ threads: [makeThread("thread-plain")], tools: catalog });
+      const response = yield* post(transport, "token-1", listBody);
+      assert.equal(response.status, 200);
+      assert.deepEqual(
+        listedTools(response.body).map((tool) => tool.name),
+        ["synara_read_thread"],
+      );
+    }),
+  );
+
+  it.effect("passes tool _meta through verbatim to a caller that holds the capability", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport({
+        threads: [makeThread("thread-computer")],
+        tools: catalog,
+        leaseCapabilities: { enableComputerControl: true },
+      });
+      const response = yield* post(transport, "token-1", listBody);
+      assert.equal(response.status, 200);
+      const tools = listedTools(response.body);
+      assert.deepEqual(
+        tools.map((tool) => tool.name),
+        ["synara_read_thread", "computer_click"],
+      );
+      assert.deepEqual(tools[1], {
+        name: "computer_click",
+        description: "Click",
+        inputSchema: { type: "object" },
+        annotations: { title: "Click" },
+        _meta: { "anthropic/alwaysLoad": true },
+      });
+      // A tool that declares no _meta must not gain an empty one: an MCP client
+      // is entitled to treat the key's absence as "no hints".
+      assert.isFalse("_meta" in tools[0]!);
+    }),
+  );
+});

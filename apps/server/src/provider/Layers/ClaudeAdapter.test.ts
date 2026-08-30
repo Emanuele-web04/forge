@@ -481,6 +481,7 @@ function makeGatewayCredentialsHarness(options?: {
 }) {
   let sequence = 0;
   const revokedTokens: string[] = [];
+  const leasedCapabilities: Array<readonly string[]> = [];
   const cancelledTurns: Array<{ readonly token: string; readonly turnId: string }> = [];
   const credentials = {
     mcpEndpointUrl: "http://127.0.0.1:48123/mcp",
@@ -505,13 +506,16 @@ function makeGatewayCredentialsHarness(options?: {
     revokeSessionToken: (token: string) => {
       revokedTokens.push(token);
     },
-    connectionForThread: () => ({
-      url: "http://127.0.0.1:48123/mcp",
-      bearerToken: `gateway-token-${++sequence}`,
-    }),
+    connectionForThread: (_threadId, _provider, leaseOptions) => {
+      leasedCapabilities.push(leaseOptions?.additionalCapabilities ?? []);
+      return {
+        url: "http://127.0.0.1:48123/mcp",
+        bearerToken: `gateway-token-${++sequence}`,
+      };
+    },
     stdioProxy: { command: "node", args: ["/state/proxy.mjs"] },
   } satisfies AgentGatewayCredentialsShape;
-  return { cancelledTurns, credentials, revokedTokens };
+  return { cancelledTurns, credentials, leasedCapabilities, revokedTokens };
 }
 
 function makeDeterministicRandomService(seed = 0x1234_5678): {
@@ -732,6 +736,30 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect.each([true, false])(
+    "leases computer control with the session when enableComputerControl is %s",
+    (enableComputerControl) => {
+      const gateway = makeGatewayCredentialsHarness();
+      const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          enableComputerControl,
+        });
+
+        assert.deepEqual(gateway.leasedCapabilities, [
+          enableComputerControl ? ["computer:control"] : [],
+        ]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("injects the canonical Synara browser MCP into an Opus 4.8 session", () => {
     const gateway = makeGatewayCredentialsHarness();
@@ -7664,15 +7692,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       // MCP tools are the case that regressed: they classify as `mcp_tool_call`
       // item-wise, and the approval must still carry the canonical request type.
-      const mcpOpened = yield* requestTypeFor("mcp__synara__tool", {
+      const mcpOpened = yield* requestTypeFor("mcp__synara__computer_launch_app", {
         app: "kcalc",
       });
       assert.equal(mcpOpened?.payload.requestType, "tool_approval");
       assert.deepEqual(mcpOpened?.payload.args as Record<string, unknown> | undefined, {
-        toolName: "mcp__synara__tool",
+        toolName: "mcp__synara__computer_launch_app",
         input: { app: "kcalc" },
         sessionApprovalAvailable: false,
-        toolUseId: "tool-use-mcp__synara__tool",
+        toolUseId: "tool-use-mcp__synara__computer_launch_app",
       });
 
       const genericOpened = yield* requestTypeFor("WebFetch", { url: "https://example.com" });

@@ -312,6 +312,10 @@
       "types": "./src/frameTransport.ts",
       "import": "./src/frameTransport.ts"
     },
+    "./computerFrame": {
+      "types": "./src/computerFrame.ts",
+      "import": "./src/computerFrame.ts"
+    },
     "./deviceHelperCache": {
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"

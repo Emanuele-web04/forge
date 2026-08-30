@@ -289,6 +289,7 @@ function makeGatewayCredentials(options?: {
 }) {
   let nextToken = 0;
   const revoked: string[] = [];
+  const leasedCapabilities: Array<readonly string[]> = [];
   const cancelledTurns: Array<{ readonly token: string; readonly turnId: string }> = [];
   const ownerByToken = new Map<string, string>();
   const credentials: AgentGatewayCredentialsShape = {
@@ -319,13 +320,14 @@ function makeGatewayCredentials(options?: {
       revoked.push(token);
       ownerByToken.delete(token);
     },
-    connectionForThread: (threadId) => {
+    connectionForThread: (threadId, _provider, leaseOptions) => {
+      leasedCapabilities.push(leaseOptions?.additionalCapabilities ?? []);
       const token = credentials.issueSessionToken(threadId, "opencode");
       return { url: credentials.mcpEndpointUrl, bearerToken: token };
     },
     stdioProxy: { command: process.execPath, args: [] },
   };
-  return { cancelledTurns, credentials, ownerByToken, revoked };
+  return { cancelledTurns, credentials, leasedCapabilities, ownerByToken, revoked };
 }
 
 function createSubscribedEventQueue() {
@@ -1105,6 +1107,43 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd });
   });
+
+  it.each([true, false])(
+    "leases a managed session's computer control when enableComputerControl is %s",
+    async (enableComputerControl) => {
+      const runtime = createMockOpenCodeRuntime();
+      const gateway = makeGatewayCredentials();
+      const threadId = asThreadId("thread-opencode-computer-control");
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: "/computer/repo",
+            enableComputerControl,
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(gateway.leasedCapabilities).toEqual([
+        enableComputerControl ? ["computer:control"] : [],
+      ]);
+    },
+  );
 
   it("isolates same-cwd managed sessions, injects distinct gateway tokens, and revokes them", async () => {
     const runtime = createMockOpenCodeRuntime();

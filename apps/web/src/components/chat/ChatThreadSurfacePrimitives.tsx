@@ -19,6 +19,7 @@ import { scheduleDeferredChatMount } from "./deferredChatMount";
 const DiffPanel = lazy(() => import("../DiffPanel"));
 export const LazyBrowserPanel = lazy(() => import("../BrowserPanel"));
 export const LazyDevicePanel = lazy(() => import("../DevicePanel"));
+export const LazyComputerPanel = lazy(() => import("../ComputerPanel"));
 
 export const noopChatSurfaceAction = () => {};
 

@@ -24,6 +24,7 @@ function makeContext(provider: ProviderKind = "claudeAgent"): ToolContext {
       turnId: "turn-a",
     },
     callerThreadId: THREAD,
+    callerThreadLabel: null,
     callerSessionKey: "gateway-session:test",
     callerProvider: provider,
     callerCapabilities: new Set(["device:control"]),

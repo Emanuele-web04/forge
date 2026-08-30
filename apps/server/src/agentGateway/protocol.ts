@@ -50,7 +50,7 @@ export interface JsonRpcNotification {
  *   2.1.x CLI's generic MCP tool normalization, which reads it for any server
  *   type, and documented in `@anthropic-ai/claude-agent-sdk`.
  * - `anthropic/searchHint`: replaces the description the same harness indexes
- *   (and sends) for a *deferred* tool. Unused today.
+ *   (and sends) for a *deferred* tool. Unused today — see computerTools.ts.
  */
 export interface McpToolMeta {
   readonly "anthropic/alwaysLoad"?: boolean;

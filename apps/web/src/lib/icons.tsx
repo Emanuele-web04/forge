@@ -44,6 +44,7 @@ import {
   IconMaximize,
   IconMinimize,
   IconMinus,
+  IconDeviceDesktop,
   IconDeviceLaptop,
   IconDeviceMobileRotated,
   IconPlugOff,
@@ -227,6 +228,8 @@ export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
 export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");
+/** Take-control affordance for the computer dock pane. */
+export const CursorClickIcon: LucideIcon = centralIconWrapper("cursor-click");
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);
@@ -274,6 +277,7 @@ export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
+export const MonitorIcon = adaptIcon(IconDeviceDesktop);
 export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const SquareSplitHorizontal: LucideIcon = (props) => (

@@ -1,4 +1,5 @@
 import {
+  COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   isToolLifecycleItemType,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurnState,
@@ -92,6 +93,9 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // Computer-control denial rows render as an actionable card (enable control
+  // and retry) instead of a plain error line; carry just what that card needs.
+  computerControlDenied?: WorkLogComputerControlDenied;
   providerContextLifecycle?: ProviderContextLifecycleInfo;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
@@ -129,6 +133,10 @@ export interface WorkLogAutomation {
   name: string;
   cadenceLabel: string;
   proposalState?: "pending" | "accepted" | "dismissed";
+}
+
+export interface WorkLogComputerControlDenied {
+  toolName: string | null;
 }
 
 export interface WorkLogSynaraCreatedThread {
@@ -368,6 +376,12 @@ function shouldKeepActivityForWorkLog(
   // turn that the revert itself just rolled out of view), so never let the
   // turn-visibility filter drop them.
   if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
+    return true;
+  }
+
+  // A computer-control denial is the only actionable feedback for a desktop
+  // tool call rejected mid-turn; never let turn-visibility filtering hide it.
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
     return true;
   }
 
@@ -699,6 +713,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (synaraThreadCreation) {
       entry.synaraThreadCreation = synaraThreadCreation;
     }
+  }
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
+    entry.computerControlDenied = { toolName: asTrimmedString(payload?.toolName) };
   }
   if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
     const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);

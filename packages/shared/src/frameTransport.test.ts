@@ -193,10 +193,10 @@ describe("shared frame transport", () => {
     await Promise.resolve();
     expect(sink.bufferedAmount()).toBe(0);
     expect(sent).toBe(3);
-    expect(decodeFrameResyncRequest('{"type":"device.frame.resync"}', "device.frame.resync")).toBe(
-      "resync",
-    );
-    expect(decodeFrameResyncRequest('{"type":"wrong"}', "device.frame.resync")).toBeNull();
+    expect(
+      decodeFrameResyncRequest('{"type":"computer.frame.resync"}', "computer.frame.resync"),
+    ).toBe("resync");
+    expect(decodeFrameResyncRequest('{"type":"wrong"}', "computer.frame.resync")).toBeNull();
     open = false;
     expect(sink.isOpen()).toBe(false);
   });

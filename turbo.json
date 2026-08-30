@@ -25,6 +25,7 @@
     "SYNARA_HOST",
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD"
   ],
+  "globalPassThroughEnv": ["SYNARA_COMPUTER_BACKEND"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

@@ -169,6 +169,21 @@ import type {
   DeviceTypeTextInput,
   ThreadDeviceState,
 } from "./device";
+import type {
+  ComputerActionResult,
+  ComputerEvent,
+  ComputerGetScreenSizeInput,
+  ComputerGetScreenSizeResult,
+  ComputerGetStatusInput,
+  ComputerInputClickInput,
+  ComputerInputKeyInput,
+  ComputerInputScrollInput,
+  ComputerListWindowsInput,
+  ComputerListWindowsResult,
+  ComputerStatusResult,
+  ComputerThreadInput,
+  ThreadComputerState,
+} from "./computer";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
@@ -946,5 +961,17 @@ export interface NativeApi {
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
     scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
+  };
+  computer: {
+    /** Thread-independent backend status for surfaces outside any conversation. */
+    getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
+    listWindows: (input: ComputerListWindowsInput) => Promise<ComputerListWindowsResult>;
+    getScreenSize: (input: ComputerGetScreenSizeInput) => Promise<ComputerGetScreenSizeResult>;
+    /** User input from the computer dock pane; needs no agent turn in flight. */
+    inputClick: (input: ComputerInputClickInput) => Promise<ComputerActionResult>;
+    inputScroll: (input: ComputerInputScrollInput) => Promise<ComputerActionResult>;
+    inputKey: (input: ComputerInputKeyInput) => Promise<ComputerActionResult>;
+    onEvent: (callback: (event: ComputerEvent) => void) => () => void;
   };
 }

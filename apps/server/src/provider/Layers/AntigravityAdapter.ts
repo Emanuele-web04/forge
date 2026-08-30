@@ -129,6 +129,11 @@ type ForeignConversationState = ToolSurfaceCounters & {
 
 type AntigravitySessionContext = ToolSurfaceCounters & {
   session: ProviderSession;
+  /**
+   * Antigravity leases per prepared turn, not at session start, so the start
+   * input is long gone by then. Keep the shared capability projection so the
+   * turn lease derives from the same facts as a session-start lease.
+   */
   readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;

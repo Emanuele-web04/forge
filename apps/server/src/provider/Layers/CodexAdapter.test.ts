@@ -225,9 +225,29 @@ validationLayer("CodexAdapterLive validation", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
-        agentGatewayCapabilityInput: {},
+        runtimeMode: "full-access",
+        // The manager owns Codex session restarts, so it carries the capability
+        // facts its gateway lease derives from.
+        agentGatewayCapabilityInput: { enableComputerControl: false },
+      });
+    }),
+  );
+  it.effect("carries computer control into the manager's gateway lease facts", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-computer"),
+        enableComputerControl: true,
         runtimeMode: "full-access",
       });
+
+      assert.deepStrictEqual(
+        validationManager.startSessionImpl.mock.calls[0]?.[0]?.agentGatewayCapabilityInput,
+        { enableComputerControl: true },
+      );
     }),
   );
   it.effect("forwards an external fork cursor when starting a session", () =>
@@ -247,8 +267,8 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-import"),
         forkSourceResumeCursor,
-        agentGatewayCapabilityInput: {},
         runtimeMode: "full-access",
+        agentGatewayCapabilityInput: { enableComputerControl: false },
       });
     }),
   );
@@ -1169,7 +1189,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         payload: {
           message: "Allow the tool call?",
           _meta: {
-            tool_name: "mcp_tool",
+            tool_name: "computer_launch_app",
             tool_params_display: [{ name: "app", value: "kcalc" }],
           },
         },
@@ -1183,7 +1203,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.deepEqual(firstEvent.value.payload.args, {
         message: "Allow the tool call?",
         _meta: {
-          tool_name: "mcp_tool",
+          tool_name: "computer_launch_app",
           tool_params_display: [{ name: "app", value: "kcalc" }],
         },
       });

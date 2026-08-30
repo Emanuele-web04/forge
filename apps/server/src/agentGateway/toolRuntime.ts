@@ -43,6 +43,13 @@ export type AgentGatewayPrincipal = ProviderSessionPrincipal | ExternalClientPri
 export interface ToolContext {
   readonly principal: ProviderSessionPrincipal;
   readonly callerThreadId: string;
+  /**
+   * The caller thread as a human would name it, for surfaces the human sees -
+   * today the agent cursor's badge on the desktop. Null when the thread has no
+   * title yet, which is not an error: the surface falls back to a generic
+   * label rather than showing a thread id.
+   */
+  readonly callerThreadLabel: string | null;
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
   readonly callerCapabilities: ReadonlySet<AgentGatewayCapability>;
