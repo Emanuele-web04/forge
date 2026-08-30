@@ -79,16 +79,12 @@ type ProviderInstallTextKey =
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
-  | "kiloBinaryPath"
-  | "kiloServerUrl"
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
   | "piAgentDir";
-type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
-type ProviderInstallPasswordConfiguredKey =
-  | "kiloServerPasswordConfigured"
-  | "openCodeServerPasswordConfigured";
+type ProviderInstallPasswordKey = "openCodeServerPassword";
+type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
 type ProviderInstallBooleanKey = "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
@@ -268,42 +264,6 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
             Leave blank to use <code>droid</code> from your PATH.
           </>
         ),
-      },
-    ],
-  },
-  {
-    provider: "kilo",
-    docs: [
-      { label: "Install", href: "https://kilo.ai/docs/cli" },
-      { label: "Update", href: "https://kilo.ai/docs/cli" },
-      { label: "Config", href: "https://kilo.ai/docs/cli#configuration" },
-    ],
-    fields: [
-      {
-        kind: "text",
-        settingsKey: "kiloBinaryPath",
-        label: "Kilo binary path",
-        placeholder: "Kilo binary path",
-        description: (
-          <>
-            Leave blank to use <code>kilo</code> from your PATH.
-          </>
-        ),
-      },
-      {
-        kind: "text",
-        settingsKey: "kiloServerUrl",
-        label: "Kilo server URL",
-        placeholder: "http://127.0.0.1:4096",
-        description: "Optional existing Kilo server URL. Leave blank to spawn a local server.",
-      },
-      {
-        kind: "password",
-        settingsKey: "kiloServerPassword",
-        configuredKey: "kiloServerPasswordConfigured",
-        label: "Kilo server password",
-        placeholder: "Kilo server password",
-        description: "Optional password for an externally managed Kilo server.",
       },
     ],
   },

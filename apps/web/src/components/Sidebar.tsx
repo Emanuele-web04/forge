@@ -2795,11 +2795,9 @@ export default function Sidebar() {
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
           : provider === "cursor"
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-            : provider === "kilo"
-              ? `Imported Kilo session${suffix ? ` ${suffix}` : ""}`
-              : provider === "opencode"
-                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+            : provider === "opencode"
+              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -6944,14 +6942,14 @@ function SidebarSearchPaletteController(props: {
   // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const
+    ["codex", "claudeAgent", "cursor", "opencode"] as const
   ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));

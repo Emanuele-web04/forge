@@ -5,7 +5,6 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
-  KiloTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -96,26 +95,23 @@ function makeProviderTextGenerationTestLayer(
 ) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
-  const kilo = createTextGenerationDouble("kilo");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
-    Layer.provide(Layer.succeed(KiloTextGeneration, kilo.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );
 
-  return { layer, codex, cursor, kilo, opencode };
+  return { layer, codex, cursor, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
   it("blocks generation when the selected provider is disabled", async () => {
-    const { layer, codex, cursor, kilo, opencode } = makeProviderTextGenerationTestLayer({
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer({
       providers: {
         codex: { enabled: false },
         cursor: { enabled: false },
-        kilo: { enabled: false },
         opencode: { enabled: false },
       },
     });
@@ -137,7 +133,6 @@ describe("ProviderTextGenerationLive", () => {
     });
     expect(codex.generateDiffSummary).not.toHaveBeenCalled();
     expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
-    expect(kilo.generateDiffSummary).not.toHaveBeenCalled();
     expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
   });
 
@@ -205,28 +200,6 @@ describe("ProviderTextGenerationLive", () => {
     expect(opencode.generateDiffSummary).toHaveBeenCalledTimes(1);
     expect(codex.generateDiffSummary).not.toHaveBeenCalled();
     expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
-  });
-
-  it("routes explicit Kilo model selections through Kilo text generation", async () => {
-    const { layer, codex, kilo, opencode } = makeProviderTextGenerationTestLayer();
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
-        yield* textGeneration.generateDiffSummary({
-          cwd: "/repo",
-          patch: "diff --git a/file.ts b/file.ts",
-          modelSelection: {
-            provider: "kilo",
-            model: "kilo/kilo-auto/free",
-          },
-        });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    expect(kilo.generateDiffSummary).toHaveBeenCalledTimes(1);
-    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
-    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
   });
 
   it("routes explicit OpenCode model selections and preserves provider options", async () => {

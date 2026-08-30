@@ -1948,11 +1948,13 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "antigravity" ||
     providerName === "grok" ||
     providerName === "droid" ||
-    providerName === "kilo" ||
     providerName === "opencode" ||
     providerName === "pi"
   ) {
     return providerName;
+  }
+  if (providerName === "kilo") {
+    return "opencode";
   }
   return "codex";
 }

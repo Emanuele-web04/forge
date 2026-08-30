@@ -14,7 +14,6 @@ consistent workspace.
 | [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                  |
 | [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI             |
 | [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                |
-| [Kilo Code](https://www.trysynara.com/docs/providers/kilo-code)         | Your Kilo Code runtime and configured credentials            |
 | [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it             |
 | [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime               |
 

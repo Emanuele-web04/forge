@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaIssue, Struct } from "effect";
+import { Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
   AntigravityModelOptions,
   ClaudeModelOptions,
@@ -61,11 +61,37 @@ export const ProviderKind = Schema.Literals([
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
+
+/**
+ * Providers that no longer exist as `ProviderKind` members but may survive in
+ * persisted data. Renamed providers map to their successor; removed providers
+ * map to the runtime that hosted their sessions. Add an entry here whenever a
+ * provider is renamed or removed so persisted payloads keep decoding.
+ */
+export const LEGACY_PROVIDER_MIGRATIONS: Readonly<Record<string, ProviderKind>> = {
+  gemini: "antigravity",
+  kilo: "opencode",
+};
+
+/**
+ * Decodes a persisted provider value, mapping legacy provider names through
+ * `LEGACY_PROVIDER_MIGRATIONS`. Use for durable payloads (handoffs, snapshots)
+ * where a removed provider must not make the whole row undecodable.
+ */
+export const PersistedProviderKind = Schema.String.pipe(
+  Schema.decodeTo(
+    ProviderKind,
+    SchemaTransformation.transform({
+      // ProviderKind still validates the result, so unknown strings fail decode.
+      decode: (provider) => (LEGACY_PROVIDER_MIGRATIONS[provider] ?? provider) as ProviderKind,
+      encode: (provider: ProviderKind) => provider as string,
+    }),
+  ),
+);
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
   "on-failure",
@@ -131,13 +157,6 @@ export const OpenCodeModelSelection = Schema.Struct({
 });
 export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
-export const KiloModelSelection = Schema.Struct({
-  provider: Schema.Literal("kilo"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(OpenCodeModelOptions),
-});
-export type KiloModelSelection = typeof KiloModelSelection.Type;
-
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
   model: TrimmedNonEmptyString,
@@ -152,7 +171,6 @@ export const ModelSelection = Schema.Union([
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
-  KiloModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
 ]);
@@ -192,11 +210,6 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   experimentalWebSockets: Schema.optional(Schema.Boolean),
 });
 
-export const KiloProviderStartOptions = Schema.Struct({
-  binaryPath: Schema.optional(TrimmedNonEmptyString),
-  serverUrl: Schema.optional(TrimmedNonEmptyString),
-});
-
 export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
@@ -209,7 +222,6 @@ export const ProviderStartOptions = Schema.Struct({
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
-  kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
 });
@@ -517,7 +529,9 @@ export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
 export const ThreadHandoff = Schema.Struct({
   sourceThreadId: ThreadId,
-  sourceProvider: ProviderKind,
+  // Handoff metadata is durable: a removed source provider must not make the
+  // whole thread row (and with it the thread list) undecodable.
+  sourceProvider: PersistedProviderKind,
   importedAt: IsoDateTime,
   bootstrapStatus: ThreadHandoffBootstrapStatus,
 });

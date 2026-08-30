@@ -21,7 +21,6 @@ import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { CursorAdapter } from "../Services/CursorAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
-import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
@@ -42,7 +41,6 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* AntigravityAdapter,
             yield* GrokAdapter,
             yield* DroidAdapter,
-            yield* KiloAdapter,
             yield* OpenCodeAdapter,
             yield* PiAdapter,
           ];

@@ -3,7 +3,6 @@ import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara
 export const GIT_TEXT_GENERATION_PROVIDER_ORDER = [
   "codex",
   "cursor",
-  "kilo",
   "opencode",
 ] as const satisfies readonly ProviderKind[];
 

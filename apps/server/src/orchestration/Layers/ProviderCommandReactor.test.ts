@@ -940,7 +940,7 @@ describe("ProviderCommandReactor", () => {
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
       readonly eventId: string;
-      readonly provider: "opencode" | "kilo";
+      readonly provider: "opencode";
       readonly type: "completed" | "aborted";
       readonly threadId?: ThreadId;
       readonly turnId?: TurnId;
@@ -3988,7 +3988,7 @@ describe("ProviderCommandReactor", () => {
     expect(resent?.input).not.toContain("old prompt");
   });
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "keeps the %s edit recap pending until the replay turn completes",
     async (provider) => {
       const harness = await createHarness({
@@ -5993,7 +5993,6 @@ describe("ProviderCommandReactor", () => {
         providers: {
           codex: { enabled: false },
           cursor: { enabled: false },
-          kilo: { enabled: false },
           opencode: { enabled: false },
         },
       },
@@ -8616,7 +8615,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -8652,7 +8651,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "keeps a fresh %s session usable while stopped-recap cleanup retries",
     async (provider) => {
       const harness = await createHarness({
@@ -8703,7 +8702,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "completes an empty pending %s transcript recap after a bare turn",
     async (provider) => {
       const harness = await createHarness({
@@ -8733,7 +8732,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -8815,7 +8814,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "lets the %s sidechat bootstrap satisfy the durable transcript recap",
     async (provider) => {
       const threadId = ThreadId.makeUnsafe(`thread-${provider}-sidechat-bootstrap`);
@@ -8890,7 +8889,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "sends the post-idle %s turn bare after native resume succeeds",
     async (provider) => {
       const harness = await createHarness({
@@ -8974,7 +8973,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({
@@ -9031,7 +9030,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "injects one transcript recap for a cursor-less %s cold start",
     async (provider) => {
       const harness = await createHarness({
@@ -9150,7 +9149,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "retries a stale %s resume once with transcript context and one user turn",
     async (provider) => {
       const harness = await createHarness({
@@ -9335,7 +9334,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(false);
   });
 
-  it.each(["opencode", "kilo"] as const)(
+  it.each(["opencode"] as const)(
     "does not discard the %s resume cursor for a transient session update failure",
     async (provider) => {
       const harness = await createHarness({

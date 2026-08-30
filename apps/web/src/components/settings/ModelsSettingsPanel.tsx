@@ -46,7 +46,7 @@ type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
 
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "kilo", "opencode"] as const;
+const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "opencode"] as const;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -98,13 +98,8 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const {
-    customCodexModels,
-    customKiloModels,
-    customOpenCodeModels,
-    textGenerationModel,
-    textGenerationProvider,
-  } = settings;
+  const { customCodexModels, customOpenCodeModels, textGenerationModel, textGenerationProvider } =
+    settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -128,23 +123,19 @@ export function ModelsSettingsPanel({
       getGitTextGenerationModelOptions(
         {
           customCodexModels,
-          customKiloModels,
           customOpenCodeModels,
           textGenerationModel,
           textGenerationProvider,
         },
         {
           codex: gitWritingCatalogOptionsByProvider.codex,
-          kilo: gitWritingCatalogOptionsByProvider.kilo,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
         },
       ),
     [
       customCodexModels,
-      customKiloModels,
       customOpenCodeModels,
       gitWritingCatalogOptionsByProvider.codex,
-      gitWritingCatalogOptionsByProvider.kilo,
       gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,

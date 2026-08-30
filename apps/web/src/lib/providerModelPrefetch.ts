@@ -28,7 +28,6 @@ export type ProviderModelPrefetchSettings = Pick<
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
-  | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
@@ -46,7 +45,6 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "cursor",
   "antigravity",
   "grok",
-  "kilo",
   "opencode",
   "pi",
 ];
@@ -149,12 +147,6 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.droidBinaryPath || null,
         cwd,
       });
-    case "kilo":
-      return providerModelsQueryOptions({
-        provider: "kilo",
-        binaryPath: settings.kiloBinaryPath || null,
-        cwd,
-      });
     case "opencode":
       return providerModelsQueryOptions({
         provider: "opencode",
@@ -184,12 +176,6 @@ function providerAgentsPrefetchQueryOptions(input: {
       return providerAgentsQueryOptions({ provider: "claudeAgent" });
     case "codex":
       return providerAgentsQueryOptions({ provider: "codex" });
-    case "kilo":
-      return providerAgentsQueryOptions({
-        provider: "kilo",
-        binaryPath: settings.kiloBinaryPath || null,
-        cwd,
-      });
     case "opencode":
       return providerAgentsQueryOptions({
         provider: "opencode",

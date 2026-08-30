@@ -7,7 +7,6 @@ import { Schema } from "effect";
 
 export const FAVORITE_MODEL_STORAGE_KEYS = {
   cursor: "synara:cursor-favourite-models:v1",
-  kilo: "synara:kilo-favourite-models:v1",
   opencode: "synara:opencode-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
 } as const;
@@ -17,9 +16,7 @@ export type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 const FavoriteModelSlugsSchema = Schema.Array(Schema.String);
 
 export function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return (
-    provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
-  );
+  return provider === "cursor" || provider === "opencode" || provider === "pi";
 }
 
 // Read favorite slugs for cycle order. Failures (SSR, parse errors) return [].

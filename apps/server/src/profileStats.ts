@@ -31,7 +31,6 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
 ]);

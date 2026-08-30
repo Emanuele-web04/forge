@@ -32,7 +32,6 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   antigravity: new Set<ModelSlug>(),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
-  kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
 };
@@ -283,7 +282,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "variant";
   }
   if (provider === "pi") {
@@ -297,15 +296,13 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode"
-      ? (caps.variantOptions ?? [])
-      : caps.reasoningEffortLevels;
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
   if (primaryOptions.length > 0) {
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
       id: reasoningDescriptorId(provider),
-      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
+      label: provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,

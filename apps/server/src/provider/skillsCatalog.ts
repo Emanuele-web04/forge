@@ -356,7 +356,6 @@ const HOME_ORIGIN_ORDER = [
   "cursor",
   "grok",
   "factory",
-  "kilo",
   "opencode",
   "pi",
   "agents",
@@ -439,10 +438,6 @@ const SKILL_ORIGIN_ROOTS = {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".factory", "skills")],
     projectRootNames: [".factory"],
   },
-  kilo: {
-    homeRoots: (input) => [nodePath.join(input.homeDir, ".kilo", "skills")],
-    projectRootNames: [".kilo"],
-  },
   opencode: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".config", "opencode", "skills")],
     projectRootNames: [".opencode"],
@@ -464,7 +459,6 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   antigravity: ["agents"],
   grok: ["grok", "claude", "agents"],
   droid: ["factory", "agents", "claude", "codex"],
-  kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;

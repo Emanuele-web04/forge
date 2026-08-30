@@ -10,6 +10,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  ProviderKind,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -195,7 +196,7 @@ function normalizeSettings(
   );
 }
 
-const EXTERNAL_SERVER_PROVIDERS = ["kilo", "opencode"] as const;
+const EXTERNAL_SERVER_PROVIDERS = ["opencode"] as const;
 
 function readLegacyProviderPasswords(raw: string): ReadonlyMap<ExternalProviderServer, string> {
   try {
@@ -217,16 +218,34 @@ function readLegacyProviderPasswords(raw: string): ReadonlyMap<ExternalProviderS
 
 function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch {
   if (!patch.providers) return patch;
-  const { serverPassword: _kiloPassword, ...kilo } = patch.providers.kilo ?? {};
   const { serverPassword: _openCodePassword, ...opencode } = patch.providers.opencode ?? {};
   return {
     ...patch,
     providers: {
       ...patch.providers,
-      ...(patch.providers.kilo ? { kilo } : {}),
       ...(patch.providers.opencode ? { opencode } : {}),
     },
   };
+}
+
+// A removed provider's git text-generation selection has no valid model on any
+// current provider. Drop the field so the decoding default applies instead of
+// the whole settings file being quarantined as undecodable.
+function dropRemovedProviderTextGenerationSelection(settings: unknown): unknown {
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    return settings;
+  }
+  const record = settings as Record<string, unknown>;
+  const selection = record.textGenerationModelSelection;
+  if (selection === null || typeof selection !== "object" || Array.isArray(selection)) {
+    return settings;
+  }
+  const provider = (selection as Record<string, unknown>).provider;
+  if (typeof provider !== "string" || Schema.is(ProviderKind)(provider)) {
+    return settings;
+  }
+  const { textGenerationModelSelection: _removed, ...rest } = record;
+  return rest;
 }
 
 function decodeSettingsFromJson(settingsPath: string, raw: string) {
@@ -236,7 +255,9 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
       parsed !== null && typeof parsed === "object" && "settings" in parsed
         ? (parsed as { revision?: unknown; migrationVersion?: unknown; settings: unknown })
         : null;
-    const decoded = Schema.decodeUnknownExit(ServerSettings)(envelope?.settings ?? parsed);
+    const decoded = Schema.decodeUnknownExit(ServerSettings)(
+      dropRemovedProviderTextGenerationSelection(envelope?.settings ?? parsed),
+    );
     if (decoded._tag === "Failure") {
       return { _tag: "Failure" as const, error: Cause.pretty(decoded.cause) };
     }
@@ -280,7 +301,6 @@ const makeServerSettings = Effect.gen(function* () {
 
   const withCredentialState = (settings: ServerSettings) =>
     Effect.all({
-      kilo: providerCredentials.isServerPasswordConfigured("kilo"),
       opencode: providerCredentials.isServerPasswordConfigured("opencode"),
     }).pipe(
       Effect.map(
@@ -288,10 +308,6 @@ const makeServerSettings = Effect.gen(function* () {
           ...settings,
           providers: {
             ...settings.providers,
-            kilo: {
-              ...settings.providers.kilo,
-              serverPasswordConfigured: configured.kilo,
-            },
             opencode: {
               ...settings.providers.opencode,
               serverPasswordConfigured: configured.opencode,

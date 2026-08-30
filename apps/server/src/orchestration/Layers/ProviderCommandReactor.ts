@@ -545,7 +545,7 @@ function isStaleClaudeResumeError(error: unknown): boolean {
 function isOpenCodeCompatibleResumeError(error: unknown): boolean {
   if (
     !Schema.is(ProviderAdapterRequestError)(error) ||
-    (error.provider !== "opencode" && error.provider !== "kilo") ||
+    error.provider !== "opencode" ||
     error.method !== "session.update"
   ) {
     return false;
@@ -1812,7 +1812,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        (preferredProvider === "opencode" || preferredProvider === "kilo") &&
+        preferredProvider === "opencode" &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -1971,7 +1971,7 @@ const make = Effect.gen(function* () {
       thread.session?.providerName ??
       thread.modelSelection.provider;
     const registerPriorTranscriptBootstrapOnFreshStart =
-      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      selectedProvider === "opencode" &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
     const {
       activeSessionBeforeEnsure,
@@ -2043,9 +2043,7 @@ const make = Effect.gen(function* () {
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
       !hasPendingRollbackTranscriptBootstrap &&
-      (!hasPendingFreshSessionTranscriptBootstrap ||
-        selectedProvider === "opencode" ||
-        selectedProvider === "kilo");
+      (!hasPendingFreshSessionTranscriptBootstrap || selectedProvider === "opencode");
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
@@ -2071,7 +2069,7 @@ const make = Effect.gen(function* () {
       });
     }
     const shouldBootstrapPriorTranscriptContext =
-      (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      ((selectedProvider === "opencode" &&
         activeSessionBeforeEnsure === undefined &&
         !nativeResumeSucceeded) ||
         hasPendingPriorTranscriptBootstrap) &&
@@ -2312,7 +2310,7 @@ const make = Effect.gen(function* () {
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
       const tracksOpenCodeCompatibleContextAcceptance =
-        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        selectedProvider === "opencode" &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
@@ -2523,7 +2521,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        selectedProvider === "opencode" &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -4152,10 +4150,7 @@ const make = Effect.gen(function* () {
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
       : thread.modelSelection.provider;
-    if (
-      (stoppedProvider === "opencode" || stoppedProvider === "kilo") &&
-      providerService.completePriorTranscriptBootstrap
-    ) {
+    if (stoppedProvider === "opencode" && providerService.completePriorTranscriptBootstrap) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(

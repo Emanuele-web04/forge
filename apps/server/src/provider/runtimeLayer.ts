@@ -16,7 +16,7 @@ import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
-import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
+import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
@@ -49,7 +49,7 @@ export function makeServerProviderLayer(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
     // Gives gateway-capable sessions their thread-scoped synara_* credentials.
-    // OpenCode/Kilo isolate managed servers before installing MCP; Pi projects
+    // OpenCode isolates managed servers before installing MCP; Pi projects
     // the same MCP catalog/dispatcher through its native custom-tool API.
     const agentGatewayCredentialsLayer =
       options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
@@ -60,10 +60,6 @@ export function makeServerProviderLayer(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveServerPassword: resolveProviderServerPassword,
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const kiloAdapterLayer = makeKiloAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
     }).pipe(Layer.provide(agentGatewayCredentialsLayer));
@@ -92,7 +88,6 @@ export function makeServerProviderLayer(
       Layer.provide(antigravityAdapterLayer),
       Layer.provide(grokAdapterLayer),
       Layer.provide(droidAdapterLayer),
-      Layer.provide(kiloAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),

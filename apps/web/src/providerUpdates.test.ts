@@ -66,7 +66,6 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
-      kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },
       opencode: {
         ...provider,
         binaryPath: "opencode",
@@ -269,11 +268,11 @@ describe("withProviderUpdateTimeout", () => {
     const pending = new Promise<never>(() => undefined);
     const assertion = expect(
       withProviderUpdateTimeout({
-        provider: "kilo",
+        provider: "opencode",
         request: pending,
         timeoutMs: 1_000,
       }),
-    ).rejects.toThrow("Kilo update timed out after 1 second");
+    ).rejects.toThrow("OpenCode update timed out after 1 second");
 
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -394,12 +393,12 @@ describe("shouldPromptProviderUpdate", () => {
   });
 
   it("assumes a lookup source when an older server omits the flag", () => {
-    const legacy = providerStatus("kilo", {
+    const legacy = providerStatus("opencode", {
       versionAdvisory: {
         status: "unknown",
         currentVersion: "1.1.2",
         latestVersion: null,
-        updateCommand: "kilo update",
+        updateCommand: "opencode upgrade",
         canUpdate: true,
         checkedAt: "2026-07-15T14:00:00.000Z",
         message: null,

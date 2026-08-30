@@ -117,6 +117,44 @@ describe("ServerSettingsService", () => {
     );
   });
 
+  it("drops a removed provider's text-generation selection instead of quarantining settings", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(dirname(settingsPath), { recursive: true });
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            revision: 3,
+            migrationVersion: 2,
+            settings: {
+              enableProviderUpdateChecks: false,
+              textGenerationModelSelection: {
+                provider: "kilo",
+                model: "kilo/kilo-auto/free",
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        const settingsFileExists = yield* fs.exists(settingsPath);
+        return { settings, settingsFileExists };
+      }),
+    );
+
+    // The rest of the settings survive; only the undecodable selection resets.
+    expect(result.settingsFileExists).toBe(true);
+    expect(result.settings.enableProviderUpdateChecks).toBe(false);
+    expect(result.settings.textGenerationModelSelection).toMatchObject({
+      provider: "codex",
+      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    });
+  });
+
   it("keeps provider passwords server-only and returns configured flags to clients", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {
@@ -126,7 +164,6 @@ describe("ServerSettingsService", () => {
         yield* service.start;
         const view = yield* service.updateSettingsView({
           providers: {
-            kilo: { serverPassword: "kilo-secret" },
             opencode: { serverPassword: "opencode-secret" },
           },
         });
@@ -136,16 +173,11 @@ describe("ServerSettingsService", () => {
       }),
     );
 
-    expect(result.internal.providers.kilo.serverPasswordConfigured).toBe(true);
     expect(result.internal.providers.opencode.serverPasswordConfigured).toBe(true);
-    expect(result.view.providers.kilo).toMatchObject({ serverPasswordConfigured: true });
     expect(result.view.providers.opencode).toMatchObject({ serverPasswordConfigured: true });
-    expect(JSON.stringify(result.internal)).not.toContain("kilo-secret");
     expect(JSON.stringify(result.internal)).not.toContain("opencode-secret");
-    expect(JSON.stringify(result.view)).not.toContain("kilo-secret");
     expect(JSON.stringify(result.view)).not.toContain("opencode-secret");
     expect(JSON.stringify(result.view)).not.toContain('"serverPassword"');
-    expect(result.persisted).not.toContain("kilo-secret");
     expect(result.persisted).not.toContain("opencode-secret");
   });
 
@@ -172,10 +204,10 @@ describe("ServerSettingsService", () => {
           codex: { enabled: false },
           claudeAgent: { enabled: true },
           cursor: { enabled: false },
-          kilo: { enabled: true },
+          opencode: { enabled: true },
         },
       },
-      expectedProvider: "kilo" as const,
+      expectedProvider: "opencode" as const,
     },
     {
       name: "normalizes enabled but unsupported Git text generation selections",

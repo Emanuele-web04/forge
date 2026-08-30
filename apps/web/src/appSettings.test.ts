@@ -75,11 +75,11 @@ describe("server-backed provider enablement", () => {
     expect(
       applyLocalAppSettingsPatch(stored, {
         disabledProviders: ["codex", "opencode"],
-        hiddenProviders: ["kilo"],
+        hiddenProviders: ["grok"],
       }),
     ).toMatchObject({
       disabledProviders: [],
-      hiddenProviders: ["kilo"],
+      hiddenProviders: ["grok"],
     });
   });
 
@@ -279,7 +279,6 @@ describe("getGitTextGenerationModelOptions", () => {
   it("merges codex and OpenCode model options for git writing settings", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: ["custom/codex-model"],
-      customKiloModels: [],
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
       textGenerationModel: "openai/gpt-5",
       textGenerationProvider: "opencode",
@@ -290,30 +289,26 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
   });
 
-  it("prefers runtime-discovered OpenCode and Kilo models for git writing settings", () => {
+  it("prefers runtime-discovered OpenCode models for git writing settings", () => {
     const options = getGitTextGenerationModelOptions(
       {
         customCodexModels: [],
-        customKiloModels: [],
         customOpenCodeModels: [],
         textGenerationModel: "openrouter/custom-model",
         textGenerationProvider: "opencode",
       },
       {
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-        kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto Free" }],
       },
     );
 
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-    expect(options.some((option) => option.slug === "kilo/kilo-auto/free")).toBe(true);
     expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
   });
 
   it("preserves a currently selected transient git writing model", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
-      customKiloModels: [],
       customOpenCodeModels: [],
       textGenerationModel: "openrouter/custom-model",
       textGenerationProvider: "opencode",
@@ -330,7 +325,6 @@ describe("getGitTextGenerationModelOptions", () => {
   it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
-      customKiloModels: [],
       customOpenCodeModels: [],
       textGenerationModel: "opencode-go/kimi-k2.6",
       textGenerationProvider: "opencode",
@@ -393,7 +387,6 @@ describe("resolveAppModelSelection", () => {
           antigravity: [],
           grok: [],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         },
@@ -413,7 +406,6 @@ describe("resolveAppModelSelection", () => {
           antigravity: [],
           grok: [],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         },
@@ -433,7 +425,6 @@ describe("resolveAppModelSelection", () => {
           antigravity: [],
           grok: [],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         },
@@ -453,7 +444,6 @@ describe("resolveAppModelSelection", () => {
           antigravity: [],
           grok: [],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         },
@@ -473,7 +463,6 @@ describe("resolveAppModelSelection", () => {
           antigravity: [],
           grok: [],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         },
@@ -589,7 +578,6 @@ describe("normalizeStoredAppSettings", () => {
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         droidBinaryPath: "droid",
-        kiloBinaryPath: "kilo",
         openCodeBinaryPath: "opencode",
         piBinaryPath: "pi",
       }),
@@ -603,7 +591,6 @@ describe("normalizeStoredAppSettings", () => {
       antigravityBinaryPath: "",
       grokBinaryPath: "",
       droidBinaryPath: "",
-      kiloBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
     });
@@ -631,8 +618,6 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "/usr/local/bin/agy",
         grokBinaryPath: "/usr/local/bin/grok",
         droidBinaryPath: "",
-        kiloBinaryPath: "",
-        kiloServerUrl: "",
         openCodeBinaryPath: "",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
@@ -670,8 +655,6 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "",
         grokBinaryPath: "",
         droidBinaryPath: "",
-        kiloBinaryPath: "",
-        kiloServerUrl: "",
         openCodeBinaryPath: "",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
@@ -692,8 +675,6 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         droidBinaryPath: "droid",
-        kiloBinaryPath: "kilo",
-        kiloServerUrl: "",
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
@@ -712,7 +693,6 @@ describe("provider-indexed custom model settings", () => {
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
-    customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
@@ -725,7 +705,6 @@ describe("provider-indexed custom model settings", () => {
       "antigravity",
       "grok",
       "droid",
-      "kilo",
       "opencode",
       "pi",
     ]);
@@ -743,7 +722,6 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
-    expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
@@ -756,7 +734,6 @@ describe("provider-indexed custom model settings", () => {
       customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
-      customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
     } as const;
@@ -771,7 +748,6 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
-    expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
   });
@@ -818,12 +794,6 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
-  it("patches custom models for kilo", () => {
-    expect(patchCustomModels("kilo", ["kilo/kilo-auto/free"])).toEqual({
-      customKiloModels: ["kilo/kilo-auto/free"],
-    });
-  });
-
   it("patches custom models for pi", () => {
     expect(patchCustomModels("pi", ["anthropic/custom-pi"])).toEqual({
       customPiModels: ["anthropic/custom-pi"],
@@ -838,7 +808,6 @@ describe("provider-indexed custom model settings", () => {
       antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
-      kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
     });
@@ -865,9 +834,6 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
-      modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
-    ).toBe(true);
-    expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
@@ -887,7 +853,6 @@ describe("provider-indexed custom model settings", () => {
       ],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
-      customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
         "openrouter/gpt-oss-120b",
@@ -929,9 +894,6 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build"),
     ).toHaveLength(1);
     expect(
-      modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
-    ).toHaveLength(1);
-    expect(
       modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toHaveLength(1);
     expect(
@@ -968,6 +930,45 @@ describe("AppSettingsSchema", () => {
     });
     expect(normalizeStoredAppSettings(decoded)).not.toHaveProperty("geminiBinaryPath");
     expect(normalizeStoredAppSettings(decoded)).not.toHaveProperty("customGeminiModels");
+  });
+
+  it("migrates persisted Kilo provider settings without transferring them to OpenCode", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        textGenerationProvider: "kilo",
+        defaultProvider: "kilo",
+        hiddenProviders: ["kilo", "grok"],
+        providerOrder: ["codex", "kilo", "pi"],
+        hiddenModels: [{ provider: "kilo", slug: "kilo/kilo-auto/free" }],
+      }),
+    );
+
+    // Single-value settings fall back to the runtime that hosted Kilo sessions;
+    // list entries (hidden/disabled/order) are dropped so Kilo preferences do
+    // not transfer onto the separate OpenCode subscription.
+    expect(decoded).toMatchObject({
+      textGenerationProvider: "opencode",
+      defaultProvider: "opencode",
+      hiddenProviders: ["grok"],
+      providerOrder: ["codex", "pi"],
+      hiddenModels: [],
+    });
+  });
+
+  it("drops unknown provider names from persisted lists instead of failing decode", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        hiddenProviders: ["some-future-provider", "codex"],
+        providerOrder: ["gemini", "codex"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      hiddenProviders: ["codex"],
+      providerOrder: ["antigravity", "codex"],
+    });
   });
 
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {
@@ -1016,7 +1017,6 @@ describe("AppSettingsSchema", () => {
       customCursorModels: [],
       customGrokModels: [],
       customDroidModels: [],
-      customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],
     });

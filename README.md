@@ -72,7 +72,6 @@ Synara connects to coding-agent runtimes that are installed and authenticated lo
 | **Antigravity** | Antigravity CLI                             |
 | **Grok**        | Grok Build                                  |
 | **Droid**       | Factory Droid                               |
-| **Kilo**        | Kilo Code or a configured Kilo server       |
 | **OpenCode**    | OpenCode and its configured model providers |
 | **Pi**          | Pi and its configured model providers       |
 

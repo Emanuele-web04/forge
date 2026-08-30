@@ -132,7 +132,7 @@ function coerceRawTextToFallback(raw: string, fallback: RawTextFallback): string
   return candidate;
 }
 
-// Free-text providers (Cursor/OpenCode/Kilo ACP) are only *asked* to emit JSON, unlike Codex
+// Free-text providers (Cursor/OpenCode ACP) are only *asked* to emit JSON, unlike Codex
 // which enforces `--output-schema`. For single-field prompts (title/branch/summary) they often
 // reply with the bare value or surrounding prose, so coerce that raw text into the expected
 // single-string field instead of failing the whole generation.

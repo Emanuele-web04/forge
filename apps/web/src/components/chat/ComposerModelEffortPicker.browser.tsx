@@ -24,7 +24,6 @@ describe("ComposerModelEffortPicker", () => {
           antigravity: [],
           grok: [{ slug: GROK_4_6, name: "Grok 4.6" }],
           droid: [],
-          kilo: [],
           opencode: [],
           pi: [],
         }}

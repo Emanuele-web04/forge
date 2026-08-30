@@ -3483,7 +3483,6 @@ layer("AutomationService", (it) => {
         providers: {
           codex: { enabled: false },
           cursor: { enabled: false },
-          kilo: { enabled: false },
           opencode: { enabled: false },
         },
       });

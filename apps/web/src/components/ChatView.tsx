@@ -962,8 +962,6 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":
       return normalizeCustomBinaryPath(providerOptions?.droid?.binaryPath);
-    case "kilo":
-      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
@@ -2357,7 +2355,6 @@ export default function ChatView({
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
-      kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
     };
@@ -2480,7 +2477,6 @@ export default function ChatView({
     selectedProvider === "cursor" ||
     selectedProvider === "antigravity" ||
     selectedProvider === "droid" ||
-    selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
@@ -3729,15 +3725,11 @@ export default function ChatView({
       binaryPath:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.binaryPath
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.binaryPath
-            : null) ?? null,
+          : null) ?? null,
       serverUrl:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverUrl
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.serverUrl
-            : null) ?? null,
+          : null) ?? null,
       experimentalWebSockets:
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets

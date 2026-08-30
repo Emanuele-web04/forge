@@ -6,10 +6,7 @@ import { GitManagerLive } from "./Layers/GitManager";
 import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
 import { CursorTextGenerationServiceLive } from "./Layers/CursorTextGeneration";
-import {
-  makeKiloTextGenerationServiceLive,
-  makeOpenCodeTextGenerationServiceLive,
-} from "./Layers/OpenCodeTextGeneration";
+import { makeOpenCodeTextGenerationServiceLive } from "./Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
 import { ServerSettingsLive } from "../serverSettings";
@@ -22,13 +19,8 @@ import {
 const textGenerationProviderLayers = Effect.gen(function* () {
   const credentials = yield* ProviderCredentials;
   const resolveProviderServerPassword = makeProviderServerPasswordResolver(credentials);
-  return Layer.mergeAll(
-    makeKiloTextGenerationServiceLive(resolveProviderServerPassword).pipe(
-      Layer.provide(OpenCodeRuntimeLive),
-    ),
-    makeOpenCodeTextGenerationServiceLive(resolveProviderServerPassword).pipe(
-      Layer.provide(OpenCodeRuntimeLive),
-    ),
+  return makeOpenCodeTextGenerationServiceLive(resolveProviderServerPassword).pipe(
+    Layer.provide(OpenCodeRuntimeLive),
   );
 }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 

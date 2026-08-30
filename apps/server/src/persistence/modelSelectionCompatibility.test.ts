@@ -14,6 +14,31 @@ it("preserves canonical Pi model selections", () => {
   });
 });
 
+it("migrates legacy Kilo provider values and labels to OpenCode", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { kilo: { variant: "high" } },
+    }),
+    {
+      provider: "opencode",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "high" },
+    },
+  );
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Kilo Code local runtime",
+      model: "custom/provider-model",
+    }),
+    {
+      provider: "opencode",
+      model: "custom/provider-model",
+    },
+  );
+});
+
 it("migrates combined Antigravity model and effort labels", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

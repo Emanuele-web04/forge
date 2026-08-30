@@ -12,7 +12,6 @@ type ModelProviderKind =
   | "antigravity"
   | "grok"
   | "droid"
-  | "kilo"
   | "opencode"
   | "pi";
 
@@ -55,7 +54,7 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
     return "opencode";
   }
   if (lowerLabel.includes("kilo")) {
-    return "kilo";
+    return "opencode";
   }
   if (lowerLabel.includes("cursor")) {
     return "cursor";
@@ -89,7 +88,6 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "antigravity" ||
     provider === "grok" ||
     provider === "droid" ||
-    provider === "kilo" ||
     provider === "opencode" ||
     provider === "pi"
   ) {
@@ -97,6 +95,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   }
   if (provider === "gemini") {
     return "antigravity";
+  }
+  if (provider === "kilo") {
+    return "opencode";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -122,11 +123,18 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   return "codex";
 }
 
-function readLegacyProviderOptions(options: unknown, provider: ModelProviderKind): unknown {
+function readLegacyProviderOptions(
+  options: unknown,
+  provider: ModelProviderKind,
+  legacyProvider?: string,
+): unknown {
   if (!isRecord(options)) {
     return options;
   }
-  const providerScopedOptions = options[provider];
+  // Selections migrated from a renamed provider (e.g. kilo → opencode) keep
+  // their options scoped under the original provider key.
+  const providerScopedOptions =
+    options[provider] ?? (legacyProvider === undefined ? undefined : options[legacyProvider]);
   return providerScopedOptions === undefined ? options : providerScopedOptions;
 }
 
@@ -181,7 +189,13 @@ export function normalizeLegacyModelSelection(input: {
   const migratedGeminiSelection = input.provider === "gemini";
   const normalizedOptions = migratedGeminiSelection
     ? undefined
-    : normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+    : normalizeModelOptions(
+        readLegacyProviderOptions(
+          input.options,
+          provider,
+          typeof input.provider === "string" ? input.provider : undefined,
+        ),
+      );
   const antigravityModel =
     provider === "antigravity"
       ? splitLegacyAntigravityModelLabel(

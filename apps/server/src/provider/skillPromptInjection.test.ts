@@ -50,7 +50,7 @@ describe("shouldInlineSkillForProvider", () => {
   });
 
   it("always inlines for providers without native skill support", () => {
-    for (const provider of ["antigravity", "grok", "kilo", "opencode"] as const) {
+    for (const provider of ["antigravity", "grok", "opencode"] as const) {
       expect(shouldInlineSkillForProvider(provider, synaraSkillPath)).toBe(true);
       expect(shouldInlineSkillForProvider(provider, claudeSkillPath)).toBe(true);
     }

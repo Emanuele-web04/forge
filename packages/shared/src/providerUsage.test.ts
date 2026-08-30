@@ -31,7 +31,6 @@ describe("provider usage metadata", () => {
       "antigravity",
       "grok",
       "droid",
-      "kilo",
       "opencode",
       "pi",
     ]);

@@ -299,12 +299,3 @@ export const DroidIcon: Icon = (props) => (
     />
   </svg>
 );
-
-export const KiloIcon: Icon = (props) => (
-  <svg {...props} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      fill="currentColor"
-      d="M0 0v100h100V0H0Zm92.59 92.59H7.41V7.41h85.19v85.19ZM61.11 71.91h9.26v7.41H58.73l-5.03-5.03V62.65h7.41v9.26ZM77.78 71.91h-7.41v-9.26h-9.26v-7.41H72.75l5.03 5.03v11.64ZM46.3 61.11h-7.41v-7.41h7.41v7.41ZM22.22 53.7h7.41V70.37h16.67v7.41h-19.05l-5.03-5.03V53.7ZM77.78 38.89v7.41H53.7v-7.41h8.28v-9.26H53.7v-7.41h10.66l5.03 5.03v11.64h8.39ZM29.63 30.56h9.26l7.41 7.41v8.33h-7.41V37.96h-9.26v8.33h-7.41V22.22h7.41v8.33ZM46.3 30.56h-7.41v-8.33h7.41v8.33Z"
-    />
-  </svg>
-);

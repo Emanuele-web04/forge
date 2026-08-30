@@ -64,13 +64,11 @@ const SETTINGS = {
   customCursorModels: ["cursor-custom"],
   customDroidModels: [],
   customGrokModels: [],
-  customKiloModels: [],
   customOpenCodeModels: [],
   customPiModels: [],
   droidBinaryPath: "",
   grokBinaryPath: "",
   hiddenProviders: [],
-  kiloBinaryPath: "",
   openCodeBinaryPath: "",
   piAgentDir: "",
   piBinaryPath: "",
@@ -234,11 +232,10 @@ describe("useProviderModelCatalog", () => {
     readCatalogRenders({
       selectedProvider: "codex",
       discoveryEnabled: true,
-      prefetchProviders: ["codex", "kilo", "opencode"],
+      prefetchProviders: ["codex", "opencode"],
     });
 
     expect(readModelQueryEnabled("codex")).toBe(true);
-    expect(readModelQueryEnabled("kilo")).toBe(true);
     expect(readModelQueryEnabled("opencode")).toBe(true);
     expect(readModelQueryEnabled("cursor")).toBe(false);
     expect(readModelQueryEnabled("antigravity")).toBe(false);
