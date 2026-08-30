@@ -8579,6 +8579,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         session_id: "sdk-session-compact",
         uuid: "result-compact",
         usage: {
+          total_tokens: 350_000,
           input_tokens: 2,
           cache_read_input_tokens: 339_998,
           output_tokens: 0,
@@ -8632,7 +8633,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (accountingUsage?.type === "thread.token-usage.updated") {
         assert.deepEqual(accountingUsage.payload.usage, {
           usedTokens: 0,
-          totalProcessedTokens: 340_000,
+          totalProcessedTokens: 350_000,
         });
       }
       const freshUsage = events[3];
@@ -8640,8 +8641,159 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (freshUsage?.type === "thread.token-usage.updated") {
         assert.equal(freshUsage.turnId, nextTurn.turnId);
         assert.equal(freshUsage.payload.usage.usedTokens, 20_000);
-        assert.equal(freshUsage.payload.usage.totalProcessedTokens, 360_000);
+        assert.equal(freshUsage.payload.usage.totalProcessedTokens, 370_000);
       }
+      const resumeCursor = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === session.threadId,
+      )?.resumeCursor as Record<string, unknown> | undefined;
+      assert.equal(resumeCursor?.processedTokenTotal, 370_000);
+      assert.equal(resumeCursor?.processedTokenBaselineKnown, true);
+      assert.equal(resumeCursor?.cumulativeTokenAccountingActive, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("resumes cumulative token accounting from the durable cursor", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const usageFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "thread.token-usage.updated",
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        resumeCursor: {
+          threadId: THREAD_ID,
+          processedTokenTotal: 350_000,
+          processedTokenBaselineKnown: true,
+          cumulativeTokenAccountingActive: true,
+        },
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-resumed-accounting",
+        uuid: "assistant-resumed-accounting",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-resumed-accounting",
+          content: [{ type: "text", text: "Fresh response" }],
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 19_999,
+            output_tokens: 0,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-resumed-accounting",
+        uuid: "result-resumed-accounting",
+        usage: { total_tokens: 50_000 },
+      } as unknown as SDKMessage);
+
+      const usageEvents = Array.from(yield* Fiber.join(usageFiber));
+      assert.equal(usageEvents[0]?.type, "thread.token-usage.updated");
+      if (usageEvents[0]?.type === "thread.token-usage.updated") {
+        assert.deepEqual(usageEvents[0].payload.usage, {
+          usedTokens: 20_000,
+          lastUsedTokens: 20_000,
+          totalProcessedTokens: 370_000,
+          maxTokens: 200_000,
+          inputTokens: 20_000,
+        });
+      }
+      assert.equal(usageEvents[1]?.type, "thread.token-usage.updated");
+      if (usageEvents[1]?.type === "thread.token-usage.updated") {
+        assert.equal(usageEvents[1].payload.usage.totalProcessedTokens, 400_000);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not promote partial accounting from a legacy resume cursor", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: Array<ProviderRuntimeEvent> = [];
+      const turnCompleted = yield* Deferred.make<void>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            if (event.type === "turn.completed") {
+              yield* Deferred.succeed(turnCompleted, undefined);
+              return;
+            }
+            if (
+              event.type === "thread.token-usage.updated" ||
+              (event.type === "thread.state.changed" && event.payload.state === "compacted")
+            ) {
+              events.push(event);
+            }
+          }),
+        ),
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: THREAD_ID, turnCount: 1 },
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "/compact",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: 150_000 },
+        session_id: "sdk-session-legacy-compact",
+        uuid: "legacy-compact-boundary",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-legacy-compact",
+        uuid: "legacy-compaction-call",
+        parent_tool_use_id: null,
+        message: {
+          id: "legacy-compaction-call",
+          content: [{ type: "text", text: "Compacted" }],
+          usage: { total_tokens: 190_000 },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-legacy-compact",
+        uuid: "legacy-result-compact",
+        usage: { total_tokens: 190_000 },
+      } as unknown as SDKMessage);
+
+      yield* Deferred.await(turnCompleted);
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["thread.state.changed"],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
