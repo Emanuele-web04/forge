@@ -2241,6 +2241,13 @@ export function makeGrokAdapter(
           if (Cause.hasInterruptsOnly(compactResult.cause)) {
             return yield* Effect.failCause(compactResult.cause);
           }
+          // Closing a load-resumed runtime releases the central replay gate.
+          // That release reaches the prompt as a request error rather than an
+          // interrupt, but teardown must retain the same interruption-only UI
+          // semantics and avoid publishing a stale compaction failure.
+          if (ctx.stopped) {
+            return yield* Effect.interrupt;
+          }
           const squashed = Cause.squash(compactResult.cause);
           const detail = squashed instanceof Error ? squashed.message : String(squashed);
           yield* emitGrokContextCompactionRuntimeEvent(ctx, {
