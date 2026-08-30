@@ -570,9 +570,17 @@ export const makePullRequestService = (
       finalizeMutationCaches: pullRequestMutationCacheFinalizer,
     });
 
+    const searchWorkItems: PullRequestServiceShape["searchWorkItems"] = (input) =>
+      dependencies.github.searchWorkItems({
+        ...input,
+        query: input.query ?? "",
+        limit: input.limit ?? 20,
+      });
+
     return {
       list,
       reviewRequestCount,
+      searchWorkItems,
       ...operations,
     } satisfies PullRequestServiceShape;
   });

@@ -1460,6 +1460,35 @@ const makeWsRpcHandlersLayer = () =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
+        [WS_METHODS.workItemsSearch]: (input) =>
+          Effect.gen(function* () {
+            const resolved = yield* resolveGitHubRepository(git, input.cwd);
+            if (!resolved.repository) {
+              return {
+                available: false,
+                errorHint: "No GitHub repository configured for this project.",
+                items: [],
+              };
+            }
+            return yield* pullRequests.searchWorkItems({
+              ...input,
+              repository: resolved.repository.nameWithOwner,
+            });
+          }).pipe(
+            Effect.catch((error) => {
+              const errorHint =
+                error instanceof GitHubCliError
+                  ? error.detail
+                  : error instanceof Error
+                    ? error.message
+                    : "Could not search GitHub work items.";
+              return Effect.succeed({
+                available: false,
+                errorHint,
+                items: [],
+              });
+            }),
+          ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>

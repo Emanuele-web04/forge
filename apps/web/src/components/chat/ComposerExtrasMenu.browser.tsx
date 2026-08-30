@@ -18,6 +18,7 @@ async function mountMenu(props?: {
   supportsFastMode?: boolean;
 }) {
   const onAddAttachments = vi.fn();
+  const onAttachWorkItem = vi.fn();
   const onToggleFastMode = vi.fn();
   const onInteractionModeChange = vi.fn();
   const host = document.createElement("div");
@@ -28,6 +29,7 @@ async function mountMenu(props?: {
       supportsFastMode={props?.supportsFastMode ?? true}
       fastModeEnabled={props?.fastModeEnabled ?? false}
       onAddAttachments={onAddAttachments}
+      onAttachWorkItem={onAttachWorkItem}
       onToggleFastMode={onToggleFastMode}
       onInteractionModeChange={onInteractionModeChange}
     />,

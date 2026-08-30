@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  WorkItemAttachment,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -13,6 +14,7 @@ import {
   type PullRequestMergeCapabilities,
   type PullRequestStack,
   type PullRequestStackSummary,
+  type WorkItemSearchResult,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -1457,6 +1459,153 @@ const makeGitHubCli = Effect.sync(() => {
       );
     });
 
+  const WORK_ITEM_JSON_FIELDS = "number,title,url,state,body,updatedAt,createdAt";
+
+  function normalizeWorkItemState(
+    state: string,
+    kind: "issue" | "pull-request",
+  ): "open" | "closed" | "merged" {
+    const upper = state.toUpperCase();
+    if (upper === "MERGED" || (kind === "pull-request" && upper === "MERGED")) return "merged";
+    if (upper === "CLOSED") return "closed";
+    return "open";
+  }
+
+  function excerptWorkItemBody(body: string | null | undefined): string {
+    const text = (body ?? "").trim();
+    if (text.length <= 500) return text;
+    return `${text.slice(0, 497)}...`;
+  }
+
+  function parseWorkItem(raw: unknown, kind: "issue" | "pull-request"): WorkItemAttachment | null {
+    if (!raw || typeof raw !== "object") return null;
+    const item = raw as Record<string, unknown>;
+    const number = typeof item.number === "number" ? item.number : Number(item.number);
+    if (!Number.isFinite(number) || number <= 0) return null;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    if (title.length === 0) return null;
+    const url = typeof item.url === "string" ? item.url.trim() : "";
+    if (url.length === 0) return null;
+    const state = normalizeWorkItemState(
+      typeof item.state === "string" ? item.state : "OPEN",
+      kind,
+    );
+    const createdAt =
+      typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString();
+    const updatedAt =
+      typeof item.updatedAt === "string" ? item.updatedAt : new Date().toISOString();
+    const attachment: WorkItemAttachment = {
+      kind,
+      number,
+      title,
+      state,
+      url,
+      bodyExcerpt: excerptWorkItemBody(typeof item.body === "string" ? item.body : ""),
+      createdAt,
+      updatedAt,
+    };
+    try {
+      return Schema.decodeUnknownSync(WorkItemAttachment)(attachment);
+    } catch {
+      return null;
+    }
+  }
+
+  function parseWorkItemList(raw: string, kind: "issue" | "pull-request"): WorkItemAttachment[] {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.flatMap((entry: unknown) => {
+        const item = parseWorkItem(entry, kind);
+        return item ? [item] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  function buildWorkItemSearchArgs(
+    kind: "issue" | "pull-request",
+    input: { repository: string; query?: string; limit?: number },
+  ): string[] {
+    const query = input.query ?? "";
+    const limit = input.limit ?? 20;
+    if (query.length === 0) {
+      return [
+        kind === "issue" ? "issue" : "pr",
+        "list",
+        "--repo",
+        input.repository,
+        "--state",
+        "open",
+        "--limit",
+        String(limit),
+        "--json",
+        WORK_ITEM_JSON_FIELDS,
+      ];
+    }
+    return [
+      "search",
+      kind === "issue" ? "issues" : "prs",
+      query,
+      "--repo",
+      input.repository,
+      "--limit",
+      String(limit),
+      "--json",
+      WORK_ITEM_JSON_FIELDS,
+    ];
+  }
+
+  function runWorkItemSearch(
+    kind: "issue" | "pull-request",
+    input: { cwd: string; repository: string; query?: string; limit?: number },
+  ): Effect.Effect<WorkItemAttachment[], GitHubCliError> {
+    const query = input.query ?? "";
+    const limit = input.limit ?? 20;
+    return execute({
+      cwd: input.cwd,
+      args: buildWorkItemSearchArgs(kind, input),
+    }).pipe(
+      Effect.map((result) => parseWorkItemList(result.stdout, kind)),
+      Effect.catch((error) => {
+        if (
+          error instanceof GitHubCliError &&
+          (error.reason === "not-installed" || error.reason === "not-authenticated")
+        ) {
+          return Effect.fail(error);
+        }
+        return Effect.succeed([]);
+      }),
+    );
+  }
+
+  const searchWorkItems: GitHubCliShape["searchWorkItems"] = (input) =>
+    Effect.gen(function* () {
+      const [issues, prs] = yield* Effect.all(
+        [runWorkItemSearch("issue", input), runWorkItemSearch("pull-request", input)],
+        { concurrency: 2 },
+      );
+      const combined = [...issues, ...prs].toSorted(
+        (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+      );
+      return {
+        available: true,
+        errorHint: null,
+        items: combined.slice(0, input.limit ?? 20),
+      };
+    }).pipe(
+      Effect.catch((error) => {
+        const hint =
+          error instanceof GitHubCliError ? error.detail : "GitHub CLI is not available.";
+        return Effect.succeed({
+          available: false,
+          errorHint: hint,
+          items: [],
+        });
+      }),
+    );
+
   const service = {
     execute,
     getViewerLogin: (input) =>
@@ -1952,6 +2101,7 @@ const makeGitHubCli = Effect.sync(() => {
 
         return { comments, truncated };
       }),
+    searchWorkItems,
     getRepositoryCloneUrls: (input) =>
       validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
         Effect.flatMap((repository) =>

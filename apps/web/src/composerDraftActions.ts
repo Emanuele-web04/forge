@@ -50,6 +50,7 @@ import {
   normalizePastedTexts,
   normalizeTerminalContextForThread,
   normalizeTerminalContextsForThread,
+  normalizeWorkItems,
   projectDraftThreadMappingKey,
   projectIdFromDraftThreadMappingKey,
   removeProjectDraftMappingsForThread,
@@ -66,6 +67,7 @@ import {
   stripNonStickyModelOptions,
 } from "./composerDraftModels";
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
+import { WORK_ITEM_ATTACHMENT_LIMIT, workItemKey } from "./lib/composerWorkItems";
 import {
   BROWSER_ANNOTATION_MAX_COUNT,
   nextBrowserAnnotationOrdinal,
@@ -1688,6 +1690,79 @@ export const createComposerDraftStoreState =
         const nextDraft: ComposerThreadDraftState = {
           ...current,
           pastedTexts: [],
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    addWorkItem: (threadId, item) => {
+      if (threadId.length === 0) {
+        return false;
+      }
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (existing.workItems.length >= WORK_ITEM_ATTACHMENT_LIMIT) {
+          return state;
+        }
+        if (existing.workItems.some((workItem) => workItemKey(workItem) === workItemKey(item))) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...existing,
+          workItems: normalizeWorkItems([...existing.workItems, item], WORK_ITEM_ATTACHMENT_LIMIT),
+        };
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: nextDraft,
+          },
+        };
+      });
+      return true;
+    },
+    removeWorkItem: (threadId, itemKey) => {
+      if (threadId.length === 0 || itemKey.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current) {
+          return state;
+        }
+        const nextWorkItems = current.workItems.filter((item) => workItemKey(item) !== itemKey);
+        if (nextWorkItems.length === current.workItems.length) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          workItems: nextWorkItems,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    clearWorkItems: (threadId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current || current.workItems.length === 0) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          workItems: [],
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {

@@ -28,6 +28,7 @@ import {
   createPastedTextDraft,
   normalizePastedTextContent,
 } from "./lib/composerPastedText";
+import { type WorkItemDraft, normalizeWorkItemDraft } from "./lib/composerWorkItems";
 import {
   type FileCommentDraft,
   type FileCommentSelection,
@@ -105,6 +106,7 @@ export interface ComposerPromptHistorySavedDraft {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
 }
@@ -124,6 +126,7 @@ export interface QueuedComposerChatTurn {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -176,6 +179,7 @@ export interface ComposerThreadDraftState {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -355,6 +359,9 @@ export interface ComposerDraftStoreState {
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
+  addWorkItem: (threadId: ThreadId, item: WorkItemDraft) => boolean;
+  removeWorkItem: (threadId: ThreadId, itemKey: string) => void;
+  clearWorkItems: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -526,6 +533,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    workItems: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -657,6 +665,27 @@ export function normalizePastedTexts(
   return normalizedPastedTexts;
 }
 
+export function normalizeWorkItems(
+  items: ReadonlyArray<WorkItemDraft>,
+  limit = 5,
+): WorkItemDraft[] {
+  const normalizedItems: WorkItemDraft[] = [];
+  const existingKeys = new Set<string>();
+  for (const item of items) {
+    const normalized = normalizeWorkItemDraft(item);
+    const key = `${normalized.kind}:${normalized.number}`;
+    if (existingKeys.has(key)) {
+      continue;
+    }
+    if (normalizedItems.length >= limit) {
+      break;
+    }
+    normalizedItems.push(normalized);
+    existingKeys.add(key);
+  }
+  return normalizedItems;
+}
+
 type PersistedPastedTextDraft = Pick<PastedTextDraft, "id" | "createdAt" | "text">;
 
 export function hydratePastedTextsFromPersisted(
@@ -666,6 +695,20 @@ export function hydratePastedTextsFromPersisted(
     return [];
   }
   return normalizePastedTexts(persisted.map((entry) => createPastedTextDraft(entry)));
+}
+
+type PersistedWorkItemDraft = Pick<
+  WorkItemDraft,
+  "id" | "kind" | "number" | "title" | "state" | "url" | "bodyExcerpt" | "createdAt" | "updatedAt"
+>;
+
+export function hydrateWorkItemsFromPersisted(
+  persisted: ReadonlyArray<PersistedWorkItemDraft> | undefined,
+): WorkItemDraft[] {
+  if (!persisted || persisted.length === 0) {
+    return [];
+  }
+  return normalizeWorkItems(persisted.map((entry) => ({ ...entry })));
 }
 
 export function normalizeTerminalContextForThread(
@@ -733,6 +776,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
+    workItems: normalizeWorkItems(draft.workItems),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
   };
@@ -764,6 +808,7 @@ export function buildTransferredComposerDraft(input: {
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
+    workItems: normalizeWorkItems(sourceDraft.workItems),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
     restoredSourceProposedPlan: null,
@@ -807,6 +852,7 @@ function clonePromptHistorySavedDraft(
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+    workItems: normalizeWorkItems(savedDraft.workItems),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
   };
@@ -824,6 +870,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
     draft.pastedTexts.length === 0 &&
+    draft.workItems.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
@@ -877,6 +924,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
+  workItems: [],
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,

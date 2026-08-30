@@ -11,6 +11,8 @@ import type {
   PullRequestSetPinnedResult,
   PullRequestsListInput,
   PullRequestsListResult,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -31,6 +33,12 @@ export interface PullRequestServiceShape {
   readonly setPinned: (
     input: PullRequestSetPinnedInput,
   ) => Effect.Effect<PullRequestSetPinnedResult, unknown>;
+  /**
+   * Search the project's GitHub repository for open issues and pull requests.
+   */
+  readonly searchWorkItems: (
+    input: WorkItemSearchInput & { repository: string },
+  ) => Effect.Effect<WorkItemSearchResult, unknown>;
 }
 
 export class PullRequestService extends ServiceMap.Service<

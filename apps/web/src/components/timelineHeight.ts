@@ -308,6 +308,7 @@ export function estimateTimelineMessageHeight(
     const fileCommentCount = displayedUserMessage.fileComments.length;
     const pastedTextCount = displayedUserMessage.pastedTexts.length;
     const browserAnnotationCount = displayedUserMessage.browserAnnotations.length;
+    const workItemCount = displayedUserMessage.workItems.length;
     const imageAttachmentHeight =
       imageAttachmentCount > 0
         ? Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
@@ -327,13 +328,15 @@ export function estimateTimelineMessageHeight(
     // popover trigger for any overflow. The hidden list is portalled and does
     // not change the virtualized transcript row's measured height.
     const browserAnnotationHeight = browserAnnotationCount > 0 ? 40 : 0;
+    const workItemHeight = workItemCount > 0 ? 40 : 0;
     const attachmentHeight =
       imageAttachmentHeight +
         assistantSelectionHeight +
         fileAttachmentHeight +
         fileCommentHeight +
         pastedTextHeight +
-        browserAnnotationHeight >
+        browserAnnotationHeight +
+        workItemHeight >
       0
         ? imageAttachmentHeight +
           assistantSelectionHeight +
@@ -341,6 +344,7 @@ export function estimateTimelineMessageHeight(
           fileCommentHeight +
           pastedTextHeight +
           browserAnnotationHeight +
+          workItemHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     const dispatchChipHeight =
@@ -353,6 +357,7 @@ export function estimateTimelineMessageHeight(
             browserAnnotationCount,
             fileCommentCount,
             pastedTextCount,
+            workItemCount,
           })
             ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
             : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)

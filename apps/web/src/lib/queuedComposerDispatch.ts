@@ -27,6 +27,7 @@ import { formatOutgoingComposerPrompt, stageUploadComposerAttachments } from "./
 import { appendFileCommentsToPrompt } from "./fileComments";
 import {
   appendTerminalContextsToPrompt,
+  appendWorkItemsToPrompt,
   filterTerminalContextsWithText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";
@@ -117,15 +118,18 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   const sendableTerminalContexts = filterTerminalContextsWithText(queuedTurn.terminalContexts);
   const sendablePastedTexts = filterPastedTextsWithText(queuedTurn.pastedTexts);
   const messageText = appendBrowserAnnotationsToPrompt(
-    appendPastedTextsToPrompt(
-      appendFileCommentsToPrompt(
-        appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
-          sendableTerminalContexts,
+    appendWorkItemsToPrompt(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
+            sendableTerminalContexts,
+          ),
+          queuedTurn.fileComments,
         ),
-        queuedTurn.fileComments,
+        sendablePastedTexts,
       ),
-      sendablePastedTexts,
+      queuedTurn.workItems,
     ),
     queuedTurn.browserAnnotations,
     messageId,

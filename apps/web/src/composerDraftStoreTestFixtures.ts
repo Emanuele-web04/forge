@@ -139,6 +139,7 @@ export function makeQueuedChatTurn(
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
     pastedTexts: [],
+    workItems: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",

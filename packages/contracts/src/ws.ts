@@ -150,6 +150,7 @@ import {
   PullRequestSetPinnedInput,
   PullRequestsListInput,
 } from "./pullRequests";
+import { WorkItemSearchInput } from "./workItems";
 import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpRefreshPairingInput,
@@ -224,6 +225,9 @@ export const WS_METHODS = {
   pullRequestsAction: "pullRequests.action",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsSetPinned: "pullRequests.setPinned",
+
+  // Work item methods
+  workItemsSearch: "workItems.search",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -434,6 +438,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
   tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
   tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
+
+  // Work items
+  tagRequestBody(WS_METHODS.workItemsSearch, WorkItemSearchInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

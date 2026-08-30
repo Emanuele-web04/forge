@@ -6,7 +6,14 @@
 import { type ProviderInteractionMode } from "@synara/contracts";
 import { useId, useRef, type ChangeEvent } from "react";
 
-import { BugIcon, ListTodoIcon, MessageCircleIcon, PaperclipIcon, PlusIcon } from "~/lib/icons";
+import {
+  BugIcon,
+  GitPullRequestIcon,
+  ListTodoIcon,
+  MessageCircleIcon,
+  PaperclipIcon,
+  PlusIcon,
+} from "~/lib/icons";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
 import {
@@ -25,6 +32,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   supportsFastMode: boolean;
   fastModeEnabled: boolean;
   onAddAttachments: (files: File[]) => void;
+  onAttachWorkItem: () => void;
   onToggleFastMode: () => void;
   onInteractionModeChange: (mode: ProviderInteractionMode) => void;
 }) {
@@ -72,6 +80,10 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
           >
             <PaperclipIcon className="size-4 shrink-0" />
             Add files
+          </MenuItem>
+          <MenuItem onClick={props.onAttachWorkItem}>
+            <GitPullRequestIcon className="size-4 shrink-0" />
+            Attach issue or PR
           </MenuItem>
 
           <MenuSeparator />

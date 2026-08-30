@@ -9,6 +9,7 @@ import {
 } from "../../composerDraftStore";
 import { type BrowserAnnotationDraft } from "../../lib/browserAnnotations";
 import { type PastedTextDraft } from "../../lib/composerPastedText";
+import { workItemKey, type WorkItemDraft } from "../../lib/composerWorkItems";
 import { type FileCommentDraft } from "../../lib/fileComments";
 import { type ChatAssistantSelectionAttachment } from "../../types";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -18,12 +19,14 @@ import { FileAttachmentChip } from "./FileAttachmentChip";
 import { ComposerPastedTextCard } from "./PastedTextChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
+import { WorkItemAttachmentChip } from "./WorkItemAttachmentChip";
 
 interface ComposerReferenceAttachmentsProps {
   assistantSelections: ReadonlyArray<ChatAssistantSelectionAttachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
   pastedTexts?: ReadonlyArray<PastedTextDraft>;
+  workItems?: ReadonlyArray<WorkItemDraft>;
   files: ReadonlyArray<ComposerFileAttachment>;
   images: ReadonlyArray<ComposerImageAttachment>;
   nonPersistedImageIdSet: ReadonlySet<string>;
@@ -33,6 +36,7 @@ interface ComposerReferenceAttachmentsProps {
   onRemoveFileComments: () => void;
   onRemovePastedText?: (pastedTextId: string) => void;
   onShowPastedTextInField?: (pastedTextId: string) => void;
+  onRemoveWorkItem?: (itemKey: string) => void;
   onRemoveFile: (fileId: string) => void;
   onRemoveImage: (imageId: string) => void;
 }
@@ -42,6 +46,7 @@ export function ComposerReferenceAttachments({
   browserAnnotations = [],
   fileComments,
   pastedTexts: pastedTextsProp,
+  workItems: workItemsProp,
   files,
   images,
   nonPersistedImageIdSet,
@@ -51,15 +56,18 @@ export function ComposerReferenceAttachments({
   onRemoveFileComments,
   onRemovePastedText,
   onShowPastedTextInField,
+  onRemoveWorkItem,
   onRemoveFile,
   onRemoveImage,
 }: ComposerReferenceAttachmentsProps) {
   const pastedTexts = pastedTextsProp ?? [];
+  const workItems = workItemsProp ?? [];
   if (
     assistantSelections.length === 0 &&
     browserAnnotations.length === 0 &&
     fileComments.length === 0 &&
     pastedTexts.length === 0 &&
+    workItems.length === 0 &&
     files.length === 0 &&
     images.length === 0
   ) {
@@ -87,6 +95,13 @@ export function ComposerReferenceAttachments({
           metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
           onShowInTextField={() => onShowPastedTextInField?.(pasted.id)}
           onRemove={() => onRemovePastedText?.(pasted.id)}
+        />
+      ))}
+      {workItems.map((item) => (
+        <WorkItemAttachmentChip
+          key={workItemKey(item)}
+          item={item}
+          onRemove={onRemoveWorkItem ? () => onRemoveWorkItem(workItemKey(item)) : undefined}
         />
       ))}
       {files.map((file) => (

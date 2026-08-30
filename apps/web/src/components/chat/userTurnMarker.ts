@@ -33,6 +33,7 @@ export interface UserTurnMediaCounts {
   readonly browserAnnotationCount: number;
   readonly fileCommentCount: number;
   readonly pastedTextCount: number;
+  readonly workItemCount: number;
 }
 
 // The marker chip sits directly above any leading media row, and its bottom
@@ -46,6 +47,7 @@ export function hasLeadingUserMedia(counts: UserTurnMediaCounts): boolean {
     counts.assistantSelectionCount > 0 ||
     counts.browserAnnotationCount > 0 ||
     counts.fileCommentCount > 0 ||
-    counts.pastedTextCount > 0
+    counts.pastedTextCount > 0 ||
+    counts.workItemCount > 0
   );
 }

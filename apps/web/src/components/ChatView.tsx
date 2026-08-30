@@ -396,6 +396,7 @@ import { appendComposerPromptText } from "../lib/chatReferences";
 import {
   appendOriginalComposerPromptBlocks,
   appendTerminalContextsToPrompt,
+  appendWorkItemsToPrompt,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   formatTerminalContextLabel,
   insertInlineTerminalContextPlaceholder,
@@ -412,6 +413,7 @@ import {
   pastedTextTitle,
   type PastedTextDraft,
 } from "../lib/composerPastedText";
+import { type WorkItemDraft } from "../lib/composerWorkItems";
 import {
   appendAssistantSelectionsToPrompt,
   formatAssistantSelectionQueuePreview,
@@ -517,6 +519,7 @@ import {
 } from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
+import { WorkItemPickerDialog } from "./chat/WorkItemPickerDialog";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
@@ -1020,6 +1023,7 @@ function buildQueuedComposerPreviewText(input: {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
+  workItems: ReadonlyArray<{ kind: string; number: number; title: string }>;
 }): string {
   if (input.trimmedPrompt.length > 0) {
     return input.trimmedPrompt;
@@ -1050,6 +1054,10 @@ function buildQueuedComposerPreviewText(input: {
   const pastedTitle = formatPastedTextTitleSeed(input.pastedTexts);
   if (pastedTitle) {
     return pastedTitle;
+  }
+  const firstWorkItem = input.workItems[0];
+  if (firstWorkItem) {
+    return `${firstWorkItem.kind === "issue" ? "Issue" : "PR"} #${firstWorkItem.number}: ${firstWorkItem.title}`;
   }
   return "Queued follow-up";
 }
@@ -1282,6 +1290,7 @@ export default function ChatView({
   const composerFileComments = composerDraft.fileComments;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPastedTexts = composerDraft.pastedTexts;
+  const composerWorkItems = composerDraft.workItems;
   const composerSkills = composerDraft.skills;
   const composerMentions = composerDraft.mentions;
   const queuedComposerTurns = composerDraft.queuedTurns;
@@ -1297,6 +1306,7 @@ export default function ChatView({
         fileCommentCount: composerFileComments.length,
         terminalContexts: composerTerminalContexts,
         pastedTexts: composerPastedTexts,
+        workItemCount: composerWorkItems.length,
       }),
     [
       composerAssistantSelections.length,
@@ -1306,6 +1316,7 @@ export default function ChatView({
       composerImages.length,
       composerTerminalContexts,
       composerPastedTexts,
+      composerWorkItems.length,
       prompt,
     ],
   );
@@ -1360,6 +1371,8 @@ export default function ChatView({
   );
   const addComposerDraftPastedTexts = useComposerDraftStore((store) => store.addPastedTexts);
   const removeComposerDraftPastedText = useComposerDraftStore((store) => store.removePastedText);
+  const addComposerDraftWorkItem = useComposerDraftStore((store) => store.addWorkItem);
+  const removeComposerDraftWorkItem = useComposerDraftStore((store) => store.removeWorkItem);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
   );
@@ -1476,6 +1489,7 @@ export default function ChatView({
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
   >({});
+  const [workItemPickerOpen, setWorkItemPickerOpen] = useState(false);
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   // Live handle to the in-flight send's worktree preparation, resolved by the
@@ -1779,6 +1793,20 @@ export default function ChatView({
       addComposerDraftPastedTexts(threadId, pastedTexts);
     },
     [addComposerDraftPastedTexts, discardPromptHistoryNavigationForComposerMutation, threadId],
+  );
+  const addComposerWorkItemToDraft = useCallback(
+    (item: WorkItemDraft) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      addComposerDraftWorkItem(threadId, item);
+    },
+    [addComposerDraftWorkItem, discardPromptHistoryNavigationForComposerMutation, threadId],
+  );
+  const removeComposerWorkItemFromDraft = useCallback(
+    (itemKey: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      removeComposerDraftWorkItem(threadId, itemKey);
+    },
+    [removeComposerDraftWorkItem, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerFileCommentToDraft = useCallback(
     (comment: FileCommentDraft) => {
@@ -7293,6 +7321,9 @@ export default function ChatView({
         if (queuedTurn.pastedTexts.length > 0) {
           addComposerPastedTextsToDraft(queuedTurn.pastedTexts);
         }
+        for (const workItem of queuedTurn.workItems) {
+          addComposerDraftWorkItem(activeThread.id, workItem);
+        }
         updateSelectedComposerSkills(queuedTurn.skills);
         updateSelectedComposerMentions(queuedTurn.mentions);
       } else {
@@ -7325,6 +7356,7 @@ export default function ChatView({
       addComposerImagesToDraft,
       addComposerTerminalContextsToDraft,
       addComposerPastedTextsToDraft,
+      addComposerDraftWorkItem,
       clearComposerDraftContent,
       scheduleComposerFocus,
       setDraftThreadContext,
@@ -7454,6 +7486,7 @@ export default function ChatView({
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
     const composerPastedTextsForSend = queuedChatTurn?.pastedTexts ?? composerPastedTexts;
+    const composerWorkItemsForSend = queuedChatTurn?.workItems ?? composerWorkItems;
     const selectedComposerSkillsForSend =
       queuedChatTurn?.skills ?? selectedComposerSkillsRef.current;
     const selectedComposerMentionsForSend =
@@ -7483,6 +7516,7 @@ export default function ChatView({
       fileCommentCount: composerFileCommentsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
       pastedTexts: composerPastedTextsForSend,
+      workItemCount: composerWorkItemsForSend.length,
     });
     let trimmedPromptForSend = trimmed;
     const restoredQueuedPlanDraftSource =
@@ -7852,6 +7886,7 @@ export default function ChatView({
           terminalContexts: sendableComposerTerminalContexts,
           fileComments: composerFileCommentsForSend,
           pastedTexts: sendableComposerPastedTexts,
+          workItems: composerWorkItemsForSend,
         }),
         prompt: promptForSend,
         images: queuedImagesForPersistence,
@@ -7861,6 +7896,7 @@ export default function ChatView({
         fileComments: composerFileCommentsForSend,
         terminalContexts: sendableComposerTerminalContexts,
         pastedTexts: sendableComposerPastedTexts,
+        workItems: composerWorkItemsForSend,
         skills: selectedComposerSkillsForSend,
         mentions: selectedComposerMentionsForSend,
         selectedProvider: selectedProviderForSend,
@@ -8142,6 +8178,7 @@ export default function ChatView({
     const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
+    const composerWorkItemsSnapshot = [...composerWorkItemsForSend];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
     // Trailing blocks are appended innermost-to-outermost: assistant selections,
@@ -8149,15 +8186,18 @@ export default function ChatView({
     // (outermost). The display
     // extractors unwrap them in the reverse order.
     const messageTextForSend = appendBrowserAnnotationsToPrompt(
-      appendPastedTextsToPrompt(
-        appendFileCommentsToPrompt(
-          appendTerminalContextsToPrompt(
-            appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
-            composerTerminalContextsSnapshot,
+      appendWorkItemsToPrompt(
+        appendPastedTextsToPrompt(
+          appendFileCommentsToPrompt(
+            appendTerminalContextsToPrompt(
+              appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+              composerTerminalContextsSnapshot,
+            ),
+            composerFileCommentsSnapshot,
           ),
-          composerFileCommentsSnapshot,
+          composerPastedTextsSnapshot,
         ),
-        composerPastedTextsSnapshot,
+        composerWorkItemsSnapshot,
       ),
       composerBrowserAnnotationsSnapshot,
       messageIdForSend,
@@ -9366,6 +9406,7 @@ export default function ChatView({
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
+      workItems: [],
       skills: [],
       mentions: [],
       selectedProvider,
@@ -11214,6 +11255,7 @@ export default function ChatView({
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
+        onAttachWorkItem={() => setWorkItemPickerOpen(true)}
         onToggleFastMode={toggleFastMode}
         onInteractionModeChange={handleInteractionModeChange}
       />
@@ -11722,6 +11764,7 @@ export default function ChatView({
                       composerBrowserAnnotations.length > 0 ||
                       composerFileComments.length > 0 ||
                       composerPastedTexts.length > 0 ||
+                      composerWorkItems.length > 0 ||
                       composerFiles.length > 0 ||
                       composerImages.length > 0) && (
                       <ComposerReferenceAttachments
@@ -11729,6 +11772,7 @@ export default function ChatView({
                         browserAnnotations={composerBrowserAnnotations}
                         fileComments={composerFileComments}
                         pastedTexts={composerPastedTexts}
+                        workItems={composerWorkItems}
                         files={composerFiles}
                         images={composerImages}
                         nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
@@ -11738,6 +11782,7 @@ export default function ChatView({
                         onRemoveFileComments={clearComposerFileCommentsFromDraft}
                         onRemovePastedText={removeComposerPastedTextFromDraft}
                         onShowPastedTextInField={showComposerPastedTextInField}
+                        onRemoveWorkItem={removeComposerWorkItemFromDraft}
                         onRemoveFile={removeComposerFile}
                         onRemoveImage={removeComposerImage}
                       />
@@ -12587,6 +12632,16 @@ export default function ChatView({
         rateLimitStatus={activeRateLimitStatus}
         activeContextWindowLabel={contextWindowSelectionStatus.activeLabel}
         pendingContextWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
+      />
+      <WorkItemPickerDialog
+        open={workItemPickerOpen}
+        onOpenChange={setWorkItemPickerOpen}
+        cwd={threadWorkspaceCwd}
+        selectedItems={composerWorkItems}
+        onSelect={(item) => {
+          addComposerWorkItemToDraft({ ...item, id: randomUUID() });
+        }}
+        onRemove={removeComposerWorkItemFromDraft}
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}
