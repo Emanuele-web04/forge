@@ -419,9 +419,14 @@ describe("external MCP gateway stdio flow", () => {
         );
         yield* Effect.promise(() => waitForOutput(outputLines, 1));
         const listedTools = (
-          outputLines[0]!.result as { tools: Array<{ name: string }> }
-        ).tools.map((tool) => tool.name);
-        expect(listedTools).toEqual([
+          outputLines[0]!.result as {
+            tools: Array<{
+              name: string;
+              inputSchema: { properties?: Record<string, unknown> };
+            }>;
+          }
+        ).tools;
+        expect(listedTools.map((tool) => tool.name)).toEqual([
           "synara_overview",
           "synara_capabilities",
           "synara_list_allowed_projects",
@@ -429,6 +434,21 @@ describe("external MCP gateway stdio flow", () => {
           "synara_wait_for_task",
           "synara_read_task",
         ]);
+        const readTaskProperties = listedTools.find((tool) => tool.name === "synara_read_task")
+          ?.inputSchema.properties;
+        expect(readTaskProperties?.maxMessageChars).toMatchObject({
+          type: "integer",
+          minimum: 50,
+          maximum: 10_000,
+        });
+        expect(readTaskProperties?.messageIndex).toMatchObject({
+          type: "integer",
+          minimum: 0,
+        });
+        expect(readTaskProperties?.messageOffsetChars).toMatchObject({
+          type: "integer",
+          minimum: 0,
+        });
 
         const prompt = "Implement the external MCP end-to-end proof.";
         stdin.write(
@@ -488,20 +508,72 @@ describe("external MCP gateway stdio flow", () => {
           summary: "Finished from external MCP.",
         });
 
-        stdin.write(
-          `${JSON.stringify({
-            jsonrpc: "2.0",
-            id: 4,
-            method: "tools/call",
-            params: { name: "synara_read_task", arguments: { threadId } },
-          })}\n`,
-        );
+        const longText = Array.from(
+          { length: 25_007 },
+          (_, index) => String(index % 10),
+        ).join("");
+        const currentDetail = details.get(threadId)!;
+        details.set(threadId, {
+          ...currentDetail,
+          messages: currentDetail.messages.map((message) =>
+            message.role === "assistant" ? { ...message, text: longText } : message,
+          ),
+        });
+
+        for (const [index, messageOffsetChars] of [0, 10_000, 20_000].entries()) {
+          stdin.write(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              id: index + 4,
+              method: "tools/call",
+              params: {
+                name: "synara_read_task",
+                arguments: {
+                  threadId,
+                  messageIndex: 1,
+                  messageOffsetChars,
+                  maxMessageChars: 10_000,
+                },
+              },
+            })}\n`,
+          );
+        }
         stdin.end();
         yield* Effect.promise(() => serving);
         expect(errors).toEqual([]);
-        expect(JSON.stringify(toolPayload(outputLines[3]!))).toContain(
-          "Finished from external MCP.",
-        );
+        const messagePages = outputLines.slice(3, 6).map(toolPayload);
+        expect(messagePages.map((page) => page.effectiveMaxMessageChars)).toEqual([
+          10_000,
+          10_000,
+          10_000,
+        ]);
+        expect(
+          messagePages
+            .map((page) => (page.messages as Array<{ text: string }>)[0]?.text ?? "")
+            .join(""),
+        ).toBe(longText);
+        expect(messagePages.map((page) => page.messagePage)).toEqual([
+          {
+            index: 1,
+            offsetChars: 0,
+            endOffsetChars: 10_000,
+            totalChars: 25_007,
+            nextOffsetChars: 10_000,
+          },
+          {
+            index: 1,
+            offsetChars: 10_000,
+            endOffsetChars: 20_000,
+            totalChars: 25_007,
+            nextOffsetChars: 20_000,
+          },
+          {
+            index: 1,
+            offsetChars: 20_000,
+            endOffsetChars: 25_007,
+            totalChars: 25_007,
+          },
+        ]);
 
         const interruptedWait = yield* gateway
           .handlePost({
@@ -576,7 +648,7 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(6);
+        expect(auditRows).toHaveLength(8);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",

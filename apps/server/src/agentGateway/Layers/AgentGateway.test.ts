@@ -1493,6 +1493,25 @@ describe("AgentGateway", () => {
         ["approval-required", "full-access"],
       );
 
+      const readThread = tools.find((tool) => tool.name === "synara_read_thread");
+      const readThreadProperties = readThread?.inputSchema.properties as
+        | Record<string, { maximum?: number; minimum?: number; type?: string }>
+        | undefined;
+      assert.include(readThread?.description ?? "", "long message losslessly");
+      assert.deepInclude(readThreadProperties?.maxMessageChars, {
+        type: "integer",
+        minimum: 50,
+        maximum: 20_000,
+      });
+      assert.deepInclude(readThreadProperties?.messageIndex, {
+        type: "integer",
+        minimum: 0,
+      });
+      assert.deepInclude(readThreadProperties?.messageOffsetChars, {
+        type: "integer",
+        minimum: 0,
+      });
+
       const setThreadGoal = tools.find((tool) => tool.name === "synara_set_thread_goal");
       assert.include(
         setThreadGoal?.description ?? "",
@@ -4922,6 +4941,73 @@ describe("AgentGateway", () => {
 
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.equal(toolResultJson(response.result).goal, goal);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("reads a long message losslessly and rejects a stale offset", () => {
+    const shell = makeThreadShell("thread-child");
+    const longText = Array.from({ length: 25_007 }, (_, index) => String(index % 10)).join("");
+    const detail: OrchestrationThread = {
+      ...makeThreadDetail(shell),
+      messages: [
+        {
+          id: MessageId.makeUnsafe("message-long"),
+          role: "assistant",
+          text: longText,
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    };
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [...baseThreads.filter((thread) => thread.id !== shell.id), shell],
+      [],
+      {
+        threadDetails: new Map([[shell.id, detail]]),
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const slices: string[] = [];
+      let messageOffsetChars = 0;
+
+      while (true) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread",
+          args: {
+            threadId: shell.id,
+            messageIndex: 0,
+            messageOffsetChars,
+            maxMessageChars: 10_000,
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const result = toolResultJson(response.result);
+        slices.push((result.messages as Array<{ text: string }>)[0]?.text ?? "");
+        assert.equal(result.effectiveMessageLimit, 1);
+        assert.equal(result.effectiveMaxMessageChars, 10_000);
+        const nextOffsetChars = (result.messagePage as { nextOffsetChars?: number })
+          .nextOffsetChars;
+        if (nextOffsetChars === undefined) break;
+        messageOffsetChars = nextOffsetChars;
+      }
+
+      assert.equal(slices.join(""), longText);
+      harness.setThreadDetail({
+        ...detail,
+        messages: [{ ...detail.messages[0]!, text: "shorter now" }],
+      });
+      const stale = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread",
+        args: { threadId: shell.id, messageIndex: 0, messageOffsetChars: 20_000 },
+      });
+      assert.isTrue(isToolError(stale.result));
+      assert.include(toolErrorText(stale.result), "no longer valid");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

@@ -99,11 +99,22 @@ export interface AgentThreadMessageSummary {
   readonly createdAt: string;
 }
 
+export interface AgentThreadSingleMessagePage {
+  readonly index: number;
+  readonly offsetChars: number;
+  readonly endOffsetChars: number;
+  readonly totalChars: number;
+  readonly nextOffsetChars?: number;
+}
+
 export interface AgentThreadMessagePage {
   readonly messages: ReadonlyArray<AgentThreadMessageSummary>;
   readonly totalMessages: number;
+  readonly effectiveMessageLimit: number;
+  readonly effectiveMaxMessageChars: number;
   /** Pass back as `cursor` to fetch the next (older) page; absent when done. */
   readonly nextCursor?: string;
+  readonly messagePage?: AgentThreadSingleMessagePage;
 }
 
 function truncateMessageText(
@@ -114,6 +125,99 @@ function truncateMessageText(
   return {
     text: `${text.slice(0, maxChars)}\n[... truncated ${text.length - maxChars} chars]`,
     truncated: true,
+  };
+}
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  return Math.max(minimum, Math.min(Math.trunc(value ?? fallback), maximum));
+}
+
+function summarizeMessage(
+  message: OrchestrationMessage,
+  index: number,
+  text: string,
+  truncated: boolean,
+): AgentThreadMessageSummary {
+  return {
+    index,
+    role: message.role,
+    text,
+    truncated,
+    ...(message.dispatchOrigin !== undefined ? { dispatchOrigin: message.dispatchOrigin } : {}),
+    createdAt: message.createdAt,
+  };
+}
+
+function assertMessageCoordinates(input: {
+  readonly cursor?: string | undefined;
+  readonly messageIndex?: number | undefined;
+  readonly messageOffsetChars?: number | undefined;
+  readonly totalMessages: number;
+}): void {
+  if (input.messageIndex === undefined) {
+    if (input.messageOffsetChars !== undefined) {
+      throw new Error('"messageOffsetChars" requires "messageIndex".');
+    }
+    return;
+  }
+  if (input.cursor !== undefined) {
+    throw new Error('"cursor" cannot be combined with "messageIndex".');
+  }
+  if (!Number.isInteger(input.messageIndex) || input.messageIndex < 0) {
+    throw new Error('"messageIndex" must be a non-negative integer.');
+  }
+  if (input.messageIndex >= input.totalMessages) {
+    throw new Error(
+      `Message index ${input.messageIndex} is no longer available (thread currently has ${input.totalMessages} messages). Re-read the thread before continuing.`,
+    );
+  }
+  if (
+    input.messageOffsetChars !== undefined &&
+    (!Number.isInteger(input.messageOffsetChars) || input.messageOffsetChars < 0)
+  ) {
+    throw new Error('"messageOffsetChars" must be a non-negative integer.');
+  }
+}
+
+function paginateSingleMessage(input: {
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly messageIndex: number;
+  readonly messageOffsetChars: number;
+  readonly maxChars: number;
+}): AgentThreadMessagePage {
+  const message = input.messages[input.messageIndex]!;
+  const totalChars = message.text.length;
+  if (input.messageOffsetChars > 0 && input.messageOffsetChars >= totalChars) {
+    throw new Error(
+      `Message offset ${input.messageOffsetChars} is no longer valid for message ${input.messageIndex} (current length ${totalChars}). Re-read the message from offset 0.`,
+    );
+  }
+  const endOffsetChars = Math.min(input.messageOffsetChars + input.maxChars, totalChars);
+  const nextOffsetChars = endOffsetChars < totalChars ? endOffsetChars : undefined;
+  return {
+    messages: [
+      summarizeMessage(
+        message,
+        input.messageIndex,
+        message.text.slice(input.messageOffsetChars, endOffsetChars),
+        nextOffsetChars !== undefined,
+      ),
+    ],
+    totalMessages: input.messages.length,
+    effectiveMessageLimit: 1,
+    effectiveMaxMessageChars: input.maxChars,
+    messagePage: {
+      index: input.messageIndex,
+      offsetChars: input.messageOffsetChars,
+      endOffsetChars,
+      totalChars,
+      ...(nextOffsetChars !== undefined ? { nextOffsetChars } : {}),
+    },
   };
 }
 
@@ -149,22 +253,36 @@ export function paginateThreadMessages(input: {
   readonly cursor?: string | undefined;
   readonly messageLimit?: number | undefined;
   readonly maxMessageChars?: number | undefined;
+  readonly messageIndex?: number | undefined;
+  readonly messageOffsetChars?: number | undefined;
 }): AgentThreadMessagePage {
-  const limit = Math.max(
+  const limit = boundedInteger(
+    input.messageLimit,
+    READ_THREAD_DEFAULT_MESSAGE_LIMIT,
     1,
-    Math.min(
-      input.messageLimit ?? READ_THREAD_DEFAULT_MESSAGE_LIMIT,
-      READ_THREAD_MAX_MESSAGE_LIMIT,
-    ),
+    READ_THREAD_MAX_MESSAGE_LIMIT,
   );
-  const maxChars = Math.max(
+  const maxChars = boundedInteger(
+    input.maxMessageChars,
+    READ_THREAD_DEFAULT_MESSAGE_CHARS,
     50,
-    Math.min(
-      input.maxMessageChars ?? READ_THREAD_DEFAULT_MESSAGE_CHARS,
-      READ_THREAD_MAX_MESSAGE_CHARS,
-    ),
+    READ_THREAD_MAX_MESSAGE_CHARS,
   );
   const total = input.messages.length;
+  assertMessageCoordinates({
+    cursor: input.cursor,
+    messageIndex: input.messageIndex,
+    messageOffsetChars: input.messageOffsetChars,
+    totalMessages: total,
+  });
+  if (input.messageIndex !== undefined) {
+    return paginateSingleMessage({
+      messages: input.messages,
+      messageIndex: input.messageIndex,
+      messageOffsetChars: input.messageOffsetChars ?? 0,
+      maxChars,
+    });
+  }
   // endExclusive is the transcript index right after the newest message of
   // this page; the cursor carries the start of the previous (newer) page.
   let endExclusive = total;
@@ -177,18 +295,13 @@ export function paginateThreadMessages(input: {
   const startInclusive = Math.max(0, endExclusive - limit);
   const messages = input.messages.slice(startInclusive, endExclusive).map((message, offset) => {
     const { text, truncated } = truncateMessageText(message.text, maxChars);
-    return {
-      index: startInclusive + offset,
-      role: message.role,
-      text,
-      truncated,
-      ...(message.dispatchOrigin !== undefined ? { dispatchOrigin: message.dispatchOrigin } : {}),
-      createdAt: message.createdAt,
-    } satisfies AgentThreadMessageSummary;
+    return summarizeMessage(message, startInclusive + offset, text, truncated);
   });
   return {
     messages,
     totalMessages: total,
+    effectiveMessageLimit: limit,
+    effectiveMaxMessageChars: maxChars,
     ...(startInclusive > 0 ? { nextCursor: String(startInclusive) } : {}),
   };
 }
@@ -214,7 +327,10 @@ export interface AgentThreadDetail {
   readonly updatedAt: string;
   readonly messages: ReadonlyArray<AgentThreadMessageSummary>;
   readonly totalMessages: number;
+  readonly effectiveMessageLimit: number;
+  readonly effectiveMaxMessageChars: number;
   readonly nextCursor?: string;
+  readonly messagePage?: AgentThreadSingleMessagePage;
 }
 
 export function summarizeThreadDetail(input: {
@@ -222,6 +338,8 @@ export function summarizeThreadDetail(input: {
   readonly cursor?: string | undefined;
   readonly messageLimit?: number | undefined;
   readonly maxMessageChars?: number | undefined;
+  readonly messageIndex?: number | undefined;
+  readonly messageOffsetChars?: number | undefined;
 }): AgentThreadDetail {
   const { thread } = input;
   const page = paginateThreadMessages({
@@ -229,6 +347,8 @@ export function summarizeThreadDetail(input: {
     cursor: input.cursor,
     messageLimit: input.messageLimit,
     maxMessageChars: input.maxMessageChars,
+    messageIndex: input.messageIndex,
+    messageOffsetChars: input.messageOffsetChars,
   });
   return {
     threadId: thread.id,
@@ -251,6 +371,9 @@ export function summarizeThreadDetail(input: {
     updatedAt: thread.updatedAt,
     messages: page.messages,
     totalMessages: page.totalMessages,
+    effectiveMessageLimit: page.effectiveMessageLimit,
+    effectiveMaxMessageChars: page.effectiveMaxMessageChars,
     ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+    ...(page.messagePage !== undefined ? { messagePage: page.messagePage } : {}),
   };
 }

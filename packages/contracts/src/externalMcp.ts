@@ -9,6 +9,7 @@ export const EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH = 256;
 export const EXTERNAL_MCP_DEFAULT_WAIT_MS = 30_000;
 export const EXTERNAL_MCP_MAX_WAIT_MS = 60_000;
 export const EXTERNAL_MCP_CREATE_TIMEOUT_MS = 10 * 60_000;
+export const EXTERNAL_MCP_MAX_MESSAGE_CHARS = 10_000;
 
 export const ExternalMcpCapability = Schema.Literals([
   "projects:read",
@@ -141,8 +142,12 @@ export const ExternalMcpReadTaskInput = Schema.Struct({
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(100)),
   ),
   maxMessageChars: Schema.optional(
-    Schema.Int.check(Schema.isGreaterThanOrEqualTo(50)).check(Schema.isLessThanOrEqualTo(10_000)),
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(50)).check(
+      Schema.isLessThanOrEqualTo(EXTERNAL_MCP_MAX_MESSAGE_CHARS),
+    ),
   ),
+  messageIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  messageOffsetChars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpReadTaskInput = typeof ExternalMcpReadTaskInput.Type;
 

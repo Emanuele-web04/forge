@@ -1,5 +1,6 @@
 import {
   EXTERNAL_MCP_DEFAULT_WAIT_MS,
+  EXTERNAL_MCP_MAX_MESSAGE_CHARS,
   EXTERNAL_MCP_MAX_PROMPT_CHARS,
   EXTERNAL_MCP_MAX_WAIT_MS,
   ExternalMcpCreateTaskInput,
@@ -455,14 +456,30 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one long message losslessly, pass messageIndex, start messageOffsetChars at 0, then follow messagePage.nextOffsetChars.",
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string" },
           cursor: { type: "string" },
           messageLimit: { type: "integer", minimum: 1, maximum: 100 },
-          maxMessageChars: { type: "integer", minimum: 50, maximum: 10_000 },
+          maxMessageChars: {
+            type: "integer",
+            minimum: 50,
+            maximum: EXTERNAL_MCP_MAX_MESSAGE_CHARS,
+            description: `Characters per message or single-message slice (default 1500, max ${EXTERNAL_MCP_MAX_MESSAGE_CHARS}). The response reports the effective value.`,
+          },
+          messageIndex: {
+            type: "integer",
+            minimum: 0,
+            description: "Stable transcript index of one message to read losslessly.",
+          },
+          messageOffsetChars: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
@@ -490,6 +507,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             cursor: input.cursor,
             messageLimit: input.messageLimit,
             maxMessageChars: input.maxMessageChars,
+            messageIndex: input.messageIndex,
+            messageOffsetChars: input.messageOffsetChars,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),

@@ -24,6 +24,8 @@ import {
 } from "./targetResolver.ts";
 import {
   deriveAgentThreadStatus,
+  READ_THREAD_MAX_MESSAGE_CHARS,
+  READ_THREAD_MAX_MESSAGE_LIMIT,
   summarizeThreadDetail,
   summarizeThreadShell,
   summarizeWaitThreadText,
@@ -286,17 +288,34 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
-      description:
-        "Read one Synara thread's status and recent messages (newest last, truncated). Pass the returned nextCursor as cursor to page older messages.",
+      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one long message losslessly in bounded slices, pass its index as messageIndex, start messageOffsetChars at 0, then follow messagePage.nextOffsetChars.`,
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string", description: "Thread to read." },
           cursor: { type: "string", description: "Pagination cursor from a previous call." },
-          messageLimit: { type: "number", description: "Messages per page (default 20, max 100)." },
+          messageLimit: {
+            type: "integer",
+            minimum: 1,
+            maximum: READ_THREAD_MAX_MESSAGE_LIMIT,
+            description: `Messages per transcript page (default 20, max ${READ_THREAD_MAX_MESSAGE_LIMIT}).`,
+          },
           maxMessageChars: {
-            type: "number",
-            description: "Per-message truncation limit (default 1500).",
+            type: "integer",
+            minimum: 50,
+            maximum: READ_THREAD_MAX_MESSAGE_CHARS,
+            description: `Characters per message or single-message slice (default 1500, max ${READ_THREAD_MAX_MESSAGE_CHARS}). The response reports the effective value.`,
+          },
+          messageIndex: {
+            type: "integer",
+            minimum: 0,
+            description: "Stable transcript index of one message to read losslessly.",
+          },
+          messageOffsetChars: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
           },
         },
         required: ["threadId"],
@@ -310,6 +329,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const cursor = readStringArg(args, "cursor");
         const messageLimit = readNumberArg(args, "messageLimit");
         const maxMessageChars = readNumberArg(args, "maxMessageChars");
+        const messageIndex = readNumberArg(args, "messageIndex");
+        const messageOffsetChars = readNumberArg(args, "messageOffsetChars");
         const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -325,6 +346,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             cursor,
             messageLimit,
             maxMessageChars,
+            messageIndex,
+            messageOffsetChars,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),

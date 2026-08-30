@@ -120,6 +120,70 @@ describe("paginateThreadMessages", () => {
     });
     assert.equal(page.messages[0]?.truncated, true);
     assert.include(page.messages[0]?.text, "[... truncated 4900 chars]");
+    assert.equal(page.effectiveMessageLimit, 20);
+    assert.equal(page.effectiveMaxMessageChars, 100);
+  });
+
+  it("reports the effective hard cap instead of silently hiding it", () => {
+    const page = paginateThreadMessages({
+      messages: [makeMessage(0, "x".repeat(25_000))],
+      maxMessageChars: 100_000,
+    });
+
+    assert.equal(page.effectiveMaxMessageChars, 20_000);
+    assert.equal(page.messages[0]?.truncated, true);
+  });
+
+  it("recovers a long message exactly from bounded slices", () => {
+    const longText = Array.from({ length: 25_007 }, (_, index) => String(index % 10)).join("");
+    const messages = [makeMessage(0, longText)];
+    const slices: string[] = [];
+    let messageOffsetChars = 0;
+
+    while (true) {
+      const page = paginateThreadMessages({
+        messages,
+        messageIndex: 0,
+        messageOffsetChars,
+        maxMessageChars: 10_000,
+      });
+      slices.push(page.messages[0]?.text ?? "");
+      assert.equal(page.effectiveMessageLimit, 1);
+      assert.equal(page.effectiveMaxMessageChars, 10_000);
+      assert.equal(page.messagePage?.index, 0);
+      assert.equal(page.messagePage?.offsetChars, messageOffsetChars);
+      const nextOffset = page.messagePage?.nextOffsetChars;
+      if (nextOffset === undefined) break;
+      messageOffsetChars = nextOffset;
+    }
+
+    assert.equal(slices.join(""), longText);
+  });
+
+  it("rejects invalid and stale single-message coordinates clearly", () => {
+    const messages = [makeMessage(0, "short")];
+
+    assert.throws(
+      () => paginateThreadMessages({ messages, messageOffsetChars: 1 }),
+      /messageOffsetChars.*requires.*messageIndex/,
+    );
+    assert.throws(
+      () => paginateThreadMessages({ messages, messageIndex: 1 }),
+      /Message index 1 is no longer available/,
+    );
+    assert.throws(
+      () =>
+        paginateThreadMessages({
+          messages,
+          messageIndex: 0,
+          messageOffsetChars: 20_000,
+        }),
+      /Message offset 20000 is no longer valid/,
+    );
+    assert.throws(
+      () => paginateThreadMessages({ messages, cursor: "1", messageIndex: 0 }),
+      /cursor.*cannot be combined.*messageIndex/,
+    );
   });
 
   it("ignores garbage cursors", () => {
