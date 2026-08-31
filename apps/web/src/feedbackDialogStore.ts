@@ -5,8 +5,7 @@
 
 import { create } from "zustand";
 
-import type { FeedbackCategory } from "./feedback";
-import type { FeedbackThreadContext } from "./feedback";
+import type { FeedbackCategory, FeedbackThreadContext } from "./feedback";
 
 interface FeedbackDialogStore {
   isOpen: boolean;

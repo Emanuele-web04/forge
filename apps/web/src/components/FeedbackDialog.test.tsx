@@ -1,8 +1,4 @@
 // FILE: FeedbackDialog.test.tsx
-// Purpose: Verifies the feedback dialog form preselects the Bug chip, renders
-//          the GitHub issue draft action conditionally, and disables both
-//          actions while in flight.
-// Layer: Web UI tests
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -12,10 +8,8 @@ import { FeedbackDialogForm } from "./FeedbackDialog";
 const noopSubmit = async () => {};
 const noopDraft = async () => {};
 
-function getActionButtons(markup: string): string[] {
-  // Full button tag plus children so we can identify the two main actions.
-  const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g) ?? [];
-  return buttons.filter(
+const actionButtons = (markup: string): string[] =>
+  (markup.match(/<button\b[\s\S]*?<\/button>/g) ?? []).filter(
     (button) =>
       button.includes('type="submit"') ||
       button.includes(">Submit") ||
@@ -23,7 +17,6 @@ function getActionButtons(markup: string): string[] {
       button.includes(">Draft a GitHub issue") ||
       button.includes(">Opening thread"),
   );
-}
 
 describe("FeedbackDialogForm", () => {
   it("preselects the Bug chip when initialCategory is bug", () => {
@@ -32,10 +25,7 @@ describe("FeedbackDialogForm", () => {
     );
 
     expect(markup).toContain('aria-pressed="true"');
-    // The selected chip is rendered before the unselected ones; count confirms
-    // only one is selected across the six categories.
-    const pressedMatches = markup.match(/aria-pressed="true"/g);
-    expect(pressedMatches?.length).toBe(1);
+    expect(markup.match(/aria-pressed="true"/g)?.length).toBe(1);
   });
 
   it("renders category chips inside an accessible group", () => {
@@ -69,37 +59,22 @@ describe("FeedbackDialogForm", () => {
     expect(withoutDraftProp).not.toContain("Draft a GitHub issue with your agent");
   });
 
-  it("disables submit and draft buttons while sending", () => {
+  it.each([
+    { isSending: true, label: "Sending…" },
+    { isDraftingIssue: true, label: "Opening thread" },
+  ])("disables submit and draft buttons while $label", ({ isSending, isDraftingIssue }) => {
     const markup = renderToStaticMarkup(
       <FeedbackDialogForm
         initialCategory="bug"
-        defaultDetails="Something is broken"
-        isSending
-        isDraftingIssue={false}
+        isSending={isSending ?? false}
+        isDraftingIssue={isDraftingIssue ?? false}
         onSubmit={noopSubmit}
         onDraftGithubIssue={noopDraft}
       />,
     );
 
-    const actionButtons = getActionButtons(markup);
-    expect(actionButtons.length).toBe(2);
-    expect(actionButtons.every((button) => button.includes("disabled"))).toBe(true);
-  });
-
-  it("disables submit and draft buttons while drafting an issue", () => {
-    const markup = renderToStaticMarkup(
-      <FeedbackDialogForm
-        initialCategory="bug"
-        defaultDetails="Something is broken"
-        isSending={false}
-        isDraftingIssue
-        onSubmit={noopSubmit}
-        onDraftGithubIssue={noopDraft}
-      />,
-    );
-
-    const actionButtons = getActionButtons(markup);
-    expect(actionButtons.length).toBe(2);
-    expect(actionButtons.every((button) => button.includes("disabled"))).toBe(true);
+    const buttons = actionButtons(markup);
+    expect(buttons.length).toBe(2);
+    expect(buttons.every((button) => button.includes("disabled"))).toBe(true);
   });
 });

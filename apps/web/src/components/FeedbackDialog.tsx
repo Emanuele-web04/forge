@@ -1,7 +1,5 @@
 // FILE: FeedbackDialog.tsx
 // Purpose: Collects categorized Synara feedback with privacy-safe diagnostics.
-// Layer: Shared UI component
-// Depends on: Feedback delivery logic and the shared dialog primitives.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -97,15 +95,10 @@ export function FeedbackDialog({
         <DialogHeader className="gap-0 px-5 pt-5 pb-3">
           <DialogTitle className="text-xl tracking-[-0.01em]">Share feedback</DialogTitle>
         </DialogHeader>
-        {/* The form state lives below DialogPopup, which unmounts its children
-            once the close transition ends — every open starts from a blank
-            form without a reset effect, and closing never flashes empty. */}
         <FeedbackDialogForm
-          defaultDetails=""
           initialCategory={initialCategory}
           isSending={isSending}
           isDraftingIssue={isDraftingIssue}
-          open={open}
           onSubmit={handleSubmit}
           onDraftGithubIssue={onDraftGithubIssue ? handleDraftIssue : undefined}
         />
@@ -115,38 +108,32 @@ export function FeedbackDialog({
 }
 
 export interface FeedbackDialogFormProps {
-  defaultDetails?: string;
   initialCategory?: FeedbackCategory | null | undefined;
   isSending: boolean;
   isDraftingIssue?: boolean;
-  open?: boolean;
   onSubmit: (category: FeedbackCategory | null, details: string) => Promise<void>;
   onDraftGithubIssue?: ((details: string) => Promise<void>) | undefined;
 }
 
 export function FeedbackDialogForm({
-  defaultDetails = "",
   initialCategory,
   isSending,
   isDraftingIssue = false,
-  open = true,
   onSubmit,
   onDraftGithubIssue,
 }: FeedbackDialogFormProps) {
   const [category, setCategory] = useState<FeedbackCategory | null>(initialCategory ?? null);
-  const [details, setDetails] = useState(defaultDetails);
+  const [details, setDetails] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setCategory(initialCategory ?? null);
-    setDetails(defaultDetails);
-  }, [initialCategory, defaultDetails]);
+  }, [initialCategory]);
 
   useEffect(() => {
-    if (!open) return;
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  }, []);
 
   const disabled = isSending || isDraftingIssue;
   const canSubmit = details.trim().length > 0 && !disabled;
@@ -157,7 +144,7 @@ export function FeedbackDialogForm({
   };
 
   const handleDraftIssue = async () => {
-    if (!onDraftGithubIssue || disabled) return;
+    if (!onDraftGithubIssue) return;
     await onDraftGithubIssue(details);
   };
 
@@ -179,12 +166,8 @@ export function FeedbackDialogForm({
               variant={selected ? "secondary" : "outline"}
               size="sm"
               aria-pressed={selected}
-              // Reference pills breathe at ~14px per side; the default `sm`
-              // padding (10px) crams the label against the pill wall.
               className="rounded-full px-3.5 font-normal"
               disabled={disabled}
-              // Keeps the caret (and the field's focus ring) in the details
-              // textarea, so picking a category never interrupts typing.
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => setCategory(selected ? null : option.value)}
             >
