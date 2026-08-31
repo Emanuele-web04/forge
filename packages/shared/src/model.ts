@@ -23,6 +23,7 @@ import {
   type ProviderWithDefaultModel,
   CodexReasoningEffort,
 } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "./providerMetadata";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
@@ -784,4 +785,163 @@ export function applyClaudePromptEffortPrefix(
     return trimmed;
   }
   return `Ultrathink:\n${trimmed}`;
+}
+
+// ── Text-generation provider/model resolver ───────────────────────────
+
+const TEXT_GENERATION_PROVIDER_ORDER: readonly ProviderKind[] = [
+  "codex",
+  "droid",
+  "cursor",
+  "opencode",
+] as const;
+
+const PROVIDER_KIND_SET: ReadonlySet<ProviderKind> = new Set(
+  PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind),
+);
+
+function isProviderKind(value: string): value is ProviderKind {
+  return PROVIDER_KIND_SET.has(value as ProviderKind);
+}
+
+export interface ResolvedTextGenerationModel {
+  readonly provider: ProviderKind;
+  readonly model: string;
+}
+
+function resolveDroidTextGenerationModelPart(model: string): string | null {
+  const trimmed = model.trim();
+  if (!trimmed || trimmed.includes(":")) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const droidAliases = MODEL_SLUG_ALIASES_BY_PROVIDER.droid as Record<string, ModelSlug>;
+  if (Object.prototype.hasOwnProperty.call(droidAliases, lower)) {
+    const aliased = droidAliases[lower];
+    if (typeof aliased === "string") {
+      return aliased;
+    }
+  }
+
+  if (
+    MODEL_SLUG_SET_BY_PROVIDER.droid.has(trimmed as ModelSlug) ||
+    MODEL_SLUG_SET_BY_PROVIDER.droid.has(lower as ModelSlug)
+  ) {
+    return trimmed;
+  }
+
+  // Custom Droid model identifiers are passed through as-is.
+  return trimmed;
+}
+
+function isKnownModelForProvider(provider: ProviderKind, model: string): boolean {
+  const normalized = normalizeModelSlug(model, provider);
+  if (!normalized) {
+    return false;
+  }
+
+  const lower = model.trim().toLowerCase();
+  const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
+  if (Object.prototype.hasOwnProperty.call(aliases, lower)) {
+    return true;
+  }
+
+  if (
+    MODEL_SLUG_SET_BY_PROVIDER[provider].has(normalized) ||
+    MODEL_SLUG_SET_BY_PROVIDER[provider].has(lower as ModelSlug)
+  ) {
+    return true;
+  }
+
+  return MODEL_CAPABILITIES_INDEX[provider]?.[normalized] !== undefined;
+}
+
+/**
+ * Resolve a text-generation model slug into a provider and canonical model.
+ *
+ * Accepts a bare model slug (e.g. `deepseek-v4-flash-0731`), an explicit
+ * `provider:model` slug (e.g. `droid:deepseek-v4-flash-0731` or
+ * `codex:gpt-5.5`), or a Droid custom slug (`droid/custom`).
+ */
+export function resolveTextGenerationModelSlug(
+  slug: string | null | undefined,
+): ResolvedTextGenerationModel | null {
+  const raw = trimOrNull(slug);
+  if (!raw) {
+    return null;
+  }
+
+  const colonIndex = raw.indexOf(":");
+  if (colonIndex > 0) {
+    const providerPart = raw.slice(0, colonIndex).trim().toLowerCase();
+    const modelPart = raw.slice(colonIndex + 1);
+    if (!isProviderKind(providerPart) || !modelPart.trim()) {
+      return null;
+    }
+    const provider = providerPart;
+
+    if (provider === "droid") {
+      const resolvedModel = resolveDroidTextGenerationModelPart(modelPart);
+      return resolvedModel ? { provider, model: resolvedModel } : null;
+    }
+
+    const normalized = normalizeModelSlug(modelPart, provider);
+    if (!normalized) {
+      return null;
+    }
+
+    if (isKnownModelForProvider(provider, modelPart)) {
+      return { provider, model: normalized };
+    }
+
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+
+  // Droid aliases take priority so they stay Droid even when the canonical
+  // slug also exists for Cursor/Codex/Claude.
+  const droidAliases = MODEL_SLUG_ALIASES_BY_PROVIDER.droid as Record<string, ModelSlug>;
+  if (Object.prototype.hasOwnProperty.call(droidAliases, lower)) {
+    const aliased = droidAliases[lower];
+    if (typeof aliased === "string") {
+      return { provider: "droid", model: aliased };
+    }
+  }
+
+  // Fall through the standard text-generation provider order.
+  for (const provider of TEXT_GENERATION_PROVIDER_ORDER) {
+    const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
+    if (Object.prototype.hasOwnProperty.call(aliases, lower)) {
+      const aliased = aliases[lower];
+      if (typeof aliased === "string") {
+        return { provider, model: aliased };
+      }
+    }
+
+    const lowerRaw = raw.toLowerCase();
+    if (
+      MODEL_SLUG_SET_BY_PROVIDER[provider].has(raw as ModelSlug) ||
+      MODEL_SLUG_SET_BY_PROVIDER[provider].has(lowerRaw as ModelSlug)
+    ) {
+      return { provider, model: lowerRaw };
+    }
+  }
+
+  // Bare Droid custom slug: droid/<model> with no further colons.
+  if (raw.toLowerCase().startsWith("droid/")) {
+    const suffix = raw.slice("droid/".length).trim();
+    if (suffix && !suffix.includes(":")) {
+      return { provider: "droid", model: suffix };
+    }
+  }
+
+  // Bare OpenCode custom slug: provider/model with a slash.
+  const slashIndex = raw.indexOf("/");
+  if (slashIndex > 0 && slashIndex < raw.length - 1 && !raw.includes(":")) {
+    return { provider: "opencode", model: raw };
+  }
+
+  return null;
 }
