@@ -360,7 +360,9 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
     );
 
-    const runtime = ManagedRuntime.make(layer);
+    const runtime = ManagedRuntime.make(
+      layer.pipe(Layer.orDie) as Layer.Layer<Layer.Success<typeof layer>>,
+    );
     const engine = yield* tryRuntimePromise("load OrchestrationEngine service", () =>
       runtime.runPromise(Effect.service(OrchestrationEngineService)),
     ).pipe(Effect.orDie);
@@ -408,7 +410,8 @@ export const makeOrchestrationIntegrationHarness = (
           .getSnapshot()
           .pipe(
             Effect.map(
-              (snapshot) => snapshot.threads.find((thread) => thread.id === threadId) ?? null,
+              (snapshot) =>
+                snapshot.threads.find((thread: OrchestrationThread) => thread.id === threadId) ?? null,
             ),
           ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),
