@@ -1137,11 +1137,7 @@ export function closeDevinSessionResources(input: {
     yield* Effect.ignore(Scope.close(input.scope, Exit.void));
     if (input.config) {
       yield* Effect.tryPromise(input.config.cleanup).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("devin.acp.session_config_cleanup_failed", {
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        ),
+        Effect.catch(() => Effect.logWarning("devin.acp.session_config_cleanup_failed")),
       );
     }
   });
