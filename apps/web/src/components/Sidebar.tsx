@@ -325,6 +325,7 @@ import {
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
+  resolveActiveSidebarThreadId,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -1582,7 +1583,7 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const { activeProjectId: focusedProjectId, focusedThreadId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
@@ -1698,8 +1699,12 @@ export default function Sidebar() {
   const pruneThreadFolderProjects = useSidebarThreadFolderStore((state) => state.pruneProjects);
 
   const routeActiveSidebarThreadId = routeThreadId;
-  const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
-  const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
+  const activeSidebarThreadId = resolveActiveSidebarThreadId({
+    focusedThreadId,
+    optimisticThreadId: optimisticActiveThreadId,
+    routeThreadId,
+  });
+  const visualActiveSidebarThreadId = activeSidebarThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
   const selectSidebarTreeThreads = useMemo(
