@@ -65,9 +65,6 @@ const SECRET_PATTERNS = [
   /ghu_[A-Za-z0-9]{20,}/gu,
   /ghs_[A-Za-z0-9]{20,}/gu,
   /ghr_[A-Za-z0-9]{20,}/gu,
-  // The `sk-` families cover modern OpenAI (`sk-proj-…`) and Anthropic
-  // (`sk-ant-…`) keys, whose bodies contain `-`/`_` separators. The lookbehind
-  // keeps ordinary words like `task-0123456789abcdef` from being mangled.
   /(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}/gu,
   /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/gu,
   /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/gu,
@@ -101,11 +98,7 @@ export function normalizeHomePaths(text: string): string {
   return text.replace(HOME_PATH_PATTERN, "~");
 }
 
-/**
- * Single sanitization policy for untrusted text that leaves the app: masks
- * high-confidence secrets, then normalizes home paths. Both the feedback
- * endpoint payload and the agent-drafted GitHub issue prompt go through this.
- */
+/** Sanitizes user-supplied feedback text before it leaves the app. */
 export function sanitizeUntrustedText(text: string): string {
   return normalizeHomePaths(redactObviousSecrets(text).text);
 }

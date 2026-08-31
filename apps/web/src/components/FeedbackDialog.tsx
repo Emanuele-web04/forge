@@ -128,9 +128,6 @@ export function FeedbackDialogForm({
   const [details, setDetails] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // The form remounts with every open because DialogPopup unmounts its children
-  // once the close transition ends. This effect only covers the quick
-  // reopen-during-exit window, where the form survives and must reset fully.
   useEffect(() => {
     if (open) {
       setCategory(initialCategory ?? null);
@@ -218,7 +215,7 @@ export function FeedbackDialogForm({
           <div className="border-t" />
           <p className="text-center text-xs text-muted-foreground">
             Opens a new thread. Your agent interviews you, then files the issue with your GitHub
-            account — only after you confirm.
+            account, but only after you confirm.
           </p>
           <Button
             type="button"

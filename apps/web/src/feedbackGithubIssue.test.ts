@@ -75,9 +75,6 @@ describe("buildGithubIssueInterviewPrompt", () => {
   it("treats $-patterns in user input as literal replacement text", () => {
     const prompt = makePrompt("crash on $& and $' input");
 
-    // `$&` must not resurrect the {{DETAILS}} placeholder and `$'` must not
-    // duplicate the template tail into the report section. `&` is escaped by
-    // the delimiter pass, hence $&amp;.
     expect(prompt).not.toContain("{{DETAILS}}");
     expect(section(prompt, "initial-report")).toBe("crash on $&amp; and $' input");
     expect(prompt.match(/Follow these steps in order/g)?.length).toBe(1);

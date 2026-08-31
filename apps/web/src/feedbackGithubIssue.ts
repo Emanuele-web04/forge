@@ -73,10 +73,10 @@ Follow these steps in order, asking one focused question at a time and waiting f
 
 1. Understand the problem. Restate the bug in one or two sentences and ask me to confirm or correct. If the initial description is empty, ask me what happened.
 2. Interview me, one topic per message:
-   a. Steps to reproduce — a minimal, deterministic, numbered list.
+   a. Steps to reproduce: a minimal, deterministic, numbered list.
    b. Expected behavior vs. actual (observed) behavior.
-   c. Impact — agree on one of: "Blocks work completely", "Major degradation or frequent failure", "Minor bug or occasional failure", "Cosmetic issue".
-   d. Area — agree on one of: apps/web, apps/server, apps/desktop, packages/contracts or packages/shared, "Build, CI, or release tooling", Docs, "Not sure".
+   c. Impact: agree on one of "Blocks work completely", "Major degradation or frequent failure", "Minor bug or occasional failure", "Cosmetic issue".
+   d. Area: agree on one of apps/web, apps/server, apps/desktop, packages/contracts or packages/shared, "Build, CI, or release tooling", Docs, "Not sure".
    e. Optional, only if I volunteer them: pasted logs or stack traces, and any workaround I found.
 3. Sanitization pass (mandatory before showing any draft). Mask secrets (API keys, tokens such as ghp_, github_pat_, sk-, AKIA…, ASIA…, xoxb-, AIza…, "Bearer …", passwords, signed URLs, private-key blocks) with [REDACTED]; replace absolute home paths with ~; keep private identifiers private by asking about each one; include logs only if I pasted them.
 4. Assemble the issue exactly in this format (it mirrors .github/ISSUE_TEMPLATE/bug_report.yml):
@@ -106,7 +106,7 @@ Follow these steps in order, asking one focused question at a time and waiting f
    <app version from the diagnostics; add commit or branch if I provided one>
 
    ### Environment
-   <OS/platform, viewport, provider and model, modes — from the diagnostics plus anything I added>
+   <OS/platform, viewport, provider and model, modes, from the diagnostics plus anything I added>
 
    ### Logs or stack traces
    <only what I pasted, sanitized; otherwise "None provided.">
@@ -117,7 +117,7 @@ Follow these steps in order, asking one focused question at a time and waiting f
    ### Workaround
    <only if I described one; otherwise "None found.">
 
-5. Confirmation gate (hard rule). Show me the final title and the COMPLETE markdown body — no summaries, no elisions. Then ask exactly:
+5. Confirmation gate (hard rule). Show me the final title and the COMPLETE markdown body. No summaries, no elisions. Then ask exactly:
    "${BUG_REPORT_CONFIRMATION_QUESTION}"
    Do not run any command that creates an issue until my next message is an explicit yes ("file it" or "yes, file it"). If I request edits, apply them and repeat this step with the full updated body.
 6. Filing path (only after my explicit confirmation):
@@ -129,7 +129,7 @@ Follow these steps in order, asking one focused question at a time and waiting f
    ${GITHUB_ISSUE_URL}?title=<encoded title>&body=<encoded body>
    If the encoded URL would exceed roughly 6,000 characters, link with the title only and tell me to paste the body from the block above. Mention that I can run gh auth login and then ask you to file it.
 
-Be concise, no filler, one question at a time. Never invent details — write "Not sure" rather than guessing.`;
+Be concise, no filler, one question at a time. Never invent details. Write "Not sure" rather than guessing.`;
 
 export interface BuildGithubIssueInterviewPromptInput {
   details: string;
@@ -146,8 +146,6 @@ export function buildGithubIssueInterviewPrompt(
   const safeDiagnostics = defangPromptPlaceholders(
     escapePromptDelimiters(sanitizeUntrustedText(input.diagnosticsSummary)),
   );
-  // Replacement strings treat `$&`/`$'` specially, which would let user text
-  // resurrect a placeholder or duplicate the template tail; pass functions.
   return BUG_REPORT_INTERVIEW_PROMPT_TEMPLATE.replaceAll(
     "{{DETAILS}}",
     () => sanitizedDetails,
