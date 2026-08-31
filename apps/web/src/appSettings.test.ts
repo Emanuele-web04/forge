@@ -279,6 +279,7 @@ describe("getGitTextGenerationModelOptions", () => {
   it("merges codex and OpenCode model options for git writing settings", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: ["custom/codex-model"],
+      customDroidModels: [],
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
       textGenerationModel: "openai/gpt-5",
       textGenerationProvider: "opencode",
@@ -293,6 +294,7 @@ describe("getGitTextGenerationModelOptions", () => {
     const options = getGitTextGenerationModelOptions(
       {
         customCodexModels: [],
+        customDroidModels: [],
         customOpenCodeModels: [],
         textGenerationModel: "openrouter/custom-model",
         textGenerationProvider: "opencode",
@@ -309,6 +311,7 @@ describe("getGitTextGenerationModelOptions", () => {
   it("preserves a currently selected transient git writing model", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
+      customDroidModels: [],
       customOpenCodeModels: [],
       textGenerationModel: "openrouter/custom-model",
       textGenerationProvider: "opencode",
@@ -325,6 +328,7 @@ describe("getGitTextGenerationModelOptions", () => {
   it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
+      customDroidModels: [],
       customOpenCodeModels: [],
       textGenerationModel: "opencode-go/kimi-k2.6",
       textGenerationProvider: "opencode",

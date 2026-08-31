@@ -5993,6 +5993,7 @@ describe("ProviderCommandReactor", () => {
         providers: {
           codex: { enabled: false },
           cursor: { enabled: false },
+          droid: { enabled: false },
           opencode: { enabled: false },
         },
       },

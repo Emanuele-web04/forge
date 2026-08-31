@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { TextGenerationError } from "../Errors.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
@@ -91,17 +92,38 @@ function createTextGenerationDouble(label: string) {
   };
 }
 
+function createDroidStrictDouble(): TextGenerationShape {
+  const fail = (operation: string) =>
+    Effect.fail(
+      new TextGenerationError({
+        operation,
+        detail: "Droid should not be used in ProviderTextGeneration tests.",
+      }),
+    );
+
+  return {
+    generateCommitMessage: () => fail("generateCommitMessage"),
+    generatePrContent: () => fail("generatePrContent"),
+    generateDiffSummary: () => fail("generateDiffSummary"),
+    generateBranchName: () => fail("generateBranchName"),
+    generateThreadTitle: () => fail("generateThreadTitle"),
+    generateThreadRecap: () => fail("generateThreadRecap"),
+    generateAutomationIntent: () => fail("generateAutomationIntent"),
+    evaluateAutomationCompletion: () => fail("evaluateAutomationCompletion"),
+  };
+}
+
 function makeProviderTextGenerationTestLayer(
   settingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
 ) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
-  const droid = createTextGenerationDouble("droid");
+  const droid = createDroidStrictDouble();
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
-    Layer.provide(Layer.succeed(DroidTextGeneration, droid.service)),
+    Layer.provide(Layer.succeed(DroidTextGeneration, droid)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );

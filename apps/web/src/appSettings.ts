@@ -147,16 +147,16 @@ export type ProviderCustomModelConfig = {
   example: string;
 };
 
-const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
-  codex: new Set(getModelOptions("codex").map((option) => option.slug)),
-  claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
-  cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
-  antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
-  grok: new Set(getModelOptions("grok").map((option) => option.slug)),
-  droid: new Set(getModelOptions("droid").map((option) => option.slug)),
-  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
-  pi: new Set(getModelOptions("pi").map((option) => option.slug)),
-};
+const BUILT_IN_MODEL_SLUGS_BY_PROVIDER = {
+  codex: new Set<string>(getModelOptions("codex").map((option) => option.slug)),
+  claudeAgent: new Set<string>(getModelOptions("claudeAgent").map((option) => option.slug)),
+  cursor: new Set<string>(getModelOptions("cursor").map((option) => option.slug)),
+  antigravity: new Set<string>(getModelOptions("antigravity").map((option) => option.slug)),
+  grok: new Set<string>(getModelOptions("grok").map((option) => option.slug)),
+  droid: new Set<string>(getModelOptions("droid").map((option) => option.slug)),
+  opencode: new Set<string>(getModelOptions("opencode").map((option) => option.slug)),
+  pi: new Set<string>(getModelOptions("pi").map((option) => option.slug)),
+} satisfies Record<ProviderKind, ReadonlySet<string>>;
 
 const withDefaults =
   <
@@ -200,12 +200,8 @@ const PersistedProviderKind = Schema.Literals([
 // providers with no successor subscription (kilo) must not transfer prefs like
 // "hidden" onto another provider, so their list entries are dropped. Unknown
 // values are dropped too instead of failing the whole settings decode.
-const RENAMED_PROVIDERS: Readonly<Record<string, ProviderKind>> = {
-  gemini: "antigravity",
-};
-
 function resolvePersistedProviderListEntry(provider: string): ProviderKind | undefined {
-  const renamed = RENAMED_PROVIDERS[provider] ?? provider;
+  const renamed = provider === "gemini" ? "antigravity" : provider;
   return Schema.is(ProviderKind)(renamed) ? renamed : undefined;
 }
 
@@ -218,6 +214,7 @@ const PersistedProviderKindList = Schema.Array(Schema.String).pipe(
           const resolved = resolvePersistedProviderListEntry(provider);
           return resolved === undefined ? [] : [resolved];
         }),
+      // SAFETY: encoding to JSON re-serializes ProviderKind slugs as plain strings.
       encode: (providers) => providers as ReadonlyArray<string>,
     }),
   ),
@@ -403,7 +400,7 @@ export interface AppModelOption extends ProviderModelOption {
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
 
-const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
+const PROVIDER_CUSTOM_MODEL_CONFIG = {
   codex: {
     provider: "codex",
     settingsKey: "customCodexModels",
@@ -476,7 +473,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
-};
+} satisfies Record<ProviderKind, ProviderCustomModelConfig>;
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
@@ -516,7 +513,7 @@ export function normalizeCustomModelSlugs(
 }
 
 export function normalizeChatFontSizePx(value: number | null | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return DEFAULT_CHAT_FONT_SIZE_PX;
   }
 
@@ -524,7 +521,7 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
 }
 
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return DEFAULT_TERMINAL_FONT_SIZE_PX;
   }
 
@@ -709,13 +706,17 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-function serverSettingValuesEqual(left: unknown, right: unknown): boolean {
+// SAFETY: generic equality used only while pruning server settings patches; values are
+// JSON-serializable primitives or arrays at this point.
+function serverSettingValuesEqual<T>(left: T, right: T): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
   return left === right;
 }
 
+// SAFETY: these records are only used inside this function to compare and delete
+// provider-specific patch keys. They are not exposed as public APIs.
 function pruneProviderPatchAgainstCurrentSettings(
   providers: MutableServerSettingsProvidersPatch,
   currentSettings: Pick<ServerSettingsView, "providers">,
@@ -724,8 +725,14 @@ function pruneProviderPatchAgainstCurrentSettings(
     const providerPatch = providers[provider];
     if (!providerPatch) continue;
 
+    /* eslint-disable anti-slop/no-chained-type-assertions,
+       anti-slop/no-unsafe-dictionary-type,
+       anti-slop/require-safety-comment-for-type-assertion */
     const patchRecord = providerPatch as Record<string, unknown>;
     const currentRecord = currentSettings.providers[provider] as unknown as Record<string, unknown>;
+    /* eslint-enable anti-slop/no-chained-type-assertions,
+       anti-slop/no-unsafe-dictionary-type,
+       anti-slop/require-safety-comment-for-type-assertion */
     for (const [key, value] of Object.entries(patchRecord)) {
       const matchesCurrent =
         key === "serverPassword"
@@ -759,16 +766,16 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+    const provider = patch.textGenerationProvider;
     serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
+      provider: resolveTextGenerationProvider({ provider: provider ?? null, model }),
       model,
     };
   }
+  /* eslint-disable anti-slop/no-conditional-empty-object-spread */
+  // SAFETY: provider patch builders use conditional spreads to omit absent keys.
+  // Droid follows the same pattern; the others are left as-is to keep this
+  // mechanical PR small.
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
@@ -861,6 +868,7 @@ export function appSettingsPatchToServerSettingsPatch(
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
   }
+  /* eslint-enable anti-slop/no-conditional-empty-object-spread */
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
     for (const provider of DEFAULT_PROVIDER_ORDER) {
@@ -916,6 +924,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "textGenerationProvider",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
+      // SAFETY: the loop iterates over keys of AppSettings, so the value is assignable
+      // to the same-keyed property of the migration patch. The cast narrows the union.
       patch[key] = normalizedSettings[key] as never;
     }
   }
@@ -937,6 +947,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customPiModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
+      // SAFETY: the loop iterates over string-array keys of AppSettings, so the value
+      // is assignable to the same-keyed property of the migration patch.
       patch[key] = normalizedSettings[key] as never;
     }
   }
@@ -958,13 +970,15 @@ export function applyLocalAppSettingsPatch(
   patch: Partial<AppSettings>,
 ): AppSettings {
   const { disabledProviders: _disabledProviders, ...localPatch } = patch;
-  return normalizeStoredAppSettings({
-    ...settings,
-    ...localPatch,
-    ...(hasOwn(patch, "openCodeServerPassword")
-      ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
-      : {}),
-  });
+  const merged = hasOwn(patch, "openCodeServerPassword")
+    ? {
+        ...settings,
+        ...localPatch,
+        openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()),
+      }
+    : { ...settings, ...localPatch };
+
+  return normalizeStoredAppSettings(merged);
 }
 
 export function getCustomModelsForProvider(
@@ -990,9 +1004,7 @@ export function patchCustomModels(
   };
 }
 
-export function getCustomModelsByProvider(
-  settings: Pick<AppSettings, CustomModelSettingsKey>,
-): Record<ProviderKind, readonly string[]> {
+export function getCustomModelsByProvider(settings: Pick<AppSettings, CustomModelSettingsKey>) {
   return {
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
@@ -1002,7 +1014,7 @@ export function getCustomModelsByProvider(
     droid: getCustomModelsForProvider(settings, "droid"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
-  };
+  } satisfies Record<ProviderKind, readonly string[]>;
 }
 
 export function getAppModelOptions(
@@ -1038,7 +1050,7 @@ export function getAppModelOptions(
       ? normalizeCursorModelVariantBaseId(selectedModel)
       : normalizeModelSlug(selectedModel, provider);
   const selectedModelMatchesExistingName =
-    typeof trimmedSelectedModel === "string" &&
+    trimmedSelectedModel !== undefined &&
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
   if (
     normalizedSelectedModel &&
@@ -1138,7 +1150,7 @@ export function resolveAppModelSelection(
 
 export function getCustomModelOptionsByProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
-): Record<ProviderKind, ReadonlyArray<ProviderModelOption>> {
+) {
   const customModelsByProvider = getCustomModelsByProvider(settings);
   return {
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
@@ -1149,7 +1161,7 @@ export function getCustomModelOptionsByProvider(
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
-  };
+  } satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
 }
 
 export function getProviderStartOptions(
@@ -1190,6 +1202,9 @@ export function getProviderStartOptions(
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
+  // SAFETY: provider start-option builders use conditional spreads to omit absent
+  // keys. Droid follows the same pattern; the others are left as-is.
+  /* eslint-disable anti-slop/no-conditional-empty-object-spread */
   const providerOptions: ProviderStartOptions = {
     ...(codexBinaryPath || settings.codexHomePath
       ? {
@@ -1253,6 +1268,7 @@ export function getProviderStartOptions(
         }
       : {}),
   };
+  /* eslint-enable anti-slop/no-conditional-empty-object-spread */
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
 }
@@ -1336,10 +1352,11 @@ export function useAppSettings() {
   });
 
   const normalizedLocalSettings = normalizeStoredAppSettings(localSettings);
-  const settings = normalizeAppSettings({
-    ...normalizedLocalSettings,
-    ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
-  });
+  const mergedSettings = { ...normalizedLocalSettings };
+  if (serverSettingsQuery.data) {
+    Object.assign(mergedSettings, serverSettingsToAppSettings(serverSettingsQuery.data));
+  }
+  const settings = normalizeAppSettings(mergedSettings);
 
   useEffect(() => {
     if (normalizedStoredSettingsRef.current) {

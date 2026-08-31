@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import type * as JsonSchema from "effect/JsonSchema";
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ServerGenerateAutomationIntentResult,
@@ -9,7 +10,7 @@ import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
 
 import { TextGenerationError } from "./Errors.ts";
 
-export function toJsonSchemaObject(schema: Schema.Top): unknown {
+export function toJsonSchemaObject(schema: Schema.Top): JsonSchema.JsonSchema {
   const document = Schema.toJsonSchemaDocument(schema);
   if (document.definitions && Object.keys(document.definitions).length > 0) {
     return {
@@ -82,17 +83,17 @@ export interface RawTextFallback {
   readonly maxWords?: number;
 }
 
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Unknown);
+type JsonObject = typeof JsonObjectSchema.Type;
+
 function stripCodeFences(raw: string): string {
   const fenced = raw.match(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/);
   return (fenced?.[1] ?? raw).trim();
 }
 
-function tryParseJsonObject(text: string): Record<string, unknown> | null {
+function tryParseJsonObject(text: string): JsonObject | null {
   try {
-    const parsed = JSON.parse(text) as unknown;
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return Schema.decodeUnknownSync(Schema.fromJsonString(JsonObjectSchema))(text);
   } catch {
     return null;
   }
@@ -100,13 +101,13 @@ function tryParseJsonObject(text: string): Record<string, unknown> | null {
 
 // Prefer the requested field, otherwise the first usable string value, so a wrong-key
 // JSON object (e.g. {"name":"Foo"}) yields "Foo" instead of the literal braces.
-function pickFallbackString(parsed: Record<string, unknown>, key: string): string | null {
+function pickFallbackString(parsed: JsonObject, key: string): string | null {
   const preferred = parsed[key];
-  if (typeof preferred === "string" && preferred.trim().length > 0) {
+  if (Schema.is(Schema.String)(preferred) && preferred.trim().length > 0) {
     return preferred.trim();
   }
   for (const value of Object.values(parsed)) {
-    if (typeof value === "string" && value.trim().length > 0) {
+    if (Schema.is(Schema.String)(value) && value.trim().length > 0) {
       return value.trim();
     }
   }

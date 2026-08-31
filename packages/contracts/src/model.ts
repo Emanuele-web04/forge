@@ -301,13 +301,23 @@ function cursorCapabilities(input?: {
   const efforts = input?.efforts ?? [];
   const defaultEffort =
     input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
+  const reasoningEffortLevels: EffortOption[] = [];
+  for (const value of efforts) {
+    if (value === defaultEffort) {
+      reasoningEffortLevels.push({
+        value,
+        label: CURSOR_EFFORT_LABELS[value],
+        isDefault: true,
+      });
+    } else {
+      reasoningEffortLevels.push({
+        value,
+        label: CURSOR_EFFORT_LABELS[value],
+      });
+    }
+  }
   return {
-    // eslint-disable-next-line oxc/no-map-spread
-    reasoningEffortLevels: efforts.map((value) => ({
-      value,
-      label: CURSOR_EFFORT_LABELS[value],
-      ...(value === defaultEffort ? { isDefault: true as const } : {}),
-    })),
+    reasoningEffortLevels,
     supportsFastMode: input?.fast ?? false,
     supportsThinkingToggle: input?.thinking ?? false,
     promptInjectedEffortLevels: [],
@@ -1067,7 +1077,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 
 export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
 
-export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
+export const DEFAULT_MODEL_BY_PROVIDER = {
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
@@ -1075,7 +1085,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   grok: "grok-4.6",
   droid: "deepseek-v4-flash-0731",
   opencode: "openai/gpt-5",
-};
+} satisfies Record<ProviderWithDefaultModel, ModelSlug>;
 
 // Backward compatibility for existing Codex-only call sites.
 export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
@@ -1083,7 +1093,7 @@ export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
-export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
+export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   codex: {
     "5.5": "gpt-5.5",
     "5.4": "gpt-5.4",
@@ -1216,7 +1226,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
-};
+} satisfies Record<ProviderKind, Record<string, ModelSlug>>;
 
 // ── Agent mention aliases ─────────────────────────────────────────────
 // Re-exported from agentMentions.ts for backward compatibility
@@ -1233,12 +1243,16 @@ export {
 
 // ── Model capabilities index ──────────────────────────────────────────
 
-export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
-  Object.entries(MODEL_OPTIONS_BY_PROVIDER).map(([provider, models]) => [
-    provider,
-    Object.fromEntries(models.map((m) => [m.slug, m.capabilities])),
-  ]),
-) as unknown as Record<ProviderKind, Record<string, ModelCapabilities>>;
+export const MODEL_CAPABILITIES_INDEX =
+  // SAFETY: built from MODEL_OPTIONS_BY_PROVIDER, which statically maps providers
+  // to model definitions with concrete capabilities. The runtime shape is exactly
+  // provider -> slug -> capabilities.
+  Object.fromEntries(
+    Object.entries(MODEL_OPTIONS_BY_PROVIDER).map(([provider, models]) => [
+      provider,
+      Object.fromEntries(models.map((m) => [m.slug, m.capabilities])),
+    ]),
+  ) as Record<ProviderKind, Record<string, ModelCapabilities>>;
 
 Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
   "grok-build-0.1": GROK_BUILD_CAPABILITIES,
@@ -1248,7 +1262,7 @@ Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
 
 // ── Provider display names ────────────────────────────────────────────
 
-export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
+export const PROVIDER_DISPLAY_NAMES = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
@@ -1257,4 +1271,4 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
-};
+} satisfies Record<ProviderKind, string>;

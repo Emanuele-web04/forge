@@ -13,6 +13,7 @@ import {
 import { TextGenerationError } from "../Errors.ts";
 import {
   DroidTextGeneration,
+  type CommitMessageGenerationResult,
   type TextGenerationOperation,
   type TextGenerationShape,
 } from "../Services/TextGeneration.ts";
@@ -47,6 +48,19 @@ const resolveDroidSettings = (
   return binaryPath ? { binaryPath } : undefined;
 };
 
+const makeMapOpError =
+  (operation: TextGenerationOperation) =>
+  (detail: string, cause?: unknown): TextGenerationError => {
+    const error = new TextGenerationError({
+      operation,
+      detail,
+    });
+    if (cause !== undefined) {
+      error.cause = cause;
+    }
+    return error;
+  };
+
 function runDroidAcp<S extends Schema.Top>(
   childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   input: {
@@ -59,6 +73,7 @@ function runDroidAcp<S extends Schema.Top>(
     providerOptions?: ProviderStartOptions;
   },
 ) {
+  const mapOpError = makeMapOpError(input.operation);
   return Effect.gen(function* () {
     const outputRef = yield* Ref.make("");
     const runtime = yield* makeDroidAcpRuntime({
@@ -74,15 +89,10 @@ function runDroidAcp<S extends Schema.Top>(
       if (content.type !== "text") return Effect.void;
       return Ref.update(outputRef, (current) => current + content.text);
     });
-    const mapOpError = (detail: string, cause?: unknown) =>
-      new TextGenerationError(
-        cause === undefined
-          ? { operation: input.operation, detail }
-          : { operation: input.operation, detail, cause },
-      );
     yield* runtime.start();
     yield* applyDroidAcpInteractionMode({
       runtime,
+      interactionMode: "plan",
       mapError: ({ cause }) =>
         mapOpError("Failed to set Droid ACP interaction mode for text generation.", cause),
     });
@@ -124,17 +134,13 @@ function runDroidAcp<S extends Schema.Top>(
       raw,
       operation: input.operation,
       providerLabel: "Droid Agent",
-      ...(input.rawTextFallback ? { rawTextFallback: input.rawTextFallback } : {}),
+      rawTextFallback: input.rawTextFallback,
     });
   }).pipe(
     Effect.mapError((cause) =>
       cause instanceof TextGenerationError
         ? cause
-        : new TextGenerationError({
-            operation: input.operation,
-            detail: "Droid Agent ACP text generation failed.",
-            cause,
-          }),
+        : mapOpError("Droid Agent ACP text generation failed.", cause),
     ),
     Effect.scoped,
   );
@@ -142,7 +148,7 @@ function runDroidAcp<S extends Schema.Top>(
 
 const droidOps = [
   [
-    "generateCommitMessage" as TextGenerationOperation,
+    "generateCommitMessage",
     (input: any) =>
       buildCommitMessagePrompt({
         branch: input.branch,
@@ -150,16 +156,19 @@ const droidOps = [
         stagedPatch: input.stagedPatch,
         includeBranch: input.includeBranch === true,
       }),
-    (g: any) => ({
-      subject: sanitizeCommitSubject(g.subject),
-      body: g.body.trim(),
-      ...("branch" in g && typeof g.branch === "string"
-        ? { branch: sanitizeFeatureBranchName(g.branch) }
-        : {}),
-    }),
+    (g: any, _input: any) => {
+      const result: CommitMessageGenerationResult = {
+        subject: sanitizeCommitSubject(g.subject),
+        body: g.body.trim(),
+      };
+      if (Schema.is(Schema.String)(g.branch)) {
+        result.branch = sanitizeFeatureBranchName(g.branch);
+      }
+      return result;
+    },
   ],
   [
-    "generatePrContent" as TextGenerationOperation,
+    "generatePrContent",
     (input: any) =>
       buildPrContentPrompt({
         baseBranch: input.baseBranch,
@@ -172,12 +181,12 @@ const droidOps = [
     (g: any) => ({ title: sanitizePrTitle(g.title), body: g.body.trim() }),
   ],
   [
-    "generateDiffSummary" as TextGenerationOperation,
+    "generateDiffSummary",
     (input: any) => buildDiffSummaryPrompt({ patch: input.patch }),
     (g: any) => ({ summary: sanitizeDiffSummary(g.summary) }),
   ],
   [
-    "generateBranchName" as TextGenerationOperation,
+    "generateBranchName",
     (input: any) =>
       buildBranchNamePrompt({
         message: input.message,
@@ -186,7 +195,7 @@ const droidOps = [
     (g: any) => ({ branch: sanitizeBranchFragment(g.branch) }),
   ],
   [
-    "generateThreadTitle" as TextGenerationOperation,
+    "generateThreadTitle",
     (input: any) =>
       buildThreadTitlePrompt({
         message: input.message,
@@ -195,7 +204,7 @@ const droidOps = [
     (g: any) => ({ title: sanitizeGeneratedThreadTitle(g.title) }),
   ],
   [
-    "generateThreadRecap" as TextGenerationOperation,
+    "generateThreadRecap",
     (input: any) =>
       buildThreadRecapPrompt({
         previousRecap: input.previousRecap,
@@ -205,7 +214,7 @@ const droidOps = [
     (g: any, input: any) => ({ recap: sanitizeThreadRecap(g.recap, input.previousRecap) }),
   ],
   [
-    "generateAutomationIntent" as TextGenerationOperation,
+    "generateAutomationIntent",
     (input: any) =>
       buildAutomationIntentPrompt({
         message: input.message,
@@ -215,7 +224,7 @@ const droidOps = [
     (g: any) => g,
   ],
   [
-    "evaluateAutomationCompletion" as TextGenerationOperation,
+    "evaluateAutomationCompletion",
     (input: any) => buildAutomationCompletionEvaluationPrompt(input),
     (g: any) => g,
   ],
@@ -223,36 +232,45 @@ const droidOps = [
 
 const makeDroidTextGeneration = Effect.gen(function* () {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // SAFETY: Object.fromEntries returns a generic string-keyed record; droidOps is a tuple of [TextGenerationOperation, function] pairs, so the record's keys are the operation union.
   const ops = Object.fromEntries(
-    droidOps.map(([operation, build, sanitize]) => [
-      operation,
-      (input: any) =>
-        Effect.gen(function* () {
-          const modelSelection = resolveDroidModelSelection(input);
-          if (!modelSelection)
-            return yield* new TextGenerationError({
+    droidOps.map(
+      ([operation, build, sanitize]): readonly [
+        TextGenerationOperation,
+        (input: any) => Effect.Effect<any, any, never>,
+      ] => [
+        operation,
+        (input: any) =>
+          Effect.gen(function* () {
+            const modelSelection = resolveDroidModelSelection(input);
+            if (!modelSelection) {
+              return yield* new TextGenerationError({
+                operation,
+                detail: "Invalid Droid model selection.",
+              });
+            }
+            const buildOutput = build(input);
+            const { prompt, outputSchemaJson } = buildOutput;
+            let rawTextFallback: RawTextFallback | undefined;
+            if ("rawTextFallback" in buildOutput) {
+              rawTextFallback = buildOutput.rawTextFallback;
+            }
+            const generated = yield* runDroidAcp(childProcessSpawner, {
               operation,
-              detail: "Invalid Droid model selection.",
+              cwd: input.cwd,
+              prompt,
+              outputSchemaJson,
+              rawTextFallback,
+              modelSelection,
+              providerOptions: input.providerOptions,
             });
-          const { prompt, outputSchemaJson, rawTextFallback } = build(input) as {
-            prompt: string;
-            outputSchemaJson: Schema.Top;
-            rawTextFallback?: RawTextFallback | undefined;
-          };
-          const generated = yield* runDroidAcp(childProcessSpawner, {
-            operation,
-            cwd: input.cwd,
-            prompt,
-            outputSchemaJson,
-            rawTextFallback,
-            modelSelection,
-            providerOptions: input.providerOptions,
-          });
-          return sanitize(generated, input);
-        }),
-    ]),
-  );
-  return ops as unknown as TextGenerationShape;
+            return sanitize(generated, input);
+          }),
+      ],
+    ),
+  ) as Record<TextGenerationOperation, (input: any) => Effect.Effect<any, any, never>>;
+  // SAFETY: droidOps covers all eight TextGenerationOperation entries; each sanitize returns the matching operation result shape, so the Object.fromEntries record implements TextGenerationShape.
+  return ops as TextGenerationShape;
 });
 
 export const DroidTextGenerationServiceLive = Layer.effect(
