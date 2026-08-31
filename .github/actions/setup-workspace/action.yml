@@ -3,7 +3,7 @@ description: Shared tool setup, dependency install, and caches for Synara CI job
 
 inputs:
   electron:
-    description: Install the Electron runtime binary ('true' or 'false').
+    description: Install the Electron runtime binary.
     required: false
     default: "false"
 
@@ -41,8 +41,6 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      # The Electron binary is deliberately skipped here even when the electron
-      # input is true; the gated step below fetches it separately from cache.
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       run: bun install --frozen-lockfile

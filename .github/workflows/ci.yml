@@ -58,8 +58,6 @@ jobs:
   browser:
     name: Browser Tests
     runs-on: ubuntu-24.04
-    # Step caps sum to 45 (15+20+10); the job cap stays above that so a stall in
-    # the non-blocking geometry step can never be converted into a job failure.
     timeout-minutes: 55
     steps:
       - name: Checkout
@@ -125,8 +123,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [static, unit, browser, build]
-    # always() + the explicit result check below keep the gate fail-closed: a
-    # cancelled or skipped dependency must fail the gate, never silently pass it.
     if: always()
     steps:
       - name: Check quality results
