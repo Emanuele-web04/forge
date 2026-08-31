@@ -2,12 +2,12 @@
 // Purpose: Own model-setting discovery, selection, and custom-model editing workflows.
 // Layer: Settings panel
 
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import {
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
-  PROVIDER_DISPLAY_NAMES,
-  type ProviderKind,
-} from "@synara/contracts";
-import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
+  getModelOptions,
+  normalizeModelSlug,
+  resolveTextGenerationModelSlug,
+} from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
@@ -20,6 +20,7 @@ import {
   getGitTextGenerationModelOptions,
   isGitTextGenerationSettingsDirty,
   patchCustomModels,
+  resolveGitTextGenerationSelection,
 } from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { PlusIcon, XIcon } from "~/lib/icons";
@@ -67,6 +68,22 @@ export function validateCustomModelInput(input: {
   if (input.savedModels.includes(normalized)) {
     return { error: "That custom model is already saved." };
   }
+
+  // Droid custom slugs must resolve through the shared text-generation resolver
+  // as `droid/<custom>` or `droid:<custom>` and must not duplicate a built-in.
+  if (input.provider === "droid") {
+    const resolved = resolveTextGenerationModelSlug(input.value);
+    if (!resolved || resolved.provider !== "droid" || !resolved.model) {
+      return { error: "Enter a Droid model slug as droid/<model> or droid:<model>." };
+    }
+    if (getModelOptions("droid").some((option) => option.slug === resolved.model)) {
+      return { error: "That model is already built in." };
+    }
+    if (input.savedModels.includes(resolved.model) && resolved.model !== normalized) {
+      return { error: "That custom model is already saved." };
+    }
+  }
+
   return { model: normalized };
 }
 
@@ -106,8 +123,11 @@ export function ModelsSettingsPanel({
     textGenerationModel,
     textGenerationProvider,
   } = settings;
-  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  const { provider: currentGitTextGenerationProvider, model: currentGitTextGenerationModel } =
+    resolveGitTextGenerationSelection({
+      provider: textGenerationProvider,
+      model: textGenerationModel,
+    });
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
     [currentGitTextGenerationModel, currentGitTextGenerationProvider],

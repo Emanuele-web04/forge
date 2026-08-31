@@ -23,6 +23,7 @@ import {
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
+  resolveTextGenerationModelSlug,
 } from "@synara/shared/model";
 import {
   APP_SNAP_SHORTCUT_KEYS,
@@ -381,16 +382,30 @@ export function isGitTextGenerationSettingsDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
+  const settingsSelection = resolveGitTextGenerationSelection({
+    provider: settings.textGenerationProvider,
+    model: settings.textGenerationModel,
+  });
+  const defaultsSelection = resolveGitTextGenerationSelection({
+    provider: defaults.textGenerationProvider,
+    model: defaults.textGenerationModel,
+  });
   return (
-    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
-    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
-      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+    settingsSelection.provider !== defaultsSelection.provider ||
+    settingsSelection.model !== defaultsSelection.model
   );
 }
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;
+type ServerProviderSettingValue = string | boolean | readonly string[];
+type MutableProviderPatch<Provider extends keyof MutableServerSettingsProvidersPatch> = Mutable<
+  NonNullable<MutableServerSettingsProvidersPatch[Provider]>
+>;
+type MutableProviderStartOptions<Provider extends keyof ProviderStartOptions> = Mutable<
+  NonNullable<ProviderStartOptions[Provider]>
+>;
 
 export interface AppModelOption extends ProviderModelOption {
   provider: ProviderKind;
@@ -477,11 +492,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG = {
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
-// Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
-// persisted config for compatibility, but do not offer an editor it cannot honor.
-export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
-  (config) => config.provider !== "droid",
-);
+export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS;
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -679,15 +690,65 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
   };
 }
 
-function resolveTextGenerationProvider(input: {
-  readonly provider?: ProviderKind | null;
-  readonly model?: string | null;
+export function resolveTextGenerationProvider(input: {
+  readonly provider?: ProviderKind | null | undefined;
+  readonly model?: string | null | undefined;
 }): ProviderKind {
   if (input.provider) {
     return input.provider;
   }
-  const model = input.model;
-  return model?.includes("/") ? "opencode" : "codex";
+
+  const resolved = resolveTextGenerationModelSlug(input.model);
+  if (resolved) {
+    return resolved.provider;
+  }
+
+  const model = input.model?.trim() ?? "";
+  if (!model) {
+    return "codex";
+  }
+
+  // Legacy fallbacks for custom or unknown slugs that the shared resolver
+  // could not map to a provider.
+  return model.includes("/") ? "opencode" : "codex";
+}
+
+/**
+ * Resolve a git text-generation model selection into a provider and a
+ * canonical model slug.
+ *
+ * Uses the shared `resolveTextGenerationModelSlug` resolver for provider
+ * inference and for canonicalizing known built-in/alias slugs, while
+ * preserving custom and discovered model identifiers that the shared resolver
+ * does not recognize (e.g. `droid/custom`, `openrouter/my-model`).
+ */
+export function resolveGitTextGenerationSelection(input: {
+  readonly provider?: ProviderKind | null | undefined;
+  readonly model?: string | null | undefined;
+}): { provider: ProviderKind; model: string } {
+  const provider = input.provider ?? resolveTextGenerationProvider({ model: input.model });
+  const model = input.model?.trim();
+  if (!model) {
+    return {
+      provider,
+      model: getDefaultModel(provider) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    };
+  }
+
+  const resolved = resolveTextGenerationModelSlug(model);
+  if (
+    resolved &&
+    resolved.provider === provider &&
+    BUILT_IN_MODEL_SLUGS_BY_PROVIDER[provider].has(resolved.model)
+  ) {
+    return { provider, model: resolved.model };
+  }
+
+  const fallbackModel =
+    normalizeModelSlug(model, provider) ??
+    getDefaultModel(provider) ??
+    DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  return { provider, model: fallbackModel };
 }
 
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
@@ -725,14 +786,15 @@ function pruneProviderPatchAgainstCurrentSettings(
     const providerPatch = providers[provider];
     if (!providerPatch) continue;
 
-    /* eslint-disable anti-slop/no-chained-type-assertions,
-       anti-slop/no-unsafe-dictionary-type,
-       anti-slop/require-safety-comment-for-type-assertion */
-    const patchRecord = providerPatch as Record<string, unknown>;
-    const currentRecord = currentSettings.providers[provider] as unknown as Record<string, unknown>;
-    /* eslint-enable anti-slop/no-chained-type-assertions,
-       anti-slop/no-unsafe-dictionary-type,
-       anti-slop/require-safety-comment-for-type-assertion */
+    // SAFETY: these records are only used inside this function to compare and
+    // delete provider-specific patch keys. They are not exposed as public APIs.
+    const patchRecord = providerPatch as Record<string, ServerProviderSettingValue | undefined>;
+    // SAFETY: current settings values are JSON-serializable primitives or arrays
+    // at this point, and are only read to compare against the patch.
+    const currentRecord = currentSettings.providers[provider] as Record<
+      string,
+      ServerProviderSettingValue | undefined
+    >;
     for (const [key, value] of Object.entries(patchRecord)) {
       const matchesCurrent =
         key === "serverPassword"
@@ -765,74 +827,60 @@ export function appSettingsPatchToServerSettingsPatch(
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-    const provider = patch.textGenerationProvider;
-    serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({ provider: provider ?? null, model }),
-      model,
-    };
+    const { provider, model } = resolveGitTextGenerationSelection({
+      provider: patch.textGenerationProvider,
+      model: patch.textGenerationModel,
+    });
+    serverPatch.textGenerationModelSelection = { provider, model };
   }
-  /* eslint-disable anti-slop/no-conditional-empty-object-spread */
-  // SAFETY: provider patch builders use conditional spreads to omit absent keys.
-  // Droid follows the same pattern; the others are left as-is to keep this
-  // mechanical PR small.
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
     hasOwn(patch, "customCodexModels")
   ) {
-    providers.codex = {
-      ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
-      ...(hasOwn(patch, "customCodexModels")
-        ? { customModels: patch.customCodexModels ?? [] }
-        : {}),
-    };
+    const codex: MutableProviderPatch<"codex"> = {};
+    if (hasOwn(patch, "codexBinaryPath")) codex.binaryPath = patch.codexBinaryPath ?? "";
+    if (hasOwn(patch, "codexHomePath")) codex.homePath = patch.codexHomePath ?? "";
+    if (hasOwn(patch, "customCodexModels")) codex.customModels = patch.customCodexModels ?? [];
+    providers.codex = codex;
   }
   if (hasOwn(patch, "claudeBinaryPath") || hasOwn(patch, "customClaudeModels")) {
-    providers.claudeAgent = {
-      ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customClaudeModels")
-        ? { customModels: patch.customClaudeModels ?? [] }
-        : {}),
-    };
+    const claudeAgent: MutableProviderPatch<"claudeAgent"> = {};
+    if (hasOwn(patch, "claudeBinaryPath")) claudeAgent.binaryPath = patch.claudeBinaryPath ?? "";
+    if (hasOwn(patch, "customClaudeModels"))
+      claudeAgent.customModels = patch.customClaudeModels ?? [];
+    providers.claudeAgent = claudeAgent;
   }
   if (
     hasOwn(patch, "cursorApiEndpoint") ||
     hasOwn(patch, "cursorBinaryPath") ||
     hasOwn(patch, "customCursorModels")
   ) {
-    providers.cursor = {
-      ...(hasOwn(patch, "cursorApiEndpoint") ? { apiEndpoint: patch.cursorApiEndpoint ?? "" } : {}),
-      ...(hasOwn(patch, "cursorBinaryPath") ? { binaryPath: patch.cursorBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customCursorModels")
-        ? { customModels: patch.customCursorModels ?? [] }
-        : {}),
-    };
+    const cursor: MutableProviderPatch<"cursor"> = {};
+    if (hasOwn(patch, "cursorApiEndpoint")) cursor.apiEndpoint = patch.cursorApiEndpoint ?? "";
+    if (hasOwn(patch, "cursorBinaryPath")) cursor.binaryPath = patch.cursorBinaryPath ?? "";
+    if (hasOwn(patch, "customCursorModels")) cursor.customModels = patch.customCursorModels ?? [];
+    providers.cursor = cursor;
   }
   if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
-    providers.antigravity = {
-      ...(hasOwn(patch, "antigravityBinaryPath")
-        ? { binaryPath: patch.antigravityBinaryPath ?? "" }
-        : {}),
-      ...(hasOwn(patch, "customAntigravityModels")
-        ? { customModels: patch.customAntigravityModels ?? [] }
-        : {}),
-    };
+    const antigravity: MutableProviderPatch<"antigravity"> = {};
+    if (hasOwn(patch, "antigravityBinaryPath"))
+      antigravity.binaryPath = patch.antigravityBinaryPath ?? "";
+    if (hasOwn(patch, "customAntigravityModels"))
+      antigravity.customModels = patch.customAntigravityModels ?? [];
+    providers.antigravity = antigravity;
   }
   if (hasOwn(patch, "grokBinaryPath") || hasOwn(patch, "customGrokModels")) {
-    providers.grok = {
-      ...(hasOwn(patch, "grokBinaryPath") ? { binaryPath: patch.grokBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
-    };
+    const grok: MutableProviderPatch<"grok"> = {};
+    if (hasOwn(patch, "grokBinaryPath")) grok.binaryPath = patch.grokBinaryPath ?? "";
+    if (hasOwn(patch, "customGrokModels")) grok.customModels = patch.customGrokModels ?? [];
+    providers.grok = grok;
   }
   if (hasOwn(patch, "droidBinaryPath") || hasOwn(patch, "customDroidModels")) {
-    providers.droid = {
-      ...(hasOwn(patch, "droidBinaryPath") ? { binaryPath: patch.droidBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customDroidModels")
-        ? { customModels: patch.customDroidModels ?? [] }
-        : {}),
-    };
+    const droid: MutableProviderPatch<"droid"> = {};
+    if (hasOwn(patch, "droidBinaryPath")) droid.binaryPath = patch.droidBinaryPath ?? "";
+    if (hasOwn(patch, "customDroidModels")) droid.customModels = patch.customDroidModels ?? [];
+    providers.droid = droid;
   }
   if (
     hasOwn(patch, "openCodeBinaryPath") ||
@@ -841,34 +889,28 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "customOpenCodeModels")
   ) {
-    providers.opencode = {
-      ...(hasOwn(patch, "openCodeBinaryPath")
-        ? { binaryPath: patch.openCodeBinaryPath ?? "" }
-        : {}),
-      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
-        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
-        : {}),
-      ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
-      ...(hasOwn(patch, "openCodeServerPassword")
-        ? { serverPassword: patch.openCodeServerPassword ?? "" }
-        : {}),
-      ...(hasOwn(patch, "customOpenCodeModels")
-        ? { customModels: patch.customOpenCodeModels ?? [] }
-        : {}),
-    };
+    const opencode: MutableProviderPatch<"opencode"> = {};
+    if (hasOwn(patch, "openCodeBinaryPath")) opencode.binaryPath = patch.openCodeBinaryPath ?? "";
+    if (hasOwn(patch, "openCodeExperimentalWebSockets"))
+      opencode.experimentalWebSockets = Boolean(patch.openCodeExperimentalWebSockets);
+    if (hasOwn(patch, "openCodeServerUrl")) opencode.serverUrl = patch.openCodeServerUrl ?? "";
+    if (hasOwn(patch, "openCodeServerPassword"))
+      opencode.serverPassword = patch.openCodeServerPassword ?? "";
+    if (hasOwn(patch, "customOpenCodeModels"))
+      opencode.customModels = patch.customOpenCodeModels ?? [];
+    providers.opencode = opencode;
   }
   if (
     hasOwn(patch, "piAgentDir") ||
     hasOwn(patch, "piBinaryPath") ||
     hasOwn(patch, "customPiModels")
   ) {
-    providers.pi = {
-      ...(hasOwn(patch, "piAgentDir") ? { agentDir: patch.piAgentDir ?? "" } : {}),
-      ...(hasOwn(patch, "piBinaryPath") ? { binaryPath: patch.piBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
-    };
+    const pi: MutableProviderPatch<"pi"> = {};
+    if (hasOwn(patch, "piAgentDir")) pi.agentDir = patch.piAgentDir ?? "";
+    if (hasOwn(patch, "piBinaryPath")) pi.binaryPath = patch.piBinaryPath ?? "";
+    if (hasOwn(patch, "customPiModels")) pi.customModels = patch.customPiModels ?? [];
+    providers.pi = pi;
   }
-  /* eslint-enable anti-slop/no-conditional-empty-object-spread */
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
     for (const provider of DEFAULT_PROVIDER_ORDER) {
@@ -1084,12 +1126,11 @@ export function mapCatalogModelOptionsToAppModelOptions(
 export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
-    | "customCodexModels"
-    | "customDroidModels"
-    | "customOpenCodeModels"
-    | "textGenerationModel"
-    | "textGenerationProvider"
-  >,
+    "customCodexModels" | "customDroidModels" | "customOpenCodeModels"
+  > & {
+    textGenerationModel?: string | undefined;
+    textGenerationProvider?: ProviderKind | undefined;
+  },
   discoveredOptionsByProvider?: Partial<
     Record<
       GitTextGenerationDiscoveredProvider,
@@ -1120,15 +1161,18 @@ export function getGitTextGenerationModelOptions(
     deduped.push(option);
   }
 
-  const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
-  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
+  const selected = resolveGitTextGenerationSelection({
+    provider: settings.textGenerationProvider,
+    model: settings.textGenerationModel,
+  });
+  if (!seen.has(`${selected.provider}:${selected.model}`)) {
     deduped.push({
-      provider: selectedProvider,
-      slug: selectedModel,
-      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
+      provider: selected.provider,
+      slug: selected.model,
+      name: formatProviderModelOptionName({
+        provider: selected.provider,
+        slug: selected.model,
+      }),
       isCustom: true,
     });
   }
@@ -1202,73 +1246,52 @@ export function getProviderStartOptions(
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
-  // SAFETY: provider start-option builders use conditional spreads to omit absent
-  // keys. Droid follows the same pattern; the others are left as-is.
-  /* eslint-disable anti-slop/no-conditional-empty-object-spread */
-  const providerOptions: ProviderStartOptions = {
-    ...(codexBinaryPath || settings.codexHomePath
-      ? {
-          codex: {
-            ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
-            ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-          },
-        }
-      : {}),
-    ...(claudeBinaryPath
-      ? {
-          claudeAgent: {
-            binaryPath: claudeBinaryPath,
-          },
-        }
-      : {}),
-    ...(cursorBinaryPath || settings.cursorApiEndpoint
-      ? {
-          cursor: {
-            ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
-            ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
-          },
-        }
-      : {}),
-    ...(antigravityBinaryPath
-      ? {
-          antigravity: {
-            binaryPath: antigravityBinaryPath,
-          },
-        }
-      : {}),
-    ...(grokBinaryPath
-      ? {
-          grok: {
-            binaryPath: grokBinaryPath,
-          },
-        }
-      : {}),
-    ...(droidBinaryPath
-      ? {
-          droid: {
-            binaryPath: droidBinaryPath,
-          },
-        }
-      : {}),
-    ...(hasOpenCodeStartOptions
-      ? {
-          opencode: {
-            ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
-            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
-            ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
-          },
-        }
-      : {}),
-    ...(piBinaryPath || settings.piAgentDir
-      ? {
-          pi: {
-            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),
-            ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),
-          },
-        }
-      : {}),
-  };
-  /* eslint-enable anti-slop/no-conditional-empty-object-spread */
+  const providerOptions: Mutable<ProviderStartOptions> = {};
+  if (codexBinaryPath || settings.codexHomePath) {
+    const codex: MutableProviderStartOptions<"codex"> = {};
+    if (codexBinaryPath) codex.binaryPath = codexBinaryPath;
+    if (settings.codexHomePath) codex.homePath = settings.codexHomePath;
+    providerOptions.codex = codex;
+  }
+  if (claudeBinaryPath) {
+    const claudeAgent = {
+      binaryPath: claudeBinaryPath,
+    } satisfies MutableProviderStartOptions<"claudeAgent">;
+    providerOptions.claudeAgent = claudeAgent;
+  }
+  if (cursorBinaryPath || settings.cursorApiEndpoint) {
+    const cursor: MutableProviderStartOptions<"cursor"> = {};
+    if (cursorBinaryPath) cursor.binaryPath = cursorBinaryPath;
+    if (settings.cursorApiEndpoint) cursor.apiEndpoint = settings.cursorApiEndpoint;
+    providerOptions.cursor = cursor;
+  }
+  if (antigravityBinaryPath) {
+    const antigravity = {
+      binaryPath: antigravityBinaryPath,
+    } satisfies MutableProviderStartOptions<"antigravity">;
+    providerOptions.antigravity = antigravity;
+  }
+  if (grokBinaryPath) {
+    const grok = { binaryPath: grokBinaryPath } satisfies MutableProviderStartOptions<"grok">;
+    providerOptions.grok = grok;
+  }
+  if (droidBinaryPath) {
+    const droid = { binaryPath: droidBinaryPath } satisfies MutableProviderStartOptions<"droid">;
+    providerOptions.droid = droid;
+  }
+  if (hasOpenCodeStartOptions) {
+    const opencode: MutableProviderStartOptions<"opencode"> = {};
+    if (openCodeBinaryPath) opencode.binaryPath = openCodeBinaryPath;
+    if (settings.openCodeExperimentalWebSockets) opencode.experimentalWebSockets = true;
+    if (settings.openCodeServerUrl) opencode.serverUrl = settings.openCodeServerUrl;
+    providerOptions.opencode = opencode;
+  }
+  if (piBinaryPath || settings.piAgentDir) {
+    const pi: MutableProviderStartOptions<"pi"> = {};
+    if (piBinaryPath) pi.binaryPath = piBinaryPath;
+    if (settings.piAgentDir) pi.agentDir = settings.piAgentDir;
+    providerOptions.pi = pi;
+  }
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
 }

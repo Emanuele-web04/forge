@@ -4,14 +4,14 @@
 // Exports: Vitest suites for appSettings.ts
 
 import { Schema } from "effect";
-import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
   applyLocalAppSettingsPatch,
   appSettingsPatchToServerSettingsPatch,
-  CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -39,7 +39,9 @@ import {
   patchCustomModels,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  resolveGitTextGenerationSelection,
   resolveTerminalFontFamilyStack,
+  resolveTextGenerationProvider,
 } from "./appSettings";
 
 describe("server-backed provider enablement", () => {
@@ -153,6 +155,106 @@ describe("server-backed provider enablement", () => {
       didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, DEFAULT_SERVER_SETTINGS_VIEW),
     ).toBe(false);
     expect(didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, disabledOpenCode)).toBe(true);
+  });
+});
+
+describe("appSettingsPatchToServerSettingsPatch", () => {
+  it("resolves bare Droid slugs and aliases to the Droid provider and canonical default model", () => {
+    for (const model of ["deepseek-v4-flash-0731", "deepseek", "flash"]) {
+      const patch = appSettingsPatchToServerSettingsPatch({ textGenerationModel: model });
+
+      expect(patch.textGenerationModelSelection).toEqual({
+        provider: "droid",
+        model: "deepseek-v4-flash-0731",
+      });
+    }
+  });
+
+  it("defaults the Droid git writing model to deepseek-v4-flash-0731 when not set", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({ textGenerationProvider: "droid" });
+
+    expect(patch.textGenerationModelSelection).toEqual({
+      provider: "droid",
+      model: "deepseek-v4-flash-0731",
+    });
+  });
+
+  it("uses the provider default for Droid instead of the global codex default", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({ textGenerationProvider: "droid" });
+
+    expect(patch.textGenerationModelSelection?.model).not.toBe(DEFAULT_GIT_TEXT_GENERATION_MODEL);
+    expect(patch.textGenerationModelSelection?.model).toBe(getDefaultModel("droid"));
+  });
+});
+
+describe("resolveTextGenerationProvider", () => {
+  it("resolves Droid slugs through the shared resolver", () => {
+    expect(resolveTextGenerationProvider({ model: "deepseek-v4-flash-0731" })).toBe("droid");
+    expect(resolveTextGenerationProvider({ model: "deepseek" })).toBe("droid");
+    expect(resolveTextGenerationProvider({ model: "flash" })).toBe("droid");
+    expect(resolveTextGenerationProvider({ model: "droid/custom" })).toBe("droid");
+    expect(resolveTextGenerationProvider({ model: "droid:custom" })).toBe("droid");
+  });
+
+  it("falls back to opencode for slash slugs and codex for unknown bare slugs", () => {
+    expect(resolveTextGenerationProvider({ model: "openrouter/custom" })).toBe("opencode");
+    expect(resolveTextGenerationProvider({ model: "custom" })).toBe("codex");
+  });
+
+  it("returns the explicit provider when provided", () => {
+    expect(resolveTextGenerationProvider({ provider: "droid" })).toBe("droid");
+    expect(resolveTextGenerationProvider({ provider: "codex", model: "deepseek" })).toBe("codex");
+  });
+});
+
+describe("resolveGitTextGenerationSelection", () => {
+  it("resolves Droid aliases to the canonical deepseek-v4-flash-0731", () => {
+    expect(resolveGitTextGenerationSelection({ model: "deepseek" })).toEqual({
+      provider: "droid",
+      model: "deepseek-v4-flash-0731",
+    });
+    expect(resolveGitTextGenerationSelection({ model: "flash" })).toEqual({
+      provider: "droid",
+      model: "deepseek-v4-flash-0731",
+    });
+  });
+
+  it("preserves Droid custom slugs from droid/<custom> and droid:<custom> forms", () => {
+    expect(resolveGitTextGenerationSelection({ model: "droid/custom" })).toEqual({
+      provider: "droid",
+      model: "droid/custom",
+    });
+    expect(resolveGitTextGenerationSelection({ model: "droid:custom" })).toEqual({
+      provider: "droid",
+      model: "droid:custom",
+    });
+  });
+
+  it("resolves OpenCode and Codex built-ins through the shared resolver", () => {
+    expect(resolveGitTextGenerationSelection({ model: "openai/gpt-5" })).toEqual({
+      provider: "opencode",
+      model: "openai/gpt-5",
+    });
+    expect(resolveGitTextGenerationSelection({ model: "gpt-5.5" })).toEqual({
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("defaults the Droid selection to deepseek-v4-flash-0731", () => {
+    expect(resolveGitTextGenerationSelection({ provider: "droid" })).toEqual({
+      provider: "droid",
+      model: "deepseek-v4-flash-0731",
+    });
+  });
+
+  it("preserves an explicit provider for unrecognized custom slash slugs", () => {
+    expect(resolveGitTextGenerationSelection({ provider: "codex", model: "custom/codex" })).toEqual(
+      {
+        provider: "codex",
+        model: "custom/codex",
+      },
+    );
   });
 });
 
@@ -340,6 +442,98 @@ describe("getGitTextGenerationModelOptions", () => {
       provider: "opencode",
       isCustom: true,
     });
+  });
+
+  it("includes Droid built-in options including deepseek-v4-flash-0731", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customDroidModels: [],
+      customOpenCodeModels: [],
+    });
+
+    expect(
+      options.some(
+        (option) => option.provider === "droid" && option.slug === "deepseek-v4-flash-0731",
+      ),
+    ).toBe(true);
+  });
+
+  it("includes custom Droid models in git writing options", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customDroidModels: ["droid/custom-model"],
+      customOpenCodeModels: [],
+    });
+
+    expect(
+      options.some(
+        (option) =>
+          option.provider === "droid" && option.slug === "droid/custom-model" && option.isCustom,
+      ),
+    ).toBe(true);
+  });
+
+  it("prefers runtime-discovered Droid catalog options over built-ins and custom models", () => {
+    const options = getGitTextGenerationModelOptions(
+      {
+        customCodexModels: [],
+        customDroidModels: ["droid/custom-model"],
+        customOpenCodeModels: [],
+        textGenerationModel: "discovered-droid-model",
+        textGenerationProvider: "droid",
+      },
+      {
+        droid: [
+          { slug: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+          { slug: "deepseek-v4-flash-0731", name: "DeepSeek V4 Flash 0731" },
+          { slug: "discovered-droid-model", name: "Discovered Droid Model" },
+        ],
+      },
+    );
+
+    expect(options.some((option) => option.slug === "discovered-droid-model")).toBe(true);
+    expect(
+      options.some(
+        (option) => option.provider === "droid" && option.slug === "deepseek-v4-flash-0731",
+      ),
+    ).toBe(true);
+    expect(options.some((option) => option.slug === "droid/custom-model")).toBe(false);
+  });
+
+  it("resolves bare Droid slugs and aliases to the Droid provider and default model", () => {
+    for (const model of ["deepseek-v4-flash-0731", "deepseek", "flash"]) {
+      const options = getGitTextGenerationModelOptions({
+        customCodexModels: [],
+        customDroidModels: [],
+        customOpenCodeModels: [],
+        textGenerationModel: model,
+      });
+
+      expect(
+        options.some(
+          (option) => option.provider === "droid" && option.slug === "deepseek-v4-flash-0731",
+        ),
+      ).toBe(true);
+      // The raw alias should be normalized to the canonical Droid default.
+      expect(options.some((option) => option.slug === model)).toBe(
+        model === "deepseek-v4-flash-0731",
+      );
+    }
+  });
+
+  it("defaults the selected Droid git writing model to deepseek-v4-flash-0731", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customDroidModels: [],
+      customOpenCodeModels: [],
+      textGenerationProvider: "droid",
+    });
+
+    expect(
+      options.some(
+        (option) => option.provider === "droid" && option.slug === "deepseek-v4-flash-0731",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -712,12 +906,6 @@ describe("provider-indexed custom model settings", () => {
       "opencode",
       "pi",
     ]);
-  });
-
-  it("keeps Droid persistence compatible without advertising unsupported custom slugs", () => {
-    expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
-      "droid",
-    );
   });
 
   it("reads custom models for each provider", () => {
