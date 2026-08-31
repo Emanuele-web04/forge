@@ -315,6 +315,7 @@ import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
+import { resolveBranchToolbarValue } from "./BranchToolbar.logic";
 import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
@@ -520,6 +521,7 @@ import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
+import { ComposerWorkspaceStatus } from "./chat/ComposerWorkspaceStatus";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
@@ -3798,6 +3800,15 @@ export default function ChatView({
       )?.name ?? null
     );
   }, [activeProject?.cwd, branchesQuery.data?.branches, gitStatusQuery.data]);
+  const composerWorkspaceBranch = resolveBranchToolbarValue({
+    envMode: resolveThreadEnvironmentMode({
+      envMode: resolvedThreadEnvMode,
+      worktreePath: resolvedThreadWorktreePath,
+    }),
+    activeWorktreePath: resolvedThreadWorktreePath,
+    activeThreadBranch: activeThread?.branch ?? null,
+    currentGitBranch: currentActiveGitBranch,
+  });
   const settledThreadBranchMismatch = resolveSettledThreadBranchMismatch({
     isSettled:
       activeThread?.settledAt != null &&
@@ -11668,6 +11679,13 @@ export default function ChatView({
                       )}
                     </div>
                   ) : null}
+                  <div className="flex min-h-5 min-w-0 justify-end pb-1">
+                    <ComposerWorkspaceStatus
+                      envMode={resolvedThreadEnvMode}
+                      worktreePath={resolvedThreadWorktreePath}
+                      branch={composerWorkspaceBranch}
+                    />
+                  </div>
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
                     isPreparingComposerImages && (
