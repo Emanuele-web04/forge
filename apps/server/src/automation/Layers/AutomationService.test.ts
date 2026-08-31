@@ -3484,6 +3484,7 @@ layer("AutomationService", (it) => {
           codex: { enabled: false },
           cursor: { enabled: false },
           opencode: { enabled: false },
+          droid: { enabled: false },
         },
       });
 

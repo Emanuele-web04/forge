@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { dirname } from "node:path";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
+import {
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
@@ -238,6 +242,22 @@ describe("ServerSettingsService", () => {
       },
       expectedProvider: "codex" as const,
     },
+    {
+      name: "falls back to droid when all ordered providers are disabled",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "opencode" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.opencode,
+        },
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          opencode: { enabled: false },
+          droid: { enabled: true },
+        },
+      },
+      expectedProvider: "droid" as const,
+    },
   ])("$name", async ({ overrides, expectedProvider }) => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
@@ -248,7 +268,9 @@ describe("ServerSettingsService", () => {
 
     expect(settings.textGenerationModelSelection.provider).toBe(expectedProvider);
     expect(settings.textGenerationModelSelection.model).toBe(
-      DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
+      expectedProvider === "droid"
+        ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
+        : DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
     );
   });
 });

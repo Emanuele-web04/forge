@@ -5,6 +5,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
+  DroidTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -95,15 +96,17 @@ function makeProviderTextGenerationTestLayer(
 ) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
+  const droid = createTextGenerationDouble("droid");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
+    Layer.provide(Layer.succeed(DroidTextGeneration, droid.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );
 
-  return { layer, codex, cursor, opencode };
+  return { layer, codex, cursor, droid, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
@@ -112,6 +115,7 @@ describe("ProviderTextGenerationLive", () => {
       providers: {
         codex: { enabled: false },
         cursor: { enabled: false },
+        droid: { enabled: false },
         opencode: { enabled: false },
       },
     });
@@ -301,6 +305,72 @@ describe("ProviderTextGenerationLive", () => {
     expect(codex.generateThreadTitle).not.toHaveBeenCalled();
     expect(opencode.generateThreadTitle).not.toHaveBeenCalled();
   });
+
+  it("routes explicit Droid selections and preserves provider options", async () => {
+    const { layer, codex, cursor, droid, opencode } = makeProviderTextGenerationTestLayer();
+    const providerOptions = { droid: { binaryPath: "/custom/bin/droid" } };
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateThreadTitle({
+          cwd: "/repo",
+          message: "Plan the Droid integration work",
+          modelSelection: {
+            provider: "droid",
+            model: "deepseek-v4-flash-0731",
+            options: { reasoningEffort: "high" },
+          },
+          providerOptions,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.title).toBe("droid title");
+    expect(droid.generateThreadTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: {
+          provider: "droid",
+          model: "deepseek-v4-flash-0731",
+          options: { reasoningEffort: "high" },
+        },
+        providerOptions,
+      }),
+    );
+    expect(codex.generateThreadTitle).not.toHaveBeenCalled();
+    expect(cursor.generateThreadTitle).not.toHaveBeenCalled();
+    expect(opencode.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
+  it.each(["droid:deepseek-v4-flash-0731", "droid/deepseek-v4-flash-0731"] as const)(
+    "routes raw %s slugs to Droid",
+    async (model) => {
+      const { layer, droid } = makeProviderTextGenerationTestLayer();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+          return yield* textGeneration.generateCommitMessage({
+            cwd: "/repo",
+            branch: null,
+            stagedSummary: "",
+            stagedPatch: "",
+            model,
+          });
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(droid.generateCommitMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "deepseek-v4-flash-0731",
+          modelSelection: {
+            provider: "droid",
+            model: "deepseek-v4-flash-0731",
+          },
+        }),
+      );
+    },
+  );
 
   it("routes automation intent generation through the selected provider", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();

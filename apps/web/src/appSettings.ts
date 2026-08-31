@@ -1055,7 +1055,7 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "opencode";
+type GitTextGenerationDiscoveredProvider = "codex" | "droid" | "opencode";
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -1087,6 +1087,9 @@ export function getGitTextGenerationModelOptions(
     ...(discoveredOptionsByProvider?.opencode
       ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
       : getAppModelOptions("opencode", settings.customOpenCodeModels)),
+    ...(discoveredOptionsByProvider?.droid
+      ? mapCatalogModelOptionsToAppModelOptions("droid", discoveredOptionsByProvider.droid)
+      : getAppModelOptions("droid", [])),
   ];
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();

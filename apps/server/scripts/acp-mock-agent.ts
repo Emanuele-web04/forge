@@ -342,6 +342,10 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
             ...(supportsSessionFork ? { fork: {} } : {}),
           },
         },
+        authMethods: [
+          { id: "device-pairing", name: "Device Pairing" },
+          { id: "factory-api-key", name: "Factory API Key" },
+        ],
       };
     }),
   ),
