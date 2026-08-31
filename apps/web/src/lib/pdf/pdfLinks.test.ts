@@ -65,9 +65,7 @@ describe("extractPageLinks", () => {
       viewport,
     });
 
-    expect(links).toEqual([
-      expect.objectContaining({ id: "1:0", targetPageNumber: 3 }),
-    ]);
+    expect(links).toEqual([expect.objectContaining({ id: "1:0", targetPageNumber: 3 })]);
     expect(doc.getPageIndex).not.toHaveBeenCalled();
   });
 
