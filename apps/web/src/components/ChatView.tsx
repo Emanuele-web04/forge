@@ -8181,9 +8181,8 @@ export default function ChatView({
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
     // Trailing blocks are appended innermost-to-outermost: assistant selections,
-    // terminal contexts, file comments, pasted text, then browser annotations
-    // (outermost). The display
-    // extractors unwrap them in the reverse order.
+    // terminal contexts, file comments, pasted text, work items, then browser
+    // annotations (outermost). The display extractors unwrap them in reverse.
     const messageTextForSend = appendBrowserAnnotationsToPrompt(
       appendWorkItemsToPrompt(
         appendPastedTextsToPrompt(
