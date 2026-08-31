@@ -95,6 +95,7 @@ export function FeedbackDialog({
           <DialogTitle className="text-xl tracking-[-0.01em]">Share feedback</DialogTitle>
         </DialogHeader>
         <FeedbackDialogForm
+          open={open}
           initialCategory={initialCategory}
           isSending={isSending}
           isDraftingIssue={isDraftingIssue}
@@ -107,6 +108,7 @@ export function FeedbackDialog({
 }
 
 export interface FeedbackDialogFormProps {
+  open?: boolean;
   initialCategory?: FeedbackCategory | null | undefined;
   isSending: boolean;
   isDraftingIssue?: boolean;
@@ -115,6 +117,7 @@ export interface FeedbackDialogFormProps {
 }
 
 export function FeedbackDialogForm({
+  open,
   initialCategory,
   isSending,
   isDraftingIssue = false,
@@ -126,8 +129,10 @@ export function FeedbackDialogForm({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    setCategory(initialCategory ?? null);
-  }, [initialCategory]);
+    if (open) {
+      setCategory(initialCategory ?? null);
+    }
+  }, [open, initialCategory]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
