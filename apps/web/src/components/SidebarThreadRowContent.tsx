@@ -15,7 +15,7 @@ import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
 import { SidebarSplitGroupRail, SidebarSplitGroupSurface } from "./SidebarSplitGroupRail";
-import { TerminalIcon } from "../lib/icons";
+import { BotIcon, TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
@@ -124,6 +124,7 @@ function renderSubagentLabel(input: {
       title: input.thread.title,
     },
     threads: input.threads,
+    fallbackOrdinal: input.thread.subagentOrdinal,
   });
   const supportingLabel =
     presentation.role ??
@@ -165,6 +166,50 @@ function SidebarSubagentLabel({
   });
 }
 
+/**
+ * Extra context announced with the focusable sidebar row, rather than from its
+ * decorative hierarchy connector. A connector cannot receive keyboard focus.
+ */
+export function resolveSubagentRowDescription({
+  thread,
+  parentTitle,
+}: {
+  thread: SidebarThreadSummary;
+  parentTitle?: string | null | undefined;
+}): string {
+  const resolvedParentTitle = parentTitle ?? "its parent thread";
+  const model = thread.modelSelection.model;
+  const modelOptions = thread.modelSelection.options as unknown as
+    | Record<string, unknown>
+    | undefined;
+  const effort =
+    typeof modelOptions?.reasoningEffort === "string"
+      ? modelOptions.reasoningEffort
+      : typeof modelOptions?.effort === "string"
+        ? modelOptions.effort
+        : null;
+  const status = thread.session?.status ?? thread.latestTurn?.state ?? null;
+  const metadata = [model, effort, status].filter((value): value is string => Boolean(value));
+
+  return `Subagent of ${resolvedParentTitle}${metadata.length > 0 ? ` · ${metadata.join(" · ")}` : ""}`;
+}
+
+function SubagentConnector({ indentPx }: { indentPx: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
+      style={{ marginLeft: `${indentPx}px` }}
+    >
+      <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
+      <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
+      <span className="sidebar-icon-chip absolute left-1.5 top-1/2 inline-flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground/75">
+        <BotIcon className="size-2" />
+      </span>
+    </span>
+  );
+}
+
 export function SidebarThreadRowContent({
   thread,
   terminalEntryPoint,
@@ -192,19 +237,6 @@ export function SidebarThreadRowContent({
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
   const isSubagentThread = Boolean(thread.parentThreadId);
-  const subagentPresentation =
-    variant === "standard" && isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
 
   return (
@@ -219,18 +251,7 @@ export function SidebarThreadRowContent({
         </>
       ) : null}
       {variant === "standard" && isSubagentThread ? (
-        <span
-          aria-hidden="true"
-          className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-          style={{ marginLeft: `${subagentIndentPx}px` }}
-        >
-          <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-          <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-          <span
-            className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ backgroundColor: subagentPresentation?.accentColor }}
-          />
-        </span>
+        <SubagentConnector indentPx={subagentIndentPx} />
       ) : terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (

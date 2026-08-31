@@ -9,7 +9,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
-import { SidebarThreadRowContent } from "./SidebarThreadRowContent";
+import {
+  resolveSubagentRowDescription,
+  SidebarThreadRowContent,
+} from "./SidebarThreadRowContent";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -134,6 +137,28 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(surface).toHaveClass("rounded-t-md");
   });
 
+  it("moves the subagent context onto its focusable row description", () => {
+    expect(
+      resolveSubagentRowDescription({
+        thread: makeThread({
+          parentThreadId: ThreadId.makeUnsafe("thread-parent-row"),
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.6",
+            options: { reasoningEffort: "medium" },
+          },
+          session: {
+            provider: "codex",
+            status: "closed",
+            createdAt: "2026-07-19T12:00:00.000Z",
+            updatedAt: "2026-07-19T12:01:00.000Z",
+          },
+        }),
+        parentTitle: "Implement webhook spec",
+      }),
+    ).toBe("Subagent of Implement webhook spec · gpt-5.6 · medium · closed");
+  });
+
   it("omits the split-group rail and surface when the row is not part of a split", async () => {
     const screen = await render(
       <SidebarThreadRowContent
@@ -150,5 +175,21 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(screen.getByText("Shared thread row")).toBeVisible();
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-surface]")).toHaveLength(0);
+  });
+
+  it("keeps the temporary icon when an ordinary thread has no metadata chips", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread()}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        suffix={<span aria-label="Temporary chat">Temporary</span>}
+      />,
+    );
+
+    await expect.element(screen.getByLabelText("Temporary chat")).toBeVisible();
   });
 });

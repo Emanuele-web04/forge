@@ -17,6 +17,7 @@ import {
   KanbanIcon,
   KeyboardIcon,
   BellIcon,
+  BotIcon,
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
@@ -205,6 +206,7 @@ import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
   SidebarThreadRowContent,
+  resolveSubagentRowDescription,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
@@ -656,7 +658,7 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "automation" | "handoff" | "fork" | "worktree";
+  id: "automation" | "handoff" | "fork" | "worktree" | "synara-source";
   tooltip: string;
   icon: ReactNode;
 };
@@ -666,10 +668,11 @@ type ThreadMetaChip = {
  * Priority lowest -> highest: automation -> handoff -> fork -> worktree. Sidechats skip fork/temporary
  * badges because the "Sidechat:" title already identifies them.
  */
-function resolveThreadRowMetaChips(input: {
+export function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
     "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
+    | "creationSource" | "sourceThreadId"
   >;
   includeHandoffBadge: boolean;
   /**
@@ -682,6 +685,14 @@ function resolveThreadRowMetaChips(input: {
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
   const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
+
+  if (input.thread.creationSource === "synara_mcp" && input.thread.sourceThreadId) {
+    chips.push({
+      id: "synara-source",
+      tooltip: "Sent by Synara from another thread",
+      icon: <SidebarGlyph icon={BotIcon} variant="meta" className="text-muted-foreground/55" />,
+    });
+  }
 
   const threadAutomations = input.threadAutomations;
   if (threadAutomations && threadAutomations.length > 0) {
@@ -739,6 +750,13 @@ function resolveThreadRowMetaChips(input: {
   }
 
   return chips;
+}
+
+export function shouldShowTemporaryThreadIcon(input: {
+  isTemporaryThread: boolean;
+  sidechatSourceThreadId: Thread["sidechatSourceThreadId"];
+}): boolean {
+  return input.isTemporaryThread && !input.sidechatSourceThreadId;
 }
 
 function terminalStatusFromThreadState(input: {
@@ -4820,6 +4838,12 @@ export default function Sidebar() {
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
+    const subagentDescription = isSubagentThread
+      ? resolveSubagentRowDescription({
+          thread,
+          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
+        })
+      : undefined;
     const pr = prByThreadId.get(thread.id) ?? null;
     const leadingPr =
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
@@ -4856,6 +4880,7 @@ export default function Sidebar() {
           <div
             role="button"
             tabIndex={0}
+            aria-description={subagentDescription}
             data-thread-item
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -4987,12 +5012,26 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
+    const subagentDescription = isSubagentThread
+      ? resolveSubagentRowDescription({
+          thread,
+          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
+        })
+      : undefined;
+    // Subagents suppress their generic handoff/fork/worktree cluster to keep the
+    // nested row compact, but provenance is independent semantics and must stay
+    // visible when a parent agent created the child from another thread.
+    const visibleMetaChips = isSubagentThread
+      ? rightMetaChips.filter((chip) => chip.id === "synara-source")
+      : rightMetaChips;
     const leadingPr =
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
-    const showCompactMeta = !isSubagentThread;
-    const showTemporaryThreadIcon =
-      showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId;
+    const showCompactMeta = visibleMetaChips.length > 0;
+    const showTemporaryThreadIcon = shouldShowTemporaryThreadIcon({
+      isTemporaryThread,
+      sidechatSourceThreadId: thread.sidechatSourceThreadId,
+    });
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5022,6 +5061,7 @@ export default function Sidebar() {
               <SidebarMenuSubButton
                 render={<div role="button" tabIndex={0} />}
                 data-thread-entry-point={threadEntryPoint}
+                aria-description={subagentDescription}
                 size="sm"
                 isActive={isActive}
                 className={cn(
@@ -5036,7 +5076,7 @@ export default function Sidebar() {
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
+                        metaChipCount: showCompactMeta ? visibleMetaChips.length : 0,
                         hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
                       }),
                 )}
@@ -5148,7 +5188,7 @@ export default function Sidebar() {
                 isSubagentThread,
                 threadJumpLabel,
                 threadJumpLabelParts,
-                rightMetaChips: showCompactMeta ? rightMetaChips : [],
+                rightMetaChips: visibleMetaChips,
                 threadStatus,
                 timestampToneClassName: isSubagentThread
                   ? isHighlighted

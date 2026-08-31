@@ -4,6 +4,7 @@
 
 import {
   buildSubagentIdentityDirectory,
+  decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints as extractParsedSubagentIdentityHints,
   isWorkerTierSubagentRole,
   resolveSubagentIdentityFromDirectory,
@@ -81,6 +82,13 @@ function fallbackSubagentLabel(value: string | null): string | null {
   }
 
   return basename(normalized);
+}
+
+function isOpaqueSubagentIdentifier(value: string | null): boolean {
+  return (
+    value !== null &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
 }
 
 function normalizeWhitespace(value: string | null | undefined): string | null {
@@ -202,6 +210,70 @@ function resolveSubagentIdentityFromParentActivity(input: {
   };
 }
 
+/**
+ * Parent collab activities retain provider spawn order even when the sidebar only
+ * has a partial set of child summaries. That makes this a durable ordinal source,
+ * unlike sorting the children currently hydrated in the client.
+ */
+export function resolveSubagentSpawnOrdinal(input: {
+  thread: Pick<SubagentThreadLike, "id" | "parentThreadId" | "subagentAgentId">;
+  threads: ReadonlyArray<SubagentThreadLike>;
+}): number | null {
+  const parentThreadId = normalizeWhitespace(input.thread.parentThreadId);
+  if (!parentThreadId) {
+    return null;
+  }
+
+  const parentThread = input.threads.find((thread) => thread.id === parentThreadId);
+  if (!parentThread) {
+    return null;
+  }
+
+  const providerThreadId = providerThreadIdForThread({
+    threadId: input.thread.id,
+    parentThreadId,
+  });
+  const agentId = normalizeWhitespace(input.thread.subagentAgentId);
+  const spawnedAgentKeys: string[] = [];
+  const seenAgentKeys = new Set<string>();
+  const registerSpawnedKey = (key: string | undefined): number | null => {
+    if (!key || seenAgentKeys.has(key)) {
+      return null;
+    }
+    seenAgentKeys.add(key);
+    spawnedAgentKeys.push(key);
+    return key === providerThreadId ? spawnedAgentKeys.length : null;
+  };
+
+  for (const activity of parentThread.activities ?? []) {
+    const root = asRecord(activity.payload);
+    const data = asRecord(root?.data);
+    const item = asRecord(data?.item) ?? data ?? root;
+    if (!item) {
+      continue;
+    }
+
+    for (const receiverThreadId of decodeSubagentReceiverThreadIds(item)) {
+      const ordinal = registerSpawnedKey(receiverThreadId);
+      if (ordinal !== null) {
+        return ordinal;
+      }
+    }
+
+    for (const hint of extractParsedSubagentIdentityHints(item)) {
+      const ordinal = registerSpawnedKey(hint.providerThreadId ?? hint.agentId);
+      if (
+        ordinal !== null ||
+        (agentId && hint.agentId === agentId && spawnedAgentKeys.length > 0)
+      ) {
+        return ordinal ?? spawnedAgentKeys.length;
+      }
+    }
+  }
+
+  return null;
+}
+
 function hashLabelSeed(seed: string): number {
   let hash = 0;
   for (const character of seed) {
@@ -221,6 +293,8 @@ export function resolveSubagentPresentation(input: {
   role?: string | null | undefined;
   title?: string | null | undefined;
   fallbackId?: string | null | undefined;
+  /** Stable sibling position, used only when every human-facing identity is absent. */
+  fallbackOrdinal?: number | null | undefined;
 }): SubagentPresentation {
   const explicitNickname = normalizeWhitespace(input.nickname);
   const explicitRole = suppressWorkerTierRole(normalizeRole(input.role));
@@ -238,7 +312,16 @@ export function resolveSubagentPresentation(input: {
   const role = explicitRole ?? parsedTitleRole;
   const resolvedTitle = parsedTitleNickname ? null : titleLabel;
   const normalizedFallbackId = normalizeWhitespace(input.fallbackId);
-  const fallbackLabel = fallbackSubagentLabel(normalizedFallbackId) ?? "Subagent";
+  const fallbackOrdinal = input.fallbackOrdinal;
+  const ordinalLabel =
+    typeof fallbackOrdinal === "number" && Number.isInteger(fallbackOrdinal) && fallbackOrdinal > 0
+      ? `Subagent ${fallbackOrdinal}`
+      : null;
+  const fallbackFromId = fallbackSubagentLabel(normalizedFallbackId);
+  const fallbackLabel =
+    ordinalLabel ??
+    (isOpaqueSubagentIdentifier(fallbackFromId) ? null : fallbackFromId) ??
+    "Subagent";
   const primaryLabel = nickname ?? resolvedTitle ?? capitalizeRoleLabel(role) ?? fallbackLabel;
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
 
@@ -258,6 +341,7 @@ export function resolveSubagentPresentationForThread(input: {
     "id" | "title" | "parentThreadId" | "subagentAgentId" | "subagentNickname" | "subagentRole"
   >;
   threads?: ReadonlyArray<SubagentThreadLike> | undefined;
+  fallbackOrdinal?: number | null | undefined;
 }): SubagentPresentation {
   const derivedIdentity =
     input.threads && input.thread.parentThreadId
@@ -266,12 +350,21 @@ export function resolveSubagentPresentationForThread(input: {
           threads: input.threads,
         })
       : null;
+  const fallbackOrdinal =
+    input.fallbackOrdinal ??
+    (input.threads && input.thread.parentThreadId
+      ? resolveSubagentSpawnOrdinal({
+          thread: input.thread,
+          threads: input.threads,
+        })
+      : null);
 
   return resolveSubagentPresentation({
     nickname: input.thread.subagentNickname ?? derivedIdentity?.nickname,
     role: input.thread.subagentRole ?? derivedIdentity?.role,
     title: input.thread.title,
     fallbackId: input.thread.id,
+    fallbackOrdinal,
   });
 }
 
