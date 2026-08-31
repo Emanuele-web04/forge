@@ -23,9 +23,7 @@ describe("threadDrag", () => {
 
   it("parses a valid thread payload", () => {
     expect(
-      parseThreadDragPayload(
-        dataTransfer({ payload: JSON.stringify({ threadId: "thread-a" }) }),
-      ),
+      parseThreadDragPayload(dataTransfer({ payload: JSON.stringify({ threadId: "thread-a" }) })),
     ).toEqual({ threadId: ThreadId.makeUnsafe("thread-a") });
   });
 

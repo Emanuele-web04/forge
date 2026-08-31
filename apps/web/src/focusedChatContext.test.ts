@@ -23,6 +23,8 @@ function makeProject(): Project {
     expanded: true,
     spaceId: null,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
   };
 }
 

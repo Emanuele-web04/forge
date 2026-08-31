@@ -3,10 +3,7 @@
 
 import "../../../index.css";
 
-import {
-  DEFAULT_SERVER_SETTINGS_VIEW,
-  type ServerProviderUsageSnapshot,
-} from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,9 +43,7 @@ describe("EnvironmentUsageSection", () => {
         { window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 },
         { window: "5h", usedPercent: 5, windowDurationMins: 300 },
       ]),
-      snapshot("claudeAgent", [
-        { window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 },
-      ]),
+      snapshot("claudeAgent", [{ window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 }]),
       snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), {

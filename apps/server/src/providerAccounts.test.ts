@@ -39,13 +39,11 @@ describe("provider account isolation", () => {
   });
 
   it("forces managed Codex homes to use private file-backed credentials", () => {
-    expect(ensureCodexFileCredentialStorage("model = \"gpt-5\"\n")).toBe(
+    expect(ensureCodexFileCredentialStorage('model = "gpt-5"\n')).toBe(
       'cli_auth_credentials_store = "file"\nmodel = "gpt-5"\n',
     );
     expect(
-      ensureCodexFileCredentialStorage(
-        'model = "gpt-5"\ncli_auth_credentials_store = "keyring"\n',
-      ),
+      ensureCodexFileCredentialStorage('model = "gpt-5"\ncli_auth_credentials_store = "keyring"\n'),
     ).toBe('model = "gpt-5"\ncli_auth_credentials_store = "file"\n');
   });
 

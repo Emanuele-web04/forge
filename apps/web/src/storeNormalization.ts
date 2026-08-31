@@ -375,9 +375,14 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
-  const sources = previous?.sources && deepEqualJson(previous.sources, incoming.sources)
-    ? previous.sources
-    : [...incoming.sources];
+  // `sources` and `primarySourceId` are optional on the read model (snapshots written before
+  // multi-folder projects omit them), so normalize them to the empty/null form the store relies on.
+  const incomingSources = incoming.sources ?? [];
+  const incomingPrimarySourceId = incoming.primarySourceId ?? null;
+  const sources =
+    previous?.sources && deepEqualJson(previous.sources, incomingSources)
+      ? previous.sources
+      : [...incomingSources];
   const expanded =
     previous?.expanded ??
     (rememberedUiState.expandedProjectCount > 0
@@ -401,7 +406,7 @@ export function normalizeProject(
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts &&
     previous.sources === sources &&
-    previous.primarySourceId === incoming.primarySourceId
+    previous.primarySourceId === incomingPrimarySourceId
   ) {
     return previous;
   }
@@ -422,7 +427,7 @@ export function normalizeProject(
     updatedAt: incoming.updatedAt,
     scripts,
     sources,
-    primarySourceId: incoming.primarySourceId,
+    primarySourceId: incomingPrimarySourceId,
   } satisfies Project;
 }
 

@@ -193,6 +193,8 @@ describe("isHomeChatContainerProject", () => {
       defaultModelSelection: null,
       expanded: false,
       scripts: [],
+      sources: [],
+      primarySourceId: null,
     };
     useStore.setState({ projects: [existingProject], threadsHydrated: true });
 

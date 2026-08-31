@@ -50,9 +50,7 @@ describe("multi-source projects", () => {
           kind: "project",
           title: "Invalid",
           workspaceRoot: "/repos/frontend",
-          sources: [
-            { id: ProjectSourceId.makeUnsafe("source-primary"), path: "/repos/frontend" },
-          ],
+          sources: [{ id: ProjectSourceId.makeUnsafe("source-primary"), path: "/repos/frontend" }],
           primarySourceId: ProjectSourceId.makeUnsafe("missing-source"),
           createdAt: "2026-08-30T20:00:00.000Z",
         },

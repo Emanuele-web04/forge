@@ -4,7 +4,11 @@ export function buildWorkspaceRootsPreamble(roots: ReadonlyArray<RootBinding>): 
   if (roots.length <= 1) return null;
   const lines = roots.map((root, index) => {
     const role = index === 0 ? "primary, your working directory" : "additional";
-    const isolation = root.isIsolated ? ", isolated worktree" : index === 0 ? "" : ", live checkout";
+    const isolation = root.isIsolated
+      ? ", isolated worktree"
+      : index === 0
+        ? ""
+        : ", live checkout";
     return `- ${root.label}: ${root.effectivePath} (${role}${isolation})`;
   });
   return [

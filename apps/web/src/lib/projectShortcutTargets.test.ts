@@ -26,6 +26,8 @@ function makeProject(id: ProjectId, kind: Project["kind"] = "project"): Project 
     defaultModelSelection: null,
     expanded: false,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
   };
 }
 

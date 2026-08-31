@@ -55,26 +55,20 @@ export function makeServerProviderLayer(
     // the same MCP catalog/dispatcher through its native custom-tool API.
     const agentGatewayCredentialsLayer =
       options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
-    const codexAdapterLayer = makeCodexAdapterLive(
-      {
-        ...(nativeEventLogger ? { nativeEventLogger } : {}),
-        resolveHomePath: async () =>
-          (
-            await Effect.runPromise(providerAccounts.resolveEnvironment("codex"))
-          ).homePath,
+    const codexAdapterLayer = makeCodexAdapterLive({
+      ...(nativeEventLogger ? { nativeEventLogger } : {}),
+      resolveHomePath: async () =>
+        (await Effect.runPromise(providerAccounts.resolveEnvironment("codex"))).homePath,
+    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const claudeAdapterLayer = makeClaudeAdapterLive({
+      ...(nativeEventLogger ? { nativeEventLogger } : {}),
+      resolveProcessEnvironment: async () => {
+        const resolved = await Effect.runPromise(
+          providerAccounts.resolveEnvironment("claudeAgent"),
+        );
+        return { accountId: resolved.accountId, env: resolved.env };
       },
-    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const claudeAdapterLayer = makeClaudeAdapterLive(
-      {
-        ...(nativeEventLogger ? { nativeEventLogger } : {}),
-        resolveProcessEnvironment: async () => {
-          const resolved = await Effect.runPromise(
-            providerAccounts.resolveEnvironment("claudeAgent"),
-          );
-          return { accountId: resolved.accountId, env: resolved.env };
-        },
-      },
-    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,

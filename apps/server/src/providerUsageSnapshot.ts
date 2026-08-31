@@ -625,7 +625,7 @@ export async function readClaudeUsageSamples(
 
 async function loadCodexUsageSnapshot(input: {
   homeDir: string;
-  homePath?: string;
+  homePath?: string | undefined;
 }): Promise<UsageSnapshot | null> {
   const codexHomeDir =
     input.homePath?.trim() || process.env.CODEX_HOME || nodePath.join(input.homeDir, ".codex");
@@ -677,7 +677,7 @@ async function loadCodexUsageSnapshot(input: {
 
 async function loadClaudeUsageSnapshot(input: {
   homeDir: string;
-  env?: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv | undefined;
 }): Promise<UsageSnapshot | null> {
   const projectsRoot = resolveClaudeProjectsRoot(input.homeDir, input.env);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
@@ -727,8 +727,8 @@ async function loadClaudeUsageSnapshot(input: {
 async function loadProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
-  homePath?: string;
-  env?: NodeJS.ProcessEnv;
+  homePath?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   switch (input.provider) {
     case "codex":
@@ -749,8 +749,8 @@ async function loadProviderUsageSnapshot(input: {
 async function getCachedProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
-  homePath?: string;
-  env?: NodeJS.ProcessEnv;
+  homePath?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${input.env?.CLAUDE_CONFIG_DIR?.trim() ?? process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
   const nowMs = Date.now();
@@ -812,8 +812,8 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
 export async function loadLocalProviderUsageLines(input: {
   provider: ProviderKind;
   homeDir: string;
-  homePath?: string;
-  env?: NodeJS.ProcessEnv;
+  homePath?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
 }): Promise<ReadonlyArray<ServerProviderUsageLine>> {
   try {
     const snapshot = await getCachedProviderUsageSnapshot(input);

@@ -68,9 +68,9 @@ describe("sidebarThreadFolderStore", () => {
     });
     store.archiveFolder("folder-ui", "2026-08-30T11:00:00.000Z");
 
-    expect(getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, PROJECT_A)).toEqual(
-      [],
-    );
+    expect(
+      getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, PROJECT_A),
+    ).toEqual([]);
     expect(
       getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, PROJECT_A, {
         includeArchived: true,
@@ -79,9 +79,9 @@ describe("sidebarThreadFolderStore", () => {
     expect(useSidebarThreadFolderStore.getState().folderIdByThreadId[THREAD_A]).toBe("folder-ui");
 
     useSidebarThreadFolderStore.getState().restoreFolder("folder-ui");
-    expect(getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, PROJECT_A)).toHaveLength(
-      1,
-    );
+    expect(
+      getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, PROJECT_A),
+    ).toHaveLength(1);
   });
 
   it("deleting a folder removes its assignments and collapsed state", () => {

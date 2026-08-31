@@ -1248,8 +1248,8 @@ const make = Effect.gen(function* () {
     if (!project) return null;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     return deriveThreadRoots({
-      sources: project.sources,
-      primarySourceId: project.primarySourceId,
+      sources: project.sources ?? [],
+      primarySourceId: project.primarySourceId ?? null,
       primaryWorktreePath: effectiveCwd,
     });
   });

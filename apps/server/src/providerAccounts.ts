@@ -142,7 +142,8 @@ function normalizeProviderState(value: unknown): ProviderAccountState {
   const requestedActive = nonEmptyString(value.activeAccountId) ?? SYSTEM_ACCOUNT_ID;
   return {
     activeAccountId:
-      requestedActive === SYSTEM_ACCOUNT_ID || accounts.some((account) => account.id === requestedActive)
+      requestedActive === SYSTEM_ACCOUNT_ID ||
+      accounts.some((account) => account.id === requestedActive)
         ? requestedActive
         : SYSTEM_ACCOUNT_ID,
     accounts,
@@ -244,10 +245,7 @@ function providerBaseHome(input: {
   return input.env.CLAUDE_CONFIG_DIR?.trim() || path.join(input.homeDir, ".claude");
 }
 
-const SHARED_ACCOUNT_ENTRIES: Record<
-  ManagedProviderAccountProvider,
-  ReadonlyArray<string>
-> = {
+const SHARED_ACCOUNT_ENTRIES: Record<ManagedProviderAccountProvider, ReadonlyArray<string>> = {
   claudeAgent: [
     "CLAUDE.md",
     "file-history",
@@ -371,9 +369,7 @@ const makeProviderAccountService = Effect.gen(function* () {
 
   const load = async (): Promise<ProviderAccountsMetadata> => {
     try {
-      return normalizeProviderAccountsMetadata(
-        JSON.parse(await fs.readFile(metadataPath, "utf8")),
-      );
+      return normalizeProviderAccountsMetadata(JSON.parse(await fs.readFile(metadataPath, "utf8")));
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT") return emptyMetadata();
       throw cause;
@@ -390,9 +386,7 @@ const makeProviderAccountService = Effect.gen(function* () {
     await fs.rename(temporaryPath, metadataPath);
   };
 
-  const mutate = <T>(
-    operation: (metadata: ProviderAccountsMetadata) => Promise<T>,
-  ): Promise<T> => {
+  const mutate = <T>(operation: (metadata: ProviderAccountsMetadata) => Promise<T>): Promise<T> => {
     const result = mutationQueue.then(async () => operation(await load()));
     mutationQueue = result.then(
       () => undefined,
@@ -489,13 +483,17 @@ const makeProviderAccountService = Effect.gen(function* () {
         active: state.activeAccountId === SYSTEM_ACCOUNT_ID,
         authStatus: "unknown",
       },
-      ...state.accounts.map((account): ProviderAccount => ({
-        ...account,
-        provider,
-        kind: "managed",
-        active: state.activeAccountId === account.id,
-        authStatus: jobs.has(jobKey(provider, account.id)) ? "authenticating" : account.authStatus,
-      })),
+      ...state.accounts.map(
+        (account): ProviderAccount => ({
+          ...account,
+          provider,
+          kind: "managed",
+          active: state.activeAccountId === account.id,
+          authStatus: jobs.has(jobKey(provider, account.id))
+            ? "authenticating"
+            : account.authStatus,
+        }),
+      ),
     ],
   });
 
@@ -505,7 +503,9 @@ const makeProviderAccountService = Effect.gen(function* () {
   ): Promise<ProviderAccountState> => {
     const accounts = await Promise.all(
       state.accounts.map((account) =>
-        jobs.has(jobKey(provider, account.id)) ? Promise.resolve(account) : probe(provider, account),
+        jobs.has(jobKey(provider, account.id))
+          ? Promise.resolve(account)
+          : probe(provider, account),
       ),
     );
     lastProbeAtByProvider.set(provider, Date.now());
@@ -562,20 +562,20 @@ const makeProviderAccountService = Effect.gen(function* () {
             ...latest.providers,
             [provider]: {
               ...state,
-              accounts: state.accounts.map((item) =>
-                item.id === accountId ? nextAccount : item,
-              ),
+              accounts: state.accounts.map((item) => (item.id === accountId ? nextAccount : item)),
             },
           },
         });
       });
     };
     child.once("error", (cause) => void settle(false, cause));
-    child.once("exit", (code, signal) =>
-      void settle(
-        code === 0,
-        code === 0 ? undefined : new Error(`Login exited with ${signal ?? code}.`),
-      ),
+    child.once(
+      "exit",
+      (code, signal) =>
+        void settle(
+          code === 0,
+          code === 0 ? undefined : new Error(`Login exited with ${signal ?? code}.`),
+        ),
     );
   };
 
@@ -589,8 +589,9 @@ const makeProviderAccountService = Effect.gen(function* () {
         );
         if (providersToProbe.length === 0) return metadata;
         const refreshedStates = await Promise.all(
-          providersToProbe.map(async (provider) =>
-            [provider, await probeProviderState(metadata.providers[provider], provider)] as const,
+          providersToProbe.map(
+            async (provider) =>
+              [provider, await probeProviderState(metadata.providers[provider], provider)] as const,
           ),
         );
         const next = {
@@ -640,9 +641,7 @@ const makeProviderAccountService = Effect.gen(function* () {
         ) {
           throw new Error("Provider account was not found.");
         }
-        const requestedAccount = current.accounts.find(
-          (account) => account.id === input.accountId,
-        );
+        const requestedAccount = current.accounts.find((account) => account.id === input.accountId);
         if (requestedAccount && requestedAccount.authStatus !== "authenticated") {
           throw new Error("Authenticate this provider account before selecting it.");
         }

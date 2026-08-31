@@ -29,6 +29,8 @@ function makeProject(id: ProjectId, name: string): Project {
     defaultModelSelection: null,
     expanded: true,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
   };
 }
 

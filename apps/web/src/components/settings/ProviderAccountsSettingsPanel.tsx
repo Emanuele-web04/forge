@@ -12,13 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import {
-  CheckIcon,
-  Loader2Icon,
-  PlusIcon,
-  RefreshCwIcon,
-  TrashCanIcon,
-} from "~/lib/icons";
+import { CheckIcon, Loader2Icon, PlusIcon, RefreshCwIcon, TrashCanIcon } from "~/lib/icons";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
@@ -26,11 +20,7 @@ import { cn } from "~/lib/utils";
 import { ProviderIcon } from "../ProviderIcon";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-import {
-  SettingsCard,
-  SettingsListRow,
-  SettingsSectionShell,
-} from "./SettingsPanelPrimitives";
+import { SettingsCard, SettingsListRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
 
 const PROVIDERS: ReadonlyArray<ManagedProviderAccountProvider> = ["claudeAgent", "codex"];
 
@@ -50,10 +40,7 @@ function updateCollection(
 ): ServerListProviderAccountsResult {
   const providers = current?.providers ?? [];
   return {
-    providers: [
-      ...providers.filter((entry) => entry.provider !== collection.provider),
-      collection,
-    ],
+    providers: [...providers.filter((entry) => entry.provider !== collection.provider), collection],
   };
 }
 
@@ -247,8 +234,8 @@ export function ProviderAccountsSettingsPanel({
       <div className="space-y-3">
         <p className="px-0.5 text-xs leading-relaxed text-muted-foreground">
           Add isolated logins and choose which identity new Claude or Codex runtime processes use.
-          Switching stops that provider cleanly; the next turn resumes the same Synara chat with
-          the selected account.
+          Switching stops that provider cleanly; the next turn resumes the same Synara chat with the
+          selected account.
         </p>
         {accountsQuery.isError ? (
           <SettingsCard>
@@ -292,7 +279,8 @@ export function ProviderAccountsSettingsPanel({
                       () => ensureNativeApi().server.createProviderAccount({ provider }),
                       {
                         title: `${providerTitle(provider)} sign-in started`,
-                        description: "Complete authentication in the browser, then return to Synara.",
+                        description:
+                          "Complete authentication in the browser, then return to Synara.",
                       },
                     )
                   }

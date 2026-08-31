@@ -914,17 +914,12 @@ function mapItemLifecycle(
 type CodexHookRunStatus = "completed" | "failed" | "blocked" | "stopped";
 
 function toCodexHookRunStatus(value: unknown): CodexHookRunStatus | undefined {
-  return value === "completed" ||
-    value === "failed" ||
-    value === "blocked" ||
-    value === "stopped"
+  return value === "completed" || value === "failed" || value === "blocked" || value === "stopped"
     ? value
     : undefined;
 }
 
-function toHookOutcome(
-  status: CodexHookRunStatus | undefined,
-): "success" | "error" | "cancelled" {
+function toHookOutcome(status: CodexHookRunStatus | undefined): "success" | "error" | "cancelled" {
   if (status === "completed") return "success";
   if (status === "blocked" || status === "stopped") return "cancelled";
   return "error";
@@ -973,8 +968,7 @@ function mapCodexHookEvent(
   if (!run || !hookId || !hookEvent) {
     return undefined;
   }
-  const hookName =
-    asTrimmedString(run.sourcePath) ?? asTrimmedString(run.handlerType) ?? hookEvent;
+  const hookName = asTrimmedString(run.sourcePath) ?? asTrimmedString(run.handlerType) ?? hookEvent;
   const statusMessage = sanitizeUnmappedProviderDetail(asTrimmedString(run.statusMessage));
   const data = sanitizeUnmappedProviderData(run);
   const base = withSanitizedHookRaw(event, canonicalThreadId);
@@ -996,9 +990,7 @@ function mapCodexHookEvent(
   const status = toCodexHookRunStatus(run.status);
   const durationCandidate = asNumber(run.durationMs);
   const durationMs =
-    durationCandidate !== undefined &&
-    Number.isInteger(durationCandidate) &&
-    durationCandidate >= 0
+    durationCandidate !== undefined && Number.isInteger(durationCandidate) && durationCandidate >= 0
       ? durationCandidate
       : undefined;
   const output = hookRunOutput(run);
@@ -2059,13 +2051,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             ...(input.forkSourceResumeCursor !== undefined
               ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
               : {}),
-             ...(input.providerOptions !== undefined || activeHomePath
-               ? { providerOptions }
-               : {}),
-             ...(input.additionalRoots !== undefined
-               ? { additionalRoots: input.additionalRoots }
-               : {}),
-             runtimeMode: input.runtimeMode,
+            ...(input.providerOptions !== undefined || activeHomePath ? { providerOptions } : {}),
+            ...(input.additionalRoots !== undefined
+              ? { additionalRoots: input.additionalRoots }
+              : {}),
+            runtimeMode: input.runtimeMode,
             ...codexModelSelectionOverrides(input.modelSelection),
           };
           return manager.startSession(managerInput);

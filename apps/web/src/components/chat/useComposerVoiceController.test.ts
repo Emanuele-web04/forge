@@ -155,6 +155,8 @@ const PROJECT: Project = {
   defaultModelSelection: null,
   expanded: true,
   scripts: [],
+  sources: [],
+  primarySourceId: null,
 };
 const AUDIO_PAYLOAD = {
   audioBase64: "audio",

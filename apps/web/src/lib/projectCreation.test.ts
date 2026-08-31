@@ -71,7 +71,7 @@ describe("createOrRecoverProjectFromPath", () => {
     expect(command?.type).toBe("project.create");
     if (command?.type !== "project.create") throw new Error("Expected project.create");
     expect(command.title).toBe("Product suite");
-    expect(command.sources?.map((source) => source.path)).toEqual([
+    expect(command.sources?.map((source: { path: string }) => source.path)).toEqual([
       "/repos/frontend",
       "/repos/backend",
     ]);

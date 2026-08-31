@@ -5,9 +5,7 @@ import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 
 import { resolveEnvironmentProviderUsageSummary } from "./EnvironmentUsageSection.logic";
 
-function snapshot(
-  input: Partial<ServerProviderUsageSnapshot> = {},
-): ServerProviderUsageSnapshot {
+function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
     provider: "codex",
     updatedAt: "2026-08-30T12:00:00.000Z",

@@ -193,9 +193,9 @@ export interface Project {
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
-  isPinned?: boolean;
+  isPinned?: boolean | undefined;
   /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
-  spaceId?: SpaceId | null;
+  spaceId?: SpaceId | null | undefined;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];

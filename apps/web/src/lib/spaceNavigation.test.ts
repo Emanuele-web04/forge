@@ -33,6 +33,8 @@ function project(input: { id: string; spaceId?: SpaceId | null; kind?: Project["
     expanded: false,
     spaceId: input.spaceId ?? null,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
   };
 }
 

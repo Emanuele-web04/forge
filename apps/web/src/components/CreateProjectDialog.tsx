@@ -176,9 +176,7 @@ export function CreateProjectDialog(props: {
     setFormError(null);
     // Deferred a frame: the dialog moves focus itself on open, so focusing the
     // name field has to happen after that lands or it is immediately undone.
-    const frame = requestAnimationFrame(() =>
-      document.getElementById(projectNameInputId)?.focus(),
-    );
+    const frame = requestAnimationFrame(() => document.getElementById(projectNameInputId)?.focus());
     return () => cancelAnimationFrame(frame);
   }, [projectNameInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
 
@@ -473,9 +471,7 @@ export function CreateProjectDialog(props: {
               setProvisionProgress(null);
               requestAnimationFrame(() =>
                 document
-                  .getElementById(
-                    nextSource === "local" ? projectNameInputId : repositoryInputId,
-                  )
+                  .getElementById(nextSource === "local" ? projectNameInputId : repositoryInputId)
                   ?.focus(),
               );
             }}
@@ -528,8 +524,7 @@ export function CreateProjectDialog(props: {
                     setPickedPath(null);
                     if (!projectNameEdited && nextPrimaryPath) {
                       setProjectName(
-                        nextPrimaryPath.split(/[/\\]/).filter(Boolean).at(-1) ??
-                          nextPrimaryPath,
+                        nextPrimaryPath.split(/[/\\]/).filter(Boolean).at(-1) ?? nextPrimaryPath,
                       );
                     }
                     setFormError(null);

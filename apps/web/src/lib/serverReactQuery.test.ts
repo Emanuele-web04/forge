@@ -226,9 +226,7 @@ describe("serverAllProviderUsageQueryOptions", () => {
 
     await invalidateProviderUsageQueries(queryClient);
 
-    expect(
-      queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated,
-    ).toBe(true);
+    expect(queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated).toBe(true);
     expect(
       queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))?.isInvalidated,
     ).toBe(true);

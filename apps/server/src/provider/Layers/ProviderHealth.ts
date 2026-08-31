@@ -1079,9 +1079,7 @@ export const makeCheckClaudeProviderStatus = (
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const baseEnv = options?.processEnv ?? process.env;
-    const claudeEnv = buildClaudeProcessEnv(
-      homeDir ? { env: baseEnv, homeDir } : { env: baseEnv },
-    );
+    const claudeEnv = buildClaudeProcessEnv(homeDir ? { env: baseEnv, homeDir } : { env: baseEnv });
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* probeProviderCliVersion(
@@ -2382,72 +2380,76 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             Effect.gen(function* () {
               const codexAccount = providerAccounts
                 ? yield* providerAccounts.resolveEnvironment("codex")
-                : { accountId: "system", env: process.env, homePath: settings.providers.codex.homePath };
+                : {
+                    accountId: "system",
+                    env: process.env,
+                    homePath: settings.providers.codex.homePath,
+                  };
               const claudeAccount = providerAccounts
                 ? yield* providerAccounts.resolveEnvironment("claudeAgent")
                 : { accountId: "system", env: process.env };
               return yield* Effect.all(
-              [
-                checkProviderWhenEnabled(
-                  settings,
-                  CODEX_PROVIDER,
-                  makeCheckCodexProviderStatus(
-                    settings.providers.codex.binaryPath,
-                    codexAccount.homePath,
+                [
+                  checkProviderWhenEnabled(
+                    settings,
+                    CODEX_PROVIDER,
+                    makeCheckCodexProviderStatus(
+                      settings.providers.codex.binaryPath,
+                      codexAccount.homePath,
+                    ),
                   ),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  CLAUDE_AGENT_PROVIDER,
-                  makeCheckClaudeProviderStatus(
-                    resolveClaudeSubscription,
-                    settings.providers.claudeAgent.binaryPath,
-                    serverConfig.homeDir,
-                    { processEnv: claudeAccount.env },
+                  checkProviderWhenEnabled(
+                    settings,
+                    CLAUDE_AGENT_PROVIDER,
+                    makeCheckClaudeProviderStatus(
+                      resolveClaudeSubscription,
+                      settings.providers.claudeAgent.binaryPath,
+                      serverConfig.homeDir,
+                      { processEnv: claudeAccount.env },
+                    ),
                   ),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  CURSOR_PROVIDER,
-                  makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  ANTIGRAVITY_PROVIDER,
-                  checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  GROK_PROVIDER,
-                  makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  DROID_PROVIDER,
-                  makeCheckDroidProviderStatus(settings.providers.droid.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  KILO_PROVIDER,
-                  makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  OPENCODE_PROVIDER,
-                  makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
-                ),
-                checkProviderWhenEnabled(
-                  settings,
-                  PI_PROVIDER,
-                  checkPiProviderStatus(
-                    settings.providers.pi.agentDir,
-                    settings.providers.pi.binaryPath,
+                  checkProviderWhenEnabled(
+                    settings,
+                    CURSOR_PROVIDER,
+                    makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
                   ),
-                ),
-              ],
-              {
-                concurrency: "unbounded",
-              },
+                  checkProviderWhenEnabled(
+                    settings,
+                    ANTIGRAVITY_PROVIDER,
+                    checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
+                  ),
+                  checkProviderWhenEnabled(
+                    settings,
+                    GROK_PROVIDER,
+                    makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+                  ),
+                  checkProviderWhenEnabled(
+                    settings,
+                    DROID_PROVIDER,
+                    makeCheckDroidProviderStatus(settings.providers.droid.binaryPath),
+                  ),
+                  checkProviderWhenEnabled(
+                    settings,
+                    KILO_PROVIDER,
+                    makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
+                  ),
+                  checkProviderWhenEnabled(
+                    settings,
+                    OPENCODE_PROVIDER,
+                    makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+                  ),
+                  checkProviderWhenEnabled(
+                    settings,
+                    PI_PROVIDER,
+                    checkPiProviderStatus(
+                      settings.providers.pi.agentDir,
+                      settings.providers.pi.binaryPath,
+                    ),
+                  ),
+                ],
+                {
+                  concurrency: "unbounded",
+                },
               );
             }),
           ),

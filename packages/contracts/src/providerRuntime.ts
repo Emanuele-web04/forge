@@ -639,9 +639,7 @@ const HookCompletedPayload = Schema.Struct({
   hookName: Schema.optional(TrimmedNonEmptyStringSchema),
   hookEvent: Schema.optional(TrimmedNonEmptyStringSchema),
   outcome: Schema.Literals(["success", "error", "cancelled"]),
-  status: Schema.optional(
-    Schema.Literals(["completed", "failed", "blocked", "stopped"]),
-  ),
+  status: Schema.optional(Schema.Literals(["completed", "failed", "blocked", "stopped"])),
   statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   durationMs: Schema.optional(NonNegativeInt),
   output: Schema.optional(Schema.String),
