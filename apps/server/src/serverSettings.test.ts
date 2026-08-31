@@ -135,6 +135,19 @@ describe("ServerSettingsService", () => {
                 provider: "kilo",
                 model: "kilo/kilo-auto/free",
               },
+              providers: {
+                kilo: {
+                  enabled: true,
+                  binaryPath: "/opt/kilo",
+                  serverUrl: "http://127.0.0.1:4096",
+                  customModels: ["provider/shared-model"],
+                },
+                opencode: {
+                  enabled: false,
+                  binaryPath: "/opt/opencode",
+                  customModels: ["provider/opencode-model"],
+                },
+              },
             },
           }),
         );
@@ -153,6 +166,12 @@ describe("ServerSettingsService", () => {
       provider: "opencode",
       model: "kilo/kilo-auto/free",
     });
+    expect(result.settings.providers.opencode).toMatchObject({
+      enabled: true,
+      binaryPath: "/opt/opencode",
+      customModels: ["provider/opencode-model", "provider/shared-model"],
+    });
+    expect(result.settings.providers.opencode.serverUrl).toBe("");
   });
 
   it("keeps provider passwords server-only and returns configured flags to clients", async () => {

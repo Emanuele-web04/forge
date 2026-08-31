@@ -210,7 +210,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
           model: "kilo/kilo-auto/free",
           options: { variant: "runtime-variant" },
         },
-        providerOptions: { opencode: { binaryPath: "/runtime/kilo" } },
+        providerOptions: { opencode: { binaryPath: "/runtime/opencode" } },
         cwd: "/tmp/project",
       });
 
@@ -228,12 +228,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         model: "kilo/kilo-auto/free",
         options: { agent: "automation-agent" },
       });
-      assert.deepStrictEqual(JSON.parse(automation?.providerOptions ?? "null"), {
-        opencode: {
-          binaryPath: "/opt/kilo",
-          serverUrl: "http://127.0.0.1:4096",
-        },
-      });
+      assert.deepStrictEqual(JSON.parse(automation?.providerOptions ?? "null"), {});
 
       const [runtimeEvent] = yield* sql<{ readonly provider: string; readonly rawSource: string }>`
         SELECT json_extract(event_json, '$.provider') AS "provider",
@@ -257,9 +252,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.deepStrictEqual(payloads.get("event-1")?.modelSelection.options, {
         variant: "event-variant",
       });
-      assert.deepStrictEqual(payloads.get("event-1")?.providerOptions, {
-        opencode: { binaryPath: "/event/kilo" },
-      });
+      assert.deepStrictEqual(payloads.get("event-1")?.providerOptions, {});
       assert.strictEqual(payloads.get("event-1")?.handoff.sourceProvider, "opencode");
       assert.strictEqual(payloads.get("event-2")?.defaultModelSelection.provider, "opencode");
       assert.deepStrictEqual(payloads.get("event-2")?.defaultModelSelection.options, {

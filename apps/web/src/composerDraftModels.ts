@@ -110,6 +110,9 @@ export function normalizeProviderKind(value: unknown): ProviderKind | null {
   if (value === "gemini") {
     return "antigravity";
   }
+  if (value === "kilo") {
+    return "opencode";
+  }
   return isProviderKind(value) ? value : null;
 }
 

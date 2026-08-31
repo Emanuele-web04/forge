@@ -227,35 +227,71 @@ function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch 
   };
 }
 
-// Kilo used the OpenCode-compatible model/options shape. Migrate that one known
-// legacy provider explicitly; genuinely unknown providers must still fail
-// decoding instead of being silently erased during a downgrade.
-function migrateRemovedProviderTextGenerationSelection(settings: unknown): unknown {
+// Migrate only portable Kilo state. Its model/options shape and enabled flag
+// remain meaningful, but Kilo binary paths, endpoints, and credentials are not
+// compatible with the OpenCode process protocol and must not be copied.
+function migrateRemovedKiloSettings(settings: unknown): unknown {
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
     return settings;
   }
   const record = settings as Record<string, unknown>;
+  let migrated = record;
   const selection = record.textGenerationModelSelection;
-  if (selection === null || typeof selection !== "object" || Array.isArray(selection)) {
-    return settings;
+  if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
+    const selectionRecord = selection as Record<string, unknown>;
+    if (selectionRecord.provider === "kilo") {
+      const options = selectionRecord.options;
+      const migratedOptions =
+        options !== null &&
+        typeof options === "object" &&
+        !Array.isArray(options) &&
+        "kilo" in options
+          ? (options as Record<string, unknown>).kilo
+          : options;
+      migrated = {
+        ...migrated,
+        textGenerationModelSelection: {
+          ...selectionRecord,
+          provider: "opencode",
+          ...(migratedOptions === undefined ? {} : { options: migratedOptions }),
+        },
+      };
+    }
   }
-  const selectionRecord = selection as Record<string, unknown>;
-  if (selectionRecord.provider !== "kilo") {
-    return settings;
+
+  const providers = record.providers;
+  if (providers !== null && typeof providers === "object" && !Array.isArray(providers)) {
+    const providerRecord = providers as Record<string, unknown>;
+    const kilo = providerRecord.kilo;
+    if (kilo !== null && typeof kilo === "object" && !Array.isArray(kilo)) {
+      const kiloRecord = kilo as Record<string, unknown>;
+      const existingOpenCode =
+        providerRecord.opencode !== null &&
+        typeof providerRecord.opencode === "object" &&
+        !Array.isArray(providerRecord.opencode)
+          ? (providerRecord.opencode as Record<string, unknown>)
+          : {};
+      const portableCustomModels = [
+        ...(Array.isArray(existingOpenCode.customModels) ? existingOpenCode.customModels : []),
+        ...(Array.isArray(kiloRecord.customModels) ? kiloRecord.customModels : []),
+      ].filter(
+        (value, index, values) => typeof value === "string" && values.indexOf(value) === index,
+      );
+      const { kilo: _removedKilo, ...remainingProviders } = providerRecord;
+      migrated = {
+        ...migrated,
+        providers: {
+          ...remainingProviders,
+          opencode: {
+            ...existingOpenCode,
+            ...(kiloRecord.enabled === true ? { enabled: true } : {}),
+            ...(portableCustomModels.length > 0 ? { customModels: portableCustomModels } : {}),
+          },
+        },
+      };
+    }
   }
-  const options = selectionRecord.options;
-  const migratedOptions =
-    options !== null && typeof options === "object" && !Array.isArray(options) && "kilo" in options
-      ? (options as Record<string, unknown>).kilo
-      : options;
-  return {
-    ...record,
-    textGenerationModelSelection: {
-      ...selectionRecord,
-      provider: "opencode",
-      ...(migratedOptions === undefined ? {} : { options: migratedOptions }),
-    },
-  };
+  return migrated;
 }
 
 function decodeSettingsFromJson(settingsPath: string, raw: string) {
@@ -266,7 +302,7 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
         ? (parsed as { revision?: unknown; migrationVersion?: unknown; settings: unknown })
         : null;
     const decoded = Schema.decodeUnknownExit(ServerSettings)(
-      migrateRemovedProviderTextGenerationSelection(envelope?.settings ?? parsed),
+      migrateRemovedKiloSettings(envelope?.settings ?? parsed),
     );
     if (decoded._tag === "Failure") {
       return { _tag: "Failure" as const, error: Cause.pretty(decoded.cause) };

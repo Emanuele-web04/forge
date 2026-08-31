@@ -63,19 +63,7 @@ export default Effect.gen(function* () {
 
   yield* sql`
     UPDATE provider_session_runtime
-    SET runtime_payload_json = json_remove(
-      json_set(
-        runtime_payload_json,
-        '$.providerOptions.opencode',
-        CASE
-          WHEN json_extract(runtime_payload_json, '$.modelSelection.provider') = 'kilo'
-            OR json_type(runtime_payload_json, '$.providerOptions.opencode') IS NULL
-          THEN json_extract(runtime_payload_json, '$.providerOptions.kilo')
-          ELSE json_extract(runtime_payload_json, '$.providerOptions.opencode')
-        END
-      ),
-      '$.providerOptions.kilo'
-    )
+    SET runtime_payload_json = json_remove(runtime_payload_json, '$.providerOptions.kilo')
     WHERE json_type(runtime_payload_json, '$.providerOptions.kilo') IS NOT NULL
   `;
 
@@ -94,23 +82,11 @@ export default Effect.gen(function* () {
     WHERE json_extract(runtime_payload_json, '$.modelSelection.provider') = 'kilo'
   `;
 
-  // Provider options are a bundle for every provider. Preserve an existing
-  // OpenCode entry unless this automation itself selected Kilo.
+  // Kilo binary paths, endpoints, and auth are not compatible with OpenCode's
+  // process protocol. Remove them while preserving any real OpenCode bundle.
   yield* sql`
     UPDATE automation_definitions
-    SET provider_options_json = json_remove(
-      json_set(
-        provider_options_json,
-        '$.opencode',
-        CASE
-          WHEN json_extract(model_selection_json, '$.provider') = 'kilo'
-            OR json_type(provider_options_json, '$.opencode') IS NULL
-          THEN json_extract(provider_options_json, '$.kilo')
-          ELSE json_extract(provider_options_json, '$.opencode')
-        END
-      ),
-      '$.kilo'
-    )
+    SET provider_options_json = json_remove(provider_options_json, '$.kilo')
     WHERE json_type(provider_options_json, '$.kilo') IS NOT NULL
   `;
 
@@ -164,25 +140,11 @@ export default Effect.gen(function* () {
     WHERE json_extract(payload_json, '$.activity.payload.provider') = 'kilo'
   `;
 
-  // Move Kilo start options before rewriting the selection so we can preserve
-  // the options that belong to a Kilo-selected command without overwriting an
-  // unrelated, already-valid OpenCode bundle.
+  // Preserve an existing OpenCode bundle but never feed Kilo endpoints or
+  // binaries to the incompatible OpenCode process protocol.
   yield* sql`
     UPDATE orchestration_events
-    SET payload_json = json_remove(
-      json_set(
-        payload_json,
-        '$.providerOptions.opencode',
-        CASE
-          WHEN json_extract(payload_json, '$.modelSelection.provider') = 'kilo'
-            OR json_extract(payload_json, '$.defaultModelSelection.provider') = 'kilo'
-            OR json_type(payload_json, '$.providerOptions.opencode') IS NULL
-          THEN json_extract(payload_json, '$.providerOptions.kilo')
-          ELSE json_extract(payload_json, '$.providerOptions.opencode')
-        END
-      ),
-      '$.providerOptions.kilo'
-    )
+    SET payload_json = json_remove(payload_json, '$.providerOptions.kilo')
     WHERE json_type(payload_json, '$.providerOptions.kilo') IS NOT NULL
   `;
 
