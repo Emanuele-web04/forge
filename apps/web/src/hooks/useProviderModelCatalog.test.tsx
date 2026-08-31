@@ -254,6 +254,16 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("droid")).toBe(false);
   });
 
+  it("keeps droid cold when the surface is inactive even if it prefetches droid", () => {
+    readCatalogRenders({
+      selectedProvider: "opencode",
+      discoveryEnabled: false,
+      prefetchProviders: ["codex", "droid", "opencode"],
+    });
+
+    expect(readModelQueryEnabled("droid")).toBe(false);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {

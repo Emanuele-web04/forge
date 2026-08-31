@@ -111,10 +111,8 @@ export function useProviderModelCatalog(input: {
   const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
   const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
   // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
-  const droidModelDiscoveryEnabled = shouldDiscoverProvider(
-    "droid",
-    prefetchProviderSet?.has("droid") ?? false,
-  );
+  const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
+  const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
 
