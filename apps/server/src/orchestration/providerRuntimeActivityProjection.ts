@@ -1113,8 +1113,7 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone:
-            status === "failed" || event.payload.outcome === "error" ? "error" : "info",
+          tone: status === "failed" || event.payload.outcome === "error" ? "error" : "info",
           kind: "runtime.warning",
           summary,
           payload: toActivityPayload({

@@ -1649,9 +1649,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             statusMessage: "api_key=private-hook-secret blocked this action",
             completedAt: 112,
             durationMs: 12,
-            entries: [
-              { kind: "error", text: "Authorization: Bearer private-hook-token" },
-            ],
+            entries: [{ kind: "error", text: "Authorization: Bearer private-hook-token" }],
           },
         },
       } satisfies ProviderEvent);
