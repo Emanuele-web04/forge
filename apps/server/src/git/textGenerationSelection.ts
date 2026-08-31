@@ -4,12 +4,14 @@ export const GIT_TEXT_GENERATION_PROVIDER_ORDER = [
   "codex",
   "cursor",
   "opencode",
-  "droid",
 ] as const satisfies readonly ProviderKind[];
 
-export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDER_ORDER)[number];
+export type GitTextGenerationProvider = "codex" | "cursor" | "opencode" | "droid";
 
-const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>(GIT_TEXT_GENERATION_PROVIDER_ORDER);
+const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>([
+  ...GIT_TEXT_GENERATION_PROVIDER_ORDER,
+  "droid",
+]);
 
 export interface TextGenerationProviderInput {
   readonly modelSelection: ModelSelection;
