@@ -657,8 +657,8 @@ type ThreadMetaChip = {
 };
 
 /**
- * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/temporary
+ * Left-to-right order: first = leftmost, last = rightmost.
+ * Priority lowest -> highest: automation -> handoff -> fork -> worktree. Sidechats skip fork/temporary
  * badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {

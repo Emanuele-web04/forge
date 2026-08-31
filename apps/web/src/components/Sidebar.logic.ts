@@ -561,7 +561,10 @@ export function resolveThreadRowTrailingReserveClass(input: {
   if (metaChipCount === 2) {
     return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
   }
-  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
+  if (metaChipCount === 3) {
+    return cn(hasTrailingGlyph ? "pr-[4.75rem]" : "pr-[3.75rem]", hoverReserve);
+  }
+  return cn(hasTrailingGlyph ? "pr-[5.75rem]" : "pr-[4.5rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
