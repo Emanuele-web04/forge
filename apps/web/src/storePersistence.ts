@@ -15,7 +15,6 @@ let persistedExpandedProjectCwdsDefined = false;
 
 export interface RememberedProjectUiState {
   expandedProjectCount: number;
-  /** True when the payload read from disk was legacy-shaped (expandedProjectCwds without projectOrderCwds). */
   isLegacyExpansionPayload: boolean;
   isProjectExpanded: (cwdKey: string) => boolean;
   projectOrderCount: number;
@@ -73,9 +72,6 @@ export function rememberProjectState(
       persistedProjectNamesByCwd.delete(cwdKey);
     }
   }
-  // Once modern order state exists in memory, the legacy expandedProjectCwds-only
-  // payload is no longer the authority; otherwise a legacy-payload session that
-  // deletes every project would collapse newly created projects.
   if (persistedProjectOrderByCwd.size > 0) {
     persistedExpandedProjectCwdsDefined = false;
   }

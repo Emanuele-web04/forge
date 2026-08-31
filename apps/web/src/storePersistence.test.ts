@@ -326,8 +326,6 @@ describe("storePersistence", () => {
     ]);
     expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
 
-    // Deleting every project must not re-arm legacy mode: a newly created project
-    // is unknown, not legacy-all-collapsed.
     forgetProjectState("/tmp/project-1");
     expect(getRememberedProjectUiState().projectOrderCount).toBe(0);
     expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
