@@ -2,7 +2,7 @@
 // Purpose: Covers file capability decisions for shared composer paste/drop handling.
 // Layer: Web hook tests
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
 
@@ -20,77 +20,37 @@ describe("useComposerDropzone file capability helpers", () => {
   describe("clipboard file collection", () => {
     const clipboard = (files: File[], items: Array<Partial<DataTransferItem>>) =>
       ({ files, items }) as unknown as Pick<DataTransfer, "files" | "items">;
-
     const fileItem = (getAsFile: () => File | null, kind = "file") =>
       ({ kind, getAsFile }) as DataTransferItem;
+    const image = (name = "image.png") => new File(["image"], name, { type: "image/png" });
 
-    it("collects files exposed through the files list", () => {
-      const file = new File(["image"], "image.png", { type: "image/png" });
-
-      expect(collectComposerClipboardFiles(clipboard([file], []))).toEqual([file]);
-    });
-
-    it("collects file-kind clipboard items", () => {
-      const file = new File(["image"], "image.png", { type: "image/png" });
-
-      expect(collectComposerClipboardFiles(clipboard([], [fileItem(() => file)]))).toEqual([file]);
-    });
-
-    it("ignores null and non-file clipboard items", () => {
+    test.each([
+      ["files-only existing path", [image()], [], ["image.png"]],
+      ["items-only regression", [], [fileItem(() => image())], ["image.png"]],
+      ["null file item", [], [fileItem(() => null)], []],
+      ["non-file/text-only item", [], [fileItem(() => null, "string")], []],
+    ])("collects %s", (_case, files, items, expectedNames) => {
       expect(
-        collectComposerClipboardFiles(
-          clipboard([], [fileItem(() => null), fileItem(() => null, "string")]),
-        ),
-      ).toEqual([]);
+        collectComposerClipboardFiles(clipboard(files, items)).map(({ name }) => name),
+      ).toEqual(expectedNames);
     });
 
-    it("deduplicates the same stable file identity across both sources", () => {
-      const listed = new File(["same"], "image.png", {
-        type: "image/png",
-        lastModified: 123,
-      });
-      const itemFile = new File(["same"], "image.png", {
-        type: "image/png",
-        lastModified: 123,
-      });
+    it("deduplicates duplicate file representations", () => {
+      const listed = new File(["same"], "image.png", { type: "image/png", lastModified: 123 });
+      const itemFile = new File(["same"], "image.png", { type: "image/png", lastModified: 123 });
 
       expect(
         collectComposerClipboardFiles(clipboard([listed], [fileItem(() => itemFile)])),
       ).toEqual([listed]);
     });
 
-    it("ignores clipboard items whose getAsFile throws", () => {
-      const listed = new File(["image"], "listed.png", { type: "image/png" });
+    it("keeps listed files when getAsFile throws", () => {
+      const listed = image("listed.png");
       const throwingItem = fileItem(() => {
         throw new Error("clipboard access denied");
       });
 
       expect(collectComposerClipboardFiles(clipboard([listed], [throwingItem]))).toEqual([listed]);
-    });
-
-    it("returns no files for text-only clipboard data", () => {
-      expect(
-        collectComposerClipboardFiles(clipboard([], [fileItem(() => null, "string")])),
-      ).toEqual([]);
-    });
-
-    it("preserves image and generic classification for collected files", () => {
-      const image = new File(["image"], "image.png", { type: "image/png" });
-      const generic = new File(["text"], "notes.txt", { type: "text/plain" });
-      const collected = collectComposerClipboardFiles(
-        clipboard([image], [fileItem(() => generic)]),
-      );
-
-      expect(splitComposerDropzoneFiles(collected)).toEqual({
-        imageFiles: [image],
-        genericFiles: [generic],
-      });
-      expect(
-        shouldHandleComposerDropzoneFiles(splitComposerDropzoneFiles(collected), "accept"),
-      ).toBe(true);
-      expect(
-        shouldHandleComposerDropzoneFiles(splitComposerDropzoneFiles([generic]), "fallthrough"),
-      ).toBe(false);
     });
   });
 
@@ -104,18 +64,16 @@ describe("useComposerDropzone file capability helpers", () => {
     });
   });
 
-  it("lets unsupported generic-only files fall through when requested", () => {
+  test.each([
+    ["accept", true],
+    ["reject", true],
+    ["fallthrough", false],
+  ] as const)("applies %s policy to generic-only files", (mode, expected) => {
     const generic = new File(["text"], "notes.txt", { type: "text/plain" });
-    const files = splitComposerDropzoneFiles([generic]);
 
-    expect(shouldHandleComposerDropzoneFiles(files, "fallthrough")).toBe(false);
-  });
-
-  it("handles generic-only files when the consumer rejects them visibly", () => {
-    const generic = new File(["text"], "notes.txt", { type: "text/plain" });
-    const files = splitComposerDropzoneFiles([generic]);
-
-    expect(shouldHandleComposerDropzoneFiles(files, "reject")).toBe(true);
+    expect(shouldHandleComposerDropzoneFiles(splitComposerDropzoneFiles([generic]), mode)).toBe(
+      expected,
+    );
   });
 
   it("resets drag state for unusable file drops", () => {
