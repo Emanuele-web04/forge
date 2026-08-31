@@ -2,6 +2,19 @@ import { Schema } from "effect";
 
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 
+const isHttpsUrl = (value: string): boolean => {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+export const OutboundMcpResourceEndpoint = TrimmedNonEmptyString.check(
+  Schema.makeFilter(isHttpsUrl),
+);
+export type OutboundMcpResourceEndpoint = typeof OutboundMcpResourceEndpoint.Type;
+
 export const OutboundMcpConnectionStatus = Schema.Literals([
   "disconnected",
   "authorizing",
@@ -16,7 +29,7 @@ export const OutboundMcpConnection = Schema.Struct({
   id: TrimmedNonEmptyString,
   presetId: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
-  endpoint: TrimmedNonEmptyString,
+  endpoint: OutboundMcpResourceEndpoint,
   status: OutboundMcpConnectionStatus,
   lastValidatedAt: Schema.NullOr(IsoDateTime),
   errorCategory: Schema.NullOr(TrimmedNonEmptyString),
