@@ -108,6 +108,7 @@ describe("SidebarThreadRowContent", () => {
     const surface = screen.getByTestId("sidebar-split-group-surface");
     await expect.element(surface).toBeVisible();
     await expect.element(surface).toHaveAttribute("data-split-position", "middle");
+    expect(getComputedStyle(surface.element()).boxShadow).toBe("none");
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
   });
 
