@@ -115,7 +115,8 @@ export function groupThreadFolderEntries<T extends { readonly rootRowId: ThreadI
   entries: readonly T[];
   activeFolderIds: ReadonlySet<string>;
   folderIdByThreadId: Readonly<Record<string, string>>;
-}): { rootEntries: T[]; entriesByFolderId: Map<string, T[]> } {
+  collapsedFolderIds?: Readonly<Record<string, true>>;
+}): { rootEntries: T[]; entriesByFolderId: Map<string, T[]>; visibleEntries: T[] } {
   const rootEntries: T[] = [];
   const entriesByFolderId = new Map<string, T[]>();
   for (const entry of input.entries) {
@@ -129,7 +130,17 @@ export function groupThreadFolderEntries<T extends { readonly rootRowId: ThreadI
     folderEntries.push(entry);
     entriesByFolderId.set(folderId, folderEntries);
   }
-  return { rootEntries, entriesByFolderId };
+
+  const visibleEntries: T[] = [];
+  // The active-folder set is created from the rendered folder list, so its insertion order
+  // is the visual order. Root rows render after every visual folder.
+  for (const folderId of input.activeFolderIds) {
+    if (input.collapsedFolderIds?.[folderId] === true) continue;
+    visibleEntries.push(...(entriesByFolderId.get(folderId) ?? []));
+  }
+  visibleEntries.push(...rootEntries);
+
+  return { rootEntries, entriesByFolderId, visibleEntries };
 }
 
 export const useSidebarThreadFolderStore = create<SidebarThreadFolderState>()(
