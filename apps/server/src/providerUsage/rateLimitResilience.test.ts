@@ -145,8 +145,6 @@ describe("parseRetryAfterMs", () => {
   it("rejects zero and unsafe delta values", () => {
     expect(parseRetryAfterMs(new Headers({ "Retry-After": "0" }), 0)).toBeUndefined();
     const unsafeSeconds = String(Number.MAX_SAFE_INTEGER);
-    expect(
-      parseRetryAfterMs(new Headers({ "Retry-After": unsafeSeconds }), 0),
-    ).toBeUndefined();
+    expect(parseRetryAfterMs(new Headers({ "Retry-After": unsafeSeconds }), 0)).toBeUndefined();
   });
 });
