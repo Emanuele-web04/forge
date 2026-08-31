@@ -32,26 +32,8 @@ import type { Project, SidebarThreadSummary } from "../../types";
  */
 export type KanbanColumnKey = KanbanClassicColumnKey | "awaitingYou";
 
-/** Classic 3-column vocabulary — `KANBAN_COLUMN_LABELS` stays scoped to it. */
+/** Classic 3-column vocabulary — kept for legacy board builds. */
 export type KanbanClassicColumnKey = "draft" | "inProgress" | "done";
-
-export const KANBAN_COLUMN_LABELS: Record<KanbanClassicColumnKey, string> = {
-  draft: "Draft",
-  inProgress: "In Progress",
-  done: "Done",
-};
-
-/**
- * Display label for a kanban column, spanning both vocabularies. The classic map
- * stays scoped to the classic keys; the v2-specific label resolves from the
- * shared v2 map (`KANBAN_COLUMN_V2_LABELS`) so the copy never re-literalizes.
- */
-export function resolveKanbanColumnLabel(column: KanbanColumnKey): string {
-  if (column === "awaitingYou") {
-    return KANBAN_COLUMN_V2_LABELS.awaitingYou;
-  }
-  return KANBAN_COLUMN_LABELS[column];
-}
 
 export const KANBAN_FALLBACK_DRAFT_TITLE = "New thread";
 

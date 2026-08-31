@@ -28,14 +28,9 @@ import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { formatElapsed } from "../../session-logic";
 import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
-import { KANBAN_ATTENTION_LABELS } from "@synara/shared/kanban";
+import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
-import {
-  kanbanThreadCardId,
-  refineAttentionFlagsForLivePr,
-  resolveKanbanColumnLabel,
-  type KanbanCard,
-} from "./kanban.logic";
+import { kanbanThreadCardId, refineAttentionFlagsForLivePr, type KanbanCard } from "./kanban.logic";
 
 /** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
 export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
@@ -70,7 +65,7 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   return (
     <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
       <KanbanStatusIcon column={card.column} className="size-3" />
-      {resolveKanbanColumnLabel(card.column)}
+      {KANBAN_COLUMN_V2_LABELS[card.column]}
     </span>
   );
 }

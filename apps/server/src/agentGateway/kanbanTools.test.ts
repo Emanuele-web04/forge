@@ -218,6 +218,8 @@ const jsonText = (result: McpToolCallResult): JsonPayload => {
 };
 
 type BoardPayload = {
+  isError?: boolean;
+  __errorText?: string;
   projects: Array<{
     projectId: string;
     columns: Array<{ key: string; cards: Array<Record<string, any>> }>;
@@ -279,7 +281,7 @@ describe("synara_read_kanban_board", () => {
     );
   });
 
-  it("returns an empty board for an unknown projectId and hides archived threads", async () => {
+  it("rejects a board read for a project other than the caller's and hides archived threads", async () => {
     const archivedRunning = makeSessionShell("thread-archived", "project-a", {
       latestTurn: {
         ...makeSessionShell("thread-archived").latestTurn!,
@@ -302,9 +304,8 @@ describe("synara_read_kanban_board", () => {
     });
 
     const empty = await boardByColumn(tools, { projectId: "project-nope" });
-    expect(empty.payload.projects).toEqual([]);
-    expect(empty.payload.asOf).toBe(NOW_ISO);
-    expect(empty.payload.callerThreadId).toBe("thread-caller");
+    expect(empty.payload.isError).toBe(true);
+    expect(empty.payload.__errorText).toContain("project-nope");
 
     const full = await boardByColumn(tools, { projectId: "project-a" });
     const cardIds = full.payload.projects.flatMap((project) =>
@@ -350,7 +351,7 @@ describe("synara_read_kanban_board", () => {
   it("omits projects past the board cap instead of emitting empty ghost columns", async () => {
     const { tools } = makeTools({
       threads: [
-        ...Array.from({ length: 500 }, (_, index) => makeThreadShell(`thread-a-${index}`)),
+        ...Array.from({ length: 501 }, (_, index) => makeThreadShell(`thread-a-${index}`)),
         makeThreadShell("thread-b-0", "project-b"),
       ],
       projects: [makeProjectShell(), makeProjectShell("project-b", "B")],
@@ -488,37 +489,6 @@ describe("synara_create_kanban_task", () => {
     expect(result.isError).toBe(true);
     expect((jsonText(result) as { __errorText?: string }).__errorText).toContain("creation failed");
   });
-
-  it("rejects concurrent writes past the per-caller in-flight cap", async () => {
-    // Block runCreateThreads until every slot-holder is released, so the
-    // in-flight count stays at the cap while the over-cap call arrives.
-    let release: () => void = () => undefined;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { tools } = makeTools({
-      threads: [makeSessionShell("thread-created")],
-      runCreateThreads: () => Effect.promise(() => held.then(() => mcpOk({}))),
-    });
-    const tool = toolById(tools, "synara_create_kanban_task");
-    const args = { title: "Fix bug" };
-
-    // Fire 4 held calls (filling the cap) plus a 5th that must be rejected.
-    const heldResults = ["a", "b", "c", "d"].map((suffix) =>
-      runHandler(tool, { ...args, requestId: `req-${suffix}` }),
-    );
-    // Yield so the held calls enter runCreateThreads and hold their slots.
-    await Promise.resolve();
-    const overCap = await runHandler(tool, { ...args, requestId: "req-e" });
-    expect(overCap.isError).toBe(true);
-    expect((jsonText(overCap) as { __errorText?: string }).__errorText).toContain(
-      "Too many concurrent kanban write calls",
-    );
-
-    // Release the held calls so they settle and the process can exit.
-    release();
-    await Promise.allSettled(heldResults);
-  });
 });
 
 describe("synara_move_kanban_card", () => {
@@ -610,14 +580,14 @@ describe("synara_move_kanban_card", () => {
     if (!failStartTurn) expect(started).toHaveLength(0);
   });
 
-  it("returns alreadyDone for a settled thread with target done and no live turn", async () => {
+  it("rejects moving an awaiting-you card to done", async () => {
     const { tools, interrupted } = makeTools({
       threads: [makeSessionShell("thread-waiting", "project-a", { hasPendingApprovals: true })],
     });
 
     const result = await move(tools, "thread-waiting", "done");
-    expect(result.alreadyDone).toBe(true);
-    expect(result.card.column).toBe("awaitingYou");
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("Awaiting-you cards cannot be force-moved");
     expect(interrupted).toHaveLength(0);
   });
 

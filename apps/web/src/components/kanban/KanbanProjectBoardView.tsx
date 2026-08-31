@@ -314,9 +314,6 @@ export function KanbanProjectBoardView({
             activeCard={activeCard}
             prByThreadId={prByThreadId}
             {...(nowMs !== undefined ? { nowMs } : {})}
-            // Fold the inner done-column cap under the board-level reveal so a
-            // >30 done column's tail is reachable in one unfold (C2).
-            {...(viewMode === "v2" && hasRevealedReviewFold ? { uncapped: true } : {})}
           />
         </div>
       </div>

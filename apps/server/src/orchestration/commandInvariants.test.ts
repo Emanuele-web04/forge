@@ -20,7 +20,6 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
-  threadHasActiveTurn,
   threadHasInFlightTurn,
 } from "./commandInvariants.ts";
 
@@ -366,20 +365,6 @@ describe("commandInvariants", () => {
         }),
       ),
     ).resolves.toBeUndefined();
-  });
-
-  it("threadHasActiveTurn trusts an active session turn or a running latest turn", () => {
-    const activeTurn = { activeTurnId: TurnId.makeUnsafe("turn-x") };
-    expect(threadHasActiveTurn({ session: activeTurn, latestTurn: null })).toBe(true);
-    expect(threadHasActiveTurn({ session: null, latestTurn: { state: "running" } })).toBe(true);
-    expect(threadHasActiveTurn({ session: null, latestTurn: { state: "completed" } })).toBe(false);
-    expect(threadHasActiveTurn({ session: { activeTurnId: null }, latestTurn: null })).toBe(false);
-    expect(
-      threadHasActiveTurn({
-        session: { activeTurnId: TurnId.makeUnsafe("turn-x") },
-        latestTurn: { state: "completed" },
-      }),
-    ).toBe(true);
   });
 
   it("threadHasInFlightTurn includes starting/running sessions that active-turn misses", () => {

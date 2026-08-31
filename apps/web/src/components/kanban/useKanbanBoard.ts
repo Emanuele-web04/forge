@@ -16,10 +16,7 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
 import { isStudioContainerProject } from "../../lib/studioProjects";
 import { useStore } from "../../store";
-import {
-  createLastActivityTimestampSelector,
-  createSidebarDisplayThreadsSelector,
-} from "../../storeSelectors";
+import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { sortProjectsForSidebar } from "../Sidebar.logic";
@@ -56,7 +53,19 @@ export function useKanbanBoard(): KanbanBoard {
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const lastActivityTimestampMsByThreadId = useStore(createLastActivityTimestampSelector());
+  const threadIds = useStore((state) => state.threadIds ?? []);
+  const threadShellById = useStore((state) => state.threadShellById ?? {});
+  const lastActivityTimestampMsByThreadId = useMemo(() => {
+    const result: Record<string, number | null> = {};
+    for (const id of threadIds) {
+      const stamp = threadShellById[id]?.updatedAt;
+      if (stamp) {
+        const parsed = Date.parse(stamp);
+        result[id] = Number.isFinite(parsed) ? parsed : null;
+      }
+    }
+    return result;
+  }, [threadIds, threadShellById]);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);

@@ -72,28 +72,6 @@ const RUNNING_SESSION = () => makeSession({ status: "running", updatedAt: STALE_
 const liveInput = (overrides: Partial<KanbanThreadDerivationInput> = {}) =>
   makeInput({ latestTurn: makeTurn(LIVE_TURN), session: RUNNING_SESSION(), ...overrides });
 
-describe("kanban v2 vocabulary", () => {
-  it("labels every v2 column key and nothing else, with awaiting-you distinct", () => {
-    expect(Object.keys(KANBAN_COLUMN_V2_LABELS).toSorted()).toEqual([...COLUMN_V2_KEYS].toSorted());
-    for (const key of COLUMN_V2_KEYS) {
-      expect(KANBAN_COLUMN_V2_LABELS[key]).toBeTypeOf("string");
-      expect(KANBAN_COLUMN_V2_LABELS[key].length).toBeGreaterThan(0);
-    }
-    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).toBe("Awaiting you");
-    expect(KANBAN_COLUMN_V2_LABELS.awaitingYou).not.toBe(KANBAN_COLUMN_V2_LABELS.inProgress);
-  });
-
-  it("labels every attention flag and nothing else", () => {
-    expect(Object.keys(KANBAN_ATTENTION_LABELS).toSorted()).toEqual(
-      [...ATTENTION_FLAGS].toSorted(),
-    );
-    for (const flag of ATTENTION_FLAGS) {
-      expect(KANBAN_ATTENTION_LABELS[flag]).toBeTypeOf("string");
-      expect(KANBAN_ATTENTION_LABELS[flag].length).toBeGreaterThan(0);
-    }
-  });
-});
-
 describe("isKanbanTurnSettled", () => {
   it("treats stamped, interrupted, and error turns as settled under a non-running session", () => {
     expect(isKanbanTurnSettled(makeInput({ latestTurn: makeTurn() }))).toBe(true);

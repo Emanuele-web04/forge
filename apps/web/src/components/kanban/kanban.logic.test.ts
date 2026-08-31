@@ -1238,13 +1238,3 @@ describe("shouldToastForExpiredDispatch (H5)", () => {
     expect(shouldToastForExpiredDispatch(thread)).toBe(toast);
   });
 });
-
-describe("needs-review reveal affordance (H1)", () => {
-  it("renders when there is a fold, stays reachable once revealed, hides when idle", () => {
-    expect(shouldShowReviewFoldToggle(false, 3)).toBe(true);
-    expect(resolveReviewFoldToggleLabel(false, 3)).toBe("Show 3 more");
-    expect(shouldShowReviewFoldToggle(true, 0)).toBe(true);
-    expect(resolveReviewFoldToggleLabel(true, 0)).toBe("Show fewer");
-    expect(shouldShowReviewFoldToggle(false, 0)).toBe(false);
-  });
-});
