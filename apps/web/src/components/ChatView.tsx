@@ -396,7 +396,6 @@ import { appendComposerPromptText } from "../lib/chatReferences";
 import {
   appendOriginalComposerPromptBlocks,
   appendTerminalContextsToPrompt,
-  appendWorkItemsToPrompt,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   formatTerminalContextLabel,
   insertInlineTerminalContextPlaceholder,
@@ -413,7 +412,7 @@ import {
   pastedTextTitle,
   type PastedTextDraft,
 } from "../lib/composerPastedText";
-import { type WorkItemDraft } from "../lib/composerWorkItems";
+import { appendWorkItemsToPrompt, type WorkItemDraft } from "../lib/composerWorkItems";
 import {
   appendAssistantSelectionsToPrompt,
   formatAssistantSelectionQueuePreview,

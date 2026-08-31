@@ -1704,26 +1704,30 @@ export const createComposerDraftStoreState =
       if (threadId.length === 0) {
         return false;
       }
+      let added = false;
       set((state) => {
         const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
-        if (existing.workItems.length >= WORK_ITEM_ATTACHMENT_LIMIT) {
+        const nextWorkItems = normalizeWorkItems(
+          [...existing.workItems, item],
+          WORK_ITEM_ATTACHMENT_LIMIT,
+        );
+        if (nextWorkItems.length === existing.workItems.length) {
           return state;
         }
-        if (existing.workItems.some((workItem) => workItemKey(workItem) === workItemKey(item))) {
-          return state;
-        }
+        added = true;
         const nextDraft: ComposerThreadDraftState = {
           ...existing,
-          workItems: normalizeWorkItems([...existing.workItems, item], WORK_ITEM_ATTACHMENT_LIMIT),
+          workItems: nextWorkItems,
         };
-        return {
-          draftsByThreadId: {
-            ...state.draftsByThreadId,
-            [threadId]: nextDraft,
-          },
-        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
       });
-      return true;
+      return added;
     },
     removeWorkItem: (threadId, itemKey) => {
       if (threadId.length === 0 || itemKey.length === 0) {
@@ -1741,28 +1745,6 @@ export const createComposerDraftStoreState =
         const nextDraft: ComposerThreadDraftState = {
           ...current,
           workItems: nextWorkItems,
-        };
-        const nextDraftsByThreadId = { ...state.draftsByThreadId };
-        if (shouldRemoveDraft(nextDraft)) {
-          delete nextDraftsByThreadId[threadId];
-        } else {
-          nextDraftsByThreadId[threadId] = nextDraft;
-        }
-        return { draftsByThreadId: nextDraftsByThreadId };
-      });
-    },
-    clearWorkItems: (threadId) => {
-      if (threadId.length === 0) {
-        return;
-      }
-      set((state) => {
-        const current = state.draftsByThreadId[threadId];
-        if (!current || current.workItems.length === 0) {
-          return state;
-        }
-        const nextDraft: ComposerThreadDraftState = {
-          ...current,
-          workItems: [],
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {

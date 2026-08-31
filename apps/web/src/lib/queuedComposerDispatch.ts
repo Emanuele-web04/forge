@@ -25,9 +25,9 @@ import {
 import { appendPastedTextsToPrompt, filterPastedTextsWithText } from "./composerPastedText";
 import { formatOutgoingComposerPrompt, stageUploadComposerAttachments } from "./composerSend";
 import { appendFileCommentsToPrompt } from "./fileComments";
+import { appendWorkItemsToPrompt } from "./composerWorkItems";
 import {
   appendTerminalContextsToPrompt,
-  appendWorkItemsToPrompt,
   filterTerminalContextsWithText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";

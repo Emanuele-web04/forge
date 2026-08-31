@@ -6,7 +6,6 @@ import {
   WorkItemKind,
   WorkItemSearchInput,
   WorkItemSearchResult,
-  WorkItemSnapshot,
 } from "./workItems";
 
 describe("WorkItem schemas", () => {
@@ -31,9 +30,9 @@ describe("WorkItem schemas", () => {
     expect(() => Schema.decodeUnknownSync(WorkItemAttachment)(oversized)).toThrow();
   });
 
-  it("decodes a pull request snapshot", () => {
+  it("decodes a pull request attachment", () => {
     const pr = { ...validAttachment, kind: "pull-request" as const, state: "merged" as const };
-    const result = Schema.decodeUnknownSync(WorkItemSnapshot)(pr);
+    const result = Schema.decodeUnknownSync(WorkItemAttachment)(pr);
     expect(result).toEqual(pr);
   });
 

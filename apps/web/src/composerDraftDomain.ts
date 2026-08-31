@@ -28,7 +28,7 @@ import {
   createPastedTextDraft,
   normalizePastedTextContent,
 } from "./lib/composerPastedText";
-import { type WorkItemDraft, normalizeWorkItemDraft } from "./lib/composerWorkItems";
+import { type WorkItemDraft, normalizeWorkItemDraft, workItemKey } from "./lib/composerWorkItems";
 import {
   type FileCommentDraft,
   type FileCommentSelection,
@@ -361,7 +361,6 @@ export interface ComposerDraftStoreState {
   clearPastedTexts: (threadId: ThreadId) => void;
   addWorkItem: (threadId: ThreadId, item: WorkItemDraft) => boolean;
   removeWorkItem: (threadId: ThreadId, itemKey: string) => void;
-  clearWorkItems: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -673,7 +672,7 @@ export function normalizeWorkItems(
   const existingKeys = new Set<string>();
   for (const item of items) {
     const normalized = normalizeWorkItemDraft(item);
-    const key = `${normalized.kind}:${normalized.number}`;
+    const key = workItemKey(normalized);
     if (existingKeys.has(key)) {
       continue;
     }
@@ -697,13 +696,8 @@ export function hydratePastedTextsFromPersisted(
   return normalizePastedTexts(persisted.map((entry) => createPastedTextDraft(entry)));
 }
 
-type PersistedWorkItemDraft = Pick<
-  WorkItemDraft,
-  "id" | "kind" | "number" | "title" | "state" | "url" | "bodyExcerpt" | "createdAt" | "updatedAt"
->;
-
 export function hydrateWorkItemsFromPersisted(
-  persisted: ReadonlyArray<PersistedWorkItemDraft> | undefined,
+  persisted: ReadonlyArray<WorkItemDraft> | undefined,
 ): WorkItemDraft[] {
   if (!persisted || persisted.length === 0) {
     return [];

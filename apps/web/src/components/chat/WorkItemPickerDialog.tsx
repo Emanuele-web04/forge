@@ -58,8 +58,6 @@ export function WorkItemPickerDialog({
   );
   const isFull = selectedItems.length >= 5;
 
-  const canAddMore = !isFull;
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">

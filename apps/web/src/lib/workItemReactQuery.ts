@@ -1,7 +1,7 @@
 // FILE: workItemReactQuery.ts
 // Purpose: React Query hook for debounced GitHub work item search.
 
-import { useQuery, queryOptions, type QueryClient } from "@tanstack/react-query";
+import { useQuery, queryOptions } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import type { WorkItemSearchInput, WorkItemSearchResult } from "@synara/contracts";
@@ -10,7 +10,6 @@ import { ensureNativeApi } from "~/nativeApi";
 export const WORK_ITEMS_SEARCH_DEBOUNCE_MS = 300;
 
 export const workItemQueryKeys = {
-  all: ["work-items"] as const,
   search: (input: WorkItemSearchInput | null) =>
     ["work-items", "search", input?.cwd ?? "", input?.query ?? "", input?.limit ?? 20] as const,
 };
@@ -52,12 +51,4 @@ export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, e
   }, [cwd, debouncedQuery]);
 
   return useWorkItemsSearch(input);
-}
-
-export function setWorkItemsSearchData(
-  queryClient: QueryClient,
-  input: WorkItemSearchInput,
-  data: WorkItemSearchResult,
-) {
-  queryClient.setQueryData(workItemQueryKeys.search(input), data);
 }

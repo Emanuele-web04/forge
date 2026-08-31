@@ -10,7 +10,7 @@ import {
 } from "./browserAnnotations";
 import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
 import { extractTrailingPastedTexts, type ParsedPastedTextEntry } from "./composerPastedText";
-import { buildAttachedWorkItemsBlock, extractTrailingWorkItems } from "./composerWorkItems";
+import { extractTrailingWorkItems } from "./composerWorkItems";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -247,18 +247,6 @@ export function materializeInlineTerminalContextPrompt(
   }
 
   return result;
-}
-
-export function appendWorkItemsToPrompt(
-  prompt: string,
-  workItems: ReadonlyArray<WorkItemAttachment>,
-): string {
-  const trimmedPrompt = prompt.trim();
-  const workItemsBlock = buildAttachedWorkItemsBlock(workItems);
-  if (workItemsBlock.length === 0) {
-    return trimmedPrompt;
-  }
-  return trimmedPrompt.length > 0 ? `${trimmedPrompt}\n${workItemsBlock}` : workItemsBlock;
 }
 
 export function appendTerminalContextsToPrompt(

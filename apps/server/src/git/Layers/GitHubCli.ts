@@ -1461,12 +1461,9 @@ const makeGitHubCli = Effect.sync(() => {
 
   const WORK_ITEM_JSON_FIELDS = "number,title,url,state,body,updatedAt,createdAt";
 
-  function normalizeWorkItemState(
-    state: string,
-    kind: "issue" | "pull-request",
-  ): "open" | "closed" | "merged" {
+  function normalizeWorkItemState(state: string): "open" | "closed" | "merged" {
     const upper = state.toUpperCase();
-    if (upper === "MERGED" || (kind === "pull-request" && upper === "MERGED")) return "merged";
+    if (upper === "MERGED") return "merged";
     if (upper === "CLOSED") return "closed";
     return "open";
   }
@@ -1486,10 +1483,7 @@ const makeGitHubCli = Effect.sync(() => {
     if (title.length === 0) return null;
     const url = typeof item.url === "string" ? item.url.trim() : "";
     if (url.length === 0) return null;
-    const state = normalizeWorkItemState(
-      typeof item.state === "string" ? item.state : "OPEN",
-      kind,
-    );
+    const state = normalizeWorkItemState(typeof item.state === "string" ? item.state : "OPEN");
     const createdAt =
       typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString();
     const updatedAt =

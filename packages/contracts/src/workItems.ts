@@ -20,9 +20,6 @@ export const WorkItemAttachment = Schema.Struct({
 });
 export type WorkItemAttachment = typeof WorkItemAttachment.Type;
 
-export const WorkItemSnapshot = WorkItemAttachment;
-export type WorkItemSnapshot = typeof WorkItemSnapshot.Type;
-
 export const WorkItemSearchInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   query: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
