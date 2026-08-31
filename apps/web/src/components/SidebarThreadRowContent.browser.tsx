@@ -81,4 +81,48 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(screen.getByText("Scout")).toBeVisible();
     await expect.element(screen.getByText("(reviewer)")).toBeVisible();
   });
+
+  it("draws the split-group rail with the member position of the row", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({ id: ThreadId.makeUnsafe("thread-split-member") })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        splitGroup={{
+          splitViewId: "split-rail",
+          memberIndex: 2,
+          memberCount: 3,
+          isLeader: false,
+          position: "middle",
+        }}
+        splitGroupActive
+      />,
+    );
+
+    const rail = screen.getByTestId("sidebar-split-group-rail");
+    await expect.element(rail).toBeVisible();
+    await expect.element(rail).toHaveAttribute("data-split-view-id", "split-rail");
+    await expect.element(rail).toHaveAttribute("data-split-position", "middle");
+    await expect.element(rail).toHaveAttribute("data-split-member", "2/3");
+  });
+
+  it("omits the split-group rail when the row is not part of a split", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({ id: ThreadId.makeUnsafe("thread-no-split") })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        splitGroup={null}
+      />,
+    );
+
+    await expect.element(screen.getByText("Shared thread row")).toBeVisible();
+    expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
+  });
 });

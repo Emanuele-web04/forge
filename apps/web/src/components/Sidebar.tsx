@@ -346,6 +346,11 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
+import {
+  applySidebarSplitGroups,
+  buildSidebarSplitGroupIndex,
+  type SidebarSplitGroupInfo,
+} from "./sidebarSplitGroups";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
@@ -1414,6 +1419,13 @@ export default function Sidebar() {
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
+  const splitViewIdBySourceThreadId = useSplitViewStore(
+    (store) => store.splitViewIdBySourceThreadId,
+  );
+  const splitGroupMembershipByThreadId = useMemo(
+    () => buildSidebarSplitGroupIndex({ splitViewsById, splitViewIdBySourceThreadId }),
+    [splitViewIdBySourceThreadId, splitViewsById],
+  );
 
   useEffect(() => {
     const api = readNativeApi();
@@ -1626,15 +1638,11 @@ export default function Sidebar() {
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const threadFolders = useSidebarThreadFolderStore((state) => state.folders);
   const folderIdByThreadId = useSidebarThreadFolderStore((state) => state.folderIdByThreadId);
-  const collapsedThreadFolderIds = useSidebarThreadFolderStore(
-    (state) => state.collapsedFolderIds,
-  );
+  const collapsedThreadFolderIds = useSidebarThreadFolderStore((state) => state.collapsedFolderIds);
   const createThreadFolder = useSidebarThreadFolderStore((state) => state.createFolder);
   const renameThreadFolder = useSidebarThreadFolderStore((state) => state.renameFolder);
   const assignThreadsToFolder = useSidebarThreadFolderStore((state) => state.assignThreads);
-  const setThreadFolderCollapsed = useSidebarThreadFolderStore(
-    (state) => state.setFolderCollapsed,
-  );
+  const setThreadFolderCollapsed = useSidebarThreadFolderStore((state) => state.setFolderCollapsed);
   const archiveThreadFolder = useSidebarThreadFolderStore((state) => state.archiveFolder);
   const restoreThreadFolder = useSidebarThreadFolderStore((state) => state.restoreFolder);
   const deleteThreadFolder = useSidebarThreadFolderStore((state) => state.deleteFolder);
@@ -1813,13 +1821,7 @@ export default function Sidebar() {
       }
       if (hasActiveAssignedThread) restoreThreadFolder(folder.id);
     }
-  }, [
-    folderIdByThreadId,
-    restoreThreadFolder,
-    sidebarThreads,
-    threadFolders,
-    threadsHydrated,
-  ]);
+  }, [folderIdByThreadId, restoreThreadFolder, sidebarThreads, threadFolders, threadsHydrated]);
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
@@ -2961,8 +2963,12 @@ export default function Sidebar() {
   const moveThreadsToFolder = useCallback(
     (threadIds: readonly ThreadId[], folderId: string | null) => {
       const folder = folderId
-        ? useSidebarThreadFolderStore.getState().folders.find((entry) => entry.id === folderId)
+        ? (useSidebarThreadFolderStore.getState().folders.find((entry) => entry.id === folderId) ??
+          null)
         : null;
+      // A `folderId` that no longer resolves is a stale drop target (folder deleted mid-drag):
+      // moving threads into it would strand them, so drop the request instead.
+      if (folderId !== null && folder === null) return;
       const eligibleIds = threadIds.filter((threadId) => {
         const thread = getThreadFromState(useStore.getState(), threadId);
         return (
@@ -3004,11 +3010,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDragOver = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!hasThreadDragType(event.dataTransfer)) return;
       // A folder owns its whole subtree as a drop target. Blocking the project-root
       // parent prevents dropping on the current folder from accidentally extracting it.
@@ -3031,11 +3033,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDragLeave = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!hasThreadDragType(event.dataTransfer)) return;
       const relatedTarget = event.relatedTarget as Node | null;
       if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
@@ -3046,11 +3044,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDrop = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!hasThreadDragType(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -3166,7 +3160,10 @@ export default function Sidebar() {
       }
       if (clicked === "move-to-project") {
         moveThreadsToFolder(
-          getThreadIdsInFolder(useSidebarThreadFolderStore.getState().folderIdByThreadId, folder.id),
+          getThreadIdsInFolder(
+            useSidebarThreadFolderStore.getState().folderIdByThreadId,
+            folder.id,
+          ),
           null,
         );
         return;
@@ -3522,12 +3519,13 @@ export default function Sidebar() {
           (thread) =>
             thread.projectId === selectedProjectId && (thread.parentThreadId ?? null) === null,
         );
-      const projectFolders = canOrganizeSelection && selectedProjectId !== null
-        ? getProjectThreadFolders(
-            useSidebarThreadFolderStore.getState().folders,
-            selectedProjectId,
-          )
-        : [];
+      const projectFolders =
+        canOrganizeSelection && selectedProjectId !== null
+          ? getProjectThreadFolders(
+              useSidebarThreadFolderStore.getState().folders,
+              selectedProjectId,
+            )
+          : [];
       const folderAssignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
       const hasFolderAssignment = ids.some((id) => folderAssignments[id] !== undefined);
 
@@ -4120,12 +4118,15 @@ export default function Sidebar() {
     if (!chatSectionExpanded) {
       return [];
     }
-    return buildProjectThreadTree({
-      threads: sortThreadsForSidebar(
-        chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
-        appSettings.sidebarThreadSortOrder,
-      ),
-      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+    return applySidebarSplitGroups({
+      rows: buildProjectThreadTree({
+        threads: sortThreadsForSidebar(
+          chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+          appSettings.sidebarThreadSortOrder,
+        ),
+        forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      }),
+      membershipByThreadId: splitGroupMembershipByThreadId,
     });
   }, [
     activeSidebarThreadId,
@@ -4133,6 +4134,7 @@ export default function Sidebar() {
     chatSectionExpanded,
     chatProjects,
     sortedSidebarThreadsByProjectId,
+    splitGroupMembershipByThreadId,
   ]);
   const visibleChatThreadIds = useMemo(
     () => visibleChatThreadRows.map((row) => row.thread.id),
@@ -4146,17 +4148,20 @@ export default function Sidebar() {
     if (!isOnStudio) {
       return [];
     }
-    return buildProjectThreadTree({
-      threads: sortThreadsForSidebar(
-        getUnpinnedThreadsForSidebar(
-          studioProjects.flatMap(
-            (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
+    return applySidebarSplitGroups({
+      rows: buildProjectThreadTree({
+        threads: sortThreadsForSidebar(
+          getUnpinnedThreadsForSidebar(
+            studioProjects.flatMap(
+              (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
+            ),
+            pinnedThreadIds,
           ),
-          pinnedThreadIds,
+          appSettings.sidebarThreadSortOrder,
         ),
-        appSettings.sidebarThreadSortOrder,
-      ),
-      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+        forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      }),
+      membershipByThreadId: splitGroupMembershipByThreadId,
     });
   }, [
     activeSidebarThreadId,
@@ -4164,6 +4169,7 @@ export default function Sidebar() {
     isOnStudio,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
+    splitGroupMembershipByThreadId,
     studioProjects,
   ]);
   const studioChatThreadIds = useMemo(
@@ -4175,6 +4181,7 @@ export default function Sidebar() {
       visibleChatThreadRows.map((row) => ({
         rowId: row.thread.id,
         rootRowId: row.rootThreadId,
+        splitGroup: row.splitGroup,
         row,
       })),
     [visibleChatThreadRows],
@@ -4272,6 +4279,7 @@ export default function Sidebar() {
         projects: standardProjects,
         sortedSidebarThreadsByProjectId,
         pinnedThreadIds,
+        splitGroupMembershipByThreadId,
         threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4281,6 +4289,7 @@ export default function Sidebar() {
       }),
     [
       activeSidebarThreadId,
+      splitGroupMembershipByThreadId,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
@@ -4302,6 +4311,7 @@ export default function Sidebar() {
       projects: studioProjects,
       sortedSidebarThreadsByProjectId,
       pinnedThreadIds,
+      splitGroupMembershipByThreadId,
       threadListExtraPagesByProjectCwd,
       normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4312,6 +4322,7 @@ export default function Sidebar() {
   }, [
     activeSidebarThreadId,
     isOnStudio,
+    splitGroupMembershipByThreadId,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
@@ -4790,9 +4801,7 @@ export default function Sidebar() {
     const isSubagentThread = Boolean(thread.parentThreadId);
     const pr = prByThreadId.get(thread.id) ?? null;
     const leadingPr =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : pr;
+      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -4926,6 +4935,7 @@ export default function Sidebar() {
     // their top-level rows align flush like pinned rows instead of the indented
     // column used for project-nested threads.
     topLevel = false,
+    splitGroup: SidebarSplitGroupInfo | null = null,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -4957,9 +4967,7 @@ export default function Sidebar() {
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const leadingPr =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : pr;
+      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon =
@@ -5087,6 +5095,10 @@ export default function Sidebar() {
               isActive={isActive}
               variant="standard"
               subagentIndentPx={subagentIndentPx}
+              splitGroup={splitGroup}
+              splitGroupActive={
+                splitGroup !== null && splitGroup.splitViewId === routeSearch.splitViewId
+              }
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -5204,7 +5216,13 @@ export default function Sidebar() {
           <div className={DISCLOSURE_INNER_CLASS}>
             <div className={cn("pl-5", disclosureContentClassName(open))}>
               {entries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
+                renderThreadRow(
+                  entry.thread,
+                  orderedProjectThreadIds,
+                  entry.depth,
+                  false,
+                  entry.splitGroup,
+                ),
               )}
             </div>
           </div>
@@ -5517,7 +5535,13 @@ export default function Sidebar() {
                 ),
               )}
               {rootVisibleEntries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
+                renderThreadRow(
+                  entry.thread,
+                  orderedProjectThreadIds,
+                  entry.depth,
+                  false,
+                  entry.splitGroup,
+                ),
               )}
 
               {(canShowMoreThreads || canShowLessThreads) && (
@@ -6520,7 +6544,13 @@ export default function Sidebar() {
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                     {studioChatThreadRows.length > 0 ? (
                       studioChatThreadRows.map((row) =>
-                        renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
+                        renderThreadRow(
+                          row.thread,
+                          studioChatThreadIds,
+                          row.depth,
+                          true,
+                          row.splitGroup,
+                        ),
                       )
                     ) : (
                       <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
@@ -6760,6 +6790,7 @@ export default function Sidebar() {
                           visibleChatThreadIds,
                           entry.row.depth,
                           true,
+                          entry.row.splitGroup,
                         ),
                       )
                     ) : (
@@ -7298,9 +7329,7 @@ export default function Sidebar() {
           onOpenChange={(nextOpen) => {
             if (!nextOpen) setThreadFolderRemovalState(null);
           }}
-          onConfirm={(disposition) =>
-            runThreadFolderRemoval(threadFolderRemovalState, disposition)
-          }
+          onConfirm={(disposition) => runThreadFolderRemoval(threadFolderRemovalState, disposition)}
         />
       ) : null}
 

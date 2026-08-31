@@ -37,6 +37,15 @@ import {
   isLatestTurnSettled,
 } from "../session-logic";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
+import {
+  applySidebarSplitGroups,
+  clampPreviewLimitToSplitGroupBoundary,
+  reorderThreadIdsByRowOrder,
+  type SidebarSplitGroupInfo,
+  type SidebarSplitGroupMembership,
+} from "./sidebarSplitGroups";
+
+const EMPTY_SPLIT_GROUP_MEMBERSHIP: ReadonlyMap<ThreadId, SidebarSplitGroupMembership> = new Map();
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -300,6 +309,8 @@ export type SidebarProjectEntry = {
   rootRowId: ThreadId;
   thread: SidebarThreadSummary;
   depth: number;
+  /** Set when the row belongs to a split view rendered as a contiguous group. */
+  splitGroup: SidebarSplitGroupInfo | null;
 };
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
@@ -1011,6 +1022,7 @@ export function getVisibleSidebarEntriesForPreview<
   T extends {
     rowId: Thread["id"];
     rootRowId: Thread["id"];
+    splitGroup?: SidebarSplitGroupInfo | null;
   },
 >(input: {
   entries: readonly T[];
@@ -1020,7 +1032,13 @@ export function getVisibleSidebarEntriesForPreview<
   hasHiddenEntries: boolean;
   visibleEntries: T[];
 } {
-  const { activeEntryId, entries, previewLimit } = input;
+  const { activeEntryId, entries } = input;
+  // Split groups render as one block with a shared rail, so the preview cut moves back to the
+  // nearest group boundary instead of slicing a group in half.
+  const previewLimit = clampPreviewLimitToSplitGroupBoundary({
+    splitGroupIds: entries.map((entry) => entry.splitGroup?.splitViewId ?? null),
+    previewLimit: input.previewLimit,
+  });
   const hasHiddenEntries = entries.length > previewLimit;
 
   if (!hasHiddenEntries) {
@@ -1062,6 +1080,17 @@ export function getVisibleSidebarEntriesForPreview<
 
   for (const entry of forcedVisibleEntries) {
     visibleEntryIds.add(entry.rowId);
+  }
+
+  // Revealing one pane of a split reveals the whole group; a lone member with a clipped rail
+  // would read as a broken row rather than as part of a split.
+  const activeSplitViewId = activeEntry.splitGroup?.splitViewId ?? null;
+  if (activeSplitViewId) {
+    for (const entry of entries) {
+      if (entry.splitGroup?.splitViewId === activeSplitViewId) {
+        visibleEntryIds.add(entry.rowId);
+      }
+    }
   }
 
   return {
@@ -1222,12 +1251,14 @@ export function getVisibleSidebarThreadIds(input: {
   previewLimit: number;
   previewPageSize: number;
   threadSortOrder: SidebarThreadSortOrder;
+  splitGroupMembershipByThreadId?: ReadonlyMap<ThreadId, SidebarSplitGroupMembership>;
 }): Thread["id"][] {
   const {
     activeThreadId,
     previewLimit,
     previewPageSize,
     projects,
+    splitGroupMembershipByThreadId,
     threadListExtraPagesByProjectId,
     threadSortOrder,
     threads,
@@ -1249,9 +1280,12 @@ export function getVisibleSidebarThreadIds(input: {
       threadsByProjectId.get(project.id) ?? [],
       threadSortOrder,
     );
-    const projectThreadTree = buildProjectThreadTree({
-      threads: projectThreads,
-      forceVisibleThreadId: activeThreadId,
+    const projectThreadTree = applySidebarSplitGroups({
+      rows: buildProjectThreadTree({
+        threads: projectThreads,
+        forceVisibleThreadId: activeThreadId,
+      }),
+      membershipByThreadId: splitGroupMembershipByThreadId ?? EMPTY_SPLIT_GROUP_MEMBERSHIP,
     });
     const paging = resolveSidebarThreadListPaging({
       totalCount: projectThreadTree.length,
@@ -1264,6 +1298,7 @@ export function getVisibleSidebarThreadIds(input: {
         rowId: row.thread.id,
         rootRowId: row.rootThreadId,
         threadId: row.thread.id,
+        splitGroup: row.splitGroup,
       })),
       activeEntryId: activeThreadId,
       previewLimit: paging.previewLimit,
@@ -1588,6 +1623,7 @@ export function deriveSidebarProjectData(input: {
   projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];
   sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
   pinnedThreadIds: readonly ThreadId[];
+  splitGroupMembershipByThreadId?: ReadonlyMap<ThreadId, SidebarSplitGroupMembership>;
   threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
@@ -1615,7 +1651,7 @@ export function deriveSidebarProjectData(input: {
     );
     const requestedExtraPages =
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
-    const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+    let orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
 
     // Collapsed folders should not build or render their full tree; large projects can
     // contain hundreds of rows and folder toggles are on the sidebar hot path.
@@ -1634,6 +1670,7 @@ export function deriveSidebarProjectData(input: {
                 rootRowId: activeThread.id,
                 thread: activeThread,
                 depth: 0,
+                splitGroup: null,
               },
             ];
 
@@ -1652,17 +1689,21 @@ export function deriveSidebarProjectData(input: {
       continue;
     }
 
-    const projectThreadTree = buildProjectThreadTree({
-      threads: projectThreads,
-      forceVisibleThreadId: input.activeSidebarThreadId,
+    const projectThreadTree = applySidebarSplitGroups({
+      rows: buildProjectThreadTree({
+        threads: projectThreads,
+        forceVisibleThreadId: input.activeSidebarThreadId,
+      }),
+      membershipByThreadId: input.splitGroupMembershipByThreadId ?? EMPTY_SPLIT_GROUP_MEMBERSHIP,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
-      ({ thread, depth, rootThreadId }) => ({
+      ({ thread, depth, rootThreadId, splitGroup }) => ({
         kind: "thread",
         rowId: thread.id,
         rootRowId: rootThreadId,
         thread,
         depth,
+        splitGroup,
       }),
     );
 
@@ -1680,6 +1721,11 @@ export function deriveSidebarProjectData(input: {
       entries: orderedEntries,
       activeEntryId: activeEntry?.rowId,
       previewLimit: paging.previewLimit,
+    });
+
+    orderedProjectThreadIds = reorderThreadIdsByRowOrder({
+      threadIds: orderedProjectThreadIds,
+      rowThreadIds: orderedEntries.map((entry) => entry.rowId),
     });
 
     byProjectId.set(project.id, {

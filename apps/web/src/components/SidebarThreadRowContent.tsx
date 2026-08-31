@@ -13,6 +13,8 @@ import { resolveSubagentPresentationForThread } from "../lib/subagentPresentatio
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
+import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
+import { SidebarSplitGroupRail } from "./SidebarSplitGroupRail";
 import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
@@ -172,6 +174,8 @@ export function SidebarThreadRowContent({
   variant,
   subagentIndentPx: subagentIndentPxProp,
   pendingStatusColorClass,
+  splitGroup,
+  splitGroupActive,
   suffix,
 }: {
   thread: SidebarThreadSummary;
@@ -182,6 +186,8 @@ export function SidebarThreadRowContent({
   variant: "pinned" | "standard";
   subagentIndentPx?: number;
   pendingStatusColorClass?: string | null | undefined;
+  splitGroup?: SidebarSplitGroupInfo | null | undefined;
+  splitGroupActive?: boolean | undefined;
   suffix?: ReactNode;
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
@@ -203,6 +209,9 @@ export function SidebarThreadRowContent({
 
   return (
     <>
+      {splitGroup ? (
+        <SidebarSplitGroupRail splitGroup={splitGroup} active={splitGroupActive === true} />
+      ) : null}
       {variant === "standard" && isSubagentThread ? (
         <span
           aria-hidden="true"
