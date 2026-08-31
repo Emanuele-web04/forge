@@ -567,6 +567,59 @@ describe("splitViewStore", () => {
     expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
   });
 
+  it("detaches one thread while preserving a split with multiple remaining chats", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+    const threadBPaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_B);
+    store.dropThreadOnPane({
+      splitViewId,
+      targetPaneId: threadBPaneId,
+      direction: "vertical",
+      side: "second",
+      threadId: THREAD_C,
+    });
+
+    const result = useSplitViewStore.getState().detachThreadFromSplitView({
+      splitViewId,
+      threadId: THREAD_A,
+    });
+
+    expect(result).toEqual({
+      kind: "split",
+      splitViewId,
+      focusedThreadId: THREAD_C,
+    });
+    expect(resolveSplitViewThreadIds(snapshot(splitViewId)).toSorted()).toEqual(
+      [THREAD_B, THREAD_C].toSorted(),
+    );
+  });
+
+  it("dissolves the card when detaching leaves a single chat", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+
+    const result = useSplitViewStore.getState().detachThreadFromSplitView({
+      splitViewId,
+      threadId: THREAD_B,
+    });
+
+    expect(result).toEqual({ kind: "single", threadId: THREAD_A });
+    expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
+    expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+  });
+
   it("removes an empty split entirely after deleting its source thread", () => {
     const store = useSplitViewStore.getState();
     const splitId = store.createFromDrop({

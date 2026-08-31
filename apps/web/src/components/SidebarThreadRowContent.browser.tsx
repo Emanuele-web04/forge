@@ -9,10 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
-import {
-  resolveSubagentRowDescription,
-  SidebarThreadRowContent,
-} from "./SidebarThreadRowContent";
+import { resolveSubagentRowDescription, SidebarThreadRowContent } from "./SidebarThreadRowContent";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -83,9 +80,12 @@ describe("SidebarThreadRowContent", () => {
 
     await expect.element(screen.getByText("Scout")).toBeVisible();
     await expect.element(screen.getByText("(reviewer)")).toBeVisible();
+    const connector = screen.getByTestId("sidebar-subagent-connector");
+    await expect.element(connector).toBeVisible();
+    await expect.element(connector).toHaveAttribute("data-indent", "10");
   });
 
-  it("draws the split-group rail with the member position of the row", async () => {
+  it("uses a simple shared card surface without a per-row split rail", async () => {
     const screen = await render(
       <SidebarThreadRowContent
         thread={makeThread({ id: ThreadId.makeUnsafe("thread-split-member") })}
@@ -105,12 +105,10 @@ describe("SidebarThreadRowContent", () => {
       />,
     );
 
-    const rail = screen.getByTestId("sidebar-split-group-rail");
-    await expect.element(rail).toBeVisible();
-    await expect.element(rail).toHaveAttribute("data-split-view-id", "split-rail");
-    await expect.element(rail).toHaveAttribute("data-split-position", "middle");
-    await expect.element(rail).toHaveAttribute("data-split-member", "2/3");
-    await expect.element(rail).toHaveAttribute("aria-label", "Split view · pane 2 of 3");
+    const surface = screen.getByTestId("sidebar-split-group-surface");
+    await expect.element(surface).toBeVisible();
+    await expect.element(surface).toHaveAttribute("data-split-position", "middle");
+    expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
   });
 
   it("draws the shared split-group surface capped to the row position", async () => {
@@ -134,7 +132,7 @@ describe("SidebarThreadRowContent", () => {
 
     const surface = screen.getByTestId("sidebar-split-group-surface");
     await expect.element(surface).toHaveAttribute("data-split-position", "first");
-    await expect.element(surface).toHaveClass("rounded-t-md");
+    await expect.element(surface).toHaveClass("rounded-t-lg");
   });
 
   it("moves the subagent context onto its focusable row description", () => {
@@ -150,6 +148,7 @@ describe("SidebarThreadRowContent", () => {
           session: {
             provider: "codex",
             status: "closed",
+            orchestrationStatus: "stopped",
             createdAt: "2026-07-19T12:00:00.000Z",
             updatedAt: "2026-07-19T12:01:00.000Z",
           },
@@ -159,7 +158,7 @@ describe("SidebarThreadRowContent", () => {
     ).toBe("Subagent of Implement webhook spec · gpt-5.6 · medium · closed");
   });
 
-  it("omits the split-group rail and surface when the row is not part of a split", async () => {
+  it("omits the split-group surface when the row is not part of a split", async () => {
     const screen = await render(
       <SidebarThreadRowContent
         thread={makeThread({ id: ThreadId.makeUnsafe("thread-no-split") })}
