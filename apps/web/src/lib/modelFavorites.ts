@@ -11,9 +11,50 @@ export const FAVORITE_MODEL_STORAGE_KEYS = {
   pi: "synara:pi-favourite-models:v1",
 } as const;
 
+const LEGACY_KILO_FAVORITE_MODEL_STORAGE_KEY = "synara:kilo-favourite-models:v1";
+
 export type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 
 const FavoriteModelSlugsSchema = Schema.Array(Schema.String);
+
+function getLocalStorage(): Storage | null {
+  try {
+    return typeof globalThis.localStorage === "undefined" ? null : globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function decodeFavoriteModelSlugs(raw: string): string[] | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const decoded = Schema.decodeUnknownSync(FavoriteModelSlugsSchema)(parsed);
+    return Array.from(new Set(decoded.filter((entry) => entry.trim().length > 0)));
+  } catch {
+    return null;
+  }
+}
+
+/** Preserve Kilo picker preferences after its provider data is migrated to OpenCode. */
+export function migrateLegacyKiloFavoriteModelSlugs(
+  storage: Storage | null = getLocalStorage(),
+): void {
+  if (!storage) return;
+  try {
+    const legacyRaw = storage.getItem(LEGACY_KILO_FAVORITE_MODEL_STORAGE_KEY);
+    if (!legacyRaw) return;
+    const legacyFavorites = decodeFavoriteModelSlugs(legacyRaw);
+    if (!legacyFavorites) return;
+
+    const currentRaw = storage.getItem(FAVORITE_MODEL_STORAGE_KEYS.opencode);
+    const currentFavorites = currentRaw ? (decodeFavoriteModelSlugs(currentRaw) ?? []) : [];
+    const mergedFavorites = Array.from(new Set([...currentFavorites, ...legacyFavorites]));
+    storage.setItem(FAVORITE_MODEL_STORAGE_KEYS.opencode, JSON.stringify(mergedFavorites));
+    storage.removeItem(LEGACY_KILO_FAVORITE_MODEL_STORAGE_KEY);
+  } catch {
+    // Best-effort preference migration; leave the legacy value for a later retry.
+  }
+}
 
 export function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
   return provider === "cursor" || provider === "opencode" || provider === "pi";
@@ -21,16 +62,16 @@ export function supportsModelFavorites(provider: ProviderKind): provider is Favo
 
 // Read favorite slugs for cycle order. Failures (SSR, parse errors) return [].
 export function readFavoriteModelSlugs(provider: ProviderKind): string[] {
-  if (!supportsModelFavorites(provider) || typeof globalThis.localStorage === "undefined") {
+  const storage = getLocalStorage();
+  if (!supportsModelFavorites(provider) || !storage) {
     return [];
   }
   try {
-    const raw = globalThis.localStorage.getItem(FAVORITE_MODEL_STORAGE_KEYS[provider]);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    const decoded = Schema.decodeUnknownSync(FavoriteModelSlugsSchema)(parsed);
-    return decoded.filter((entry) => entry.trim().length > 0);
+    const raw = storage.getItem(FAVORITE_MODEL_STORAGE_KEYS[provider]);
+    return raw ? (decodeFavoriteModelSlugs(raw) ?? []) : [];
   } catch {
     return [];
   }
 }
+
+migrateLegacyKiloFavoriteModelSlugs();

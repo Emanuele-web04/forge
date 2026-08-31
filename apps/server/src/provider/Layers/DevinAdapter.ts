@@ -1612,8 +1612,8 @@ export function makeDevinAdapter(
             catch: (error) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
-                operation: "startSession",
-                issue:
+                method: "session/start",
+                detail:
                   error instanceof Error ? error.message : "Failed to install Devin MCP config.",
               }),
           });

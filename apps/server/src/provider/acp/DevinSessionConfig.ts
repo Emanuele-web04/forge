@@ -90,7 +90,8 @@ export async function createDevinSessionConfig(
     const home = env.HOME?.trim();
     const sourceConfigHome =
       env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
-    for (const namespace of sourceConfigHome ? (["devin", "cognition"] as const) : []) {
+    for (const namespace of ["devin", "cognition"] as const) {
+      if (!sourceConfigHome) break;
       const sourceSkills = path.join(sourceConfigHome, namespace, "skills");
       const targetNamespace = path.join(root, namespace);
       const targetSkills = path.join(targetNamespace, "skills");

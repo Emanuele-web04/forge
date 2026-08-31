@@ -46,7 +46,7 @@ type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
 
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "opencode"] as const;
+const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "droid", "opencode"] as const;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -129,6 +129,7 @@ export function ModelsSettingsPanel({
         },
         {
           codex: gitWritingCatalogOptionsByProvider.codex,
+          droid: gitWritingCatalogOptionsByProvider.droid,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
         },
       ),
@@ -136,6 +137,7 @@ export function ModelsSettingsPanel({
       customCodexModels,
       customOpenCodeModels,
       gitWritingCatalogOptionsByProvider.codex,
+      gitWritingCatalogOptionsByProvider.droid,
       gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,

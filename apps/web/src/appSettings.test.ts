@@ -337,6 +337,20 @@ describe("getGitTextGenerationModelOptions", () => {
       isCustom: true,
     });
   });
+
+  it("offers built-in Droid models to a user currently on Codex", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "droid" && option.slug === "auto")).toBe(
+      true,
+    );
+    expect(options.some((option) => option.provider === "codex")).toBe(true);
+  });
 });
 
 describe("isGitTextGenerationSettingsDirty", () => {

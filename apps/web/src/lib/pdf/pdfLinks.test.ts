@@ -48,6 +48,27 @@ describe("extractPageLinks", () => {
     expect(links[1]).not.toHaveProperty("url");
   });
 
+  it("resolves numeric page-index destinations and drops out-of-range indexes", async () => {
+    const doc = {
+      numPages: 4,
+      getDestination: vi.fn(),
+      getPageIndex: vi.fn(),
+    } as unknown as PDFDocumentProxy;
+
+    const links = await extractPageLinks({
+      doc,
+      page: makePage([
+        { subtype: "Link", rect: [0, 0, 10, 10], dest: [2, { name: "Fit" }] },
+        { subtype: "Link", rect: [0, 20, 10, 30], dest: [-1, { name: "Fit" }] },
+        { subtype: "Link", rect: [0, 40, 10, 50], dest: [4, { name: "Fit" }] },
+      ]),
+      viewport,
+    });
+
+    expect(links).toEqual([expect.objectContaining({ id: "1:0", targetPageNumber: 3 })]);
+    expect(doc.getPageIndex).not.toHaveBeenCalled();
+  });
+
   it("memoizes named destinations per document so repeats resolve once", async () => {
     const ref = { num: 3, gen: 0 };
     const doc = {

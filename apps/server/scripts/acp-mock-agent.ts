@@ -350,7 +350,12 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
             ...(supportsSessionFork ? { fork: {} } : {}),
           },
         },
-        authMethods: advertiseAuthMethods ? [{ id: "test-key", name: "Test Key" }] : [],
+        authMethods: advertiseAuthMethods
+          ? [{ id: "test-key", name: "Test Key" }]
+          : [
+              { id: "device-pairing", name: "Device Pairing" },
+              { id: "factory-api-key", name: "Factory API Key" },
+            ],
       };
     }),
   ),

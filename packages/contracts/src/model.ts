@@ -560,6 +560,8 @@ const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
  * TODO: This should not be a static array, each provider
  * should return its own model list over the WS API.
  */
+export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" as const;
+
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     {
@@ -844,6 +846,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
+      capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
+    },
+    {
+      slug: DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+      name: "DeepSeek V4 Flash 0731",
       capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
     },
     {

@@ -1,4 +1,13 @@
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,12 +21,7 @@ describe("macOS Electron launcher copy", { skip: process.platform !== "darwin" }
     const root = mkdtempSync(join(tmpdir(), "synara-electron-launcher-"));
     const source = join(root, "source", "Electron.app");
     const target = join(root, "runtime", "Synara (Dev).app");
-    const framework = join(
-      source,
-      "Contents",
-      "Frameworks",
-      "Electron Framework.framework",
-    );
+    const framework = join(source, "Contents", "Frameworks", "Electron Framework.framework");
 
     mkdirSync(join(framework, "Versions", "A", "Resources"), { recursive: true });
     writeFileSync(join(framework, "Versions", "A", "Resources", "icudtl.dat"), "icu");
@@ -36,9 +40,6 @@ describe("macOS Electron launcher copy", { skip: process.platform !== "darwin" }
     );
     assert.equal(lstatSync(copiedResources).isSymbolicLink(), true);
     assert.equal(readlinkSync(copiedResources), "Versions/Current/Resources");
-    assert.equal(
-      readFileSync(join(copiedResources, "icudtl.dat"), "utf8"),
-      "icu",
-    );
+    assert.equal(readFileSync(join(copiedResources, "icudtl.dat"), "utf8"), "icu");
   });
 });
