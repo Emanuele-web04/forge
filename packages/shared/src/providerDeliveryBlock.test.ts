@@ -27,4 +27,12 @@ describe("providerDeliveryBlock", () => {
       ),
     ).toBe(false);
   });
+
+  it("does not match unrelated details that only share the summary prefix", () => {
+    expect(isProviderDeliveryBlockDetail(PROVIDER_DELIVERY_BLOCK_SUMMARY)).toBe(true);
+    expect(isProviderDeliveryBlockDetail(`${PROVIDER_DELIVERY_BLOCK_SUMMARY}: blocked`)).toBe(true);
+    expect(isProviderDeliveryBlockDetail(`${PROVIDER_DELIVERY_BLOCK_SUMMARY} elsewhere`)).toBe(
+      false,
+    );
+  });
 });
