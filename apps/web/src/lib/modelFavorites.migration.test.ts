@@ -31,15 +31,8 @@ function makeMemoryStorage(initial: Record<string, string>): Storage {
 describe("migrateLegacyKiloFavoriteModelSlugs", () => {
   it("merges Kilo favorites into OpenCode without duplicates", () => {
     const storage = makeMemoryStorage({
-      [FAVORITE_MODEL_STORAGE_KEYS.opencode]: JSON.stringify([
-        "openai/gpt-5",
-        "shared/model",
-      ]),
-      [LEGACY_KILO_KEY]: JSON.stringify([
-        "shared/model",
-        "anthropic/claude-sonnet",
-        "",
-      ]),
+      [FAVORITE_MODEL_STORAGE_KEYS.opencode]: JSON.stringify(["openai/gpt-5", "shared/model"]),
+      [LEGACY_KILO_KEY]: JSON.stringify(["shared/model", "anthropic/claude-sonnet", ""]),
     });
 
     migrateLegacyKiloFavoriteModelSlugs(storage);
