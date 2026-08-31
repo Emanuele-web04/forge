@@ -234,19 +234,26 @@ const GROK_CLI_EFFORT_DESCRIPTIONS = {
   xhigh: "Highest effort and reasoning level",
 } as const;
 
+const GROK_CLI_EFFORT_LABELS = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+} as const;
+
 function grokCliEffortOption(
-  value: Exclude<GrokReasoningEffort, "none">,
+  value: keyof typeof GROK_CLI_EFFORT_LABELS,
   options: Pick<EffortOption, "isDefault"> = {},
 ): EffortOption {
   return {
     value,
-    label: value === "xhigh" ? "Extra High" : `${value.charAt(0).toUpperCase()}${value.slice(1)}`,
+    label: GROK_CLI_EFFORT_LABELS[value],
     description: GROK_CLI_EFFORT_DESCRIPTIONS[value],
     ...options,
   };
 }
 
-function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
+function baseCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
   return {
     reasoningEffortLevels,
     supportsFastMode: false,
@@ -254,6 +261,10 @@ function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): Model
     promptInjectedEffortLevels: [],
     contextWindowOptions: [],
   };
+}
+
+function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
+  return baseCapabilities(reasoningEffortLevels);
 }
 
 const GROK_BUILD_CAPABILITIES = grokCapabilities([
@@ -343,115 +354,126 @@ const CURSOR_GPT_5_6_CAPABILITIES = cursorCapabilities({
 });
 
 function droidCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
-  return {
-    reasoningEffortLevels,
-    supportsFastMode: false,
-    supportsThinkingToggle: false,
-    promptInjectedEffortLevels: [],
-    contextWindowOptions: [],
-  };
+  return baseCapabilities(reasoningEffortLevels);
+}
+
+const DROID_EFFORT_LABELS = {
+  off: "Off",
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+} as const;
+
+type DroidEffortValue = keyof typeof DROID_EFFORT_LABELS;
+
+function droidEffortOption(
+  value: DroidEffortValue,
+  options: Pick<EffortOption, "isDefault"> & { readonly label?: string } = {},
+): EffortOption {
+  const { label, ...rest } = options;
+  return { value, label: label ?? DROID_EFFORT_LABELS[value], ...rest };
 }
 
 const DROID_CLAUDE_XHIGH_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
-  { value: "xhigh", label: "Extra High" },
-  { value: "max", label: "Max" },
+  droidEffortOption("off"),
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high", { isDefault: true }),
+  droidEffortOption("xhigh"),
+  droidEffortOption("max"),
 ]);
 
 const DROID_CLAUDE_MAX_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
-  { value: "max", label: "Max" },
+  droidEffortOption("off"),
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high", { isDefault: true }),
+  droidEffortOption("max"),
 ]);
 
 const DROID_CLAUDE_BASIC_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off", isDefault: true },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
+  droidEffortOption("off", { isDefault: true }),
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high"),
 ]);
 
 const DROID_GPT_MEDIUM_CAPABILITIES = droidCapabilities([
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium", isDefault: true },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" },
+  droidEffortOption("low"),
+  droidEffortOption("medium", { isDefault: true }),
+  droidEffortOption("high"),
+  droidEffortOption("xhigh"),
 ]);
 
 const DROID_GPT_5_6_CAPABILITIES = droidCapabilities([
-  { value: "none", label: "None" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium", isDefault: true },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" },
-  { value: "max", label: "Maximum" },
+  droidEffortOption("none"),
+  droidEffortOption("low"),
+  droidEffortOption("medium", { isDefault: true }),
+  droidEffortOption("high"),
+  droidEffortOption("xhigh"),
+  droidEffortOption("max", { label: "Maximum" }),
 ]);
 
 const DROID_GPT_PRO_CAPABILITIES = droidCapabilities([
-  { value: "medium", label: "Medium", isDefault: true },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" },
+  droidEffortOption("medium", { isDefault: true }),
+  droidEffortOption("high"),
+  droidEffortOption("xhigh"),
 ]);
 
 const DROID_GPT_HIGH_CAPABILITIES = droidCapabilities([
-  { value: "none", label: "None" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
-  { value: "xhigh", label: "Extra High" },
+  droidEffortOption("none"),
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high", { isDefault: true }),
+  droidEffortOption("xhigh"),
 ]);
 
 const DROID_GPT_5_2_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low", isDefault: true },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" },
+  droidEffortOption("off"),
+  droidEffortOption("low", { isDefault: true }),
+  droidEffortOption("medium"),
+  droidEffortOption("high"),
+  droidEffortOption("xhigh"),
 ]);
 
 const DROID_GEMINI_HIGH_CAPABILITIES = droidCapabilities([
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high", { isDefault: true }),
 ]);
 
 const DROID_GEMINI_MINIMAL_CAPABILITIES = droidCapabilities([
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
+  droidEffortOption("minimal"),
+  droidEffortOption("low"),
+  droidEffortOption("medium"),
+  droidEffortOption("high", { isDefault: true }),
 ]);
 
 const DROID_CORE_HIGH_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "high", label: "High", isDefault: true },
+  droidEffortOption("off"),
+  droidEffortOption("high", { isDefault: true }),
 ]);
 
 const DROID_CORE_DEEPSEEK_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "high", label: "High", isDefault: true },
-  { value: "max", label: "Max" },
+  droidEffortOption("off"),
+  droidEffortOption("low"),
+  droidEffortOption("high", { isDefault: true }),
+  droidEffortOption("max"),
 ]);
 
 const DROID_DEEPSEEK_FLASH_CAPABILITIES = droidCapabilities([
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low", isDefault: true },
-  { value: "high", label: "High" },
+  droidEffortOption("off"),
+  droidEffortOption("low", { isDefault: true }),
+  droidEffortOption("high"),
 ]);
 
-const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
-  reasoningEffortLevels: [{ value: "high", label: "High", isDefault: true }],
-  supportsFastMode: false,
-  supportsThinkingToggle: false,
-  promptInjectedEffortLevels: [],
-  contextWindowOptions: [],
-};
+const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = droidCapabilities([
+  droidEffortOption("high", { isDefault: true }),
+]);
 
 // Shared Claude building blocks. Capability shapes repeat across Claude
 // generations, so declare them once and let each model entry override only the
