@@ -238,6 +238,22 @@ describe("ServerSettingsService", () => {
       },
       expectedProvider: "codex" as const,
     },
+    {
+      name: "falls back to droid when all ordered providers are disabled",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "opencode" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.opencode,
+        },
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          opencode: { enabled: false },
+          droid: { enabled: true },
+        },
+      },
+      expectedProvider: "droid" as const,
+    },
   ])("$name", async ({ overrides, expectedProvider }) => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
