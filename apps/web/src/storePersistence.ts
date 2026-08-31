@@ -89,19 +89,26 @@ export function readPersistedState(initialState: AppState): AppState {
     persistedExpandedProjectCwds.clear();
     persistedProjectOrderByCwd.clear();
     persistedProjectNamesByCwd.clear();
-    persistedExpandedProjectCwdsDefined = Array.isArray(parsed.expandedProjectCwds);
-    for (const cwd of parsed.expandedProjectCwds ?? []) {
+    persistedExpandedProjectCwdsDefined =
+      Array.isArray(parsed.expandedProjectCwds) && parsed.projectOrderCwds === undefined;
+    for (const cwd of Array.isArray(parsed.expandedProjectCwds) ? parsed.expandedProjectCwds : []) {
       if (typeof cwd === "string" && cwd.length > 0) {
         persistedExpandedProjectCwds.add(projectCwdKey(cwd));
       }
     }
-    for (const cwd of parsed.projectOrderCwds ?? []) {
+    for (const cwd of Array.isArray(parsed.projectOrderCwds) ? parsed.projectOrderCwds : []) {
       const cwdKey = typeof cwd === "string" ? projectCwdKey(cwd) : "";
       if (cwdKey.length > 0 && !persistedProjectOrderByCwd.has(cwdKey)) {
         persistedProjectOrderByCwd.set(cwdKey, persistedProjectOrderByCwd.size);
       }
     }
-    for (const [cwd, name] of Object.entries(parsed.projectNamesByCwd ?? {})) {
+    const projectNamesByCwd =
+      typeof parsed.projectNamesByCwd === "object" &&
+      parsed.projectNamesByCwd !== null &&
+      !Array.isArray(parsed.projectNamesByCwd)
+        ? parsed.projectNamesByCwd
+        : {};
+    for (const [cwd, name] of Object.entries(projectNamesByCwd)) {
       if (typeof cwd !== "string" || cwd.length === 0 || typeof name !== "string") continue;
       const trimmedName = name.trim();
       if (trimmedName.length === 0) continue;

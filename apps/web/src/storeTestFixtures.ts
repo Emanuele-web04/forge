@@ -277,8 +277,6 @@ export function makeFakeWindow(storage: Map<string, string>): {
   localStorage: {
     getItem: (key: string) => string | null;
     setItem: Mock<(key: string, value: string) => void>;
-    removeItem: (key: string) => void;
-    clear: () => void;
   };
   addEventListener: Mock<() => void>;
 } {
@@ -289,12 +287,6 @@ export function makeFakeWindow(storage: Map<string, string>): {
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem,
-      removeItem: (key: string) => {
-        storage.delete(key);
-      },
-      clear: () => {
-        storage.clear();
-      },
     },
     addEventListener: vi.fn(),
   };
