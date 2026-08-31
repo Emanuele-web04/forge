@@ -686,10 +686,8 @@ describe("store projection", () => {
       parentThreadId,
       title: "Subagent child-two",
     });
-    const readModel = {
-      ...makeReadModel(parent),
-      threads: [parent, child],
-    };
+    const readModel = makeReadModel(parent);
+    readModel.threads = [parent, child];
 
     const hydrated = syncServerReadModel(makeState(makeThread({ id: parentThreadId })), readModel);
     const evicted = evictThreadDetailFromClientState(hydrated, parentThreadId);

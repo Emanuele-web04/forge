@@ -187,7 +187,6 @@ describe("applySidebarSplitGroups", () => {
 
     expect(grouped[0]?.splitGroup).toEqual({
       splitViewId: "split-1",
-      presentation: "card",
       memberIndex: 1,
       memberCount: 2,
       isLeader: true,
@@ -222,24 +221,6 @@ describe("applySidebarSplitGroups", () => {
       "first",
       "middle",
       "last",
-    ]);
-  });
-
-  it("keeps split members in place when they belong to different sidebar containers", () => {
-    const grouped = applySidebarSplitGroups({
-      rows: [row(THREAD_A), row(THREAD_B), row(THREAD_C), row(THREAD_D)],
-      membershipByThreadId: membership,
-      containerKeyByThreadId: {
-        [THREAD_B]: "folder-a",
-      },
-    });
-
-    expect(describeRows(grouped)).toEqual([THREAD_A, THREAD_B, THREAD_C, THREAD_D]);
-    expect(grouped.map((entry) => entry.splitGroup?.presentation ?? null)).toEqual([
-      null,
-      "linked",
-      null,
-      "linked",
     ]);
   });
 

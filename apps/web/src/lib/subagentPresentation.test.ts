@@ -128,9 +128,9 @@ describe("resolveSubagentPresentation", () => {
       resolveSubagentPresentation({ nickname: "Scout", title: "Audit layout", role: "reviewer" })
         .primaryLabel,
     ).toBe("Scout");
-    expect(
-      resolveSubagentPresentation({ title: "Audit layout", role: "reviewer" }).primaryLabel,
-    ).toBe("Audit layout");
+    expect(resolveSubagentPresentation({ title: "Audit layout", role: "reviewer" }).primaryLabel).toBe(
+      "Audit layout",
+    );
     expect(resolveSubagentPresentation({ title: "Subagent", role: "reviewer" }).primaryLabel).toBe(
       "Reviewer",
     );
