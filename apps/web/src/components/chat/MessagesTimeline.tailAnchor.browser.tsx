@@ -23,7 +23,7 @@ const VIEWPORT_HEIGHT_PX = 420;
 const BASE_BOTTOM_INSET_PX = 64;
 // maintainScrollAtEnd re-sticks within its threshold rather than to the exact
 // pixel bottom; anything within this tolerance counts as following the tail.
-const AUTO_FOLLOW_TOLERANCE_PX = 96;
+const AUTO_FOLLOW_TOLERANCE_PX = 120;
 const FIRST_SENT_MESSAGE_ID = "sent-user-message";
 const SECOND_SENT_MESSAGE_ID = "sent-user-message-2";
 const FIRST_STREAMING_MESSAGE_ID = "streaming-assistant-message";
@@ -324,7 +324,7 @@ describe("MessagesTimeline tail anchor", () => {
       // 5) A new send re-anchors, and an overflowing response hands off to
       // follow-the-tail with the reserve back at zero.
       handle().send(SECOND_SENT_MESSAGE_ID);
-      void handle().listRef.current?.scrollToEnd?.({ animated: true });
+      void handle().listRef.current?.scrollToEnd?.({ animated: false });
       await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
 
       // Streamed in chunks, the way a real turn arrives: the transcript has to

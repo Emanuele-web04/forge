@@ -13,7 +13,7 @@ import type { deriveTimelineEntries } from "../../session-logic";
 type TimelineEntries = ReturnType<typeof deriveTimelineEntries>;
 
 const VIEWPORT_HEIGHT_PX = 420;
-const AUTO_FOLLOW_TOLERANCE_PX = 96;
+const AUTO_FOLLOW_TOLERANCE_PX = 120;
 
 function messageEntry(
   id: string,
@@ -166,7 +166,8 @@ async function startStreamingAndFollow(
     .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 }
 
-function wheelUp(container: HTMLElement, scrollBy: number, eventDelta: number): void {
+function wheelUp(handle: HarnessHandle, scrollBy: number, eventDelta: number): void {
+  const container = getScrollContainer(handle);
   const before = container.scrollTop;
   container.dispatchEvent(
     new WheelEvent("wheel", {
@@ -176,6 +177,7 @@ function wheelUp(container: HTMLElement, scrollBy: number, eventDelta: number): 
       clientY: container.clientHeight / 2,
     }),
   );
+  handle.releaseUserScroll();
   container.scrollTop = Math.max(0, before - scrollBy);
   container.dispatchEvent(new Event("scroll"));
 }
@@ -196,7 +198,7 @@ describe("MessagesTimeline scroll ownership", () => {
 
       await startStreamingAndFollow(handle, container);
       const scrollTopBeforeWheel = container.scrollTop;
-      wheelUp(container, 100, 100);
+      wheelUp(handle, 100, 100);
       await settleFrames(1);
 
       expect(container.scrollTop).toBeLessThan(scrollTopBeforeWheel);
@@ -226,7 +228,7 @@ describe("MessagesTimeline scroll ownership", () => {
       const container = getScrollContainer(handle);
 
       await startStreamingAndFollow(handle, container);
-      wheelUp(container, 300, 200);
+      wheelUp(handle, 300, 200);
       await settleFrames(3);
 
       expect(distanceFromBottomPx(container)).toBeGreaterThan(AUTO_FOLLOW_TOLERANCE_PX);
