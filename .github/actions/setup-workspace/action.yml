@@ -1,12 +1,15 @@
 name: Setup workspace
-description: Shared checkout, tool setup, dependency install, and caches for Synara CI jobs
+description: Shared tool setup, dependency install, and caches for Synara CI jobs
+
+inputs:
+  electron:
+    description: Install the Electron runtime binary ('true' or 'false').
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-
     - name: Setup Bun
       uses: oven-sh/setup-bun@v2
       with:
@@ -27,15 +30,8 @@ runs:
         restore-keys: |
           ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
 
-    - name: Cache Playwright browsers
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-playwright-
-
     - name: Cache Electron runtime
+      if: ${{ inputs.electron == 'true' }}
       uses: actions/cache@v5
       with:
         path: ~/.cache/electron
@@ -45,6 +41,22 @@ runs:
 
     - name: Install dependencies
       shell: bash
+      # The Electron binary is deliberately skipped here even when the electron
+      # input is true; the gated step below fetches it separately from cache.
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       run: bun install --frozen-lockfile
+
+    - name: Install Electron test runtime
+      if: ${{ inputs.electron == 'true' }}
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          if node apps/desktop/node_modules/electron/install.js; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done

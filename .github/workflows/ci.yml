@@ -12,10 +12,13 @@ concurrency:
 
 jobs:
   static:
-    name: Format, Lint, Typecheck, Brand
+    name: Static Checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
 
@@ -37,8 +40,11 @@ jobs:
   unit:
     name: Unit Tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
 
@@ -52,10 +58,23 @@ jobs:
   browser:
     name: Browser Tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Step caps sum to 45 (15+20+10); the job cap stays above that so a stall in
+    # the non-blocking geometry step can never be converted into a job failure.
+    timeout-minutes: 55
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       # Run the workspace-local playwright binary directly: bunx stalled after
       # the chromium download on hosted runners. The step timeout stops any
@@ -81,25 +100,17 @@ jobs:
         run: bun run --cwd apps/web test:browser:geometry
 
   build:
-    name: Build Desktop
+    name: Desktop Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
-
-      - name: Install Electron test runtime
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if node apps/desktop/node_modules/electron/install.js; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
+        with:
+          electron: "true"
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -110,10 +121,12 @@ jobs:
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
   quality:
-    name: Quality
+    name: Quality Gate
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [static, unit, browser, build]
+    # always() + the explicit result check below keep the gate fail-closed: a
+    # cancelled or skipped dependency must fail the gate, never silently pass it.
     if: always()
     steps:
       - name: Check quality results
