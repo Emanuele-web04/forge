@@ -1,21 +1,41 @@
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
 import type { DroidModelSelection, ModelSelection, ProviderStartOptions } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import { resolveTextGenerationModelSlug } from "@synara/shared/model";
+import { version } from "../../../package.json" with { type: "json" };
 
 import {
   applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
-  makeDroidAcpRuntime,
+  DroidAcpRuntime,
+  DroidAcpRuntimeLayer,
   type DroidAcpRuntimeSettings,
+  type DroidAcpRuntimeShape,
 } from "../../provider/acp/DroidAcpSupport.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   DroidTextGeneration,
+  type AutomationCompletionEvaluationInput,
+  type AutomationCompletionEvaluationResult,
+  type AutomationIntentGenerationInput,
+  type AutomationIntentGenerationResult,
+  type BranchNameGenerationInput,
+  type BranchNameGenerationResult,
+  type CommitMessageGenerationInput,
   type CommitMessageGenerationResult,
+  type DiffSummaryGenerationInput,
+  type DiffSummaryGenerationResult,
+  type PrContentGenerationInput,
+  type PrContentGenerationResult,
   type TextGenerationOperation,
   type TextGenerationShape,
+  type ThreadRecapGenerationInput,
+  type ThreadRecapGenerationResult,
+  type ThreadTitleGenerationInput,
+  type ThreadTitleGenerationResult,
 } from "../Services/TextGeneration.ts";
 import {
   buildAutomationCompletionEvaluationPrompt,
@@ -34,11 +54,74 @@ import {
   type RawTextFallback,
 } from "../textGenerationShared.ts";
 
+const DROID_OUTPUT_MAX_CHARS = 256_000;
+const DROID_PROMPT_TIMEOUT_MS = 180_000;
+const DROID_GIT_TEXT_CLIENT_NAME = "synara-git-text";
+const DROID_GIT_TEXT_CLIENT_VERSION = version;
+
+const CommitMessageOutputSchema = Schema.Struct({
+  subject: Schema.String,
+  body: Schema.String,
+  branch: Schema.optional(Schema.String),
+});
+
+const parseDroidPrefixedModel = (value: string | undefined): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const prefix = "droid:";
+  if (!trimmed.toLowerCase().startsWith(prefix)) return null;
+  const modelPart = trimmed.slice(prefix.length).trim();
+  if (!modelPart || modelPart.includes(":")) return null;
+  return modelPart;
+};
+
 const resolveDroidModelSelection = (input: {
+  model?: string;
   modelSelection?: ModelSelection;
 }): DroidModelSelection | null => {
-  const selection = input.modelSelection;
-  return selection?.provider === "droid" ? selection : null;
+  if (input.modelSelection !== undefined) {
+    if (input.modelSelection.provider !== "droid") {
+      return null;
+    }
+
+    const droidOptions = input.modelSelection.options;
+    const rawModel = input.modelSelection.model;
+    if (!rawModel) {
+      return {
+        provider: "droid",
+        model: DEFAULT_MODEL_BY_PROVIDER.droid,
+        options: droidOptions,
+      };
+    }
+
+    const resolved = resolveTextGenerationModelSlug(rawModel);
+    if (resolved?.provider === "droid") {
+      return { provider: "droid", model: resolved.model, options: droidOptions };
+    }
+
+    const fallback = parseDroidPrefixedModel(rawModel);
+    if (fallback) {
+      return { provider: "droid", model: fallback, options: droidOptions };
+    }
+
+    return null;
+  }
+
+  if (input.model) {
+    const resolved = resolveTextGenerationModelSlug(input.model);
+    if (resolved?.provider === "droid") {
+      return { provider: "droid", model: resolved.model };
+    }
+
+    const fallback = parseDroidPrefixedModel(input.model);
+    if (fallback) {
+      return { provider: "droid", model: fallback };
+    }
+
+    return null;
+  }
+
+  return { provider: "droid", model: DEFAULT_MODEL_BY_PROVIDER.droid };
 };
 
 const resolveDroidSettings = (
@@ -63,6 +146,7 @@ const makeMapOpError =
 
 function runDroidAcp<S extends Schema.Top>(
   childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  droidAcpRuntime: DroidAcpRuntimeShape,
   input: {
     operation: TextGenerationOperation;
     cwd: string;
@@ -70,55 +154,79 @@ function runDroidAcp<S extends Schema.Top>(
     outputSchemaJson: S;
     rawTextFallback?: RawTextFallback | undefined;
     modelSelection: DroidModelSelection;
-    providerOptions?: ProviderStartOptions;
+    providerOptions?: ProviderStartOptions | undefined;
   },
 ) {
   const mapOpError = makeMapOpError(input.operation);
   return Effect.gen(function* () {
     const outputRef = yield* Ref.make("");
-    const runtime = yield* makeDroidAcpRuntime({
+    const sizeExceededRef = yield* Ref.make(false);
+    const runtime = yield* droidAcpRuntime.make({
       childProcessSpawner,
       droidSettings: resolveDroidSettings(input.providerOptions),
       cwd: input.cwd,
-      clientInfo: { name: "synara-git-text", version: "0.0.0" },
+      clientInfo: {
+        name: DROID_GIT_TEXT_CLIENT_NAME,
+        version: DROID_GIT_TEXT_CLIENT_VERSION,
+      },
     });
-    yield* runtime.handleSessionUpdate((notification) => {
-      const update = notification.update;
-      if (update.sessionUpdate !== "agent_message_chunk") return Effect.void;
-      const content = update.content;
-      if (content.type !== "text") return Effect.void;
-      return Ref.update(outputRef, (current) => current + content.text);
+
+    yield* runtime.handleSessionUpdate((notification) =>
+      Effect.gen(function* () {
+        const update = notification.update;
+        if (update.sessionUpdate !== "agent_message_chunk") return;
+        const content = update.content;
+        if (content.type !== "text") return;
+
+        const current = yield* Ref.get(outputRef);
+        const nextLength = current.length + content.text.length;
+        if (nextLength > DROID_OUTPUT_MAX_CHARS) {
+          yield* Ref.set(sizeExceededRef, true);
+          yield* runtime.cancel;
+          return;
+        }
+
+        yield* Ref.set(outputRef, current + content.text);
+      }),
+    );
+
+    const runDroidAcpSession = Effect.gen(function* () {
+      yield* runtime.start();
+      yield* applyDroidAcpModelSelection({
+        runtime,
+        model: input.modelSelection.model,
+        reasoningEffort: input.modelSelection.options?.reasoningEffort,
+        mapError: ({ cause }) =>
+          mapOpError("Failed to set Droid ACP model for text generation.", cause),
+      });
+      yield* applyDroidAcpInteractionMode({
+        runtime,
+        interactionMode: "plan",
+        mapError: ({ cause }) =>
+          mapOpError("Failed to set Droid ACP interaction mode for text generation.", cause),
+      });
+      return yield* runtime.prompt({ prompt: [{ type: "text", text: input.prompt }] });
     });
-    yield* runtime.start();
-    yield* applyDroidAcpInteractionMode({
-      runtime,
-      interactionMode: "plan",
-      mapError: ({ cause }) =>
-        mapOpError("Failed to set Droid ACP interaction mode for text generation.", cause),
+
+    const promptOption = yield* runDroidAcpSession.pipe(
+      Effect.timeoutOption(DROID_PROMPT_TIMEOUT_MS),
+      Effect.mapError((cause) =>
+        cause instanceof TextGenerationError
+          ? cause
+          : mapOpError("Droid Agent ACP request failed.", cause),
+      ),
+    );
+
+    const sizeExceeded = yield* Ref.get(sizeExceededRef);
+    if (sizeExceeded) {
+      return yield* Effect.fail(mapOpError("Droid Agent output exceeded maximum size."));
+    }
+
+    const promptResult = yield* Option.match(promptOption, {
+      onNone: () => Effect.fail(mapOpError("Droid Agent request timed out.")),
+      onSome: Effect.succeed,
     });
-    yield* applyDroidAcpModelSelection({
-      runtime,
-      model: input.modelSelection.model,
-      reasoningEffort: input.modelSelection.options?.reasoningEffort,
-      mapError: ({ cause }) =>
-        mapOpError("Failed to set Droid ACP model for text generation.", cause),
-    });
-    const promptResult = yield* runtime
-      .prompt({ prompt: [{ type: "text", text: input.prompt }] })
-      .pipe(
-        Effect.timeoutOption(180_000),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(mapOpError("Droid Agent request timed out.")),
-            onSome: Effect.succeed,
-          }),
-        ),
-        Effect.mapError((cause) =>
-          cause instanceof TextGenerationError
-            ? cause
-            : mapOpError("Droid Agent ACP request failed.", cause),
-        ),
-      );
+
     const raw = (yield* Ref.get(outputRef)).trim();
     if (!raw) {
       return yield* Effect.fail(
@@ -129,6 +237,7 @@ function runDroidAcp<S extends Schema.Top>(
         ),
       );
     }
+
     return yield* decodeStructuredTextGenerationOutput({
       schema: input.outputSchemaJson,
       raw,
@@ -146,134 +255,138 @@ function runDroidAcp<S extends Schema.Top>(
   );
 }
 
-const droidOps = [
-  [
-    "generateCommitMessage",
-    (input: any) =>
-      buildCommitMessagePrompt({
-        branch: input.branch,
-        stagedSummary: input.stagedSummary,
-        stagedPatch: input.stagedPatch,
-        includeBranch: input.includeBranch === true,
-      }),
-    (g: any, _input: any) => {
-      const result: CommitMessageGenerationResult = {
-        subject: sanitizeCommitSubject(g.subject),
-        body: g.body.trim(),
-      };
-      if (Schema.is(Schema.String)(g.branch)) {
-        result.branch = sanitizeFeatureBranchName(g.branch);
-      }
-      return result;
-    },
-  ],
-  [
-    "generatePrContent",
-    (input: any) =>
-      buildPrContentPrompt({
-        baseBranch: input.baseBranch,
-        headBranch: input.headBranch,
-        commitSummary: input.commitSummary,
-        diffSummary: input.diffSummary,
-        diffPatch: input.diffPatch,
-        prTemplate: input.prTemplate,
-      }),
-    (g: any) => ({ title: sanitizePrTitle(g.title), body: g.body.trim() }),
-  ],
-  [
-    "generateDiffSummary",
-    (input: any) => buildDiffSummaryPrompt({ patch: input.patch }),
-    (g: any) => ({ summary: sanitizeDiffSummary(g.summary) }),
-  ],
-  [
-    "generateBranchName",
-    (input: any) =>
-      buildBranchNamePrompt({
-        message: input.message,
-        attachments: input.attachments,
-      }),
-    (g: any) => ({ branch: sanitizeBranchFragment(g.branch) }),
-  ],
-  [
-    "generateThreadTitle",
-    (input: any) =>
-      buildThreadTitlePrompt({
-        message: input.message,
-        attachments: input.attachments,
-      }),
-    (g: any) => ({ title: sanitizeGeneratedThreadTitle(g.title) }),
-  ],
-  [
-    "generateThreadRecap",
-    (input: any) =>
-      buildThreadRecapPrompt({
-        previousRecap: input.previousRecap,
-        newMaterial: input.newMaterial,
-        currentState: input.currentState,
-      }),
-    (g: any, input: any) => ({ recap: sanitizeThreadRecap(g.recap, input.previousRecap) }),
-  ],
-  [
-    "generateAutomationIntent",
-    (input: any) =>
-      buildAutomationIntentPrompt({
-        message: input.message,
-        defaultMode: input.defaultMode,
-        nowIso: input.nowIso,
-      }),
-    (g: any) => g,
-  ],
-  [
-    "evaluateAutomationCompletion",
-    (input: any) => buildAutomationCompletionEvaluationPrompt(input),
-    (g: any) => g,
-  ],
-] as const;
-
 const makeDroidTextGeneration = Effect.gen(function* () {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  // SAFETY: Object.fromEntries returns a generic string-keyed record; droidOps is a tuple of [TextGenerationOperation, function] pairs, so the record's keys are the operation union.
-  const ops = Object.fromEntries(
-    droidOps.map(
-      ([operation, build, sanitize]): readonly [
-        TextGenerationOperation,
-        (input: any) => Effect.Effect<any, any, never>,
-      ] => [
-        operation,
-        (input: any) =>
-          Effect.gen(function* () {
-            const modelSelection = resolveDroidModelSelection(input);
-            if (!modelSelection) {
-              return yield* new TextGenerationError({
-                operation,
-                detail: "Invalid Droid model selection.",
-              });
-            }
-            const buildOutput = build(input);
-            const { prompt, outputSchemaJson } = buildOutput;
-            let rawTextFallback: RawTextFallback | undefined;
-            if ("rawTextFallback" in buildOutput) {
-              rawTextFallback = buildOutput.rawTextFallback;
-            }
-            const generated = yield* runDroidAcp(childProcessSpawner, {
-              operation,
-              cwd: input.cwd,
-              prompt,
-              outputSchemaJson,
-              rawTextFallback,
-              modelSelection,
-              providerOptions: input.providerOptions,
-            });
-            return sanitize(generated, input);
-          }),
-      ],
+  const droidAcpRuntime = yield* DroidAcpRuntime;
+
+  const makeDroidOperation =
+    <
+      I extends {
+        readonly cwd: string;
+        readonly model?: string;
+        readonly modelSelection?: ModelSelection;
+        readonly providerOptions?: ProviderStartOptions;
+      },
+      S extends Schema.Top,
+      O,
+    >(
+      operation: TextGenerationOperation,
+      build: (input: I) => {
+        readonly prompt: string;
+        readonly outputSchemaJson: S;
+        readonly rawTextFallback?: RawTextFallback;
+      },
+      sanitize: (g: S["Type"], input: I) => O,
+    ): ((input: I) => Effect.Effect<O, TextGenerationError, S["DecodingServices"]>) =>
+    (input) =>
+      Effect.gen(function* () {
+        const modelSelection = resolveDroidModelSelection(input);
+        if (!modelSelection) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: "Invalid Droid model selection.",
+          });
+        }
+        const buildOutput = build(input);
+        const generated = yield* runDroidAcp(childProcessSpawner, droidAcpRuntime, {
+          operation,
+          cwd: input.cwd,
+          prompt: buildOutput.prompt,
+          outputSchemaJson: buildOutput.outputSchemaJson,
+          rawTextFallback: buildOutput.rawTextFallback,
+          modelSelection,
+          providerOptions: input.providerOptions,
+        });
+        return sanitize(generated, input);
+      });
+
+  const ops = {
+    generateCommitMessage: makeDroidOperation(
+      "generateCommitMessage",
+      (input: CommitMessageGenerationInput) =>
+        buildCommitMessagePrompt({
+          branch: input.branch,
+          stagedSummary: input.stagedSummary,
+          stagedPatch: input.stagedPatch,
+          includeBranch: input.includeBranch === true,
+        }),
+      (generated, input): CommitMessageGenerationResult => {
+        const g = Schema.decodeUnknownSync(CommitMessageOutputSchema)(generated);
+        const result: CommitMessageGenerationResult = {
+          subject: sanitizeCommitSubject(g.subject),
+          body: g.body.trim(),
+        };
+        if (input.includeBranch && g.branch !== undefined) {
+          result.branch = sanitizeFeatureBranchName(g.branch);
+        }
+        return result;
+      },
     ),
-  ) as Record<TextGenerationOperation, (input: any) => Effect.Effect<any, any, never>>;
-  // SAFETY: droidOps covers all eight TextGenerationOperation entries; each sanitize returns the matching operation result shape, so the Object.fromEntries record implements TextGenerationShape.
-  return ops as TextGenerationShape;
+    generatePrContent: makeDroidOperation(
+      "generatePrContent",
+      (input: PrContentGenerationInput) => buildPrContentPrompt(input),
+      (g): PrContentGenerationResult => ({
+        title: sanitizePrTitle(g.title),
+        body: g.body.trim(),
+      }),
+    ),
+    generateDiffSummary: makeDroidOperation(
+      "generateDiffSummary",
+      (input: DiffSummaryGenerationInput) => buildDiffSummaryPrompt({ patch: input.patch }),
+      (g): DiffSummaryGenerationResult => ({ summary: sanitizeDiffSummary(g.summary) }),
+    ),
+    generateBranchName: makeDroidOperation(
+      "generateBranchName",
+      (input: BranchNameGenerationInput) =>
+        buildBranchNamePrompt({
+          message: input.message,
+          attachments: input.attachments,
+        }),
+      (g): BranchNameGenerationResult => ({ branch: sanitizeBranchFragment(g.branch) }),
+    ),
+    generateThreadTitle: makeDroidOperation(
+      "generateThreadTitle",
+      (input: ThreadTitleGenerationInput) =>
+        buildThreadTitlePrompt({
+          message: input.message,
+          attachments: input.attachments,
+        }),
+      (g): ThreadTitleGenerationResult => ({ title: sanitizeGeneratedThreadTitle(g.title) }),
+    ),
+    generateThreadRecap: makeDroidOperation(
+      "generateThreadRecap",
+      (input: ThreadRecapGenerationInput) =>
+        buildThreadRecapPrompt({
+          previousRecap: input.previousRecap,
+          newMaterial: input.newMaterial,
+          currentState: input.currentState,
+        }),
+      (g, input): ThreadRecapGenerationResult => ({
+        recap: sanitizeThreadRecap(g.recap, input.previousRecap),
+      }),
+    ),
+    generateAutomationIntent: makeDroidOperation(
+      "generateAutomationIntent",
+      (input: AutomationIntentGenerationInput) =>
+        buildAutomationIntentPrompt({
+          message: input.message,
+          defaultMode: input.defaultMode,
+          nowIso: input.nowIso,
+        }),
+      (g): AutomationIntentGenerationResult => g,
+    ),
+    evaluateAutomationCompletion: makeDroidOperation(
+      "evaluateAutomationCompletion",
+      (input: AutomationCompletionEvaluationInput) =>
+        buildAutomationCompletionEvaluationPrompt(input),
+      (g): AutomationCompletionEvaluationResult => g,
+    ),
+  };
+
+  return ops satisfies TextGenerationShape;
 });
 
 export const DroidTextGenerationServiceLive = Layer.effect(
   DroidTextGeneration,
   makeDroidTextGeneration,
-);
+).pipe(Layer.provide(DroidAcpRuntimeLayer));

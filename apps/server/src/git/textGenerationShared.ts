@@ -7,6 +7,7 @@ import {
   type ChatAttachment,
 } from "@synara/contracts";
 import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
+import { resolveTextGenerationModelSlug } from "@synara/shared/model";
 
 import { TextGenerationError } from "./Errors.ts";
 
@@ -270,7 +271,11 @@ export function buildCommitMessagePrompt(input: {
         body: Schema.String,
       });
 
-  return { prompt, outputSchemaJson };
+  return {
+    prompt,
+    outputSchemaJson,
+    rawTextFallback: { key: "subject" } satisfies RawTextFallback,
+  };
 }
 
 export function buildPrContentPrompt(input: {
@@ -332,6 +337,7 @@ export function buildPrContentPrompt(input: {
       title: Schema.String,
       body: Schema.String,
     }),
+    rawTextFallback: { key: "title" } satisfies RawTextFallback,
   };
 }
 
@@ -360,9 +366,9 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
 }
 
 export function buildThreadRecapPrompt(input: {
-  readonly previousRecap?: string;
+  readonly previousRecap?: string | undefined;
   readonly newMaterial: string;
-  readonly currentState?: string;
+  readonly currentState?: string | undefined;
 }) {
   return {
     prompt: [
@@ -403,7 +409,7 @@ export function buildThreadRecapPrompt(input: {
 // Converts an explicit composer trigger into the same automation fields the create API expects.
 export function buildAutomationIntentPrompt(input: {
   readonly message: string;
-  readonly defaultMode?: AutomationMode;
+  readonly defaultMode?: AutomationMode | undefined;
   readonly nowIso: string;
 }) {
   const defaultMode = input.defaultMode ?? "heartbeat";
@@ -475,6 +481,7 @@ export function buildAutomationIntentPrompt(input: {
       limitSection(input.message, 16_000),
     ].join("\n"),
     outputSchemaJson: ServerGenerateAutomationIntentResult,
+    rawTextFallback: { key: "name", maxWords: 12 } satisfies RawTextFallback,
   };
 }
 
@@ -523,12 +530,13 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
       confidence: Schema.Number,
       reason: Schema.String,
     }),
+    rawTextFallback: { key: "reason", maxWords: 30 } satisfies RawTextFallback,
   };
 }
 
 export function buildBranchNamePrompt(input: {
   readonly message: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment>;
+  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
 }) {
   const attachmentLines = attachmentMetadataLines(input.attachments);
   const promptSections = [
@@ -563,7 +571,7 @@ export function buildBranchNamePrompt(input: {
 
 export function buildThreadTitlePrompt(input: {
   readonly message: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment>;
+  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
 }) {
   const attachmentLines = attachmentMetadataLines(input.attachments);
   const promptSections = [
@@ -602,4 +610,15 @@ export function buildThreadTitlePrompt(input: {
       maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
     } satisfies RawTextFallback,
   };
+}
+
+export function resolveDroidTextGenerationModelSlug(
+  slug: string | null | undefined,
+): string | null {
+  const resolved = resolveTextGenerationModelSlug(slug);
+  return resolved?.provider === "droid" ? resolved.model : null;
+}
+
+export function isDroidTextGenerationModelSlug(slug: string): boolean {
+  return resolveTextGenerationModelSlug(slug)?.provider === "droid";
 }
