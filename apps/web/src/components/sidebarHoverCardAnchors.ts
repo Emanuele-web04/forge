@@ -52,12 +52,8 @@ export function abbreviateHomePath(cwd: string, homeDir: string | null): string 
   const comparisonCwd = cwd.replaceAll("\\", "/");
   const comparisonHomeDir = normalizedHomeDir.replaceAll("\\", "/");
   const comparableCwd = windowsStyle ? comparisonCwd.toLowerCase() : comparisonCwd;
-  const comparableHomeDir = windowsStyle
-    ? comparisonHomeDir.toLowerCase()
-    : comparisonHomeDir;
-  const childPrefix = comparableHomeDir.endsWith("/")
-    ? comparableHomeDir
-    : `${comparableHomeDir}/`;
+  const comparableHomeDir = windowsStyle ? comparisonHomeDir.toLowerCase() : comparisonHomeDir;
+  const childPrefix = comparableHomeDir.endsWith("/") ? comparableHomeDir : `${comparableHomeDir}/`;
 
   if (comparableCwd === comparableHomeDir) {
     return "~";
