@@ -4,6 +4,7 @@
 // Exports: repo diff scope labels, validation, and a persisted Zustand store.
 
 import type { GitReadWorkingTreeDiffInput } from "@synara/contracts";
+import { useEffect } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -53,8 +54,11 @@ export function isRepoDiffScope(value: string): value is RepoDiffScope {
 interface RepoDiffScopeStore {
   scope: RepoDiffScope;
   compareRef: string | null;
+  /** Repository the scope currently belongs to (not persisted). */
+  cwd: string | null;
   setScope: (scope: RepoDiffScope) => void;
   setCompareRef: (compareRef: string | null) => void;
+  syncCwd: (cwd: string | null) => void;
 }
 
 const REPO_DIFF_SCOPE_STORAGE_KEY = "synara:repo-diff-scope:v1";
@@ -64,8 +68,10 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
     (set) => ({
       scope: DEFAULT_REPO_DIFF_SCOPE,
       compareRef: null,
+      cwd: null,
       setScope: (scope) => set({ scope }),
       setCompareRef: (compareRef) => set({ compareRef }),
+      syncCwd: (cwd) => set({ cwd }),
     }),
     {
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
@@ -94,3 +100,25 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
     },
   ),
 );
+
+/**
+ * Compare refs are repository-specific: a branch or SHA picked for one project
+ * is usually meaningless in another. When the active repository changes, drop a
+ * persisted ref scope (and its ref) so the next repository does not open with a
+ * diff error; other scopes transfer safely. Pass every active consumer's cwd so
+ * the tracking stays correct wherever the panel is mounted.
+ */
+export function useRepoDiffScopeCwdSync(cwd: string | null): void {
+  const storeCwd = useRepoDiffScopeStore((store) => store.cwd);
+  useEffect(() => {
+    if (cwd === null || storeCwd === cwd) {
+      return;
+    }
+    const switching = storeCwd !== null;
+    useRepoDiffScopeStore.setState((state) =>
+      switching && state.scope === "ref"
+        ? { cwd, scope: DEFAULT_REPO_DIFF_SCOPE, compareRef: null }
+        : { cwd },
+    );
+  }, [cwd, storeCwd]);
+}

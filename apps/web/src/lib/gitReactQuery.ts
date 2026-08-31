@@ -204,6 +204,8 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
       type: "active",
     }),
     ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
+    // A mounted diff editor keeps showing a base blob until refetched.
+    ...queryCache.findAll({ queryKey: ["git", "file-at-rev", cwd] as const, type: "active" }),
   ];
   const uniqueQueries = [...new Map(queries.map((query) => [query.queryHash, query])).values()];
   return uniqueQueries.toSorted((left, right) => {
@@ -225,6 +227,16 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
     }),
     queryClient.invalidateQueries({
       queryKey: gitQueryKeys.pullRequest(cwd),
+      refetchType: "none",
+    }),
+    // Revision-dependent families: after a save, commit, or branch movement the
+    // cached attribution/blobs would otherwise survive their stale windows.
+    queryClient.invalidateQueries({
+      queryKey: ["git", "blame-line", cwd] as const,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: ["git", "file-at-rev", cwd] as const,
       refetchType: "none",
     }),
   ]);

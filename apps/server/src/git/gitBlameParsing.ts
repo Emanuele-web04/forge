@@ -1,7 +1,8 @@
 import type { GitBlameLineResult } from "@synara/contracts";
 
-const BLAME_HEADER_PATTERN = /^([0-9a-f]{40}) \d+ \d+(?: \d+)?$/;
-const UNCOMMITTED_SHA_PATTERN = /^0{40}$/;
+// Object IDs are 40 hex characters for SHA-1 repositories and 64 for SHA-256.
+const BLAME_HEADER_PATTERN = /^([0-9a-f]{40,64}) \d+ \d+(?: \d+)?$/;
+const UNCOMMITTED_SHA_PATTERN = /^0{40,64}$/;
 const SHORT_SHA_LENGTH = 7;
 
 function stripAngleBrackets(value: string): string {
@@ -11,7 +12,11 @@ function stripAngleBrackets(value: string): string {
 
 function formatUnixSecondsAsIso(value: string): string {
   const seconds = Number.parseInt(value.trim(), 10);
-  return Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : "";
+  if (!Number.isFinite(seconds)) return "";
+  // Git can emit timestamps outside JavaScript's supported Date range; guard so
+  // a single exotic commit cannot fail the whole blame request.
+  const date = new Date(seconds * 1000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
 }
 
 function readField(line: string, field: string): string | null {

@@ -7,7 +7,7 @@ import { cn } from "~/lib/utils";
 import { CodeEditBoundary } from "./CodeEditBoundary";
 import {
   CODE_EDITOR_LOADING_FALLBACK,
-  codeEditorSaveKeyDownHandler,
+  useCodeEditorSaveKeyDownHandler,
   useCodeEditorSessionOptions,
 } from "./CodeEditorPane";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
@@ -66,11 +66,12 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
     }),
     [props.renderSideBySide, props.resolvedTheme],
   );
+  const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
 
   return (
     <div
       className={cn("min-h-0 min-w-0 flex-1 overflow-auto", props.className)}
-      onKeyDownCapture={codeEditorSaveKeyDownHandler(props.onSave)}
+      onKeyDownCapture={saveKeyDownHandler}
     >
       <CodeEditBoundary fallback={CODE_EDITOR_LOADING_FALLBACK}>
         <FileDiff

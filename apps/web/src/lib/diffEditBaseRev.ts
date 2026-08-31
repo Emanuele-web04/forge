@@ -9,6 +9,11 @@ export interface DiffEditBaseRev {
 
 export interface DiffFileEditRequest {
   filePath: string;
+  /**
+   * Pre-change path for renamed/moved files: the base revision usually still
+   * holds the file under its old name, so the base-side read must use it.
+   */
+  basePath?: string | undefined;
   mode: "diff" | "file";
   baseRev: DiffEditBaseRev;
 }

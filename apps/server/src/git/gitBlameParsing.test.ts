@@ -117,4 +117,38 @@ describe("git blame porcelain parsing", () => {
 
     expect(parseGitBlamePorcelain(stdout)?.authorTime).toBe("");
   });
+
+  it("parses SHA-256 repository object IDs", () => {
+    const sha256 = "a".repeat(64);
+    const zeroSha256 = "0".repeat(64);
+    const stdout = [
+      `${sha256} 2 2 1`,
+      "author Ada Lovelace",
+      "author-mail <ada@example.com>",
+      "author-time 1700000000",
+      "summary Hash stretched",
+      "\tvalue",
+    ].join("\n");
+
+    expect(parseGitBlamePorcelain(stdout)).toMatchObject({
+      sha: sha256,
+      shortSha: "aaaaaaa",
+      uncommitted: false,
+    });
+    expect(
+      parseGitBlamePorcelain(`${zeroSha256} 3 3 1\nauthor x\n\tvalue\n`)?.uncommitted,
+    ).toBe(true);
+  });
+
+  it("returns an empty timestamp when author-time is outside the Date range", () => {
+    const stdout = [
+      `${SHA} 1 1 1`,
+      "author Ada Lovelace",
+      "author-time 99999999999999999999",
+      "summary Clock broke",
+      "\tvalue",
+    ].join("\n");
+
+    expect(parseGitBlamePorcelain(stdout)?.authorTime).toBe("");
+  });
 });

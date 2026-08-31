@@ -25,6 +25,12 @@ export function loadPierreEdit(): Promise<typeof import("@pierre/diffs/edit")> {
   return editModule;
 }
 
+// A rejected import is cached forever by the dynamic-import registry, so the
+// retry path clears the memoized promise to force a fresh load attempt.
+export function resetPierreEditLoad(): void {
+  editModule = null;
+}
+
 export function createCodeEditHistoryControls(editor: PierreEditor): CodeEditHistoryControls {
   return {
     undo: () => {

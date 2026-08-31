@@ -70,13 +70,24 @@ export function useWorkspaceFileEditor(
     let cancelled = false;
     void sha256Hex(contents).then((sha256) => {
       if (!cancelled) {
-        dispatch({ type: "loaded", key: editorKey, contents, sha256 });
+        const lineEnding = fileQuery.data?.lineEnding;
+        dispatch({
+          type: "loaded",
+          key: editorKey,
+          contents,
+          sha256,
+          expectedVersion: fileQuery.data?.version ?? null,
+          encoding: fileQuery.data?.encoding ?? null,
+          // Mixed endings cannot round-trip through a guarded write; treat
+          // them like unversioned reads and fall back to the hash guard.
+          lineEnding: lineEnding === "mixed" || lineEnding == null ? null : lineEnding,
+        });
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [contents, editorKey, truncated]);
+  }, [contents, editorKey, truncated, fileQuery.data]);
 
   useEffect(() => {
     if (editorKey === null) {
@@ -105,16 +116,36 @@ export function useWorkspaceFileEditor(
       dispatch({ type: "saveStarted" });
       try {
         const api = ensureNativeApi();
-        await api.projects.writeFile({
+        // Prefer the server's guarded-write path: it verifies the version it
+        // issued and re-encodes the save with the file's original encoding and
+        // line endings, so CRLF/BOM files neither false-conflict nor silently
+        // change format. The contents hash remains the fallback for reads that
+        // carried no version. Overwrite deliberately skips version guards so it
+        // stays an escape hatch when the file changed on disk.
+        const writeResult = await api.projects.writeFile({
           cwd,
           relativePath,
           contents: nextContents,
-          ...(options.useExpectedHash && current.baselineSha256.length > 0
-            ? { expectedContentsSha256: current.baselineSha256 }
-            : {}),
+          ...(options.useExpectedHash &&
+          current.expectedVersion !== null &&
+          current.encoding !== null &&
+          current.lineEnding !== null
+            ? {
+                expectedVersion: current.expectedVersion,
+                encoding: current.encoding,
+                lineEnding: current.lineEnding,
+              }
+            : options.useExpectedHash && current.baselineSha256.length > 0
+              ? { expectedContentsSha256: current.baselineSha256 }
+              : {}),
         });
         const sha256 = await sha256Hex(nextContents);
-        dispatch({ type: "saveSucceeded", contents: nextContents, sha256 });
+        dispatch({
+          type: "saveSucceeded",
+          contents: nextContents,
+          sha256,
+          expectedVersion: writeResult.version,
+        });
         queryClient.setQueryData(queryOptions.queryKey, (previous) =>
           previous ? { ...previous, contents: nextContents } : previous,
         );
@@ -153,6 +184,10 @@ export function useWorkspaceFileEditor(
           key: editorKey,
           contents: result.contents,
           sha256: await sha256Hex(result.contents),
+          expectedVersion: result.version,
+          encoding: result.encoding,
+          lineEnding:
+            result.lineEnding === "mixed" || result.lineEnding == null ? null : result.lineEnding,
         });
       })
       .catch((error: unknown) => {

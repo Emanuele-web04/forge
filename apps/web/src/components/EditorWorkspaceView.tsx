@@ -93,6 +93,7 @@ interface EditorWorkspaceViewProps {
   onSelectDiffFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
   editFilePath: string | null;
+  editDiffBasePath?: string | null;
   editDiffBaseRev: DiffEditBaseRev | null;
   onCenterModeChange: (mode: EditorCenterMode) => void;
   onEditFile: (filePath: string) => void;
@@ -571,7 +572,9 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
             <ProjectMenuPicker
               projectOptions={props.projectOptions ?? []}
               selectedProjectId={props.currentProjectId ?? null}
-              onProjectIdChange={props.onSelectProject}
+              onProjectIdChange={(projectId) =>
+                guardLeavingEdit(() => props.onSelectProject?.(projectId))
+              }
               trigger={
                 <ChatHeaderIconButton
                   type="button"
@@ -603,7 +606,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           aria-pressed={true}
           title="Switch to chat view"
           className="w-[5.5rem] gap-1.5"
-          onClick={props.onExitEditorView}
+          onClick={() => guardLeavingEdit(props.onExitEditorView)}
         >
           <ChatBubbleIcon className="size-3.5" />
           <span className="truncate font-normal">Chat</span>
@@ -668,6 +671,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <WorkspaceFileDiffEditorPane
                   workspaceRoot={props.workspaceRoot}
                   filePath={props.editFilePath}
+                  basePath={props.editDiffBasePath ?? null}
                   baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}

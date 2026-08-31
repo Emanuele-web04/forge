@@ -1,8 +1,12 @@
 import type { EditorOptions } from "@pierre/diffs/edit";
 import { File } from "@pierre/diffs/react";
-import { useMemo, useRef, type KeyboardEvent, type RefObject } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useMemo, useRef, type KeyboardEvent, type RefObject } from "react";
 
+import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
+import { isEditorFileSaveShortcut } from "~/keybindings";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { CodeEditBoundary } from "./CodeEditBoundary";
 import {
@@ -60,13 +64,41 @@ export function useCodeEditorSessionOptions(input: {
   );
 }
 
-export function codeEditorSaveKeyDownHandler(onSave: () => void) {
-  return (event: KeyboardEvent<HTMLDivElement>) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+
+function isBrowserSaveChord(event: KeyboardEvent<HTMLDivElement>): boolean {
+  return (
+    event.key.toLowerCase() === "s" &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+// Capture-phase save handling for the pierre editor: the editor hosts its own
+// key handling, so saves are dispatched from the container. The chord is
+// matched against the configured `editor.file.save` binding (not hard-coded
+// Mod+S) so rebinds are honored, while the browser save dialog stays
+// suppressed for the default chord regardless of the binding.
+export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+  return useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (isBrowserSaveChord(event)) {
+        event.preventDefault();
+      }
+      if (!isEditorFileSaveShortcut(event, keybindings)) {
+        return;
+      }
       event.preventDefault();
-      onSave();
-    }
-  };
+      event.stopPropagation();
+      onSaveRef.current();
+    },
+    [keybindings],
+  );
 }
 
 export const CODE_EDITOR_LOADING_FALLBACK = (
@@ -102,10 +134,12 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
     [props.resolvedTheme],
   );
 
+  const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+
   return (
     <div
       className={cn("min-h-0 min-w-0 flex-1 overflow-auto", props.className)}
-      onKeyDownCapture={codeEditorSaveKeyDownHandler(props.onSave)}
+      onKeyDownCapture={saveKeyDownHandler}
     >
       <CodeEditBoundary fallback={CODE_EDITOR_LOADING_FALLBACK}>
         <File

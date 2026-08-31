@@ -44,7 +44,11 @@ import { resolveDiffEditBaseRev, type DiffFileEditRequest } from "../lib/diffEdi
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { type RepoDiffScope, useRepoDiffScopeStore } from "../repoDiffScopeStore";
+import {
+  type RepoDiffScope,
+  useRepoDiffScopeCwdSync,
+  useRepoDiffScopeStore,
+} from "../repoDiffScopeStore";
 import { useStore } from "../store";
 import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
@@ -547,6 +551,7 @@ export default function DiffPanel({
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const activeCwd = diffEnvironmentState.cwd;
+  useRepoDiffScopeCwdSync(activeCwd ?? null);
   const selectedTurnId = panelState
     ? (panelState.diffTurnId ?? null)
     : (diffSearch.diffTurnId ?? null);
@@ -1002,9 +1007,10 @@ export default function DiffPanel({
   const openFileInEditor = useMemo(
     () =>
       onEditFile
-        ? (filePath: string) => {
+        ? (filePath: string, options?: { basePath?: string | null }) => {
             onEditFile({
               filePath,
+              ...(options?.basePath ? { basePath: options.basePath } : {}),
               mode: diffViewKind === "turn" ? "file" : "diff",
               baseRev: resolveDiffEditBaseRev(repoDiffScope, repoDiffCompareRef, upstreamBranch),
             });

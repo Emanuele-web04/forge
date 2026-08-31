@@ -7,7 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { gitWorkingTreeDiffStatsQueryOptions } from "~/lib/gitReactQuery";
-import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+import { useRepoDiffScopeCwdSync, useRepoDiffScopeStore } from "~/repoDiffScopeStore";
 
 export interface RepoDiffTotals {
   additions: number;
@@ -28,6 +28,7 @@ export function useRepoDiffTotals({
   refetchInterval?: number | false;
 }): RepoDiffTotals {
   const refetchInterval = refetchIntervalProp ?? false;
+  useRepoDiffScopeCwdSync(gitCwd);
   // Match the Diff panel source selector so every surface shows the selected scope.
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   const repoDiffCompareRef = useRepoDiffScopeStore((store) => store.compareRef);

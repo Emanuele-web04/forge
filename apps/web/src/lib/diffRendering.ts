@@ -289,6 +289,20 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   return raw;
 }
 
+// Resolve the pre-change path for a parsed file diff (the old side of a
+// rename/move), stripping the conventional `a/` patch prefix. Returns null for
+// files that were not renamed or moved.
+export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
+  if (fileDiff.prevName === undefined) {
+    return null;
+  }
+  const raw = fileDiff.prevName;
+  if (raw.startsWith("a/") || raw.startsWith("b/")) {
+    return raw.slice(2);
+  }
+  return raw;
+}
+
 // Stable identity for a parsed file diff, used as a React key and selection id.
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;

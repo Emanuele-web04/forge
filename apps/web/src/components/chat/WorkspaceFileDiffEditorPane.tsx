@@ -22,6 +22,8 @@ import {
 export interface WorkspaceFileDiffEditorPaneProps {
   workspaceRoot: string | null;
   filePath: string;
+  /** Pre-change path for renamed files: the base revision read uses it. */
+  basePath?: string | null | undefined;
   baseRev: DiffEditBaseRev;
   resolvedTheme: "light" | "dark";
   onClose: () => void;
@@ -42,7 +44,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
   const originalQuery = useQuery(
     gitReadFileAtRevQueryOptions({
       cwd: props.workspaceRoot,
-      filePath: props.filePath,
+      filePath: props.basePath ?? props.filePath,
       ...(props.baseRev.rev !== undefined ? { rev: props.baseRev.rev } : {}),
       ...(props.baseRev.mergeBaseWith !== undefined
         ? { mergeBaseWith: props.baseRev.mergeBaseWith }

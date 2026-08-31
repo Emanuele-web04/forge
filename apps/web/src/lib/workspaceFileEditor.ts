@@ -1,4 +1,19 @@
-export interface WorkspaceFileEditorState {
+import type { ProjectFileEncoding, ProjectFileLineEnding } from "@synara/contracts";
+
+export interface WorkspaceFileEditorEncoding {
+  /** Server-side version of the loaded bytes (`sha256:<hex>` of the raw file). */
+  expectedVersion: string | null;
+  encoding: ProjectFileEncoding | null;
+  lineEnding: Exclude<ProjectFileLineEnding, "mixed"> | null;
+}
+
+export const EMPTY_WORKSPACE_FILE_EDITOR_ENCODING: WorkspaceFileEditorEncoding = {
+  expectedVersion: null,
+  encoding: null,
+  lineEnding: null,
+};
+
+export interface WorkspaceFileEditorState extends WorkspaceFileEditorEncoding {
   key: string | null;
   baseline: string;
   baselineSha256: string;
@@ -10,11 +25,25 @@ export interface WorkspaceFileEditorState {
 }
 
 export type WorkspaceFileEditorAction =
-  | { type: "loaded"; key: string; contents: string; sha256: string }
-  | { type: "reloaded"; key: string; contents: string; sha256: string }
+  | ({
+      type: "loaded";
+      key: string;
+      contents: string;
+      sha256: string;
+    } & Partial<WorkspaceFileEditorEncoding>)
+  | ({
+      type: "reloaded";
+      key: string;
+      contents: string;
+      sha256: string;
+    } & Partial<WorkspaceFileEditorEncoding>)
   | { type: "changed"; value: string }
   | { type: "saveStarted" }
-  | { type: "saveSucceeded"; contents: string; sha256: string }
+  | ({
+      type: "saveSucceeded";
+      contents: string;
+      sha256: string;
+    } & Partial<WorkspaceFileEditorEncoding>)
   | { type: "saveFailed"; message: string; conflict: boolean }
   | { type: "conflictDismissed" }
   | { type: "closed" };
@@ -28,6 +57,7 @@ export const INITIAL_WORKSPACE_FILE_EDITOR_STATE: WorkspaceFileEditorState = {
   conflict: false,
   saving: false,
   saveError: null,
+  ...EMPTY_WORKSPACE_FILE_EDITOR_ENCODING,
 };
 
 export function isWorkspaceFileEditorDirty(state: WorkspaceFileEditorState): boolean {
@@ -39,6 +69,7 @@ function replaceBuffer(
   key: string,
   contents: string,
   sha256: string,
+  encoding?: Partial<WorkspaceFileEditorEncoding>,
 ): WorkspaceFileEditorState {
   return {
     key,
@@ -49,6 +80,9 @@ function replaceBuffer(
     conflict: false,
     saving: false,
     saveError: null,
+    expectedVersion: encoding?.expectedVersion ?? null,
+    encoding: encoding?.encoding ?? null,
+    lineEnding: encoding?.lineEnding ?? null,
   };
 }
 
@@ -68,10 +102,10 @@ export function workspaceFileEditorReducer(
       ) {
         return state;
       }
-      return replaceBuffer(state, action.key, action.contents, action.sha256);
+      return replaceBuffer(state, action.key, action.contents, action.sha256, action);
     }
     case "reloaded":
-      return replaceBuffer(state, action.key, action.contents, action.sha256);
+      return replaceBuffer(state, action.key, action.contents, action.sha256, action);
     case "changed":
       return state.key === null || state.value === action.value
         ? state
@@ -86,6 +120,9 @@ export function workspaceFileEditorReducer(
         saving: false,
         conflict: false,
         saveError: null,
+        expectedVersion: action.expectedVersion ?? state.expectedVersion,
+        encoding: action.encoding ?? state.encoding,
+        lineEnding: action.lineEnding ?? state.lineEnding,
       };
     case "saveFailed":
       return { ...state, saving: false, conflict: action.conflict, saveError: action.message };

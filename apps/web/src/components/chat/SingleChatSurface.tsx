@@ -260,6 +260,7 @@ export function SingleChatSurface(props: {
   );
   const [editorEditTarget, setEditorEditTarget] = useState<{
     filePath: string;
+    basePath: string | null;
     baseRev: DiffEditBaseRev;
     returnMode: "file" | "diff";
   } | null>(null);
@@ -461,13 +462,19 @@ export function SingleChatSurface(props: {
   };
 
   const handleEditFileInEditorView = (filePath: string) => {
-    setEditorEditTarget({ filePath, baseRev: { rev: "HEAD" }, returnMode: "file" });
+    setEditorEditTarget({
+      filePath,
+      basePath: null,
+      baseRev: { rev: "HEAD" },
+      returnMode: "file",
+    });
     setEditorCenterMode("fileEdit");
   };
 
   const handleEditDiffFileInEditorView = (request: DiffFileEditRequest) => {
     setEditorEditTarget({
       filePath: request.filePath,
+      basePath: request.basePath ?? null,
       baseRev: request.baseRev,
       returnMode: "diff",
     });
@@ -1098,6 +1105,7 @@ export function SingleChatSurface(props: {
               expandedDirectories={editorExpandedDirectories}
               centerMode={editorCenterMode}
               editFilePath={editorEditTarget?.filePath ?? null}
+              editDiffBasePath={editorEditTarget?.basePath ?? null}
               editDiffBaseRev={editorEditTarget?.baseRev ?? null}
               onEditFile={handleEditFileInEditorView}
               onCloseEdit={handleCloseEditorEdit}

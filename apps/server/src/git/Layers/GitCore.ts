@@ -576,6 +576,13 @@ export const collectGitOutput = Effect.fn(function* <E>(
 
   yield* Stream.runForEach(stream, (chunk) =>
     Effect.gen(function* () {
+      // In truncate mode the retained prefix is complete once `text` is full:
+      // keep draining the pipe so the child can exit promptly, but skip the
+      // decoding and line-scanning work for everything past the limit so a
+      // huge blob costs O(1) per chunk instead of proportional processing.
+      if (outputMode === "truncate" && text.length >= maxOutputBytes) {
+        return;
+      }
       bytes += chunk.byteLength;
       if (bytes > maxOutputBytes && outputMode === "error") {
         return yield* new GitCommandError({

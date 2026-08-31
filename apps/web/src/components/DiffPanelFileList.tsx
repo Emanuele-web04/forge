@@ -14,7 +14,11 @@ import {
   PencilIcon,
 } from "~/lib/icons";
 
-import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
+import {
+  buildFileDiffRenderKey,
+  resolveFileDiffPath,
+  resolveFileDiffPrevPath,
+} from "~/lib/diffRendering";
 import { FileDiffCard, FileDiffSurface, type DiffLineClickProps } from "./chat/FileDiffView";
 import { resolveDiffLineBlameTarget, type DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { LocalImagePreview } from "./LocalImagePreview";
@@ -28,7 +32,7 @@ type DiffRenderMode = "stacked" | "split";
 export interface DiffFileChatActions {
   onReferenceInChat: (filePath: string) => void;
   onAskWhyChanged: (filePath: string) => void;
-  onEditFile?: ((filePath: string) => void) | undefined;
+  onEditFile?: ((filePath: string, options?: { basePath?: string | null }) => void) | undefined;
 }
 
 const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
@@ -36,7 +40,12 @@ const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-for
 // Per-file actions menu rendered in the custom header's trailing slot, left of
 // the collapse chevron. Marked with data-diff-header-menu so header clicks on
 // it do not toggle the file collapse state.
-function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffFileChatActions }) {
+function DiffFileHeaderActionsMenu(props: {
+  filePath: string;
+  canEditFile: boolean;
+  basePath: string | null;
+  chatActions: DiffFileChatActions;
+}) {
   const copyPathToClipboard = useCopyPathToClipboard();
 
   return (
@@ -55,10 +64,10 @@ function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffF
         }
       />
       <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-60 min-w-60">
-        {props.chatActions.onEditFile ? (
+        {props.chatActions.onEditFile && props.canEditFile ? (
           <MenuItem
             onClick={() => {
-              props.chatActions.onEditFile?.(props.filePath);
+              props.chatActions.onEditFile?.(props.filePath, { basePath: props.basePath });
             }}
           >
             <PencilIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
@@ -127,13 +136,23 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
+  // A deleted file no longer exists in the working tree, so editing it can
+  // only produce a load error in the editor pane.
+  const canEditFile = props.fileDiff.type !== "deleted";
+  // Renames keep the base-side content under the old path.
+  const basePath = resolveFileDiffPrevPath(props.fileDiff);
   const shouldPreviewImage =
     !isCollapsed && props.workspaceRoot !== null && isSupportedLocalImagePath(filePath);
   const renderHeaderTrailing = () => (
     <>
       {chatActions ? (
         <span data-diff-header-menu="true" className="inline-flex">
-          <DiffFileHeaderActionsMenu filePath={filePath} chatActions={chatActions} />
+          <DiffFileHeaderActionsMenu
+            filePath={filePath}
+            canEditFile={canEditFile}
+            basePath={basePath}
+            chatActions={chatActions}
+          />
         </span>
       ) : null}
       <DiffFileCollapseChevron collapsed={isCollapsed} />
@@ -142,7 +161,14 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const { onBlameLine } = props;
   const handleLineClick = onBlameLine
     ? (line: DiffLineClickProps) => {
-        const target = resolveDiffLineBlameTarget(filePath, line);
+        // Deletion lines blame the tree that still has the content: for a
+        // rename that is the old path, since the new name does not exist at
+        // the blame revision.
+        const blamePath =
+          line.lineType === "change-deletion"
+            ? (resolveFileDiffPrevPath(props.fileDiff) ?? filePath)
+            : filePath;
+        const target = resolveDiffLineBlameTarget(blamePath, line);
         if (target) onBlameLine(target);
       }
     : undefined;
