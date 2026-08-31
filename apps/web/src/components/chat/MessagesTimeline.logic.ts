@@ -867,12 +867,13 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      // A settled assistant message whose streamed text interleaved with tool
-      // rows renders as message-segment slices. They are still this turn's
-      // narration, so they fold too instead of stranding everything earlier
-      // outside the disclosure.
-      if (prev.kind === "message-segment" && !prev.message.streaming) {
-        foldIndices.push(scan);
+      // Settled message-segment slices are this turn's narration and fold in;
+      // streaming segments are not full rows, but earlier rows behind them
+      // still belong to this turn.
+      if (prev.kind === "message-segment") {
+        if (!prev.message.streaming) {
+          foldIndices.push(scan);
+        }
         continue;
       }
       if (prev.kind === "proposed-plan") {
@@ -880,22 +881,14 @@ function collapseSettledTurns(
         // narration/work outside the final "Worked for..." disclosure.
         continue;
       }
-      if (prev.kind === "message-segment") {
-        // Segments are slices of a streamed message; they are not full rows to
-        // fold, but earlier rows behind them still belong to this turn.
-        continue;
-      }
       break;
     }
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
-    // The disclosure folds everything back to the user boundary, so "Worked
-    // for" must start where the folded segment starts. `turnStartByMessageId`
-    // is derived directly from the original message list and does not advance
-    // past intermediate completed assistant messages, so the settled duration is
-    // stable even when the set of foldable rows changes between the first settle
-    // and a later re-fold.
+    // The disclosure folds back to the user boundary, so "Worked for" starts
+    // there. turnStartByMessageId does not advance past completed intermediate
+    // assistants, keeping the settled duration stable across re-folds.
     let collapsedStart = turnStartByMessageId.get(message.id) ?? row.durationStart;
     // All slices of one segmented message share the same ChatMessage, so the
     // message folds once (at its first slice) to keep narration identity stable.

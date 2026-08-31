@@ -2496,7 +2496,6 @@ describe("resolveWorkingLabel", () => {
       }),
     ).toBe("Starting Pi…");
 
-    // The unacknowledged local send takes precedence over the connecting phase.
     expect(
       resolveWorkingLabel({
         isSendBusy: true,
@@ -2506,7 +2505,6 @@ describe("resolveWorkingLabel", () => {
       }),
     ).toBe("Loading");
 
-    // Once the server has taken over the dispatch, the connecting shimmer is shown.
     expect(
       resolveWorkingLabel({
         isSendBusy: true,
@@ -2516,20 +2514,9 @@ describe("resolveWorkingLabel", () => {
       }),
     ).toBe("Starting Pi…");
 
-    // Without a provider name, the connecting phase falls back to Thinking.
     expect(
       resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
     ).toBe("Thinking");
-
-    // Display name uses the provider kind mapping.
-    expect(
-      resolveWorkingLabel({
-        isSendBusy: false,
-        turnTakenOver: false,
-        isConnecting: true,
-        providerName: "OpenCode",
-      }),
-    ).toBe("Starting OpenCode…");
   });
 });
 

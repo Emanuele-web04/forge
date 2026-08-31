@@ -1173,9 +1173,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.collapsedWorkElapsed).toBe("23m");
   });
 
-  it("is byte-identical when the turn settles after the active turn leaves running", () => {
-    // Simulate the video shape: the terminal is answered after the session has
-    // already left the running state; a later re-fold must not change the label.
+  it("keeps the settled duration stable after the active turn leaves running", () => {
     const entries = [
       userEntry("u1", "2026-01-01T00:00:00Z"),
       workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
@@ -1192,7 +1190,7 @@ describe("deriveMessagesTimelineRows", () => {
       }),
     ];
 
-    const liveRows = deriveMessagesTimelineRows({
+    const live = deriveMessagesTimelineRows({
       ...baseInput,
       isWorking: true,
       activeTurnInProgress: true,
@@ -1200,27 +1198,23 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries: entries,
     });
 
-    const settledRows = deriveMessagesTimelineRows({
+    const settled = deriveMessagesTimelineRows({
       ...baseInput,
       isWorking: false,
       activeTurnInProgress: false,
       timelineEntries: entries,
     });
 
-    const liveTerminal = messageRow(liveRows, "a2");
-    const settledTerminal = messageRow(settledRows, "a2");
-    expect(liveTerminal).toBeDefined();
-    expect(settledTerminal).toBeDefined();
-    expect(settledTerminal!.collapsedWorkElapsed).toBe("1m");
-    // If this were recomputed while the turn was live, the terminal would not yet
-    // be collapsed; once it is, the value is stable and does not change.
-    const recomputedRows = deriveMessagesTimelineRows({
+    expect(messageRow(live, "a2")).toBeDefined();
+    expect(messageRow(settled, "a2")!.collapsedWorkElapsed).toBe("1m");
+
+    const recomputed = deriveMessagesTimelineRows({
       ...baseInput,
       isWorking: false,
       activeTurnInProgress: false,
       timelineEntries: entries,
     });
-    expect(messageRow(recomputedRows, "a2")!.collapsedWorkElapsed).toBe("1m");
+    expect(messageRow(recomputed, "a2")!.collapsedWorkElapsed).toBe("1m");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {
