@@ -4,7 +4,7 @@
 import { useQuery, queryOptions } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import type { WorkItemSearchInput, WorkItemSearchResult } from "@synara/contracts";
+import type { WorkItemSearchInput } from "@synara/contracts";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const WORK_ITEMS_SEARCH_DEBOUNCE_MS = 300;
@@ -14,7 +14,7 @@ export const workItemQueryKeys = {
     ["work-items", "search", input?.cwd ?? "", input?.query ?? "", input?.limit ?? 20] as const,
 };
 
-export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null) {
+export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null, enabled = true) {
   return queryOptions({
     queryKey: workItemQueryKeys.search(input),
     queryFn: async () => {
@@ -23,14 +23,14 @@ export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null) {
       }
       return ensureNativeApi().workItems.search(input);
     },
-    enabled: input !== null,
+    enabled: enabled && input !== null,
     staleTime: 30_000,
     gcTime: 10 * 60_000,
   });
 }
 
-export function useWorkItemsSearch(input: WorkItemSearchInput | null) {
-  return useQuery(workItemsSearchQueryOptions(input));
+export function useWorkItemsSearch(input: WorkItemSearchInput | null, enabled = true) {
+  return useQuery(workItemsSearchQueryOptions(input, enabled));
 }
 
 export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, enabled: boolean) {
@@ -50,5 +50,5 @@ export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, e
     return { cwd, query: debouncedQuery, limit: 20 };
   }, [cwd, debouncedQuery]);
 
-  return useWorkItemsSearch(input);
+  return useWorkItemsSearch(input, enabled);
 }

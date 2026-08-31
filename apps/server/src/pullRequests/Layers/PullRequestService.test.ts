@@ -914,4 +914,43 @@ describe("isDefinitivePullRequestNotFound", () => {
       ),
     ).toBe(false);
   });
+
+  it("searches work items through the bounded GitHub read path", async () => {
+    const project = makeProject("project-work-items", "Work items", "/tmp/work-items");
+    const workItem = {
+      kind: "issue" as const,
+      number: 5,
+      title: "Issue five",
+      state: "open" as const,
+      url: "https://github.com/acme/shared/issues/5",
+      bodyExcerpt: "body",
+      createdAt: now,
+      updatedAt: now,
+    };
+    const github = createGitHubCliWithFakeGh({ workItems: [workItem] }).service;
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map([[project.id, "acme/shared"]]),
+              github,
+            }),
+          );
+          return yield* service.searchWorkItems({
+            cwd: "/tmp/work-items",
+            repository: "acme/shared",
+            query: "",
+            limit: 20,
+          });
+        }),
+      ),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.errorHint).toBeNull();
+    expect(result.items).toEqual([workItem]);
+  });
 });

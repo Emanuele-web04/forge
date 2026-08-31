@@ -57,4 +57,28 @@ describe("composerWorkItems", () => {
     const { workItems } = extractTrailingWorkItems(`Hello${block}`);
     expect(workItems).toEqual([]);
   });
+
+  it("preserves the prompt text when the block is malformed JSON", () => {
+    const { promptText, workItems } = extractTrailingWorkItems(
+      "Hello\n<attached_work_items>\n{not json\n</attached_work_items>",
+    );
+    expect(promptText).toBe("Hello");
+    expect(workItems).toEqual([]);
+  });
+
+  it("preserves the prompt text when the block is not an array", () => {
+    const { promptText, workItems } = extractTrailingWorkItems(
+      'Hello\n<attached_work_items>\n{"kind":"issue"}\n</attached_work_items>',
+    );
+    expect(promptText).toBe("Hello");
+    expect(workItems).toEqual([]);
+  });
+
+  it("drops entries missing required timestamps", () => {
+    const block =
+      '\n<attached_work_items>\n[{"kind":"issue","number":7,"title":"No timestamps","state":"open","url":"https://github.com/owner/repo/issues/7","bodyExcerpt":""}]\n</attached_work_items>';
+    const { promptText, workItems } = extractTrailingWorkItems(`Hello${block}`);
+    expect(promptText).toBe("Hello");
+    expect(workItems).toEqual([]);
+  });
 });

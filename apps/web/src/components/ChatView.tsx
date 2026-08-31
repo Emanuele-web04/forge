@@ -7321,7 +7321,7 @@ export default function ChatView({
           addComposerPastedTextsToDraft(queuedTurn.pastedTexts);
         }
         for (const workItem of queuedTurn.workItems) {
-          addComposerDraftWorkItem(activeThread.id, workItem);
+          addComposerWorkItemToDraft(workItem);
         }
         updateSelectedComposerSkills(queuedTurn.skills);
         updateSelectedComposerMentions(queuedTurn.mentions);
@@ -7355,7 +7355,7 @@ export default function ChatView({
       addComposerImagesToDraft,
       addComposerTerminalContextsToDraft,
       addComposerPastedTextsToDraft,
-      addComposerDraftWorkItem,
+      addComposerWorkItemToDraft,
       clearComposerDraftContent,
       scheduleComposerFocus,
       setDraftThreadContext,
@@ -7539,7 +7539,8 @@ export default function ChatView({
       composerBrowserAnnotationsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||
-      sendableComposerPastedTexts.length > 0;
+      sendableComposerPastedTexts.length > 0 ||
+      composerWorkItemsForSend.length > 0;
     // Queued chat turns already captured their intended mode. Live plan follow-ups
     // with attachments must use the normal send path so references are preserved.
     if (isLivePlanFollowUpSubmission) {

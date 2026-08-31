@@ -605,6 +605,7 @@ export const createComposerDraftStoreState =
                 terminalContexts: [],
                 fileComments: [],
                 pastedTexts: [],
+                workItems: [],
                 skills: [],
                 mentions: [],
               }
@@ -651,6 +652,7 @@ export const createComposerDraftStoreState =
           ),
           fileComments: normalizeFileComments(savedDraft.fileComments),
           pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+          workItems: normalizeWorkItems(savedDraft.workItems),
           skills: [...savedDraft.skills],
           mentions: [...savedDraft.mentions],
         };
@@ -1983,6 +1985,7 @@ export const createComposerDraftStoreState =
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],
+          workItems: [],
           skills: [],
           mentions: [],
           restoredSourceProposedPlan: null,

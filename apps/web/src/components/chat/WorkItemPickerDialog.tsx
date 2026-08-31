@@ -4,7 +4,7 @@
 import type { WorkItemAttachment } from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { workItemKey } from "~/lib/composerWorkItems";
+import { workItemKey, WORK_ITEM_ATTACHMENT_LIMIT } from "~/lib/composerWorkItems";
 import { useDebouncedWorkItemsSearch } from "~/lib/workItemReactQuery";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -56,7 +56,7 @@ export function WorkItemPickerDialog({
     () => new Set(selectedItems.map((item) => workItemKey(item))),
     [selectedItems],
   );
-  const isFull = selectedItems.length >= 5;
+  const isFull = selectedItems.length >= WORK_ITEM_ATTACHMENT_LIMIT;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

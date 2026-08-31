@@ -15,6 +15,8 @@ import {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
+  WorkItemKind,
+  WorkItemState,
 } from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import type { DeepMutable } from "effect/Types";
@@ -136,10 +138,10 @@ type PersistedPastedTextDraft = typeof PersistedPastedTextDraft.Type;
 
 const PersistedWorkItemDraft = Schema.Struct({
   id: Schema.String,
-  kind: Schema.Literals(["issue", "pull-request"]),
+  kind: WorkItemKind,
   number: Schema.Number,
   title: Schema.String,
-  state: Schema.Literals(["open", "closed", "merged"]),
+  state: WorkItemState,
   url: Schema.String,
   bodyExcerpt: Schema.String,
   createdAt: Schema.String,

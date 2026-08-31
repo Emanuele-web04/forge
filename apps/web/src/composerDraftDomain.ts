@@ -28,7 +28,12 @@ import {
   createPastedTextDraft,
   normalizePastedTextContent,
 } from "./lib/composerPastedText";
-import { type WorkItemDraft, normalizeWorkItemDraft, workItemKey } from "./lib/composerWorkItems";
+import {
+  type WorkItemDraft,
+  normalizeWorkItemDraft,
+  workItemKey,
+  WORK_ITEM_ATTACHMENT_LIMIT,
+} from "./lib/composerWorkItems";
 import {
   type FileCommentDraft,
   type FileCommentSelection,
@@ -666,7 +671,7 @@ export function normalizePastedTexts(
 
 export function normalizeWorkItems(
   items: ReadonlyArray<WorkItemDraft>,
-  limit = 5,
+  limit = WORK_ITEM_ATTACHMENT_LIMIT,
 ): WorkItemDraft[] {
   const normalizedItems: WorkItemDraft[] = [];
   const existingKeys = new Set<string>();

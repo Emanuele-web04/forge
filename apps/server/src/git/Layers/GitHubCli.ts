@@ -1461,11 +1461,12 @@ const makeGitHubCli = Effect.sync(() => {
 
   const WORK_ITEM_JSON_FIELDS = "number,title,url,state,body,updatedAt,createdAt";
 
-  function normalizeWorkItemState(state: string): "open" | "closed" | "merged" {
+  function normalizeWorkItemState(state: string): "open" | "closed" | "merged" | null {
     const upper = state.toUpperCase();
     if (upper === "MERGED") return "merged";
     if (upper === "CLOSED") return "closed";
-    return "open";
+    if (upper === "OPEN") return "open";
+    return null;
   }
 
   function excerptWorkItemBody(body: string | null | undefined): string {
@@ -1483,11 +1484,12 @@ const makeGitHubCli = Effect.sync(() => {
     if (title.length === 0) return null;
     const url = typeof item.url === "string" ? item.url.trim() : "";
     if (url.length === 0) return null;
-    const state = normalizeWorkItemState(typeof item.state === "string" ? item.state : "OPEN");
-    const createdAt =
-      typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString();
-    const updatedAt =
-      typeof item.updatedAt === "string" ? item.updatedAt : new Date().toISOString();
+    const state = normalizeWorkItemState(typeof item.state === "string" ? item.state : "");
+    // Timestamps are required: fabricating one would float the row to the top of
+    // the recency sort, so malformed rows are dropped instead.
+    const createdAt = typeof item.createdAt === "string" ? item.createdAt : "";
+    const updatedAt = typeof item.updatedAt === "string" ? item.updatedAt : "";
+    if (createdAt.length === 0 || updatedAt.length === 0 || state === null) return null;
     const attachment: WorkItemAttachment = {
       kind,
       number,
@@ -1538,30 +1540,33 @@ const makeGitHubCli = Effect.sync(() => {
         WORK_ITEM_JSON_FIELDS,
       ];
     }
+    // Flags come first and the query is passed after `--` so a query that starts
+    // with "-" is treated as search terms, never as gh flags.
     return [
       "search",
       kind === "issue" ? "issues" : "prs",
-      query,
       "--repo",
       input.repository,
+      "--state",
+      "open",
       "--limit",
       String(limit),
       "--json",
       WORK_ITEM_JSON_FIELDS,
+      "--",
+      query,
     ];
   }
 
   function runWorkItemSearch(
     kind: "issue" | "pull-request",
     input: { cwd: string; repository: string; query?: string; limit?: number },
-  ): Effect.Effect<WorkItemAttachment[], GitHubCliError> {
-    const query = input.query ?? "";
-    const limit = input.limit ?? 20;
+  ): Effect.Effect<{ items: WorkItemAttachment[]; degraded: boolean }, GitHubCliError> {
     return execute({
       cwd: input.cwd,
       args: buildWorkItemSearchArgs(kind, input),
     }).pipe(
-      Effect.map((result) => parseWorkItemList(result.stdout, kind)),
+      Effect.map((result) => ({ items: parseWorkItemList(result.stdout, kind), degraded: false })),
       Effect.catch((error) => {
         if (
           error instanceof GitHubCliError &&
@@ -1569,7 +1574,9 @@ const makeGitHubCli = Effect.sync(() => {
         ) {
           return Effect.fail(error);
         }
-        return Effect.succeed([]);
+        // Transient failures (network, rate limits, timeouts) degrade the result
+        // instead of failing the whole search.
+        return Effect.succeed({ items: [], degraded: true });
       }),
     );
   }
@@ -1580,12 +1587,15 @@ const makeGitHubCli = Effect.sync(() => {
         [runWorkItemSearch("issue", input), runWorkItemSearch("pull-request", input)],
         { concurrency: 2 },
       );
-      const combined = [...issues, ...prs].toSorted(
+      const combined = [...issues.items, ...prs.items].toSorted(
         (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
       );
       return {
         available: true,
-        errorHint: null,
+        errorHint:
+          issues.degraded || prs.degraded
+            ? "Some GitHub results may be missing because a search request failed."
+            : null,
         items: combined.slice(0, input.limit ?? 20),
       };
     }).pipe(

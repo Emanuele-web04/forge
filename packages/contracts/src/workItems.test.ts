@@ -30,6 +30,26 @@ describe("WorkItem schemas", () => {
     expect(() => Schema.decodeUnknownSync(WorkItemAttachment)(oversized)).toThrow();
   });
 
+  it("accepts a body excerpt of exactly 500 characters", () => {
+    const exact = { ...validAttachment, bodyExcerpt: "x".repeat(500) };
+    expect(() => Schema.decodeUnknownSync(WorkItemAttachment)(exact)).not.toThrow();
+  });
+
+  it("rejects non-positive numbers", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, number: 0 }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, number: -3 }),
+    ).toThrow();
+  });
+
+  it("rejects an empty title", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, title: "   " }),
+    ).toThrow();
+  });
+
   it("decodes a pull request attachment", () => {
     const pr = { ...validAttachment, kind: "pull-request" as const, state: "merged" as const };
     const result = Schema.decodeUnknownSync(WorkItemAttachment)(pr);
@@ -39,6 +59,24 @@ describe("WorkItem schemas", () => {
   it("decodes a search input with defaults", () => {
     const result = Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo" });
     expect(result).toEqual({ cwd: "/repo", query: "", limit: 20 });
+  });
+
+  it("rejects an oversized search query", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo", query: "x".repeat(257) }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo", query: "x".repeat(256) }),
+    ).not.toThrow();
+  });
+
+  it("rejects an out-of-range search limit", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo", limit: 21 }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo", limit: 0 }),
+    ).toThrow();
   });
 
   it("decodes a search result", () => {

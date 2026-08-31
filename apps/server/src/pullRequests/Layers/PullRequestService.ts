@@ -571,11 +571,13 @@ export const makePullRequestService = (
     });
 
     const searchWorkItems: PullRequestServiceShape["searchWorkItems"] = (input) =>
-      dependencies.github.searchWorkItems({
-        ...input,
-        query: input.query ?? "",
-        limit: input.limit ?? 20,
-      });
+      withGitHubRead(
+        dependencies.github.searchWorkItems({
+          ...input,
+          query: input.query ?? "",
+          limit: input.limit ?? 20,
+        }),
+      );
 
     return {
       list,

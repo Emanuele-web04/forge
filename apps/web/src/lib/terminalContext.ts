@@ -346,8 +346,8 @@ export function deriveDisplayedUserMessageState(
   options: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
   // Trailing blocks are serialized in order: assistant selections, terminal
-  // contexts, file comments, pasted text, then browser annotations (outermost).
-  // Strip them in reverse so each extractor sees its block at the end.
+  // contexts, file comments, pasted text, work items, then browser annotations
+  // (outermost). Strip them in reverse so each extractor sees its block at the end.
   const extractedBrowserAnnotations =
     options.messageId === undefined
       ? { promptText: prompt, annotations: [] }

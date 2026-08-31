@@ -1464,8 +1464,11 @@ const makeWsRpcHandlersLayer = () =>
           Effect.gen(function* () {
             // Trust boundary: the client sends a cwd, but we must verify it is an
             // absolute, normalized, real directory before running git/gh inside it.
-            const resolvedCwd = path.resolve(input.cwd);
-            if (!path.isAbsolute(input.cwd) || resolvedCwd !== path.normalize(input.cwd)) {
+            // Trailing separators are tolerated: path.resolve drops them while
+            // path.normalize keeps them, so compare on the stripped form.
+            const candidateCwd = input.cwd.replace(/[\\/]+$/, "") || input.cwd;
+            const resolvedCwd = path.resolve(candidateCwd);
+            if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
               return {
                 available: false,
                 errorHint: "Invalid workspace path.",

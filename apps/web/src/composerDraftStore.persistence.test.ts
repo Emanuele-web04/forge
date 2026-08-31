@@ -963,3 +963,86 @@ describe("flushStorageBeforePageHide", () => {
     ).not.toThrow();
   });
 });
+
+describe("composerDraftStore work item persistence", () => {
+  const threadId = ThreadId.makeUnsafe("thread-work-items-persist");
+
+  const makeWorkItem = (kind: "issue" | "pull-request", number: number) => ({
+    id: `${kind}-${number}`,
+    kind,
+    number,
+    title: `Work item ${kind} ${number}`,
+    state: "open" as const,
+    url: `https://github.com/owner/repo/${kind === "issue" ? "issues" : "pull"}/${number}`,
+    bodyExcerpt: "Body",
+    createdAt: "2024-01-01T00:00:00Z",
+    updatedAt: "2024-01-02T00:00:00Z",
+  });
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("round-trips work item attachments through partialize and merge", () => {
+    const store = useComposerDraftStore.getState();
+    store.addWorkItem(threadId, makeWorkItem("issue", 5));
+    store.addWorkItem(threadId, makeWorkItem("pull-request", 6));
+
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
+      draftsByThreadId?: Record<string, { workItems?: Array<Record<string, unknown>> }>;
+    };
+    expect(persistedState.draftsByThreadId?.[threadId]?.workItems).toHaveLength(2);
+    expect(persistedState.draftsByThreadId?.[threadId]?.workItems?.[0]).toMatchObject({
+      kind: "issue",
+      number: 5,
+    });
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.workItems).toMatchObject([
+      { kind: "issue", number: 5, title: "Work item issue 5" },
+      { kind: "pull-request", number: 6, title: "Work item pull-request 6" },
+    ]);
+  });
+
+  it("drops malformed persisted work item entries during hydration", () => {
+    const store = useComposerDraftStore.getState();
+    store.addWorkItem(threadId, makeWorkItem("issue", 5));
+
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
+      draftsByThreadId?: Record<string, { workItems?: Array<Record<string, unknown>> }>;
+    };
+    const draftWorkItems = persistedState.draftsByThreadId?.[threadId]?.workItems ?? [];
+    draftWorkItems.push({ kind: "issue", number: -1, title: "Bad number" });
+    draftWorkItems.push({ kind: "discussion", number: 8, title: "Bad kind" });
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.workItems).toHaveLength(1);
+    expect(mergedState.draftsByThreadId[threadId]?.workItems?.[0]?.number).toBe(5);
+  });
+});

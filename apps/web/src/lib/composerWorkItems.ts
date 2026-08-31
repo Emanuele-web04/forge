@@ -21,6 +21,8 @@ export function normalizeWorkItemDraft(item: WorkItemDraft): WorkItemDraft {
 
 export function buildAttachedWorkItemsBlock(items: ReadonlyArray<WorkItemAttachment>): string {
   if (items.length === 0) return "";
+  // Field whitelist must stay in sync with WorkItemAttachment: a dropped field
+  // fails schema re-parse on extraction and the attachment disappears.
   const fields = [
     "kind",
     "number",

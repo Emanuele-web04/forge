@@ -22,7 +22,9 @@ export type WorkItemAttachment = typeof WorkItemAttachment.Type;
 
 export const WorkItemSearchInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  query: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
+  query: Schema.optional(Schema.String.check(Schema.isMaxLength(256))).pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(20))).pipe(
     Schema.withDecodingDefault(() => 20),
   ),

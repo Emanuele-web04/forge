@@ -45,6 +45,7 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.gitWorkingTreeDiffStats,
   WS_METHODS.gitSummarizeDiff,
   WS_METHODS.gitPullRequestSnapshot,
+  WS_METHODS.workItemsSearch,
   WS_METHODS.serverGetProviderUsageSnapshot,
   WS_METHODS.serverListProviderUsage,
   WS_METHODS.serverGetDiagnostics,
