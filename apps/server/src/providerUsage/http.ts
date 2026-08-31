@@ -83,9 +83,14 @@ export function parseRetryAfterMs(headers: Headers, nowMs: number): number | und
     return undefined;
   }
   const trimmed = raw.trim();
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds)) {
-    return seconds > 0 ? seconds * 1000 : undefined;
+  if (/^\d+$/u.test(trimmed)) {
+    const milliseconds = Number(trimmed) * 1000;
+    return milliseconds > 0 && Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  }
+  // HTTP-date values begin with a weekday name. Reject alternate JavaScript number spellings
+  // before Date.parse can reinterpret values such as `1.5` or `+10` as implementation-defined dates.
+  if (/^[+\-.\d]/u.test(trimmed)) {
+    return undefined;
   }
   const dateMs = Date.parse(trimmed);
   if (Number.isFinite(dateMs)) {
