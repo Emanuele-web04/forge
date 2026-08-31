@@ -292,7 +292,7 @@ describe("AcpSessionRuntime", () => {
               args: [mockAgentPath],
               env: {
                 VITEST: "true",
-                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "0,0",
                 SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
                 SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY: "1",
               },

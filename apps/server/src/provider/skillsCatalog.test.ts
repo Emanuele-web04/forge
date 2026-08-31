@@ -116,6 +116,11 @@ describe("discoverSkillsCatalog", () => {
       "Devin",
     );
     await writeSkill(
+      path.join(homeDir, ".config", "cognition", "skills", "cognition-only"),
+      "cognition-only",
+      "Cognition",
+    );
+    await writeSkill(
       path.join(homeDir, ".codeium", "windsurf", "skills", "windsurf-only"),
       "windsurf-only",
       "Windsurf",
@@ -136,17 +141,28 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
     expect(byName.get("grok-only")?.scope).toBe("grok");
     expect(byName.get("devin-only")?.scope).toBe("devin");
+    expect(byName.get("cognition-only")?.scope).toBe("devin");
     expect(byName.get("windsurf-only")?.scope).toBe("devin");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
   });
 
-  it("discovers Devin's project-local Windsurf skills root", async () => {
+  it("discovers Devin's project-local native skill roots", async () => {
     const cwd = path.join(root, "repo", "packages", "web");
     await mkdir(cwd, { recursive: true });
     await writeSkill(
-      path.join(root, "repo", ".windsurf", "skills", "project-only"),
-      "project-only",
+      path.join(root, "repo", ".devin", "skills", "devin-project"),
+      "devin-project",
+      "Project Devin skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".cognition", "skills", "cognition-project"),
+      "cognition-project",
+      "Project Cognition skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".windsurf", "skills", "windsurf-project"),
+      "windsurf-project",
       "Project Windsurf skill",
     );
 
@@ -157,9 +173,9 @@ describe("discoverSkillsCatalog", () => {
       provider: "devin",
     });
 
-    expect(skills.find((skill) => skill.name === "project-only")).toMatchObject({
-      scope: "project",
-    });
+    for (const name of ["devin-project", "cognition-project", "windsurf-project"]) {
+      expect(skills.find((skill) => skill.name === name)).toMatchObject({ scope: "project" });
+    }
   });
 
   it("discovers only the registered Claude plugin version for Grok with its native namespace", async () => {

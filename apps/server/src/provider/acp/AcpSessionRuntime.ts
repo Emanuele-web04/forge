@@ -136,24 +136,12 @@ export function isAcpAuthRequiredError(error: AcpErrors.AcpError): boolean {
   // Protocol-level auth-required uses -32000 in ACP. Require a
   // recognizable auth-failure phrase so a generic -32000 server error is not
   // misclassified as an auth challenge.
-  return messageLooksLikeAuthRequired(message);
+  return error.code === -32000 && messageLooksLikeAuthRequired(message);
 }
 
 export function causeIndicatesAuthRequired(cause: Cause.Cause<AcpErrors.AcpError>): boolean {
   const failReason = Cause.findFail(cause);
-  if (failReason._tag === "Success" && isAcpAuthRequiredError(failReason.success.error)) {
-    return true;
-  }
-  const dieReason = Cause.findDie(cause);
-  if (dieReason._tag === "Success") {
-    const defect = dieReason.success.defect;
-    const message =
-      defect instanceof Error ? defect.message : typeof defect === "string" ? defect : "";
-    if (messageLooksLikeAuthRequired(message)) {
-      return true;
-    }
-  }
-  return false;
+  return failReason._tag === "Success" && isAcpAuthRequiredError(failReason.success.error);
 }
 
 export interface AcpProtocolLogEvent {
@@ -1862,6 +1850,27 @@ const makeAcpSessionRuntime = (
             }
           }
 
+          // session/load may replay a large transcript before the consumer attaches;
+          // gate prompt/fork/config access and per-update suppression until the
+          // replay settles or reaches its hard cap.
+          if (sessionSetupMethod === "load") {
+            const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
+            const hardTimeoutMs =
+              options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
+            loadReplayGate = yield* makeAcpLoadReplayGate({
+              quietMs,
+              hardTimeoutMs,
+              onHardTimeout: ({ elapsedMs }) =>
+                Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
+                  sessionId,
+                  command: options.spawn.command,
+                  elapsedMs,
+                  quietMs,
+                  hardTimeoutMs,
+                }),
+            });
+          }
+
           // Install the final session id, baseline, and replay policy. Fresh sessions
           // replay all buffered updates; resumed sessions only apply bounded-state
           // updates (commands/config/mode) because transcript replay before attachment
@@ -1870,6 +1879,9 @@ const makeAcpSessionRuntime = (
             replay: resumedExistingSession ? "bounded-only" : "all",
             resetState: resumedExistingSession,
           });
+          if (loadReplayGate !== undefined) {
+            yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
+          }
 
           return {
             sessionId,
@@ -1891,28 +1903,6 @@ const makeAcpSessionRuntime = (
             : runAuthenticate.pipe(Effect.andThen(runSessionSetup));
 
         const { sessionId, sessionSetupResult, sessionSetupMethod } = yield* setup;
-
-        // session/load may replay a large transcript before the consumer attaches;
-        // gate prompt/fork/config access and per-update suppression until the
-        // replay settles or reaches its hard cap.
-        if (sessionSetupMethod === "load") {
-          const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
-          const hardTimeoutMs =
-            options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
-          loadReplayGate = yield* makeAcpLoadReplayGate({
-            quietMs,
-            hardTimeoutMs,
-            onHardTimeout: ({ elapsedMs }) =>
-              Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
-                sessionId,
-                command: options.spawn.command,
-                elapsedMs,
-                quietMs,
-                hardTimeoutMs,
-              }),
-          });
-          yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
-        }
 
         // setSessionEpoch already installed the setup baseline and replayed pending
         // updates through the same reducer, so no separate post-setup mutation is

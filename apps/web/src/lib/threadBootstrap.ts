@@ -107,7 +107,6 @@ interface ResolveTerminalThreadCreationStateInput {
   defaultProvider?: ProviderKind | null | undefined;
   draftComposerState: ComposerThreadDraftState | null;
   draftThread: DraftThreadState | null;
-  // Fresh bootstrap: prefer explicit thread/project/default providers over the stale sticky composer state.
   fresh?: boolean;
   options: NewThreadOptions | undefined;
   projectDefaultModelSelection: ModelSelection | null;
@@ -161,7 +160,7 @@ export function createActiveDraftThreadSnapshot(
   if (!activeDraftThread || activeDraftThread.projectId !== projectId) {
     return null;
   }
-  const snapshot: DraftThreadState = {
+  return {
     projectId: activeDraftThread.projectId,
     createdAt: activeDraftThread.createdAt,
     runtimeMode: activeDraftThread.runtimeMode,
@@ -172,11 +171,8 @@ export function createActiveDraftThreadSnapshot(
     workingDirectory: activeDraftThread.workingDirectory ?? null,
     lastKnownPr: activeDraftThread.lastKnownPr ?? null,
     envMode: activeDraftThread.envMode,
+    ...(activeDraftThread.isTemporary ? { isTemporary: true } : {}),
   };
-  if (activeDraftThread.isTemporary) {
-    snapshot.isTemporary = true;
-  }
-  return snapshot;
 }
 
 // Decide whether we should reuse a stored draft, the current route draft, or create a fresh one.
@@ -217,7 +213,7 @@ export function createFreshDraftThreadSeed(input: {
   entryPoint: ThreadPrimarySurface;
   options: NewThreadOptions | undefined;
 }): Omit<DraftThreadState, "projectId" | "interactionMode"> {
-  const seed: Omit<DraftThreadState, "projectId" | "interactionMode"> = {
+  return {
     createdAt: input.createdAt,
     branch: input.options?.branch ?? null,
     worktreePath: input.options?.worktreePath ?? null,
@@ -225,11 +221,8 @@ export function createFreshDraftThreadSeed(input: {
     envMode: input.options?.envMode ?? "local",
     runtimeMode: DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
+    ...(input.options?.temporary ? { isTemporary: true } : {}),
   };
-  if (input.options?.temporary) {
-    seed.isTemporary = true;
-  }
-  return seed;
 }
 
 // Detect whether the caller wants to override stored draft context before reuse.
@@ -243,37 +236,32 @@ export function hasDraftContextOverrides(options?: NewThreadOptions): boolean {
 }
 
 // Build the exact patch we should apply to an existing draft before reusing it.
-type DraftThreadContextPatch = {
+export function buildDraftThreadContextPatch(
+  entryPoint: ThreadPrimarySurface,
+  options?: NewThreadOptions,
+): {
   branch?: string | null;
   entryPoint: ThreadPrimarySurface;
   envMode?: DraftThreadEnvMode;
   worktreePath?: string | null;
   workingDirectory?: string | null;
-};
-
-export function buildDraftThreadContextPatch(
-  entryPoint: ThreadPrimarySurface,
-  options?: NewThreadOptions,
-): DraftThreadContextPatch | null {
+} | null {
   if (!hasDraftContextOverrides(options)) {
     return null;
   }
   const shouldClearWorktreeForLocalMode =
     options?.envMode === "local" && options?.worktreePath === undefined;
-  const patch: DraftThreadContextPatch = { entryPoint };
-  if (options?.branch !== undefined) {
-    patch.branch = options.branch ?? null;
-  }
-  if (options?.worktreePath !== undefined || shouldClearWorktreeForLocalMode) {
-    patch.worktreePath = options?.worktreePath ?? null;
-  }
-  if (options?.workingDirectory !== undefined) {
-    patch.workingDirectory = options.workingDirectory ?? null;
-  }
-  if (options?.envMode !== undefined) {
-    patch.envMode = options.envMode;
-  }
-  return patch;
+  return {
+    ...(options?.branch !== undefined ? { branch: options.branch ?? null } : {}),
+    ...(options?.worktreePath !== undefined || shouldClearWorktreeForLocalMode
+      ? { worktreePath: options?.worktreePath ?? null }
+      : {}),
+    ...(options?.workingDirectory !== undefined
+      ? { workingDirectory: options.workingDirectory ?? null }
+      : {}),
+    ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
+    entryPoint,
+  };
 }
 
 // Reuse only when the active route draft already belongs to the target project and surface.
@@ -314,8 +302,8 @@ export function resolveTerminalThreadCreationState(
           ? input.activeDraftThread.envMode
           : undefined;
 
-  const preferredModelSelectionInput: Parameters<typeof resolvePreferredComposerModelSelection>[0] =
-    {
+  return {
+    modelSelection: resolvePreferredComposerModelSelection({
       draft: input.draftComposerState,
       threadModelSelection:
         input.activeThread?.projectId === input.projectId
@@ -323,13 +311,8 @@ export function resolveTerminalThreadCreationState(
           : null,
       projectModelSelection: input.projectDefaultModelSelection,
       defaultProvider: input.defaultProvider,
-    };
-  if (input.fresh !== undefined) {
-    preferredModelSelectionInput.fresh = input.fresh;
-  }
-
-  return {
-    modelSelection: resolvePreferredComposerModelSelection(preferredModelSelectionInput),
+      ...(input.fresh !== undefined ? { fresh: input.fresh } : {}),
+    }),
     runtimeMode:
       input.draftThread?.runtimeMode ??
       (input.activeThread?.projectId === input.projectId ? input.activeThread.runtimeMode : null) ??

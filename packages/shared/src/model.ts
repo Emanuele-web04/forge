@@ -581,8 +581,8 @@ export function normalizeModelSlug(
   const providerScopedModel =
     provider === "claudeAgent"
       ? trimmed.replace(/\[[^\]]+\]$/u, "")
-      : provider === "devin" && trimmed.toLowerCase().endsWith("-medium")
-        ? trimmed.toLowerCase().slice(0, -"-medium".length)
+      : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
+        ? trimmed.slice(0, -"-medium".length)
         : trimmed;
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
   const aliasKey = providerScopedModel.toLowerCase();

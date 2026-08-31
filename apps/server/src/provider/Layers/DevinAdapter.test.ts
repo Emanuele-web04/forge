@@ -300,6 +300,30 @@ describe("resolveDevinStartModel", () => {
     expect(effectiveModels).toEqual(["gpt-5-6-sol-high", "gpt-5-6-sol-high"]);
   });
 
+  it("retries model discovery after a fallback error", async () => {
+    let discoveryCalls = 0;
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discoveryLock = yield* Semaphore.make(1);
+        const discoverModels = makeCachedDevinModelDiscovery({
+          discoveryLock,
+          discover: () =>
+            Effect.sync(() => {
+              discoveryCalls += 1;
+              return discoveryCalls === 1
+                ? { models: [], source: "devin.static", cached: false, error: "not ready" }
+                : { models: [], source: "devin-cli", cached: false };
+            }),
+        });
+        return [yield* discoverModels("devin"), yield* discoverModels("devin")];
+      }),
+    );
+
+    expect(discoveryCalls).toBe(2);
+    expect(results[0]?.error).toBe("not ready");
+    expect(results[1]?.error).toBeUndefined();
+  });
+
   it("coalesces concurrent model discovery through the shared lock", async () => {
     let discoveryCalls = 0;
     const results = await Effect.runPromise(
@@ -339,6 +363,67 @@ describe("resolveDevinStartModel", () => {
 
     expect(discoveryCalls).toBe(0);
     expect(effectiveModel).toBe("gpt-5.6-sol");
+  });
+
+  it("rejects requested traits that have no concrete model variant", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveDevinStartModel({
+          explicitModel: undefined,
+          modelSelection: {
+            model: "gpt-5.6-sol",
+            options: { reasoningEffort: "medium" },
+          },
+          discoverModels: () =>
+            Effect.succeed({
+              source: "devin-cli",
+              cached: false,
+              models: [
+                {
+                  slug: "gpt-5.6-sol",
+                  name: "GPT-5.6 Sol",
+                  modelVariants: [
+                    { model: "gpt-5-6-sol-low", reasoningEffort: "low" },
+                    { model: "gpt-5-6-sol-high", reasoningEffort: "high" },
+                  ],
+                },
+              ],
+            }),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "resolveDevinStartModel",
+    });
+  });
+
+  it("resolves traits when the stored model is already a concrete variant", async () => {
+    const effectiveModel = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel: undefined,
+        modelSelection: {
+          model: "gpt-5-6-sol-high",
+          options: { reasoningEffort: "high" },
+        },
+        discoverModels: () =>
+          Effect.succeed({
+            source: "devin-cli",
+            cached: false,
+            models: [
+              {
+                slug: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
+                modelVariants: [
+                  { model: "gpt-5-6-sol-low", reasoningEffort: "low" },
+                  { model: "gpt-5-6-sol-high", reasoningEffort: "high" },
+                ],
+              },
+            ],
+          }),
+      }),
+    );
+
+    expect(effectiveModel).toBe("gpt-5-6-sol-high");
   });
 });
 

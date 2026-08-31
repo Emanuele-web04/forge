@@ -5411,6 +5411,41 @@ validation.layer("ProviderServiceLive validation", (it) => {
     }),
   );
 
+  it.effect("fails closed when startSession has no provider source", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-no-provider");
+
+      const failure = yield* Effect.result(
+        provider.startSession(threadId, {
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      if (failure.failure._tag !== "ProviderValidationError") return;
+      assert.equal(failure.failure.operation, "provider.session.start");
+    }),
+  );
+
+  it.effect("derives an omitted provider from modelSelection", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-model-provider");
+
+      const session = yield* provider.startSession(threadId, {
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
+      });
+
+      assert.equal(session.provider, "claudeAgent");
+    }),
+  );
+
   it.effect("fails loudly when the adapter does not support stopping a task", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

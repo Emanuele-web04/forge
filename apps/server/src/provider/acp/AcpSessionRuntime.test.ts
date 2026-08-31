@@ -436,6 +436,17 @@ describe("isAcpAuthRequiredError", () => {
       ),
     ).toBe(false);
   });
+
+  it("does not treat permission failures with another protocol code as auth-required", () => {
+    expect(
+      isAcpAuthRequiredError(
+        new AcpErrors.AcpRequestError({
+          code: -32603,
+          errorMessage: "Permission denied while reading the workspace.",
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("AcpSessionRuntime startup timeouts", () => {

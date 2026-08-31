@@ -450,16 +450,20 @@ const SKILL_ORIGIN_ROOTS = {
   devin: {
     homeRoots: (input) => [
       ...(process.platform === "win32"
-        ? [nodePath.join(input.homeDir, "AppData", "Roaming", "devin", "skills")]
+        ? [
+            nodePath.join(input.homeDir, "AppData", "Roaming", "devin", "skills"),
+            nodePath.join(input.homeDir, "AppData", "Roaming", "cognition", "skills"),
+          ]
         : []),
       nodePath.join(input.homeDir, ".config", "devin", "skills"),
+      nodePath.join(input.homeDir, ".config", "cognition", "skills"),
       nodePath.join(input.homeDir, ".codeium", "windsurf", "skills"),
       nodePath.join(input.homeDir, ".codeium", "windsurf-next", "skills"),
       nodePath.join(input.homeDir, ".codeium", "windsurf-insiders", "skills"),
       // Keep the original path as a compatibility fallback for early Devin CLI builds.
       nodePath.join(input.homeDir, ".devin", "skills"),
     ],
-    projectRootNames: [".devin", ".windsurf"],
+    projectRootNames: [".devin", ".cognition", ".windsurf"],
   },
   agents: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".agents", "skills")],

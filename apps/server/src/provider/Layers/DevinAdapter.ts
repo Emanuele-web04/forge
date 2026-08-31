@@ -555,10 +555,12 @@ export function makeCachedDevinModelDiscovery<E, R>(input: {
           return { ...cached.result, cached: true };
         }
         const result = yield* input.discover(resolvedBinaryPath);
-        setDevinDiscoveryCacheEntry(cache, resolvedBinaryPath, {
-          expiresAt: Date.now() + DEVIN_MODEL_DISCOVERY_CACHE_MS,
-          result,
-        });
+        if (result.error === undefined) {
+          setDevinDiscoveryCacheEntry(cache, resolvedBinaryPath, {
+            expiresAt: Date.now() + DEVIN_MODEL_DISCOVERY_CACHE_MS,
+            result,
+          });
+        }
         return result;
       }),
     );
@@ -1041,33 +1043,53 @@ export function resolveDevinStartModel<E, R>(input: {
       }
     | undefined;
   readonly discoverModels: () => Effect.Effect<ProviderListModelsResult, E, R>;
-}): Effect.Effect<string | undefined, E, R> {
-  const options = input.modelSelection?.options;
+}): Effect.Effect<string | undefined, E | ProviderAdapterValidationError, R> {
+  const modelSelection = input.modelSelection;
+  const options = modelSelection?.options;
   const traitsNeedResolution =
     trimOrNull(options?.reasoningEffort) !== null ||
     options?.fastMode !== undefined ||
     options?.thinking !== undefined ||
     trimOrNull(options?.contextWindow) !== null;
-  const resolve = (runtimeModel?: ProviderModelDescriptor) =>
-    resolveDevinEffectiveModel({
-      explicitModel: input.explicitModel,
-      selectionModel: input.modelSelection?.model,
-      modelOptions: options,
+  const resolveVariant = (runtimeModel?: ProviderModelDescriptor) =>
+    resolveDevinModelVariant({
+      model: modelSelection?.model,
+      modelVariant: options?.modelVariant,
+      reasoningEffort: options?.reasoningEffort,
+      fastMode: options?.fastMode,
+      thinking: options?.thinking,
+      contextWindow: options?.contextWindow,
       ...(runtimeModel ? { runtimeModel } : {}),
     });
-  if (!input.modelSelection || !traitsNeedResolution) {
+  const resolve = (runtimeModel?: ProviderModelDescriptor) =>
+    resolveVariant(runtimeModel) ?? modelSelection?.model ?? input.explicitModel;
+  if (!modelSelection || !traitsNeedResolution) {
     return Effect.succeed(resolve());
   }
 
   return input.discoverModels().pipe(
-    Effect.map((result) => {
+    Effect.flatMap((result) => {
       const normalizedSelection =
-        normalizeModelSlug(input.modelSelection?.model, PROVIDER) ?? input.modelSelection?.model;
+        normalizeModelSlug(modelSelection.model, PROVIDER) ?? modelSelection.model;
       const runtimeModel = result.models.find((candidate) => {
         const normalizedCandidate = normalizeModelSlug(candidate.slug, PROVIDER) ?? candidate.slug;
-        return normalizedCandidate === normalizedSelection;
+        return (
+          normalizedCandidate === normalizedSelection ||
+          candidate.modelVariants?.some((variant) => variant.model === modelSelection.model) ===
+            true
+        );
       });
-      return resolve(runtimeModel);
+      const resolvedModel = resolveVariant(runtimeModel);
+      if (resolvedModel !== undefined) {
+        return Effect.succeed(resolvedModel);
+      }
+      return Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "resolveDevinStartModel",
+          issue: `Could not resolve the requested traits to a concrete variant for Devin model '${modelSelection.model}'. Refresh models or clear the unsupported trait selection.`,
+        }),
+      );
     }),
   );
 }
