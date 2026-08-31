@@ -15,14 +15,14 @@ What does not belong here:
 
 Attribution complements licenses; it never replaces them. If code or prose is copied or
 derived from an MIT/BSD-style project, carry the upstream copyright and permission notice
-alongside the copied portions as the license requires — a row in this table is not a
+alongside the copied portions as the license requires. A row in this table is not a
 substitute.
 
 ## Adapted work
 
-| Project | Author   | Source                           | License | Used in             | Nature                                                                                                    |
-| ------- | -------- | -------------------------------- | ------- | ------------------- | --------------------------------------------------------------------------------------------------------- |
-| mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature | Adapted — memory lifecycle concepts; scoring constants and near-verbatim standing-order prose are adapted |
+| Project | Author   | Source                           | License | Used in                                                                | Nature                                                                                                    |
+| ------- | -------- | -------------------------------- | ------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature, https://github.com/Emanuele-web04/synara/pull/863 | Adapted in the linked PR. Memory lifecycle concepts, confirm-driven reinforcement, and exponential decay. |
 
 ### License notice for mind
 
@@ -54,5 +54,5 @@ SOFTWARE.
 
 | Project      | Author                      | Source                                    | License    | Used in                                                                         | Nature                                                                 |
 | ------------ | --------------------------- | ----------------------------------------- | ---------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| codex        | OpenAI                      | https://github.com/openai/codex           | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`) | Inspired — protocol and behavior reference                             |
-| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT        | Agent-session UX flows and operational safeguards                               | Inspired — reference implementation, per `AGENTS.md` "Reference Repos" |
+| codex        | OpenAI                      | https://github.com/openai/codex           | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`) | Inspired. Protocol and behavior reference.                             |
+| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT        | Agent-session UX flows and operational safeguards                               | Inspired. Reference implementation, per `AGENTS.md` "Reference Repos". |
