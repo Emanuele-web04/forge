@@ -160,16 +160,130 @@ const makeDroidTextGeneration = Effect.gen(function* () {
     });
   }
 
-  // oxfmt-ignore
   return {
-    generateCommitMessage: Effect.fn("DroidTextGeneration.generateCommitMessage")(function* (input: OperationInputOf<"generateCommitMessage">) { return yield* runDroidAcpOperation("generateCommitMessage", input, (input) => buildCommitMessagePrompt({ branch: input.branch, stagedSummary: input.stagedSummary, stagedPatch: input.stagedPatch, includeBranch: input.includeBranch === true }), (generated, _input) => ({ subject: sanitizeCommitSubject(generated.subject), body: generated.body.trim(), ...("branch" in generated && typeof generated.branch === "string" ? { branch: sanitizeFeatureBranchName(generated.branch) } : {}) })); }),
-    generatePrContent: Effect.fn("DroidTextGeneration.generatePrContent")(function* (input: OperationInputOf<"generatePrContent">) { return yield* runDroidAcpOperation("generatePrContent", input, (input) => buildPrContentPrompt({ baseBranch: input.baseBranch, headBranch: input.headBranch, commitSummary: input.commitSummary, diffSummary: input.diffSummary, diffPatch: input.diffPatch, ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}) }), (generated) => ({ title: sanitizePrTitle(generated.title), body: generated.body.trim() })); }),
-    generateDiffSummary: Effect.fn("DroidTextGeneration.generateDiffSummary")(function* (input: OperationInputOf<"generateDiffSummary">) { return yield* runDroidAcpOperation("generateDiffSummary", input, (input) => buildDiffSummaryPrompt({ patch: input.patch }), (generated) => ({ summary: sanitizeDiffSummary(generated.summary) })); }),
-    generateBranchName: Effect.fn("DroidTextGeneration.generateBranchName")(function* (input: OperationInputOf<"generateBranchName">) { return yield* runDroidAcpOperation("generateBranchName", input, (input) => buildBranchNamePrompt({ message: input.message, ...(input.attachments ? { attachments: input.attachments } : {}) }), (generated) => ({ branch: sanitizeBranchFragment(generated.branch) })); }),
-    generateThreadTitle: Effect.fn("DroidTextGeneration.generateThreadTitle")(function* (input: OperationInputOf<"generateThreadTitle">) { return yield* runDroidAcpOperation("generateThreadTitle", input, (input) => buildThreadTitlePrompt({ message: input.message, ...(input.attachments ? { attachments: input.attachments } : {}) }), (generated) => ({ title: sanitizeGeneratedThreadTitle(generated.title) })); }),
-    generateThreadRecap: Effect.fn("DroidTextGeneration.generateThreadRecap")(function* (input: OperationInputOf<"generateThreadRecap">) { return yield* runDroidAcpOperation("generateThreadRecap", input, (input) => buildThreadRecapPrompt({ ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}), newMaterial: input.newMaterial, ...(input.currentState ? { currentState: input.currentState } : {}) }), (generated, input) => ({ recap: sanitizeThreadRecap(generated.recap, input.previousRecap) })); }),
-    generateAutomationIntent: Effect.fn("DroidTextGeneration.generateAutomationIntent")(function* (input: OperationInputOf<"generateAutomationIntent">) { return yield* runDroidAcpOperation("generateAutomationIntent", input, (input) => buildAutomationIntentPrompt({ message: input.message, ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}), nowIso: input.nowIso }), (generated) => generated); }),
-    evaluateAutomationCompletion: Effect.fn("DroidTextGeneration.evaluateAutomationCompletion")(function* (input: OperationInputOf<"evaluateAutomationCompletion">) { return yield* runDroidAcpOperation("evaluateAutomationCompletion", input, (input) => buildAutomationCompletionEvaluationPrompt(input), (generated) => generated); }),
+    generateCommitMessage: Effect.fn("DroidTextGeneration.generateCommitMessage")(function* (
+      input: OperationInputOf<"generateCommitMessage">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateCommitMessage",
+        input,
+        (input) =>
+          buildCommitMessagePrompt({
+            branch: input.branch,
+            stagedSummary: input.stagedSummary,
+            stagedPatch: input.stagedPatch,
+            includeBranch: input.includeBranch === true,
+          }),
+        (generated, _input) => ({
+          subject: sanitizeCommitSubject(generated.subject),
+          body: generated.body.trim(),
+          ...("branch" in generated && typeof generated.branch === "string"
+            ? { branch: sanitizeFeatureBranchName(generated.branch) }
+            : {}),
+        }),
+      );
+    }),
+    generatePrContent: Effect.fn("DroidTextGeneration.generatePrContent")(function* (
+      input: OperationInputOf<"generatePrContent">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generatePrContent",
+        input,
+        (input) =>
+          buildPrContentPrompt({
+            baseBranch: input.baseBranch,
+            headBranch: input.headBranch,
+            commitSummary: input.commitSummary,
+            diffSummary: input.diffSummary,
+            diffPatch: input.diffPatch,
+            ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}),
+          }),
+        (generated) => ({
+          title: sanitizePrTitle(generated.title),
+          body: generated.body.trim(),
+        }),
+      );
+    }),
+    generateDiffSummary: Effect.fn("DroidTextGeneration.generateDiffSummary")(function* (
+      input: OperationInputOf<"generateDiffSummary">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateDiffSummary",
+        input,
+        (input) => buildDiffSummaryPrompt({ patch: input.patch }),
+        (generated) => ({ summary: sanitizeDiffSummary(generated.summary) }),
+      );
+    }),
+    generateBranchName: Effect.fn("DroidTextGeneration.generateBranchName")(function* (
+      input: OperationInputOf<"generateBranchName">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateBranchName",
+        input,
+        (input) =>
+          buildBranchNamePrompt({
+            message: input.message,
+            ...(input.attachments ? { attachments: input.attachments } : {}),
+          }),
+        (generated) => ({ branch: sanitizeBranchFragment(generated.branch) }),
+      );
+    }),
+    generateThreadTitle: Effect.fn("DroidTextGeneration.generateThreadTitle")(function* (
+      input: OperationInputOf<"generateThreadTitle">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateThreadTitle",
+        input,
+        (input) =>
+          buildThreadTitlePrompt({
+            message: input.message,
+            ...(input.attachments ? { attachments: input.attachments } : {}),
+          }),
+        (generated) => ({ title: sanitizeGeneratedThreadTitle(generated.title) }),
+      );
+    }),
+    generateThreadRecap: Effect.fn("DroidTextGeneration.generateThreadRecap")(function* (
+      input: OperationInputOf<"generateThreadRecap">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateThreadRecap",
+        input,
+        (input) =>
+          buildThreadRecapPrompt({
+            ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+            newMaterial: input.newMaterial,
+            ...(input.currentState ? { currentState: input.currentState } : {}),
+          }),
+        (generated, input) => ({
+          recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+        }),
+      );
+    }),
+    generateAutomationIntent: Effect.fn("DroidTextGeneration.generateAutomationIntent")(function* (
+      input: OperationInputOf<"generateAutomationIntent">,
+    ) {
+      return yield* runDroidAcpOperation(
+        "generateAutomationIntent",
+        input,
+        (input) =>
+          buildAutomationIntentPrompt({
+            message: input.message,
+            ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+            nowIso: input.nowIso,
+          }),
+        (generated) => generated,
+      );
+    }),
+    evaluateAutomationCompletion: Effect.fn("DroidTextGeneration.evaluateAutomationCompletion")(
+      function* (input: OperationInputOf<"evaluateAutomationCompletion">) {
+        return yield* runDroidAcpOperation(
+          "evaluateAutomationCompletion",
+          input,
+          (input) => buildAutomationCompletionEvaluationPrompt(input),
+          (generated) => generated,
+        );
+      },
+    ),
   };
 });
 
