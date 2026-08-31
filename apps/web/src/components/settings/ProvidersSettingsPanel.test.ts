@@ -20,8 +20,6 @@ describe("isProviderInstallSettingsDirty", () => {
       { antigravityBinaryPath: "/opt/agy" },
       { grokBinaryPath: "/opt/grok" },
       { droidBinaryPath: "/opt/droid" },
-      { kiloBinaryPath: "/opt/kilo" },
-      { kiloServerUrl: "http://127.0.0.1:5000" },
       { openCodeBinaryPath: "/opt/opencode" },
       { openCodeServerUrl: "http://127.0.0.1:5001" },
       { openCodeExperimentalWebSockets: true },
@@ -37,11 +35,8 @@ describe("isProviderInstallSettingsDirty", () => {
 
   it("uses configured flags instead of unreadable password values", () => {
     expect(
-      isProviderInstallSettingsDirty({ ...defaults, kiloServerPassword: "secret" }, defaults),
+      isProviderInstallSettingsDirty({ ...defaults, openCodeServerPassword: "secret" }, defaults),
     ).toBe(false);
-    expect(
-      isProviderInstallSettingsDirty({ ...defaults, kiloServerPasswordConfigured: true }, defaults),
-    ).toBe(true);
     expect(
       isProviderInstallSettingsDirty(
         { ...defaults, openCodeServerPasswordConfigured: true },
@@ -55,7 +50,6 @@ describe("createProviderInstallResetPatch", () => {
   it("resets every configured field and writes password values so configured flags clear", () => {
     const patch = createProviderInstallResetPatch({
       ...defaults,
-      kiloServerPassword: "",
       openCodeServerPassword: "",
     });
 
@@ -69,9 +63,6 @@ describe("createProviderInstallResetPatch", () => {
         "cursorBinaryPath",
         "droidBinaryPath",
         "grokBinaryPath",
-        "kiloBinaryPath",
-        "kiloServerPassword",
-        "kiloServerUrl",
         "openCodeBinaryPath",
         "openCodeExperimentalWebSockets",
         "openCodeServerPassword",
@@ -80,7 +71,6 @@ describe("createProviderInstallResetPatch", () => {
         "piBinaryPath",
       ].sort(),
     );
-    expect(patch.kiloServerPassword).toBe("");
     expect(patch.openCodeServerPassword).toBe("");
   });
 });

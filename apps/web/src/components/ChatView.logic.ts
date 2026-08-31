@@ -1457,6 +1457,84 @@ export function resolveQueuedSteerGateTransition(input: {
   };
 }
 
+export function shouldHoldQueuedComposerAutoDispatch(input: {
+  hasQueueableLiveTurn: boolean;
+  phase: SessionPhase;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isAwaitingTurnStart: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+}): boolean {
+  return (
+    input.hasQueueableLiveTurn ||
+    input.phase === "disconnected" ||
+    input.isSendBusy ||
+    input.isConnecting ||
+    input.isAwaitingTurnStart ||
+    input.queuedSteerGate !== null ||
+    input.hasPendingApproval ||
+    input.hasPendingProgress ||
+    input.hasPendingUserInput ||
+    input.queuedTurnCount === 0
+  );
+}
+
+/** The post-ack gap is not live-turn takeover, so hold until `hasLiveTurnTakenOver` or fail-open. */
+export function resolveQueuedComposerAutoDispatchHold(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
+  isConnecting: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+  threadError: string | null | undefined;
+  now?: number;
+}): boolean {
+  const isSendBusy =
+    input.localDispatch !== null &&
+    !hasServerAcknowledgedLocalDispatch({
+      localDispatch: input.localDispatch,
+      phase: input.phase,
+      latestTurn: input.latestTurn,
+      session: input.session,
+      messages: input.messages,
+      hasPendingApproval: input.hasPendingApproval,
+      hasPendingUserInput: input.hasPendingUserInput,
+      threadError: input.threadError,
+    });
+  const turnTakenOver = hasLiveTurnTakenOver({
+    localDispatch: input.localDispatch,
+    phase: input.phase,
+    latestTurn: input.latestTurn,
+    session: input.session,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingUserInput: input.hasPendingUserInput,
+    threadError: input.threadError,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
+  return shouldHoldQueuedComposerAutoDispatch({
+    hasQueueableLiveTurn: input.phase === "running" && input.session?.activeTurnId != null,
+    phase: input.phase,
+    isSendBusy,
+    isConnecting: input.isConnecting,
+    isAwaitingTurnStart: input.localDispatch !== null && !turnTakenOver,
+    queuedSteerGate: input.queuedSteerGate,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingProgress: input.hasPendingProgress,
+    hasPendingUserInput: input.hasPendingUserInput,
+    queuedTurnCount: input.queuedTurnCount,
+  });
+}
+
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
 
 export function shouldStartActiveTurnLayoutGrace(options: {

@@ -8,6 +8,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type CSSProperties,
   type MouseEventHandler,
@@ -29,6 +30,7 @@ import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTim
 import { composerOverlayAffordanceBottomPx } from "./composerOverlay";
 import { MessageTrail } from "./MessageTrail";
 import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
+import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 
@@ -100,11 +102,14 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
+  keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
+  availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupPendingAction?: ComponentProps<
     typeof MessagesTimeline
   >["worktreeSetupPendingAction"];
   onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
+  findHighlightStore?: ThreadFindHighlightStore | null;
 }
 
 export function ChatTranscriptPane({
@@ -171,9 +176,12 @@ export function ChatTranscriptPane({
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
+  keybindings,
+  availableEditors,
   worktreeSetup,
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
+  findHighlightStore: findHighlightStoreProp,
 }: ChatTranscriptPaneProps) {
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
@@ -194,6 +202,13 @@ export function ChatTranscriptPane({
   // highlights can't linger.
   const trailItems = deriveMessageTrailItems(timelineEntries);
   const [activeTrailStore] = useState(() => createActiveTrailStore());
+  const [fallbackFindHighlightStore] = useState(() => createThreadFindHighlightStore());
+  const findHighlightStore = findHighlightStoreProp ?? fallbackFindHighlightStore;
+  const findHighlight = useSyncExternalStore(
+    findHighlightStore.subscribe,
+    findHighlightStore.get,
+    findHighlightStore.get,
+  );
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
@@ -277,10 +292,13 @@ export function ChatTranscriptPane({
             chatFontSizePx={chatFontSizePx}
             timestampFormat={timestampFormat}
             workspaceRoot={workspaceRoot}
+            {...(keybindings ? { keybindings } : {})}
+            {...(availableEditors ? { availableEditors } : {})}
             contentInsetRightPx={contentInsetRightPx}
             contentInsetBottomPx={contentInsetBottomPx}
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+            findHighlight={findHighlight}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />

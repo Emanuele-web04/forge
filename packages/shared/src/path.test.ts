@@ -46,10 +46,24 @@ describe("workspaceRelativePathOf", () => {
     expect(workspaceRelativePathOf("/repo/application/file.ts", "/repo/app")).toBeNull();
   });
 
-  it("normalizes Windows separators and drive-letter casing", () => {
-    expect(workspaceRelativePathOf("C:\\repo\\app\\src\\page.tsx", "c:/repo/app")).toBe(
-      "src/page.tsx",
+  it("normalizes Windows separators and path casing", () => {
+    expect(workspaceRelativePathOf("C:\\Repo\\App\\Src\\Page.tsx", "c:/repo/app")).toBe(
+      "Src/Page.tsx",
     );
+  });
+
+  it("compares normalized UNC paths case-insensitively", () => {
+    expect(
+      workspaceRelativePathOf("//Server/Share/Repo/Src/Page.tsx", "\\\\server\\share\\repo"),
+    ).toBe("Src/Page.tsx");
+  });
+
+  it("derives Windows relative paths from segments after length-changing case folds", () => {
+    expect(workspaceRelativePathOf("C:\\İ\\secret", "c:\\i̇")).toBe("secret");
+  });
+
+  it("keeps POSIX path comparisons case-sensitive", () => {
+    expect(workspaceRelativePathOf("/Repo/App/src/page.tsx", "/repo/app")).toBeNull();
   });
 
   it("returns null for empty inputs", () => {

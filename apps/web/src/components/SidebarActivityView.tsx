@@ -710,6 +710,7 @@ export function SidebarActivityView({
           ? (prByThreadId.get(thread.id) ?? null)
           : resolveThreadPullRequestFallback({
               branch: thread.branch,
+              hasDedicatedWorktree: thread.worktreePath !== null,
               lastKnownPr: thread.lastKnownPr ?? null,
             })
       }

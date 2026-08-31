@@ -13,8 +13,9 @@ import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../
  * Fork the runtime's active session when the agent advertises `session/fork`.
  *
  * Fails with a `ProviderAdapterValidationError` when the capability is missing
- * so callers fall back to Synara's retained-transcript fork, and bounds the
- * whole probe+fork exchange with the adapter's request timeout.
+ * so callers fall back to Synara's retained-transcript fork. Replay readiness
+ * has its own bounded policy; the adapter timeout applies only after that gate
+ * opens, preserving the full RPC allowance even when replay hits its hard cap.
  */
 export function forkViaAcpRuntime(input: {
   readonly provider: string;
@@ -42,14 +43,15 @@ export function forkViaAcpRuntime(input: {
         issue: `This ${input.provider} ACP version advertises session/fork but cannot reopen the forked session; Synara will rebuild the fork from its retained transcript.`,
       });
     }
-    return yield* input.runtime.forkSession({ cwd: input.targetCwd, mcpServers: [] });
-  }).pipe(
-    Effect.timeoutOption(input.requestTimeoutMs),
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.fail(input.timeoutError("session/fork")),
-        onSome: Effect.succeed,
-      }),
-    ),
-  );
+    yield* input.runtime.awaitLoadReplayReady;
+    return yield* input.runtime.forkSession({ cwd: input.targetCwd, mcpServers: [] }).pipe(
+      Effect.timeoutOption(input.requestTimeoutMs),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(input.timeoutError("session/fork")),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+  });
 }

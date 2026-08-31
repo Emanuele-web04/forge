@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { parseWindowsWslUncPath, prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -22,6 +22,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as AcpErrors from "./AcpErrors.ts";
+import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
@@ -45,6 +46,8 @@ import {
 
 const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
+const ACP_LOAD_REPLAY_QUIET_MS = 350;
+const ACP_LOAD_REPLAY_HARD_TIMEOUT_MS = 30_000;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
 
 export type AcpSessionStartupStep =
@@ -173,6 +176,20 @@ export interface AcpSpawnInput {
   readonly env?: NodeJS.ProcessEnv;
 }
 
+/**
+ * ACP agents launched inside WSL must receive a Linux cwd in protocol payloads,
+ * even though the Windows parent identifies the same workspace by its WSL UNC path.
+ */
+export function resolveAcpSessionCwd(
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") {
+    return cwd;
+  }
+  return parseWindowsWslUncPath(cwd)?.linuxPath ?? cwd;
+}
+
 export interface AcpFreshSessionRetryPolicy {
   readonly shouldRetry: (error: AcpErrors.AcpError) => boolean;
   readonly delayMs?: number;
@@ -227,6 +244,11 @@ export interface AcpSessionRuntimeOptions {
   readonly freshSessionRetry?: AcpFreshSessionRetryPolicy;
   /** Overrides for {@link DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS}. */
   readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
+  /** Test/provider policy overrides for session/load transcript replay suppression. */
+  readonly loadReplayPolicy?: {
+    readonly quietMs?: number;
+    readonly hardTimeoutMs?: number;
+  };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -312,9 +334,17 @@ export interface AcpSessionRuntimeShape {
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
   readonly supportsSessionRecovery: Effect.Effect<boolean, AcpErrors.AcpError>;
-  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
-  readonly getConfigOptions: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>>;
-  readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
+  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined, AcpErrors.AcpError>;
+  readonly getConfigOptions: Effect.Effect<
+    ReadonlyArray<Acp.SessionConfigOption>,
+    AcpErrors.AcpError
+  >;
+  readonly getAvailableCommands: Effect.Effect<
+    ReadonlyArray<Acp.AvailableCommand>,
+    AcpErrors.AcpError
+  >;
+  /** Waits for session/load replay suppression to settle or reach its hard cap. */
+  readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
   ) => Effect.Effect<Acp.PromptResponse, AcpErrors.AcpError>;
@@ -737,12 +767,33 @@ const makeAcpSessionRuntime = (
     );
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     // session/load can replay a large history before the consumer attaches; drop
-    // those notifications so they never accumulate in the unbounded queue. For
-    // resumed sessions the gate stays closed past start() and only opens once the
-    // adapter attaches a consumer via getEvents(), because the agent may keep
-    // replaying after replying to session/load. Plain mutable state (not a Ref)
-    // so getEvents() can open the gate synchronously at attach time.
+    // those notifications so they never accumulate in the bounded queue.
     let acceptingSessionUpdates = false;
+    let loadReplayGate: AcpLoadReplayGate | undefined;
+    const awaitLoadReplayReady = Effect.suspend(() => {
+      const gate = loadReplayGate;
+      if (gate === undefined) {
+        return Effect.void;
+      }
+      return gate.attachConsumer.pipe(
+        Effect.andThen(gate.awaitReady),
+        Effect.flatMap((outcome) =>
+          outcome === "ready"
+            ? Effect.void
+            : Effect.fail(
+                new AcpErrors.AcpRequestError({
+                  code: -32603,
+                  errorMessage: "ACP runtime closed while waiting for session/load replay.",
+                }),
+              ),
+        ),
+      );
+    });
+    const getModeState = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(modeStateRef)));
+    const getConfigOptions = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(configOptionsRef)));
+    const getAvailableCommands = awaitLoadReplayReady.pipe(
+      Effect.andThen(Ref.get(availableCommandsRef)),
+    );
     // Counts every parsed event offered into eventQueue (see
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
     // writer per offer, and readers only need a monotonic snapshot.
@@ -816,6 +867,9 @@ const makeAcpSessionRuntime = (
       );
 
     yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
+    // Registered after child teardown so LIFO scope closure releases any first
+    // prompt/fork waiter before waiting for the child process to exit.
+    yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
 
     const acp = yield* makeOfficialSdkClient(child, runtimeScope, options.protocolLogging);
 
@@ -855,25 +909,39 @@ const makeAcpSessionRuntime = (
                 Effect.andThen(resolveConfigOptionUpdateWaiters(update.configOptions)),
               )
             : Effect.void;
-        const rememberBoundedState = rememberCommands.pipe(Effect.andThen(rememberConfigOptions));
-        if (!acceptingSessionUpdates) {
-          // Command and configuration inventories are bounded state, not
+        const rememberMode =
+          update.sessionUpdate === "current_mode_update"
+            ? Ref.update(modeStateRef, (current) =>
+                current === undefined ? current : updateModeState(current, update.currentModeId),
+              )
+            : Effect.void;
+        const rememberBoundedState = rememberCommands.pipe(
+          Effect.andThen(rememberConfigOptions),
+          Effect.andThen(rememberMode),
+        );
+        const processUpdate = (suppress: boolean) => {
+          // Command, configuration, and mode inventories are bounded state, not
           // transcript replay; retain them even while historical session
           // updates are being suppressed.
-          return rememberBoundedState;
-        }
-        return rememberBoundedState.pipe(
-          Effect.andThen(
-            handleSessionUpdate({
-              offer: offerSessionEvent,
-              modeStateRef,
-              toolCallsRef,
-              assistantSegmentRef,
-              runtimeInstanceId,
-              params: notification,
-            }),
-          ),
-        );
+          if (suppress) {
+            return rememberBoundedState;
+          }
+          return rememberBoundedState.pipe(
+            Effect.andThen(
+              handleSessionUpdate({
+                offer: offerSessionEvent,
+                modeStateRef,
+                toolCallsRef,
+                assistantSegmentRef,
+                runtimeInstanceId,
+                params: notification,
+              }),
+            ),
+          );
+        };
+        return loadReplayGate === undefined
+          ? processUpdate(!acceptingSessionUpdates)
+          : loadReplayGate.suppressUpdate.pipe(Effect.flatMap(processUpdate));
       }),
     );
 
@@ -1006,7 +1074,8 @@ const makeAcpSessionRuntime = (
       configId: string,
       value: string | boolean,
     ): Effect.Effect<Acp.SetSessionConfigOptionResponse, AcpErrors.AcpError> =>
-      validateConfigOptionValue(configId, value).pipe(
+      awaitLoadReplayReady.pipe(
+        Effect.andThen(validateConfigOptionValue(configId, value)),
         Effect.flatMap(() => getStartedState),
         Effect.flatMap((started) =>
           Ref.get(configOptionsRef).pipe(
@@ -1110,6 +1179,7 @@ const makeAcpSessionRuntime = (
       );
 
       const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+      const sessionCwd = resolveAcpSessionCwd(options.cwd);
 
       let sessionId: string;
       let sessionSetupResult:
@@ -1121,7 +1191,7 @@ const makeAcpSessionRuntime = (
       if (options.resumeSessionId) {
         const resumePayload = {
           sessionId: options.resumeSessionId,
-          cwd: options.cwd,
+          cwd: sessionCwd,
           mcpServers,
           ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.ResumeSessionRequest;
@@ -1148,7 +1218,7 @@ const makeAcpSessionRuntime = (
           : (() => {
               const loadPayload = {
                 sessionId: options.resumeSessionId,
-                cwd: options.cwd,
+                cwd: sessionCwd,
                 mcpServers,
                 ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
               } satisfies Acp.LoadSessionRequest;
@@ -1169,7 +1239,7 @@ const makeAcpSessionRuntime = (
         // agent output emitted while the request is in flight is buffered.
         acceptingSessionUpdates = true;
         const createPayload = {
-          cwd: options.cwd,
+          cwd: sessionCwd,
           mcpServers,
           ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.NewSessionRequest;
@@ -1197,6 +1267,25 @@ const makeAcpSessionRuntime = (
       if (resumedExistingSession) {
         yield* Ref.set(toolCallsRef, new Map());
         yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+      }
+
+      if (sessionSetupMethod === "load") {
+        const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
+        const hardTimeoutMs =
+          options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
+        loadReplayGate = yield* makeAcpLoadReplayGate({
+          quietMs,
+          hardTimeoutMs,
+          onHardTimeout: ({ elapsedMs }) =>
+            Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
+              sessionId,
+              command: options.spawn.command,
+              elapsedMs,
+              quietMs,
+              hardTimeoutMs,
+            }),
+        });
+        yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
       }
 
       const nextState = {
@@ -1259,16 +1348,20 @@ const makeAcpSessionRuntime = (
       start: () => start,
       awaitExit: awaitAcpChildExit(child),
       getEvents: () => {
-        // Attaching a consumer opens the session/update gate: from here on the
-        // queue is drained, so accepting notifications can no longer grow it
-        // without bound (see acceptingSessionUpdates above).
+        const gate = loadReplayGate;
+        if (gate !== undefined) {
+          return Stream.fromEffect(gate.attachConsumer).pipe(
+            Stream.flatMap(() => Stream.fromQueue(eventQueue)),
+          );
+        }
         acceptingSessionUpdates = true;
         return Stream.fromQueue(eventQueue);
       },
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
-      getModeState: Ref.get(modeStateRef),
-      getConfigOptions: Ref.get(configOptionsRef),
-      getAvailableCommands: Ref.get(availableCommandsRef),
+      getModeState,
+      getConfigOptions,
+      getAvailableCommands,
+      awaitLoadReplayReady,
       prompt: (payload) =>
         getStartedState.pipe(
           Effect.flatMap((started) => {
@@ -1276,10 +1369,13 @@ const makeAcpSessionRuntime = (
               sessionId: started.sessionId,
               ...payload,
             } satisfies Acp.PromptRequest;
-            return closeActiveAssistantSegment({
-              offer: offerSessionEvent,
-              assistantSegmentRef,
-            }).pipe(
+            return awaitLoadReplayReady.pipe(
+              Effect.andThen(
+                closeActiveAssistantSegment({
+                  offer: offerSessionEvent,
+                  assistantSegmentRef,
+                }),
+              ),
               Effect.andThen(
                 runLoggedRequest(
                   "session/prompt",
@@ -1300,12 +1396,12 @@ const makeAcpSessionRuntime = (
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
+        getModeState.pipe(
           Effect.flatMap((modeState) => {
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies Acp.SetSessionModeResponse);
             }
-            return Ref.get(configOptionsRef).pipe(
+            return getConfigOptions.pipe(
               Effect.map((options) =>
                 options.find(
                   (option) =>
@@ -1349,10 +1445,14 @@ const makeAcpSessionRuntime = (
               ...payload,
               sessionId: started.sessionId,
             } satisfies Acp.ForkSessionRequest;
-            return runLoggedRequest(
-              "session/fork",
-              requestPayload,
-              acp.agent.forkSession(requestPayload),
+            return awaitLoadReplayReady.pipe(
+              Effect.andThen(
+                runLoggedRequest(
+                  "session/fork",
+                  requestPayload,
+                  acp.agent.forkSession(requestPayload),
+                ),
+              ),
             );
           }),
         ),

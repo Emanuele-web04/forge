@@ -2,7 +2,10 @@ import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { ServerConfig } from "../../config";
 import { DeviceService } from "../../device/Services/DeviceService";
+import { GitCore } from "../../git/Services/GitCore";
+import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager } from "../../terminal/Services/Manager";
@@ -106,6 +109,27 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const serverConfig = yield* ServerConfig;
+  const git = yield* GitCore;
+
+  const pruneManagedWorktreesAfterLifecycle = (context: {
+    readonly eventType: ThreadDeletedEvent["type"];
+    readonly threadId?: string;
+  }) =>
+    pruneProjectedArchivedManagedWorktrees({
+      homeDir: serverConfig.homeDir,
+      worktreesDir: serverConfig.worktreesDir,
+      snapshotQuery: projectionSnapshotQuery,
+      git,
+    }).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("thread lifecycle cleanup skipped managed worktree prune", {
+          ...context,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
 
   const refreshCommandReadModelAfterPurge = (threadId: string) =>
     orchestrationEngine.refreshCommandReadModel().pipe(
@@ -256,6 +280,12 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
+    // Reclaim while the soft-deleted projection row still names the worktree.
+    // Dirty managed worktrees are snapped and left with a warning (no force).
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
         threadId,
@@ -265,11 +295,11 @@ const make = Effect.gen(function* () {
     yield* purgeThreadData(event);
   });
 
-  const processThreadLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
+  const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
     event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
 
-  const processThreadLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
-    processThreadLifecycleEvent(event).pipe(
+  const processLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
+    processLifecycleEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -282,7 +312,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadLifecycleEventSafely, {
+  const worker = yield* makeDrainableWorker(processLifecycleEventSafely, {
     capacity: THREAD_LIFECYCLE_REACTOR_CAPACITY,
   });
 
@@ -306,7 +336,16 @@ const make = Effect.gen(function* () {
                   cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)).pipe(
                     Effect.flatMap((cleaned) =>
                       cleaned
-                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId))
+                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId)).pipe(
+                            Effect.flatMap((fenced) =>
+                              fenced
+                                ? pruneManagedWorktreesAfterLifecycle({
+                                    eventType: "thread.deleted",
+                                    threadId,
+                                  }).pipe(Effect.as(true))
+                                : Effect.succeed(false),
+                            ),
+                          )
                         : Effect.succeed(false),
                     ),
                   ),

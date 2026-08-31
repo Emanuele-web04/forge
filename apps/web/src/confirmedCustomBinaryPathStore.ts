@@ -6,23 +6,14 @@
 // Exports: load/save helpers for the confirmed-path record.
 
 import type { ProviderKind } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { isPlainObject } from "./persistedRecord";
 
 const STORAGE_KEY = "synara:confirmed-custom-binary-paths:v1";
 
-// Mirror of the ProviderKind literal union; the explicit annotation makes the
-// compiler reject this list if a new provider is added without updating it.
-const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set<ProviderKind>([
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "antigravity",
-  "grok",
-  "droid",
-  "kilo",
-  "opencode",
-  "pi",
-]);
+const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set(
+  PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind),
+);
 
 function isProviderKind(value: string): value is ProviderKind {
   return PROVIDER_KINDS.has(value as ProviderKind);

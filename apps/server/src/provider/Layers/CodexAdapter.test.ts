@@ -462,6 +462,37 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps session/started to a canonical session.started runtime event", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-started"),
+        kind: "session",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "session/started",
+        threadId: asThreadId("thread-1"),
+        message: "Codex session ready for thread native-thread-1",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.started");
+      if (firstEvent.value.type !== "session.started") {
+        return;
+      }
+      assert.equal(
+        firstEvent.value.payload.message,
+        "Codex session ready for thread native-thread-1",
+      );
+    }),
+  );
+
   it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -614,10 +645,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       if (events[0]?.type === "content.delta") {
         assert.equal(events[0].payload.streamKind, "reasoning_text");
         assert.equal(events[0].payload.contentIndex, 2);
+        assert.deepEqual(events[0].raw?.payload, {});
       }
       if (events[1]?.type === "content.delta") {
         assert.equal(events[1].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[1].payload.summaryIndex, 1);
+        assert.deepEqual(events[1].raw?.payload, {});
       }
     }),
   );
@@ -1403,6 +1436,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[2].itemId, "rs_reasoning_1");
         assert.equal(events[2].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[2].payload.summaryIndex, 0);
+        assert.deepEqual(events[2].raw?.payload, {});
       }
 
       assert.equal(events[3]?.type, "task.completed");

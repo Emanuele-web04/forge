@@ -74,11 +74,13 @@ export function resolveClaudeCredentialKeepaliveIntervalMs(env: NodeJS.ProcessEn
 async function nudgeClaudeTokenRefresh(
   binaryPath: string,
   homeDir: string | undefined,
+  signal: AbortSignal,
 ): Promise<void> {
-  const release = await acquireClaudeAuthStatusLock();
+  const release = await acquireClaudeAuthStatusLockWithSignal(signal);
   try {
     await execFileAsync(binaryPath, [...CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS], {
       timeout: COMMAND_TIMEOUT_MS,
+      signal,
       env: buildClaudeProcessEnv(homeDir ? { homeDir } : undefined),
     });
   } finally {
@@ -86,8 +88,49 @@ async function nudgeClaudeTokenRefresh(
   }
 }
 
+function acquireClaudeAuthStatusLockWithSignal(signal: AbortSignal): Promise<() => void> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void acquireClaudeAuthStatusLock().then(
+      (release) => {
+        if (settled) {
+          release();
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(release);
+      },
+      (cause) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(cause);
+      },
+    );
+  });
+}
+
 export interface ClaudeCredentialKeepaliveHandle {
-  readonly stop: () => void;
+  readonly stop: () => Promise<void>;
+}
+
+export interface ClaudeCredentialKeepaliveController {
+  readonly reconcile: (input: {
+    readonly enabled: boolean;
+    readonly binaryPath?: string;
+  }) => Promise<void>;
+  readonly stop: () => Promise<void>;
 }
 
 export function startClaudeCredentialKeepalive(input?: {
@@ -96,40 +139,52 @@ export function startClaudeCredentialKeepalive(input?: {
   readonly binaryPath?: string;
   readonly homeDir?: string;
   readonly log?: (message: string) => void;
+  readonly runAuthStatus?: (input: {
+    readonly binaryPath: string;
+    readonly homeDir: string | undefined;
+    readonly signal: AbortSignal;
+  }) => Promise<void>;
 }): ClaudeCredentialKeepaliveHandle {
   const platform = input?.platform ?? process.platform;
   const env = input?.env ?? process.env;
   const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(input?.binaryPath);
   const homeDir = input?.homeDir;
   const log = input?.log ?? (() => {});
+  const runAuthStatus =
+    input?.runAuthStatus ??
+    ((input) => nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.signal));
 
   // Only run when explicitly enabled. The check touches Claude Code auth data, so
   // Synara should not do it as background work merely because the app opened.
   if (!isClaudeCredentialKeepaliveEnabled({ platform, env })) {
-    return { stop: () => {} };
+    return { stop: async () => {} };
   }
 
   const intervalMs = resolveClaudeCredentialKeepaliveIntervalMs(env);
-  let inFlight = false;
+  const abortController = new AbortController();
+  let stopped = false;
+  let activeTick: Promise<void> | null = null;
+  let stopPromise: Promise<void> | null = null;
 
-  const tick = async (): Promise<void> => {
-    if (inFlight) {
-      return;
+  const tick = (): Promise<void> => {
+    if (stopped || activeTick) {
+      return activeTick ?? Promise.resolve();
     }
-    inFlight = true;
-    try {
-      await nudgeClaudeTokenRefresh(binaryPath, homeDir);
-    } catch (cause) {
-      // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure
-      // must never crash the server. Keep it quiet since it self-heals on the next tick.
-      log(
-        `[claude-keepalive] token refresh nudge failed (non-fatal): ${
-          cause instanceof Error ? cause.message : String(cause)
-        }`,
-      );
-    } finally {
-      inFlight = false;
-    }
+    activeTick = runAuthStatus({ binaryPath, homeDir, signal: abortController.signal })
+      .catch((cause) => {
+        if (abortController.signal.aborted) return;
+        // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure
+        // must never crash the server. Keep it quiet since it self-heals on the next tick.
+        log(
+          `[claude-keepalive] token refresh nudge failed (non-fatal): ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+        );
+      })
+      .finally(() => {
+        activeTick = null;
+      });
+    return activeTick;
   };
 
   const timer = setInterval(() => void tick(), intervalMs);
@@ -142,6 +197,70 @@ export function startClaudeCredentialKeepalive(input?: {
   void tick();
   log(`[claude-keepalive] started (every ${intervalMs / 60_000}m, macOS)`);
   return {
-    stop: () => clearInterval(timer),
+    stop: () => {
+      if (stopPromise) return stopPromise;
+      stopped = true;
+      clearInterval(timer);
+      const inFlight = activeTick;
+      abortController.abort();
+      stopPromise = inFlight ?? Promise.resolve();
+      return stopPromise;
+    },
+  };
+}
+
+export function createClaudeCredentialKeepaliveController(input?: {
+  readonly platform?: NodeJS.Platform;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDir?: string;
+  readonly log?: (message: string) => void;
+  readonly start?: typeof startClaudeCredentialKeepalive;
+}): ClaudeCredentialKeepaliveController {
+  const start = input?.start ?? startClaudeCredentialKeepalive;
+  let active: {
+    readonly binaryPath: string;
+    readonly handle: ClaudeCredentialKeepaliveHandle;
+  } | null = null;
+  let transitionQueue = Promise.resolve();
+
+  const stopActive = async (): Promise<void> => {
+    const handle = active?.handle;
+    active = null;
+    await handle?.stop();
+  };
+
+  const enqueueTransition = (transition: () => Promise<void>): Promise<void> => {
+    const queued = transitionQueue.then(transition, transition);
+    transitionQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  };
+
+  return {
+    reconcile: (settings) =>
+      enqueueTransition(async () => {
+        if (!settings.enabled) {
+          await stopActive();
+          return;
+        }
+        const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(settings.binaryPath);
+        if (active?.binaryPath === binaryPath) {
+          return;
+        }
+        await stopActive();
+        active = {
+          binaryPath,
+          handle: start({
+            ...(input?.platform ? { platform: input.platform } : {}),
+            ...(input?.env ? { env: input.env } : {}),
+            binaryPath,
+            ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
+            ...(input?.log ? { log: input.log } : {}),
+          }),
+        };
+      }),
+    stop: () => enqueueTransition(stopActive),
   };
 }

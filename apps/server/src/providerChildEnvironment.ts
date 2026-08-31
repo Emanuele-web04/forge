@@ -10,7 +10,6 @@ export type ProviderChildKind =
   | "cursor"
   | "droid"
   | "grok"
-  | "kilo"
   | "opencode"
   | "pi";
 
@@ -24,11 +23,24 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",
+  "OPENAI_API_KEY",
   "XAI_API_KEY",
   "GROK_CODE_XAI_API_KEY",
   "FACTORY_API_KEY",
   "CURSOR_API_KEY",
+  "DOCKER_AUTH_CONFIG",
 ]);
+
+export function registerProviderCredentialKey(key: string): void {
+  const normalized = key.trim().toUpperCase();
+  if (/^[A-Z0-9_.-]+$/u.test(normalized)) {
+    PROVIDER_CREDENTIAL_KEYS.add(normalized);
+  }
+}
+
+export function isProviderCredentialKey(key: string): boolean {
+  return PROVIDER_CREDENTIAL_KEYS.has(key.trim().toUpperCase());
+}
 
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {
   antigravity: new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]),
@@ -47,7 +59,6 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",
-  kilo: "all",
   opencode: "all",
   pi: "all",
 };
@@ -91,9 +102,9 @@ export function buildProviderChildEnvironment(input: {
       continue;
     }
     if (
-      PROVIDER_CREDENTIAL_KEYS.has(key) &&
+      isProviderCredentialKey(key) &&
       credentialGrants !== "all" &&
-      !credentialGrants.has(key)
+      !credentialGrants.has(key.toUpperCase())
     ) {
       continue;
     }

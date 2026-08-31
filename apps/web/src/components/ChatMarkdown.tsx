@@ -16,6 +16,7 @@ import React, {
   use,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -38,8 +39,16 @@ import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
-import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import { useQuery } from "@tanstack/react-query";
+import { projectResolveWorkspaceFileReferenceQueryOptions } from "../lib/projectReactQuery";
+import {
+  extractAbsoluteFilesystemPaths,
+  resolveChatFileChipTarget,
+  resolveMarkdownFileLinkTarget,
+  rewriteMarkdownFileUriHref,
+} from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -64,6 +73,13 @@ import {
   parseComposerChipSegment,
 } from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
+import { applyActiveChatFindMatch, type ThreadFindRange } from "./chat/threadFind.logic";
+import {
+  ChatFindRenderProvider,
+  FindAwareCodeFallback,
+  FindAwareMarkdownText,
+  FindAwareShikiHtml,
+} from "./ChatMarkdownFind";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -106,6 +122,10 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
+  /** Case-insensitive substring to wrap while in-thread find is open. */
+  findQuery?: string | undefined;
+  /** Active occurrence in this markdown body; other hits stay dimmer. */
+  findActiveRange?: ThreadFindRange | null | undefined;
   /**
    * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
    * survive the way they were typed), no math/KaTeX and no literal-dollar
@@ -124,6 +144,11 @@ interface ChatMarkdownProps {
    * length- and newline-preserving). Without it checkboxes render read-only.
    */
   onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
+  /**
+   * Absolute paths already observed on this turn's tool calls. A relative
+   * inline-code chip uses one of these when the match is unique.
+   */
+  knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -156,6 +181,26 @@ type MarkdownRemarkPlugins = NonNullable<
 type MarkdownRehypePlugins = NonNullable<
   React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]
 >;
+interface ParsedMarkdownProps {
+  text: string;
+  remarkPlugins: MarkdownRemarkPlugins;
+  rehypePlugins: MarkdownRehypePlugins;
+  components: Components;
+}
+
+const ParsedMarkdown = memo(function ParsedMarkdown(props: ParsedMarkdownProps) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={props.remarkPlugins}
+      rehypePlugins={props.rehypePlugins}
+      components={props.components}
+      urlTransform={markdownUrlTransform}
+    >
+      {props.text}
+    </ReactMarkdown>
+  );
+});
+
 const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
@@ -226,11 +271,22 @@ type MarkdownParentNode = {
   children?: MarkdownNode[];
 };
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
-type RenderableThreadMarker = ThreadMarker & { className: string };
-type ThreadMarkerFragmentContinuity = {
+const CHAT_FIND_TEXT_TAG_NAME = "chat-find-text";
+const CHAT_FIND_TEXT_START_ATTRIBUTE = "data-chat-find-text-start";
+type TextRangeFragmentContinuity = {
   readonly continuesBefore: boolean;
   readonly continuesAfter: boolean;
 };
+
+type MarkdownRangeDecoration = {
+  startOffset: number;
+  endOffset: number;
+  nodeType: string;
+  classNameFor: (continuity: TextRangeFragmentContinuity) => string;
+  properties: Record<string, string>;
+};
+
+type RenderableThreadMarker = ThreadMarker & { className: string };
 
 // The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
 // it never re-parses the markdown tree; this className is the stable, parse-time-only part.
@@ -245,15 +301,16 @@ function markerClassNameFor(marker: ThreadMarker) {
     .join(" ");
 }
 
-// Joins marker fragments split by markdown nodes so bold/code boundaries still read as one mark.
-function markerFragmentClassNameFor(
-  marker: RenderableThreadMarker,
-  continuity: ThreadMarkerFragmentContinuity,
+function rangeFragmentClassName(
+  className: string,
+  continuity: TextRangeFragmentContinuity,
+  continuesBeforeClass: string,
+  continuesAfterClass: string,
 ): string {
   return [
-    marker.className,
-    continuity.continuesBefore ? "thread-marker-continues-before" : "",
-    continuity.continuesAfter ? "thread-marker-continues-after" : "",
+    className,
+    continuity.continuesBefore ? continuesBeforeClass : "",
+    continuity.continuesAfter ? continuesAfterClass : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -285,20 +342,92 @@ function normalizeRenderableMarkers(input: {
   return result;
 }
 
-function createThreadMarkerRemarkPlugin(input: {
+function threadMarkerDecorations(input: {
   text: string;
   markers: readonly ThreadMarker[] | undefined;
-}) {
-  const markers = normalizeRenderableMarkers(input);
-  return () => (tree: MarkdownNode) => {
-    if (markers.length === 0) {
-      return;
+}): MarkdownRangeDecoration[] {
+  return normalizeRenderableMarkers(input).map((marker) => ({
+    startOffset: marker.startOffset,
+    endOffset: marker.endOffset,
+    nodeType: "threadMarker",
+    classNameFor: (continuity) =>
+      rangeFragmentClassName(
+        marker.className,
+        continuity,
+        "thread-marker-continues-before",
+        "thread-marker-continues-after",
+      ),
+    properties: {
+      "data-thread-marker-id": marker.id,
+      "data-thread-marker-style": marker.style,
+      "data-thread-marker-color": marker.color,
+    },
+  }));
+}
+
+function collapseOverlappingDecorations(
+  decorations: readonly MarkdownRangeDecoration[],
+): MarkdownRangeDecoration[] {
+  const result: MarkdownRangeDecoration[] = [];
+  let previousEnd = -1;
+  for (const decoration of decorations.toSorted(
+    (left, right) => left.startOffset - right.startOffset || right.endOffset - left.endOffset,
+  )) {
+    if (decoration.startOffset < previousEnd) {
+      continue;
     }
-    applyThreadMarkersToNode(tree, markers);
+    if (decoration.endOffset <= decoration.startOffset) {
+      continue;
+    }
+    result.push(decoration);
+    previousEnd = decoration.endOffset;
+  }
+  return result;
+}
+
+function createTextRangeRemarkPlugin(decorations: readonly MarkdownRangeDecoration[]) {
+  const usable = collapseOverlappingDecorations(decorations);
+  return () => (tree: MarkdownNode) => {
+    if (usable.length > 0) {
+      applyRangeDecorationsToNode(tree, usable);
+    }
+    wrapFindableTextNodes(tree);
   };
 }
 
-function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly RenderableThreadMarker[]) {
+function wrapFindableTextNodes(node: MarkdownNode): void {
+  if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
+    return;
+  }
+  const parent = node as MarkdownParentNode;
+  parent.children = (parent.children ?? []).map((child) => {
+    if (child && typeof child === "object" && "type" in child && child.type === "text") {
+      return wrapFindableTextNode(child as MarkdownTextNode);
+    }
+    wrapFindableTextNodes(child);
+    return child;
+  });
+}
+
+function wrapFindableTextNode(node: MarkdownTextNode): MarkdownNode {
+  const startOffset = node.position?.start?.offset;
+  if (startOffset === undefined || node.value.length === 0) {
+    return node;
+  }
+  return {
+    type: "chatFindText",
+    data: {
+      hName: CHAT_FIND_TEXT_TAG_NAME,
+      hProperties: { [CHAT_FIND_TEXT_START_ATTRIBUTE]: String(startOffset) },
+    },
+    children: [node],
+  };
+}
+
+function applyRangeDecorationsToNode(
+  node: MarkdownNode,
+  decorations: readonly MarkdownRangeDecoration[],
+) {
   if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
     return;
   }
@@ -307,71 +436,96 @@ function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly Renderab
   // The guard above already proved `children` is an array; `?? []` only satisfies the optional type.
   parent.children = (parent.children ?? []).flatMap((child) => {
     if (child && typeof child === "object" && "type" in child && child.type === "text") {
-      return splitTextNodeWithMarkers(child as MarkdownTextNode, markers);
+      return splitTextNodeWithRangeDecorations(child as MarkdownTextNode, decorations);
     }
-    applyThreadMarkersToNode(child, markers);
+    applyRangeDecorationsToNode(child, decorations);
     return [child];
   });
 }
 
-function splitTextNodeWithMarkers(
+function splitTextNodeWithRangeDecorations(
   node: MarkdownTextNode,
-  markers: readonly RenderableThreadMarker[],
+  decorations: readonly MarkdownRangeDecoration[],
 ): MarkdownNode[] {
   const startOffset = node.position?.start?.offset;
   const endOffset = node.position?.end?.offset;
   if (startOffset === undefined || endOffset === undefined) {
     return [node];
   }
-  const overlappingMarkers: RenderableThreadMarker[] = [];
-  for (const marker of markers) {
-    if (marker.endOffset <= startOffset) {
+  const overlapping: MarkdownRangeDecoration[] = [];
+  for (const decoration of decorations) {
+    if (decoration.endOffset <= startOffset) {
       continue;
     }
-    if (marker.startOffset >= endOffset) {
+    if (decoration.startOffset >= endOffset) {
       break;
     }
-    overlappingMarkers.push(marker);
+    overlapping.push(decoration);
   }
-  if (overlappingMarkers.length === 0) {
+  if (overlapping.length === 0) {
     return [node];
   }
 
   const nodes: MarkdownNode[] = [];
   let cursor = 0;
-  for (const marker of overlappingMarkers) {
-    const markerStart = Math.max(0, marker.startOffset - startOffset);
-    const markerEnd = Math.min(node.value.length, marker.endOffset - startOffset);
-    if (markerStart < cursor || markerEnd > node.value.length) {
+  for (const decoration of overlapping) {
+    const rangeStart = Math.max(0, decoration.startOffset - startOffset);
+    const rangeEnd = Math.min(node.value.length, decoration.endOffset - startOffset);
+    if (rangeStart < cursor || rangeEnd > node.value.length) {
       continue;
     }
-    const absoluteFragmentStart = startOffset + markerStart;
-    const absoluteFragmentEnd = startOffset + markerEnd;
-    if (markerStart > cursor) {
-      nodes.push({ type: "text", value: node.value.slice(cursor, markerStart) });
+    const absoluteFragmentStart = startOffset + rangeStart;
+    const absoluteFragmentEnd = startOffset + rangeEnd;
+    if (rangeStart > cursor) {
+      nodes.push(
+        createPositionedTextNode(
+          node.value.slice(cursor, rangeStart),
+          startOffset + cursor,
+          absoluteFragmentStart,
+        ),
+      );
     }
     nodes.push({
-      type: "threadMarker",
+      type: decoration.nodeType,
       data: {
         hName: "span",
         hProperties: {
-          className: markerFragmentClassNameFor(marker, {
-            continuesBefore: absoluteFragmentStart > marker.startOffset,
-            continuesAfter: absoluteFragmentEnd < marker.endOffset,
+          className: decoration.classNameFor({
+            continuesBefore: absoluteFragmentStart > decoration.startOffset,
+            continuesAfter: absoluteFragmentEnd < decoration.endOffset,
           }),
-          "data-thread-marker-id": marker.id,
-          "data-thread-marker-style": marker.style,
-          "data-thread-marker-color": marker.color,
+          ...decoration.properties,
         },
       },
-      children: [{ type: "text", value: node.value.slice(markerStart, markerEnd) }],
+      children: [
+        createPositionedTextNode(
+          node.value.slice(rangeStart, rangeEnd),
+          absoluteFragmentStart,
+          absoluteFragmentEnd,
+        ),
+      ],
     });
-    cursor = markerEnd;
+    cursor = rangeEnd;
   }
   if (cursor < node.value.length) {
-    nodes.push({ type: "text", value: node.value.slice(cursor) });
+    nodes.push(createPositionedTextNode(node.value.slice(cursor), startOffset + cursor, endOffset));
   }
   return nodes.length > 0 ? nodes : [node];
+}
+
+function createPositionedTextNode(
+  value: string,
+  startOffset: number,
+  endOffset: number,
+): MarkdownTextNode {
+  return {
+    type: "text",
+    value,
+    position: {
+      start: { offset: startOffset },
+      end: { offset: endOffset },
+    },
+  };
 }
 const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
 const ALL_CAPS_DOLLAR_IDENTIFIER_REGEX = /^[A-Z][A-Z0-9_]{1,31}$/;
@@ -748,15 +902,51 @@ function inlineCodeFilePath(raw: string): string | null {
   // Strip a pair of surrounding quotes/backticks the author may have wrapped the
   // path in (e.g. `'src/data/social-metrics.ts'`).
   const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
-  if (
-    value.length === 0 ||
-    value.length > INLINE_CODE_FILE_PATH_MAX_LENGTH ||
-    /\s/.test(value) ||
-    value.includes("://")
-  ) {
+  if (value.length === 0 || /\s/.test(value) || value.includes("://")) {
     return null;
   }
-  return pathLooksLikeKnownFile(value) ? value : null;
+  const withoutPosition = value.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  // Absolute local files and directories (`/Users/…/annotate-pr`) are chips
+  // even without a known filename extension. Relative names still need a
+  // recognizable file so ordinary tokens stay code.
+  if (resolveMarkdownFileLinkTarget(withoutPosition)) {
+    return value;
+  }
+  if (withoutPosition.length > INLINE_CODE_FILE_PATH_MAX_LENGTH) {
+    return null;
+  }
+  return pathLooksLikeKnownFile(withoutPosition) ? value : null;
+}
+
+function VerifiedWorkspaceFileChip(props: {
+  rawReference: string;
+  cwd: string;
+  theme: "light" | "dark";
+  label?: ReactNode;
+  href?: string;
+}) {
+  const relativePath = props.rawReference.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  const query = useQuery(
+    projectResolveWorkspaceFileReferenceQueryOptions({
+      cwd: props.cwd,
+      relativePath,
+    }),
+  );
+  const fallback = <code>{props.label ?? relativePath}</code>;
+  if (query.isPending || query.isError || query.data === undefined) {
+    return fallback;
+  }
+  if (query.data === null) {
+    return fallback;
+  }
+  return (
+    <OpenableFileChip
+      targetPath={query.data}
+      theme={props.theme}
+      {...(props.label !== undefined ? { label: props.label } : {})}
+      {...(props.href ? { href: props.href } : {})}
+    />
+  );
 }
 
 // Shared openable file chip: the same mention-chip UI (file icon + medium label)
@@ -935,6 +1125,7 @@ interface SuspenseShikiCodeBlockProps {
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
+  sourceOffset: number;
 }
 
 type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
@@ -945,12 +1136,47 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
+// While a message streams, its open code block grows on every reveal commit (~25/s) and
+// each commit re-tokenizes the whole block — quadratic in block length and the single
+// largest renderer cost of a code-heavy turn. Highlight at most this often while
+// streaming; the prefix already on screen stays put and the trailing value always lands,
+// so the block converges to exactly the settled highlight.
+// Each highlight costs roughly linearly in block length, so the cadence also stretches
+// with size: small blocks stay at the base interval, a block at
+// `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
+// `STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS`, keeping per-second tokenization work bounded.
+const STREAMING_CODE_HIGHLIGHT_INTERVAL_MS = 160;
+const STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS = 1_000;
+const STREAMING_CODE_HIGHLIGHT_BASE_CHARS = 8_000;
+const STREAMING_CODE_HIGHLIGHT_SLOW_CHARS = 80_000;
+
+export function streamingCodeHighlightIntervalMs(codeLength: number): number {
+  if (codeLength <= STREAMING_CODE_HIGHLIGHT_BASE_CHARS) {
+    return STREAMING_CODE_HIGHLIGHT_INTERVAL_MS;
+  }
+  const progress = Math.min(
+    1,
+    (codeLength - STREAMING_CODE_HIGHLIGHT_BASE_CHARS) /
+      (STREAMING_CODE_HIGHLIGHT_SLOW_CHARS - STREAMING_CODE_HIGHLIGHT_BASE_CHARS),
+  );
+  return Math.round(
+    STREAMING_CODE_HIGHLIGHT_INTERVAL_MS +
+      progress * (STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS - STREAMING_CODE_HIGHLIGHT_INTERVAL_MS),
+  );
+}
+
 function SuspenseShikiCodeBlock({
   language,
-  code,
+  code: liveCode,
   themeName,
   isStreaming,
+  sourceOffset,
 }: SuspenseShikiCodeBlockProps) {
+  const code = useThrottledStreamingValue(
+    liveCode,
+    isStreaming,
+    streamingCodeHighlightIntervalMs(liveCode.length),
+  );
   const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
   return (
     <LoadedShikiCodeBlock
@@ -959,6 +1185,7 @@ function SuspenseShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
+      sourceOffset={sourceOffset}
     />
   );
 }
@@ -969,6 +1196,7 @@ function LoadedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  sourceOffset,
 }: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
   const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
   const cachedHighlightedHtml = !isStreaming
@@ -976,12 +1204,7 @@ function LoadedShikiCodeBlock({
     : null;
 
   if (cachedHighlightedHtml != null) {
-    return (
-      <div
-        className="chat-markdown-shiki"
-        dangerouslySetInnerHTML={{ __html: cachedHighlightedHtml }}
-      />
-    );
+    return <FindAwareShikiHtml html={cachedHighlightedHtml} sourceOffset={sourceOffset} />;
   }
 
   // The uncached path lives in its own component: an early return above must
@@ -994,6 +1217,7 @@ function LoadedShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
+      sourceOffset={sourceOffset}
     />
   );
 }
@@ -1005,6 +1229,7 @@ function UncachedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  sourceOffset,
 }: SuspenseShikiCodeBlockProps & {
   syntaxHighlighting: SyntaxHighlightingModule;
   cacheKey: string;
@@ -1023,9 +1248,7 @@ function UncachedShikiCodeBlock({
     }
   }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
 
-  return (
-    <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
-  );
+  return <FindAwareShikiHtml html={highlightedHtml} sourceOffset={sourceOffset} />;
 }
 
 function ChatMarkdown({
@@ -1036,7 +1259,10 @@ function ChatMarkdown({
   style,
   onImageExpand,
   markers,
+  findQuery: findQueryProp,
+  findActiveRange: findActiveRangeProp,
   onTaskToggle,
+  knownAbsoluteFilePaths: knownAbsoluteFilePathsProp,
   variant: variantProp,
   mentionReferences,
   terminalContexts,
@@ -1047,9 +1273,21 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const findQuery = findQueryProp ?? "";
+  const findActiveRange = findActiveRangeProp ?? null;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
+  const extractedAbsoluteFilePaths = useMemo(() => extractAbsoluteFilesystemPaths(text), [text]);
+  const knownAbsoluteFilePaths = useMemo(() => {
+    if (
+      (knownAbsoluteFilePathsProp === undefined || knownAbsoluteFilePathsProp.length === 0) &&
+      extractedAbsoluteFilePaths.length === 0
+    ) {
+      return undefined;
+    }
+    return [...new Set([...(knownAbsoluteFilePathsProp ?? []), ...extractedAbsoluteFilePaths])];
+  }, [extractedAbsoluteFilePaths, knownAbsoluteFilePathsProp]);
   // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
   // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
   // streaming or under reduced motion. Governs cadence only; the deferred value below still
@@ -1072,17 +1310,17 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  const sourceText = useMemo(
+    () => (isUserVariant ? text : repairMarkdownTableDelimiters(text)),
+    [isUserVariant, text],
+  );
   // Marker offsets are applied against mdast positions, which come from the
   // repaired text — validate them against the same string. A marker recorded
   // after a repaired delimiter row fails its `selectedText` check and is
   // dropped instead of highlighting a shifted range.
-  const threadMarkerRemarkPlugin = useMemo(
-    () =>
-      markers && markers.length > 0
-        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers })
-        : null,
-    [markers, text],
-  );
+  const rangeDecorationRemarkPlugin = useMemo(() => {
+    return createTextRangeRemarkPlugin(threadMarkerDecorations({ text: sourceText, markers }));
+  }, [markers, sourceText]);
   const composerChipsRemarkPlugin = useMemo(
     () =>
       isUserVariant
@@ -1098,13 +1336,19 @@ function ChatMarkdown({
   );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
     if (composerChipsRemarkPlugin) {
-      return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
+      return [
+        ...USER_MARKDOWN_REMARK_PLUGINS,
+        composerChipsRemarkPlugin,
+        rangeDecorationRemarkPlugin,
+      ];
     }
-    return threadMarkerRemarkPlugin
-      ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
-      : MARKDOWN_REMARK_PLUGINS;
-  }, [composerChipsRemarkPlugin, threadMarkerRemarkPlugin]);
+    return [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin];
+  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    applyActiveChatFindMatch(rootRef.current, findActiveRange);
+  }, [findActiveRange, findQuery, renderedText]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, children, ...props }) {
@@ -1124,7 +1368,9 @@ function ChatMarkdown({
             return <InlineLinkChip url={restoredHref} interactive />;
           }
         }
-        const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
+        const targetPath = isExternalHttp
+          ? null
+          : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePaths);
         if (!targetPath) {
           return (
             <a
@@ -1145,9 +1391,6 @@ function ChatMarkdown({
           );
         }
 
-        // Local file links keep their openable behavior but adopt the shared
-        // mention-chip UI (file icon + medium label). The link text is preserved
-        // as the label.
         return (
           <OpenableFileChip
             targetPath={targetPath}
@@ -1157,7 +1400,7 @@ function ChatMarkdown({
           />
         );
       },
-      pre({ node: _node, children, ...props }) {
+      pre({ node, children, ...props }) {
         const codeBlock = extractCodeBlock(children);
         if (!codeBlock) {
           return <pre {...props}>{children}</pre>;
@@ -1165,32 +1408,71 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
+        const blockStart = node?.position?.start?.offset ?? 0;
+        const codeOffsetInSource = sourceText.indexOf(code, blockStart);
+        const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
+        const highlightedFallback = (
+          <pre {...props}>
+            <FindAwareCodeFallback code={code} sourceOffset={sourceOffset}>
+              {children}
+            </FindAwareCodeFallback>
+          </pre>
+        );
 
         return (
           <MarkdownCodeBlock code={code} fence={fence}>
-            <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-              <Suspense fallback={<pre {...props}>{children}</pre>}>
+            <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+              <Suspense fallback={highlightedFallback}>
                 <SuspenseShikiCodeBlock
                   language={fence.language}
                   code={code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
+                  sourceOffset={sourceOffset}
                 />
               </Suspense>
             </CodeHighlightErrorBoundary>
           </MarkdownCodeBlock>
         );
       },
-      code({ node: _node, className, children, ...props }) {
+      code({ node, className, children, ...props }) {
         // Fenced blocks carry a `language-*` class and are rendered by `pre`;
         // only inline code (no class) that names a file becomes an openable
-        // mention chip. The target is resolved against cwd so it opens like a
-        // markdown file link; an unresolvable path still chips on its raw value.
+        // mention chip. Absolute local paths chip immediately. Relative names
+        // chip only when that file actually exists in the chat workspace.
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
-            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+            const nodeStart = node?.position?.start?.offset ?? 0;
+            const filePathOffset = sourceText.indexOf(filePath, nodeStart);
+            const sourceOffset = filePathOffset < 0 ? nodeStart : filePathOffset;
+            const findLabelProps = {
+              label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
+            };
+            const knownTarget = resolveChatFileChipTarget(
+              filePath,
+              undefined,
+              knownAbsoluteFilePaths,
+            );
+            if (knownTarget) {
+              return (
+                <OpenableFileChip
+                  targetPath={knownTarget}
+                  theme={resolvedTheme}
+                  {...findLabelProps}
+                />
+              );
+            }
+            if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
+              return (
+                <VerifiedWorkspaceFileChip
+                  rawReference={filePath}
+                  cwd={cwd}
+                  theme={resolvedTheme}
+                  {...findLabelProps}
+                />
+              );
+            }
           }
         }
         return (
@@ -1266,10 +1548,24 @@ function ChatMarkdown({
             context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
           return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
         },
+        [CHAT_FIND_TEXT_TAG_NAME]: (props: {
+          children?: ReactNode;
+          [CHAT_FIND_TEXT_START_ATTRIBUTE]?: string | undefined;
+        }) => {
+          const rawSourceOffset = props[CHAT_FIND_TEXT_START_ATTRIBUTE];
+          const sourceOffset =
+            rawSourceOffset === undefined ? Number.NaN : Number.parseInt(rawSourceOffset, 10);
+          const text = nodeToPlainText(props.children);
+          if (!Number.isFinite(sourceOffset) || text.length === 0) {
+            return <>{props.children}</>;
+          }
+          return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
+        },
       } as unknown as Components),
     }),
     [
       cwd,
+      knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
       isUserVariant,
@@ -1278,22 +1574,29 @@ function ChatMarkdown({
       onTaskToggle,
       resolvedTheme,
       terminalContexts,
+      text,
+      sourceText,
     ],
   );
 
   return (
     <div
+      ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
+      <ChatFindRenderProvider
+        query={findQuery}
+        sourceText={sourceText}
+        activeRange={findActiveRange}
       >
-        {renderedText}
-      </ReactMarkdown>
+        <ParsedMarkdown
+          text={renderedText}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={markdownComponents}
+        />
+      </ChatFindRenderProvider>
     </div>
   );
 }

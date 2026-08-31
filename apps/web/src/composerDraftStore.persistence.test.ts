@@ -155,6 +155,40 @@ describe("composerDraftStore persisted-state hydration", () => {
     expect(hydrated.draftThreadsByThreadId[threadId]?.interactionMode).toBe("debug");
   });
 
+  it("migrates persisted Kilo draft and sticky selections to OpenCode", () => {
+    const threadId = ThreadId.makeUnsafe("thread-kilo-draft");
+    const kiloSelection = {
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "high" },
+    };
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Continue this draft",
+          attachments: [],
+          modelSelectionByProvider: {
+            opencode: { provider: "opencode", model: "openai/gpt-5" },
+            kilo: kiloSelection,
+          },
+          activeProvider: "kilo",
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: { kilo: kiloSelection },
+      stickyActiveProvider: "kilo",
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.activeProvider).toBe("opencode");
+    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider?.opencode).toEqual({
+      provider: "opencode",
+      model: "openai/gpt-5",
+    });
+    expect(hydrated.stickyActiveProvider).toBe("opencode");
+    expect(hydrated.stickyModelSelectionByProvider?.opencode?.provider).toBe("opencode");
+  });
+
   it("preserves a staged goal in draft-thread state during hydration and drops blank ones", () => {
     const projectId = ProjectId.makeUnsafe("project-goal");
     const threadId = ThreadId.makeUnsafe("thread-goal");

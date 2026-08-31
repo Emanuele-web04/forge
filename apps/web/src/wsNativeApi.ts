@@ -525,7 +525,14 @@ export function createWsNativeApi(): NativeApi {
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       searchContent: (input) => transport.request(WS_METHODS.projectsSearchContent, input),
-      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      prewarmSearchIndex: (input) =>
+        transport.request(WS_METHODS.projectsPrewarmSearchIndex, input),
+      readFile: (input, options) =>
+        options?.signal
+          ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
+          : transport.request(WS_METHODS.projectsReadFile, input),
+      resolveWorkspaceFileReferences: (input) =>
+        transport.request(WS_METHODS.projectsResolveWorkspaceFileReferences, input),
       resolveOutOfRootFileReference: (input) =>
         transport.request(WS_METHODS.projectsResolveOutOfRootFileReference, input),
       createLocalFilePreviewGrant: (input) =>
@@ -769,6 +776,8 @@ export function createWsNativeApi(): NativeApi {
         transport.request(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers, input),
       reconcileProviderDelivery: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, input),
+      prepareQuitResume: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.prepareQuitResume, input),
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),

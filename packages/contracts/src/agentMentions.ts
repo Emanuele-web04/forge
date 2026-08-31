@@ -217,7 +217,6 @@ export const AGENT_MENTION_ALIASES_BY_PROVIDER: Record<
   antigravity: {},
   grok: {},
   droid: {},
-  kilo: OPENCODE_AGENT_MENTION_ALIASES,
   opencode: OPENCODE_AGENT_MENTION_ALIASES,
   pi: {},
 } as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
@@ -235,7 +234,6 @@ const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, reado
   antigravity: [],
   grok: [],
   droid: [],
-  kilo: [],
   opencode: [],
   pi: [],
 };

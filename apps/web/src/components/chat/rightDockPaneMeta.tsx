@@ -5,6 +5,7 @@
 
 import type { ReactNode } from "react";
 
+import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
 import {
   DeviceMobileIcon,
@@ -25,6 +26,7 @@ import {
 } from "~/rightDockStore.logic";
 import { CHAT_SURFACE_CHIP_ICON_CLASS_NAME, SurfaceChipIcon } from "./chatHeaderControls";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { pullRequestPaneTabLabel } from "../pullRequest/pullRequestDetail.logic";
 
 export interface RightDockPaneMeta {
   label: string;
@@ -136,6 +138,31 @@ export function resolveRightDockPaneLabel(
   overrides?: Record<string, string | undefined>,
 ): string {
   return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind).label;
+}
+
+export function buildRightDockPaneLabelOverrides(
+  panes: readonly RightDockPane[],
+  threadSummaries: readonly { id: string; title: string }[],
+): Record<string, string | undefined> | undefined {
+  const sidechatTitleByThreadId = new Map(
+    threadSummaries.map((thread) => [thread.id, thread.title] as const),
+  );
+  const overrides: Record<string, string | undefined> = {};
+
+  for (const pane of panes) {
+    if (pane.kind === "file" && pane.filePath) {
+      overrides[pane.id] = basenameOfPath(pane.filePath);
+    } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
+      overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
+    } else if (pane.kind === "sidechat" && pane.threadId) {
+      const title = sidechatTitleByThreadId.get(pane.threadId)?.trim();
+      if (title) {
+        overrides[pane.id] = title;
+      }
+    }
+  }
+
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 // Resolves a tab glyph: file panes show the per-file-type icon (matching the

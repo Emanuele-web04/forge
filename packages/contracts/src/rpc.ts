@@ -172,6 +172,10 @@ import {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectPrewarmSearchIndexInput,
+  ProjectPrewarmSearchIndexResult,
+  ProjectResolveWorkspaceFileReferencesInput,
+  ProjectResolveWorkspaceFileReferencesResult,
   ProjectResolveOutOfRootFileReferenceInput,
   ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
@@ -342,6 +346,15 @@ export const WsOrchestrationReconcileProviderDeliveryRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationPrepareQuitResumeRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.prepareQuitResume,
+  {
+    payload: OrchestrationRpcSchemas.prepareQuitResume.input,
+    success: OrchestrationRpcSchemas.prepareQuitResume.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
   success: OrchestrationShellStreamItem,
@@ -417,11 +430,26 @@ export const WsProjectsSearchContentRpc = Rpc.make(WS_METHODS.projectsSearchCont
   error: WsRpcError,
 });
 
+export const WsProjectsPrewarmSearchIndexRpc = Rpc.make(WS_METHODS.projectsPrewarmSearchIndex, {
+  payload: ProjectPrewarmSearchIndexInput,
+  success: ProjectPrewarmSearchIndexResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsResolveWorkspaceFileReferencesRpc = Rpc.make(
+  WS_METHODS.projectsResolveWorkspaceFileReferences,
+  {
+    payload: ProjectResolveWorkspaceFileReferencesInput,
+    success: ProjectResolveWorkspaceFileReferencesResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsProjectsResolveOutOfRootFileReferenceRpc = Rpc.make(
   WS_METHODS.projectsResolveOutOfRootFileReference,
@@ -1237,6 +1265,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationReplayEventsRpc,
   WsOrchestrationListProviderDeliveryBlockersRpc,
   WsOrchestrationReconcileProviderDeliveryRpc,
+  WsOrchestrationPrepareQuitResumeRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
@@ -1247,7 +1276,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsSearchContentRpc,
+  WsProjectsPrewarmSearchIndexRpc,
   WsProjectsReadFileRpc,
+  WsProjectsResolveWorkspaceFileReferencesRpc,
   WsProjectsResolveOutOfRootFileReferenceRpc,
   WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,

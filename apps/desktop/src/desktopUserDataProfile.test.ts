@@ -38,6 +38,16 @@ describe("desktopUserDataProfile", () => {
     ).toBe("/Users/tester/Library/Application Support/synara-canary");
   });
 
+  it("uses an explicit smoke profile instead of the development profile", () => {
+    expect(
+      resolveDesktopUserDataPath({
+        appDataBase: "/Users/tester/Library/Application Support",
+        userDataDirectoryName: "synara-dev",
+        testOverridePath: "/tmp/synara-desktop-smoke/electron-user-data",
+      }),
+    ).toBe("/tmp/synara-desktop-smoke/electron-user-data");
+  });
+
   it("uses XDG_CONFIG_HOME on Linux when available", () => {
     expect(
       resolveDesktopAppDataBase({

@@ -110,7 +110,6 @@ describe("discoverSkillsCatalog", () => {
       "Cursor",
     );
     await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
-    await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
     await writeSkill(
       path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
       "opencode-only",
@@ -126,7 +125,6 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
     expect(byName.get("grok-only")?.scope).toBe("grok");
-    expect(byName.get("kilo-only")?.scope).toBe("kilo");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
   });

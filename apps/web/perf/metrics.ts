@@ -125,8 +125,8 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Style-level cost toggles driven by URL params (animations=off, shimmer=off, scrollFade=off)
- *  so paired runs can isolate a single cost without code changes. */
+/** Style-level cost toggles driven by URL params (animations=off, shimmer=off, scrollFade=off,
+ *  glass=off|<filter>, mask=off) so paired runs can isolate a single cost without code changes. */
 export function installCostToggleStyles(): void {
   const params = new URLSearchParams(window.location.search);
   const style = document.createElement("style");
@@ -142,6 +142,24 @@ export function installCostToggleStyles(): void {
     style.textContent += `
       .shimmer {
         animation: none !important;
+      }
+    `;
+  }
+  // Composer glass: `glass=off` drops the backdrop blur; any other value is used verbatim
+  // as the filter (e.g. `glass=blur(20px)`), so paired runs can cost alternative radii.
+  const glass = params.get("glass");
+  if (glass !== null) {
+    style.textContent += `
+      :root {
+        --composer-glass-filter: ${glass === "off" ? "none" : glass} !important;
+      }
+    `;
+  }
+  if (params.get("mask") === "off") {
+    style.textContent += `
+      [data-chat-scroll-container] {
+        -webkit-mask-image: none !important;
+        mask-image: none !important;
       }
     `;
   }

@@ -268,4 +268,35 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         [codexThreadId],
       );
     }));
+
+  it("treats a binding with an unknown provider name as no binding", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const legacyThreadId = ThreadId.makeUnsafe("thread-unknown-provider-binding");
+      yield* runtimeRepository.upsert({
+        threadId: legacyThreadId,
+        providerName: "kilo",
+        adapterKey: "kilo",
+        runtimeMode: "full-access",
+        status: "running",
+        lifecycleGeneration: "legacy-test-kilo",
+        lastSeenAt: new Date().toISOString(),
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+
+      const binding = yield* directory.getBinding(legacyThreadId);
+      assert.isTrue(Option.isNone(binding));
+
+      const providerResult = yield* directory.getProvider(legacyThreadId).pipe(Effect.result);
+      assertFailure(
+        providerResult,
+        new ProviderSessionDirectoryPersistenceError({
+          operation: "ProviderSessionDirectory.getProvider",
+          detail: `No persisted provider binding found for thread '${legacyThreadId}'.`,
+        }),
+      );
+    }));
 });

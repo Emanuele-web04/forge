@@ -7,16 +7,16 @@ import { providerUsageLearnMoreHref } from "@synara/shared/providerUsage";
 
 export interface RateLimitWindow {
   window: string;
-  usedPercent?: number;
-  utilization?: number;
-  resetsAt?: string;
-  windowDurationMins?: number;
+  usedPercent?: number | undefined;
+  utilization?: number | undefined;
+  resetsAt?: string | undefined;
+  windowDurationMins?: number | undefined;
 }
 
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: RateLimitWindow[];
+  limits?: ReadonlyArray<RateLimitWindow>;
   usedPercent?: number;
   utilization?: number;
   resetsAt?: string;

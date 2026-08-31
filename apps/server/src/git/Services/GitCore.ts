@@ -34,6 +34,7 @@ import type {
   GitStashInfoResult,
   GitStatusInput,
   GitStatusResult,
+  GitWorkingTreeDiffStatsResult,
 } from "@synara/contracts";
 
 import type { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
@@ -68,6 +69,8 @@ export interface GitBranchContext {
   readonly branch: string | null;
   readonly upstreamRef: string | null;
 }
+
+export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree";
 
 export interface GitPreparedCommitContext {
   stagedSummary: string;
@@ -254,6 +257,12 @@ export interface GitCoreShape {
     cwd: string,
     ref: string,
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
+  /** Read aggregate diff counts without materializing a unified patch. */
+  readonly readDiffStats: (
+    cwd: string,
+    scope: GitDiffScope,
+  ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitCommandError>;
 
   /**
    * Build staged change context for commit generation.

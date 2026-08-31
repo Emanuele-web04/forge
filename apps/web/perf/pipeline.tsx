@@ -30,6 +30,12 @@ import {
 import { createRoot } from "react-dom/client";
 
 import { ChatTranscriptPane } from "../src/components/chat/ChatTranscriptPane";
+import { composerTranscriptBottomInsetPx } from "../src/components/chat/composerOverlay";
+import {
+  COMPOSER_INPUT_SHELL_CLASS_NAME,
+  COMPOSER_INPUT_SURFACE_CLASS_NAME,
+} from "../src/components/chat/composerPickerStyles";
+import { cn } from "../src/lib/utils";
 import { useStore } from "../src/store";
 import { createThreadSelector } from "../src/storeSelectors";
 import { makeActivity, makeDomainEvent, makeState, makeThread } from "../src/storeTestFixtures";
@@ -130,6 +136,15 @@ const params = new URLSearchParams(window.location.search);
 const seedMessageCount = Math.max(1, Number(params.get("messages") ?? 200));
 const working = params.get("working") !== "0";
 const instrumentLayout = params.get("instrument") === "1";
+// `composer=0` drops the floating composer overlay. By default the harness mounts the
+// same frosted composer surface the app floats over the transcript (and the matching
+// bottom inset + viewport mask), because that overlay is where the compositor cost of a
+// streaming turn lives and a transcript-only harness cannot see it.
+const composerOverlay = params.get("composer") !== "0";
+const COMPOSER_OVERLAY_HEIGHT_PX = 148;
+const composerInsetBottomPx = composerOverlay
+  ? composerTranscriptBottomInsetPx(COMPOSER_OVERLAY_HEIGHT_PX)
+  : 0;
 
 installCostToggleStyles();
 
@@ -483,8 +498,9 @@ function PipelineHarness() {
   );
 
   return (
-    <main className="flex h-screen min-h-0 w-screen bg-background text-foreground">
+    <main className="relative flex h-screen min-h-0 w-screen bg-background text-foreground">
       <ChatTranscriptPane
+        {...(composerInsetBottomPx ? { contentInsetBottomPx: composerInsetBottomPx } : {})}
         activeThreadId={THREAD_ID}
         activeTurnId={working ? STREAM_TURN_ID : null}
         activeTurnInProgress={working}
@@ -524,6 +540,22 @@ function PipelineHarness() {
         workspaceRoot={undefined}
         worktreeSetup={null}
       />
+      {composerOverlay ? (
+        // Same shell/surface classes as the real composer so index.css applies the
+        // identical glass (`.chat-composer-surface::before` backdrop-filter).
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4"
+          style={{ height: COMPOSER_OVERLAY_HEIGHT_PX }}
+        >
+          <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "w-full max-w-3xl")}>
+            <div
+              className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "h-32 rounded-3xl")}
+              data-perf-composer-overlay="true"
+            />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

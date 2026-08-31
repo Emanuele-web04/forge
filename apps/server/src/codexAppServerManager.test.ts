@@ -29,6 +29,7 @@ import {
 import {
   buildCodexInitializeParams,
   buildCodexThreadOpenRequest,
+  shouldWarnCodexFreshStartWithoutResume,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   __codexCliVersionGateTesting,
@@ -79,6 +80,8 @@ describe("Codex Synara harness policy", () => {
       expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
+      expect(instructions).toContain("Make every final response self-contained");
+      expect(instructions).toContain("contain all context the user needs to decide");
       expect(instructions).toContain("one exact synara_create_threads plan");
       expect(instructions).toContain("tools.mcp__synara__browser_open");
       for (const name of BROWSER_TOOL_NAMES) {
@@ -1448,6 +1451,29 @@ describe("buildCodexThreadOpenRequest", () => {
   });
 });
 
+describe("shouldWarnCodexFreshStartWithoutResume", () => {
+  it("warns only when a previously bound thread is opened with thread/start", () => {
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/start",
+        previouslyBound: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/start",
+        previouslyBound: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/resume",
+        previouslyBound: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("formatCodexThreadResumeError", () => {
   it("explains how to resolve an active writer conflict", () => {
     const formatted = formatCodexThreadResumeError(
@@ -1531,6 +1557,43 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("emits session/started after any successful thread open", () => {
+    const manager = new CodexAppServerManager();
+    const methods: string[] = [];
+    manager.on("event", (event) => {
+      methods.push(event.method);
+    });
+    const context = {
+      session: {
+        provider: "codex" as const,
+        status: "connecting" as const,
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        resumeCursor: undefined as unknown,
+      },
+    };
+
+    for (const threadOpenMethod of ["thread/start", "thread/resume", "thread/fork"] as const) {
+      methods.length = 0;
+      (
+        manager as unknown as {
+          markSessionReadyAfterThreadOpen: (
+            context: unknown,
+            input: { threadOpenMethod: string; providerThreadId: string },
+          ) => void;
+        }
+      ).markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod,
+        providerThreadId: "native-thread-1",
+      });
+      expect(methods).toEqual(["session/threadOpenResolved", "session/ready", "session/started"]);
+      expect(context.session.status).toBe("ready");
+      expect(context.session.resumeCursor).toEqual({ threadId: "native-thread-1" });
+    }
+  });
+
   it("enables Codex experimental api capabilities during initialize", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
@@ -2103,6 +2166,113 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("restarts the idle grace period after a discovery request settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      const context = {
+        discovery: true,
+        session: { cwd: "/repo" },
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        nextRequestId: 1,
+        stopping: false,
+      };
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", context);
+      vi.spyOn(
+        manager as unknown as {
+          writeMessage: () => Promise<void>;
+        },
+        "writeMessage",
+      ).mockResolvedValue(undefined);
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+      const request = (
+        manager as unknown as {
+          sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+        }
+      ).sendRequest(context, "model/list", {});
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      (
+        manager as unknown as {
+          handleResponse: (context: unknown, response: unknown) => void;
+        }
+      ).handleResponse(context, { id: 1, result: {} });
+      await request;
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops an idle discovery session after its configured grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", {
+        stopping: false,
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+      });
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+      expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("wires model discovery through model/list", async () => {
     const manager = new CodexAppServerManager();
     const context = {

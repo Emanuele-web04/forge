@@ -8,6 +8,7 @@ import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
   normalizeBrowserUrlInput,
+  resolveFloatingBrowserGuestLayout,
 } from "@synara/shared/browserSession";
 import type {
   BrowserAnnotationEvent,
@@ -63,8 +64,44 @@ export function createBrowserRendererLossHandler<TRenderer>({
 }
 
 export interface BrowserPanelHideScheduler {
+  /** Claims the thread's live browser surface until the returned release function is called. */
+  readonly acquire: (threadId: string) => () => void;
   readonly cancel: (threadId: string) => void;
   readonly schedule: (threadId: string, hide: () => void) => void;
+}
+
+export interface BrowserPanelRendererHandoff {
+  readonly trackDetach: (threadId: string, detach: Promise<unknown>) => void;
+  readonly waitForDetach: (threadId: string) => Promise<void>;
+}
+
+/**
+ * Serializes renderer guest replacement across dock/floating BrowserPanel instances.
+ * React can mount the replacement before the old panel's IPC cleanup has completed;
+ * waiting here keeps browserManager's duplicate-runtime guard from stranding the guest.
+ */
+export function createBrowserPanelRendererHandoff(): BrowserPanelRendererHandoff {
+  const pendingByThreadId = new Map<string, Promise<void>>();
+
+  function trackDetach(threadId: string, detach: Promise<unknown>): void {
+    const previous = pendingByThreadId.get(threadId);
+    const completion = Promise.all([previous ?? Promise.resolve(), detach]).then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingByThreadId.set(threadId, completion);
+    void completion.then(() => {
+      if (pendingByThreadId.get(threadId) === completion) {
+        pendingByThreadId.delete(threadId);
+      }
+    });
+  }
+
+  function waitForDetach(threadId: string): Promise<void> {
+    return pendingByThreadId.get(threadId) ?? Promise.resolve();
+  }
+
+  return { trackDetach, waitForDetach };
 }
 
 type BrowserPanelHideTimer = ReturnType<typeof globalThis.setTimeout>;
@@ -81,6 +118,7 @@ export function createBrowserPanelHideScheduler(
   clearTimer: (timer: BrowserPanelHideTimer) => void = (timer) => globalThis.clearTimeout(timer),
 ): BrowserPanelHideScheduler {
   const pendingByThreadId = new Map<string, BrowserPanelHideTimer>();
+  const liveHostCountByThreadId = new Map<string, number>();
 
   function cancel(threadId: string): void {
     const pending = pendingByThreadId.get(threadId);
@@ -89,17 +127,39 @@ export function createBrowserPanelHideScheduler(
     clearTimer(pending);
   }
 
+  function acquire(threadId: string): () => void {
+    // A new live host takes over before the previous host's cleanup necessarily runs.
+    // Cancelling here also handles the opposite React commit order, where cleanup queued
+    // the hide before the replacement host mounted.
+    cancel(threadId);
+    liveHostCountByThreadId.set(threadId, (liveHostCountByThreadId.get(threadId) ?? 0) + 1);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+
+      const nextCount = (liveHostCountByThreadId.get(threadId) ?? 1) - 1;
+      if (nextCount > 0) {
+        liveHostCountByThreadId.set(threadId, nextCount);
+      } else {
+        liveHostCountByThreadId.delete(threadId);
+      }
+    };
+  }
+
   function schedule(threadId: string, hide: () => void): void {
     cancel(threadId);
     const pending = setTimer(() => {
       if (pendingByThreadId.get(threadId) !== pending) return;
       pendingByThreadId.delete(threadId);
+      if ((liveHostCountByThreadId.get(threadId) ?? 0) > 0) return;
       hide();
     });
     pendingByThreadId.set(threadId, pending);
   }
 
-  return { cancel, schedule };
+  return { acquire, cancel, schedule };
 }
 
 /**
@@ -113,6 +173,42 @@ export function shouldOccludeBrowserWebview(input: {
   hasObscuringOverlay: boolean;
 }): boolean {
   return input.showLocalServersHome || input.browserActionsMenuOpen || input.hasObscuringOverlay;
+}
+
+/**
+ * Checks only the hit-test entries above a browser surface.
+ *
+ * `document.elementsFromPoint()` continues past the surface into its ancestors
+ * and then into sibling content behind it. Treating every visible entry as an
+ * obstruction makes an overlaid browser hide itself whenever the chat behind it
+ * is also hit-testable. The first surface/descendant entry is the compositor
+ * boundary; anything after it is not eligible to occlude the browser.
+ */
+export function hasObscuringHitStackElementAboveSurface<TElement>(
+  hitElements: readonly TElement[],
+  input: {
+    isSurfaceBoundary: (element: TElement) => boolean;
+    isNonObscuring: (element: TElement) => boolean;
+    isVisible: (element: TElement) => boolean;
+  },
+): boolean {
+  let hasVisibleElementAboveSurface = false;
+  for (const hitElement of hitElements) {
+    if (input.isSurfaceBoundary(hitElement)) {
+      return hasVisibleElementAboveSurface;
+    }
+    if (input.isNonObscuring(hitElement)) {
+      continue;
+    }
+    if (input.isVisible(hitElement)) {
+      hasVisibleElementAboveSurface = true;
+    }
+  }
+
+  // If the surface is absent from the hit-test stack, the remaining entries are
+  // ambiguous (and commonly represent content behind the floating panel). Do
+  // not hide the browser based on that incomplete stack.
+  return false;
 }
 
 interface ResolveBrowserAddressSyncInput {
@@ -155,6 +251,13 @@ export interface BrowserChromeStatus {
   tone: "default" | "error";
   label: string;
 }
+
+// The address field and tab pills share one chrome-control surface so the whole row reads
+// as a single cohesive control: matching height, radius, border width, and type scale.
+export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
+// The address field's filled look, reused by the active tab so the selected tab visually
+// matches the search input (same border tone + faint fill).
+export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
 
 export function browserAnnotationDraftFromCommittedEvent(
   event: Extract<BrowserAnnotationEvent, { kind: "committed" }>,
@@ -528,4 +631,48 @@ export function resolveBrowserAddressSync(
     value: input.nextDisplayValue,
     syncedValue: input.nextDisplayValue,
   };
+}
+
+// Bounds keys used to include a bare ":hidden" suffix. Hidden keys now carry a
+// zoom token (`renderer:hidden:zoom-1`), so callers must not use endsWith(":hidden").
+export function isBrowserPanelBoundsHiddenKey(key: string): boolean {
+  return key.includes(":hidden");
+}
+
+export function applyBrowserWebviewPresentation(
+  stage: HTMLElement,
+  input: { floating: boolean; slotWidth: number; slotHeight: number },
+): void {
+  // Scale a CSS stage around a frozen 1280×800 guest. Transforming the
+  // <webview> itself during drag/resize blacks the guest and can kill CDP.
+  if (!input.floating) {
+    stage.style.position = "absolute";
+    stage.style.inset = "0";
+    stage.style.left = "";
+    stage.style.top = "";
+    stage.style.width = "100%";
+    stage.style.height = "100%";
+    stage.style.transform = "";
+    stage.style.transformOrigin = "";
+    stage.style.borderRadius = "";
+    stage.style.clipPath = "";
+    stage.style.overflow = "hidden";
+    return;
+  }
+
+  const layout = resolveFloatingBrowserGuestLayout({
+    width: input.slotWidth,
+    height: input.slotHeight,
+  });
+  stage.style.position = "absolute";
+  stage.style.inset = "";
+  stage.style.left = `${layout.x}px`;
+  stage.style.top = `${layout.y}px`;
+  stage.style.width = `${layout.width}px`;
+  stage.style.height = `${layout.height}px`;
+  stage.style.transform = layout.scale === 1 ? "" : `scale(${layout.scale})`;
+  stage.style.transformOrigin = "top left";
+  stage.style.borderRadius = "10px";
+  stage.style.clipPath = "inset(0 round 10px)";
+  stage.style.overflow = "hidden";
 }

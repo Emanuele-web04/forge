@@ -64,14 +64,6 @@ export const OpenCodeServerProviderSettings = Schema.Struct({
 });
 export type OpenCodeServerProviderSettings = typeof OpenCodeServerProviderSettings.Type;
 
-export const KiloServerProviderSettings = Schema.Struct({
-  ...ProviderSettingsBase,
-  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "kilo")),
-  serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
-  serverPasswordConfigured: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
-});
-export type KiloServerProviderSettings = typeof KiloServerProviderSettings.Type;
-
 export const PiServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "pi")),
@@ -108,7 +100,6 @@ export const ServerSettings = Schema.Struct({
     antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
-    kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
@@ -168,13 +159,6 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
-      kilo: Schema.optionalKey(
-        Schema.Struct({
-          ...ProviderSettingsBasePatch,
-          serverUrl: Schema.optionalKey(StringSetting),
-          serverPassword: Schema.optionalKey(StringSetting),
-        }),
-      ),
       opencode: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

@@ -64,7 +64,7 @@ import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
 } from "./provider/supervisedProcessTeardown.ts";
-import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
+import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
@@ -317,7 +317,10 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
-const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
+// Discovery results live in the bounded caches below, so keeping a dedicated
+// app-server process alive for ten minutes only retains its process tree. A
+// short grace period still collapses startup bursts from adjacent UI queries.
+const CODEX_DISCOVERY_SESSION_IDLE_MS = 15_000;
 const CODEX_VOICE_AUTH_CACHE_TTL_MS = 60_000;
 const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
 
@@ -344,11 +347,12 @@ function asString(value: unknown): string | undefined {
 }
 
 function normalizeCodexProcessLine(rawLine: string): string {
-  return rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
+  return (
+    rawLine.includes(ANSI_ESCAPE_CHAR) ? rawLine.replaceAll(ANSI_ESCAPE_REGEX, "") : rawLine
+  ).trim();
 }
 
-function isIgnorableCodexProcessLine(rawLine: string): boolean {
-  const line = normalizeCodexProcessLine(rawLine);
+function isIgnorableCodexProcessLine(line: string): boolean {
   if (!line) {
     return true;
   }
@@ -367,10 +371,10 @@ function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
   );
 }
 
-function logIgnoredCodexStdout(rawLine: string, reason: string): void {
+function logIgnoredCodexStdout(rawLine: string, line: string, reason: string): void {
   log.warn("ignoring non-protocol codex app-server stdout", {
     reason,
-    preview: normalizeCodexProcessLine(rawLine).slice(0, 160),
+    preview: line.slice(0, 160),
     length: rawLine.length,
   });
 }
@@ -644,6 +648,13 @@ export function buildCodexThreadOpenRequest(input: {
   };
 }
 
+export function shouldWarnCodexFreshStartWithoutResume(input: {
+  readonly threadOpenMethod: string;
+  readonly previouslyBound: boolean;
+}): boolean {
+  return input.threadOpenMethod === "thread/start" && input.previouslyBound;
+}
+
 // turn/start uses sandboxPolicy objects, so keep this separate from thread/start.
 function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
@@ -871,10 +882,10 @@ export function parseCodexUserInputQuestions(
 }
 
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  if (isIgnorableCodexProcessLine(rawLine)) {
+  const line = normalizeCodexProcessLine(rawLine);
+  if (isIgnorableCodexProcessLine(line)) {
     return null;
   }
-  const line = normalizeCodexProcessLine(rawLine);
 
   const match = line.match(CODEX_STDERR_LOG_REGEX);
   if (match) {
@@ -949,6 +960,7 @@ function setRecentCacheEntry<K, V>(
 
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
+  private readonly previouslyBoundThreadIds = new Set<ThreadId>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
   private readonly discoverySessionStartups = new Map<string, Promise<CodexSessionContext>>();
   private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -973,6 +985,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
+  private readonly discoverySessionIdleMs: number;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -983,6 +996,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
+      readonly discoverySessionIdleMs?: number;
     },
   ) {
     super();
@@ -991,6 +1005,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
+    this.discoverySessionIdleMs = Math.max(
+      0,
+      options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
+    );
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -1043,7 +1061,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         await this.stopSession(threadId);
       }
 
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
+      const resolvedCwd = resolveScratchWorkspaceCwd(threadId, input.cwd);
 
       const session: ProviderSession = {
         provider: "codex",
@@ -1144,6 +1162,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(resumeThreadId ? { resumeThreadId } : {}),
         sessionOverrides,
       });
+      const previouslyBound =
+        this.previouslyBoundThreadIds.has(threadId) || input.resumeCursor !== undefined;
+      if (
+        shouldWarnCodexFreshStartWithoutResume({
+          threadOpenMethod: threadOpenRequest.method,
+          previouslyBound,
+        })
+      ) {
+        this.emitLifecycleEvent(
+          context,
+          "session/threadStartWithoutResume",
+          "Starting a new Codex thread for a Synara thread that previously had a provider binding.",
+        );
+        await Effect.logWarning(
+          "codex app-server starting a fresh thread for a previously bound Synara thread",
+          {
+            threadId,
+            threadOpenMethod: "thread/start",
+            resumeThreadId: resumeThreadId ?? null,
+          },
+        ).pipe(this.runPromise);
+      }
       this.emitLifecycleEvent(
         context,
         "session/threadOpenRequested",
@@ -1231,15 +1271,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
       const providerThreadId = threadIdRaw;
 
-      this.updateSession(context, {
-        status: "ready",
-        resumeCursor: { threadId: providerThreadId },
+      this.markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod,
+        providerThreadId,
       });
-      this.emitLifecycleEvent(
-        context,
-        "session/threadOpenResolved",
-        `Codex ${threadOpenMethod} resolved.`,
-      );
       await Effect.logInfo("codex app-server thread open resolved", {
         threadId,
         threadOpenMethod,
@@ -1248,7 +1283,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resolvedThreadId: providerThreadId,
         requestedRuntimeMode: input.runtimeMode,
       }).pipe(this.runPromise);
-      this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
       return { ...context.session };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start Codex session.";
@@ -1923,16 +1957,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const response = await this.sendRequest(context, "thread/fork", forkParams);
       const forkedProviderThreadId = this.readThreadIdFromResponse("thread/fork", response);
 
-      this.updateSession(context, {
-        status: "ready",
-        resumeCursor: { threadId: forkedProviderThreadId },
+      this.markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod: "thread/fork",
+        providerThreadId: forkedProviderThreadId,
       });
-      this.emitLifecycleEvent(context, "session/threadOpenResolved", "Codex thread/fork resolved.");
-      this.emitLifecycleEvent(
-        context,
-        "session/ready",
-        `Connected to thread ${forkedProviderThreadId}`,
-      );
 
       return {
         threadId,
@@ -2817,9 +2845,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       void this.stopDiscoverySession(discoveryKey).catch((error) => {
         log.warn("Failed to stop idle Codex discovery session", { discoveryKey, error });
       });
-    }, CODEX_DISCOVERY_SESSION_IDLE_MS);
+    }, this.discoverySessionIdleMs);
     timer.unref();
     this.discoverySessionIdleTimers.set(discoveryKey, timer);
+  }
+
+  private restartDiscoverySessionIdleTimer(context: CodexSessionContext): void {
+    if (!context.discovery || context.stopping) {
+      return;
+    }
+    const discoveryKey = context.session.cwd?.trim();
+    if (!discoveryKey || this.discoverySessions.get(discoveryKey) !== context) {
+      return;
+    }
+    this.scheduleDiscoverySessionIdleStop(discoveryKey);
   }
 
   private async stopDiscoverySession(discoveryKey: string): Promise<void> {
@@ -2872,7 +2911,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context.stopping) return;
       try {
         for (const line of context.stdoutFramer.push(chunk)) {
-          if (!isIgnorableCodexProcessLine(line)) this.handleStdoutLine(context, line);
+          this.handleStdoutLine(context, line);
         }
       } catch (cause) {
         this.handleTransportFailure(context, cause);
@@ -2975,20 +3014,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  private handleStdoutLine(context: CodexSessionContext, line: string): void {
+  private handleStdoutLine(context: CodexSessionContext, rawLine: string): void {
+    const line = normalizeCodexProcessLine(rawLine);
     if (isIgnorableCodexProcessLine(line)) {
       return;
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(rawLine);
     } catch {
       // App-server stdout is JSONL, but Codex subprocesses and hooks can leak
       // arbitrary output onto the same pipe, including fragments that begin
       // like JSON-RPC. An unparseable line cannot be a usable protocol frame;
       // ignore it and let any affected request fail through its normal timeout.
-      logIgnoredCodexStdout(line, "invalid JSON fragment");
+      logIgnoredCodexStdout(rawLine, line, "invalid JSON fragment");
       return;
     }
 
@@ -2996,7 +3036,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!protocolEnvelope || !isCodexProtocolEnvelope(protocolEnvelope)) {
       // Command output can also be valid standalone JSON (`{}`, `[]`, strings,
       // numbers). Only JSON-RPC-shaped envelopes belong to app-server itself.
-      logIgnoredCodexStdout(line, "valid JSON without a JSON-RPC envelope");
+      logIgnoredCodexStdout(rawLine, line, "valid JSON without a JSON-RPC envelope");
       return;
     }
 
@@ -3451,6 +3491,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.pending.delete(String(id));
         reject(error);
       });
+    }).finally(() => {
+      this.restartDiscoverySessionIdleTimer(context);
     });
 
     return result as TResponse;
@@ -3461,6 +3503,36 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.handleTransportFailure(context, cause);
       throw cause;
     });
+  }
+
+  private markSessionReadyAfterThreadOpen(
+    context: CodexSessionContext,
+    input: {
+      readonly threadOpenMethod: string;
+      readonly providerThreadId: string;
+    },
+  ): void {
+    this.updateSession(context, {
+      status: "ready",
+      resumeCursor: { threadId: input.providerThreadId },
+    });
+    this.previouslyBoundThreadIds.add(context.session.threadId);
+    this.emitLifecycleEvent(
+      context,
+      "session/threadOpenResolved",
+      `Codex ${input.threadOpenMethod} resolved.`,
+    );
+    this.emitLifecycleEvent(
+      context,
+      "session/ready",
+      `Connected to thread ${input.providerThreadId}`,
+    );
+    // Resume/fork do not notify session start; emit it so idle-stop re-arms.
+    this.emitLifecycleEvent(
+      context,
+      "session/started",
+      `Codex session ready for thread ${input.providerThreadId}`,
+    );
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {

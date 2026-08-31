@@ -151,7 +151,6 @@ const ATTACHMENT_VIEWPORT_MATRIX = [
 interface UserRowMeasurement {
   measuredRowHeightPx: number;
   timelineWidthMeasuredPx: number;
-  renderedInVirtualizedRegion: boolean;
 }
 
 interface MountedChatView {
@@ -1727,18 +1726,33 @@ async function dispatchModelCycleShortcutWhenReady(
 function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
-): void {
+): KeyboardEvent {
   const useMetaForMod = isMacNavigatorPlatform();
-  target.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: input.key,
-      shiftKey: input.shiftKey ?? false,
-      altKey: input.altKey ?? false,
-      metaKey: useMetaForMod,
-      ctrlKey: !useMetaForMod,
-      bubbles: true,
-      cancelable: true,
-    }),
+  const event = new KeyboardEvent("keydown", {
+    key: input.key,
+    shiftKey: input.shiftKey ?? false,
+    altKey: input.altKey ?? false,
+    metaKey: useMetaForMod,
+    ctrlKey: !useMetaForMod,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+// Re-dispatches until the shortcut handler consumes the event: the resolved
+// keybindings land asynchronously after `serverGetConfig`, so a single dispatch
+// can race the config apply.
+async function dispatchConfiguredShortcutWhenReady(
+  target: EventTarget,
+  input: { key: string; shiftKey?: boolean; altKey?: boolean },
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchConfiguredShortcut(target, input).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
   );
 }
 
@@ -1888,7 +1902,6 @@ async function measureUserRow(options: {
 
   let timelineWidthMeasuredPx = 0;
   let measuredRowHeightPx = 0;
-  let renderedInVirtualizedRegion = false;
   await vi.waitFor(
     async () => {
       scrollContainer.scrollTop = 0;
@@ -1898,7 +1911,6 @@ async function measureUserRow(options: {
       expect(measuredRow, "Unable to measure targeted user row height.").toBeTruthy();
       timelineWidthMeasuredPx = measuredRow!.getBoundingClientRect().width;
       measuredRowHeightPx = measuredRow!.getBoundingClientRect().height;
-      renderedInVirtualizedRegion = measuredRow!.closest("[data-index]") instanceof HTMLElement;
       expect(timelineWidthMeasuredPx, "Unable to measure timeline width.").toBeGreaterThan(0);
       expect(measuredRowHeightPx, "Unable to measure targeted user row height.").toBeGreaterThan(0);
     },
@@ -1908,7 +1920,7 @@ async function measureUserRow(options: {
     },
   );
 
-  return { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion };
+  return { measuredRowHeightPx, timelineWidthMeasuredPx };
 }
 
 async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasurement> {
@@ -2325,10 +2337,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
+        const { measuredRowHeightPx, timelineWidthMeasuredPx } =
           await mounted.measureUserRow(targetMessageId);
-
-        expect(renderedInVirtualizedRegion).toBe(true);
 
         const estimatedHeightPx = estimateTimelineMessageHeight(
           { role: "user", text: userText, attachments: [] },
@@ -2368,7 +2378,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
           { timelineWidthPx: measurement.timelineWidthMeasuredPx },
         );
 
-        expect(measurement.renderedInVirtualizedRegion).toBe(true);
         expect(Math.abs(measurement.measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
           viewport.textTolerancePx,
         );
@@ -4031,10 +4040,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
+        const { measuredRowHeightPx, timelineWidthMeasuredPx } =
           await mounted.measureUserRow(targetMessageId);
-
-        expect(renderedInVirtualizedRegion).toBe(true);
 
         const estimatedHeightPx = estimateTimelineMessageHeight(
           {
@@ -4376,17 +4383,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      // The empty landing runs minimal chrome with no scripts control, so drafts
+      // reach scripts through their keybindings; drive the same runProjectScript
+      // path the way a user would.
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "script.lint.run",
+              shortcut: {
+                key: "l",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Lint",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Lint button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      await dispatchConfiguredShortcutWhenReady(window, {
+        key: "l",
+        shiftKey: true,
+        altKey: true,
+      });
 
       await vi.waitFor(
         () => {
@@ -4454,17 +4480,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      // Same keybinding-driven path as the local-draft script test above: the
+      // empty landing exposes no scripts control.
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "script.test.run",
+              shortcut: {
+                key: "t",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Test",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Test button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      await dispatchConfiguredShortcutWhenReady(window, {
+        key: "t",
+        shiftKey: true,
+        altKey: true,
+      });
 
       await vi.waitFor(
         () => {
@@ -5450,6 +5494,202 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("auto-dispatches only the queue head until the previous turn is live", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const firstQueuedPrompt = "queued follow-up A stays the only dispatch";
+    const secondQueuedPrompt = "queued follow-up B must wait for the live turn";
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-queued-gap-target" as MessageId,
+      targetText: "queued gap target",
+      sessionStatus: "running",
+    });
+
+    const enqueueQueuedChatTurn = (id: string, prompt: string) => {
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+        id,
+        kind: "chat",
+        createdAt: NOW_ISO,
+        previewText: prompt,
+        prompt,
+        images: [],
+        files: [],
+        assistantSelections: [],
+        browserAnnotations: [],
+        terminalContexts: [],
+        fileComments: [],
+        pastedTexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider: "codex",
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        envMode: "local",
+      });
+    };
+
+    const turnStartCommands = () =>
+      wsRequests.flatMap((request) => {
+        if (request._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return [];
+        }
+        const command = request.command;
+        if (
+          typeof command !== "object" ||
+          command === null ||
+          !("type" in command) ||
+          command.type !== "thread.turn.start"
+        ) {
+          return [];
+        }
+        return [
+          command as {
+            threadId?: unknown;
+            message?: { messageId?: unknown; text?: unknown };
+          },
+        ];
+      });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      enqueueQueuedChatTurn("queued-turn-gap-a", firstQueuedPrompt);
+      enqueueQueuedChatTurn("queued-turn-gap-b", secondQueuedPrompt);
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(2);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "ready",
+              activeTurnId: null,
+              updatedAt: isoAt(1_200),
+            }
+          : null,
+        updatedAt: isoAt(1_200),
+      }));
+
+      const firstCommand = await vi.waitFor(
+        () => {
+          const match = turnStartCommands().find((command) =>
+            String(command.message?.text ?? "").includes(firstQueuedPrompt),
+          );
+          expect(match, "first queued turn should auto-dispatch").toBeTruthy();
+          return match!;
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      const sentMessageId = String(firstCommand.message?.messageId ?? "");
+      expect(sentMessageId, "dispatched user message id").not.toBe("");
+
+      const requestedTurnId = TurnId.makeUnsafe("turn-queued-gap");
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe(sentMessageId),
+            role: "user" as const,
+            text: firstQueuedPrompt,
+            turnId: requestedTurnId,
+            streaming: false,
+            source: "native" as const,
+            createdAt: isoAt(1_300),
+            updatedAt: isoAt(1_300),
+          },
+        ],
+        latestTurn: {
+          turnId: requestedTurnId,
+          state: "running",
+          requestedAt: isoAt(1_300),
+          startedAt: null,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "ready",
+              activeTurnId: null,
+              updatedAt: isoAt(1_300),
+            }
+          : null,
+        updatedAt: isoAt(1_300),
+      }));
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 500);
+      });
+
+      expect(turnStartCommands()).toHaveLength(1);
+      expect(String(turnStartCommands()[0]?.message?.text ?? "")).toContain(firstQueuedPrompt);
+      expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+      expect(document.body.textContent).toContain(secondQueuedPrompt);
+
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: thread.latestTurn
+          ? {
+              ...thread.latestTurn,
+              startedAt: isoAt(1_301),
+            }
+          : thread.latestTurn,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "running",
+              activeTurnId: requestedTurnId,
+              updatedAt: isoAt(1_301),
+            }
+          : null,
+        updatedAt: isoAt(1_301),
+      }));
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 400);
+      });
+
+      expect(turnStartCommands()).toHaveLength(1);
+      expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+      expect(document.body.textContent).toContain(secondQueuedPrompt);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("keeps the new thread selected after clicking the new-thread button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -6055,7 +6295,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const workspacePickerTrigger = page.getByTestId("workspace-picker-trigger");
       await expect.element(workspacePickerTrigger).toBeInTheDocument();
       const controlsBefore = document.querySelector<HTMLElement>(
-        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+        '[data-empty-landing-controls="true"]',
       );
       const composerBlockBefore = document.querySelector<HTMLElement>(
         '[data-empty-landing-composer-block="true"]',
@@ -6092,7 +6332,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       const controlsAfter = document.querySelector<HTMLElement>(
-        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+        '[data-empty-landing-controls="true"]',
       );
       const composerBlockAfter = document.querySelector<HTMLElement>(
         '[data-empty-landing-composer-block="true"]',

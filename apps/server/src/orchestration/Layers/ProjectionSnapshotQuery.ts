@@ -140,6 +140,7 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
 const ProjectionManagedWorktreeThreadRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   archivedAt: ProjectionThread.fields.archivedAt,
+  deletedAt: ProjectionThread.fields.deletedAt,
   worktreePath: ProjectionThread.fields.worktreePath,
   associatedWorktreePath: ProjectionThread.fields.associatedWorktreePath,
 });
@@ -679,6 +680,8 @@ function toProjectedThreadShellFromStoredSummary(input: {
     subagentRole: threadRow.subagentRole ?? null,
     forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: threadRow.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: threadRow.sidechatExpiredAt ?? null,
     lastKnownPr: threadRow.lastKnownPr,
     latestTurn: input.latestTurn,
     latestUserMessageAt: threadRow.latestUserMessageAt,
@@ -736,6 +739,8 @@ function toProjectedThread(input: {
     subagentRole: threadRow.subagentRole ?? null,
     forkSourceThreadId: threadRow.forkSourceThreadId,
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: threadRow.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: threadRow.sidechatExpiredAt ?? null,
     lastKnownPr: threadRow.lastKnownPr,
     latestTurn: input.latestTurn,
     createdAt: threadRow.createdAt,
@@ -906,6 +911,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_last_activity_at AS "sidechatLastActivityAt",
+          sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
@@ -955,6 +962,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_last_activity_at AS "sidechatLastActivityAt",
+          sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
@@ -983,6 +992,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           archived_at AS "archivedAt",
+          deleted_at AS "deletedAt",
           worktree_path AS "worktreePath",
           associated_worktree_path AS "associatedWorktreePath"
         FROM projection_threads
@@ -1538,6 +1548,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_last_activity_at AS "sidechatLastActivityAt",
+          sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
@@ -1596,6 +1608,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_last_activity_at AS "sidechatLastActivityAt",
+          sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
@@ -2509,6 +2523,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             (row): ProjectionManagedWorktreeThread => ({
               id: row.threadId,
               archivedAt: row.archivedAt ?? null,
+              deletedAt: row.deletedAt ?? null,
               worktreePath: row.worktreePath ?? null,
               associatedWorktreePath: row.associatedWorktreePath ?? null,
             }),

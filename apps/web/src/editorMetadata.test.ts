@@ -28,6 +28,7 @@ describe("resolveAvailableEditorOptions", () => {
         "ghostty",
         "muxy",
         "terminal",
+        "iterm",
         "warp",
         "xcode",
         "webstorm",
@@ -55,6 +56,7 @@ describe("resolveAvailableEditorOptions", () => {
       "ghostty",
       "muxy",
       "terminal",
+      "iterm",
       "warp",
       "xcode",
       "idea",
@@ -76,6 +78,7 @@ describe("resolveAvailableEditorOptions", () => {
     expect(resolveEditorIcon("ghostty").name).toBe("GhosttyIcon");
     expect(resolveEditorIcon("muxy").name).toBe("TerminalAppIcon");
     expect(resolveEditorIcon("terminal").name).toBe("TerminalAppIcon");
+    expect(resolveEditorIcon("iterm").name).toBe("TerminalAppIcon");
     expect(resolveEditorIcon("xcode").name).toBe("SimpleIcon");
     expect(resolveEditorIcon("webstorm").name).toBe("SimpleIcon");
   });

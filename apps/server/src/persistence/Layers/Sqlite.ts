@@ -2,6 +2,7 @@ import { Effect, Layer, FileSystem, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
+import { MigrationSchemaTooNewError } from "../Errors.ts";
 import {
   inspectPendingMigrationRecovery,
   reclaimOrphanedMigrationArtifacts,
@@ -9,6 +10,7 @@ import {
   runWithPreMigrationBackup,
   type MigrationRecoveryMarker,
 } from "../MigrationBackup.ts";
+import { createMigrationSchemaTooNewStartupBlockError } from "../MigrationSchemaTooNewStartupBlock.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -53,7 +55,17 @@ const repairSqliteFilePermissions = (dbPath: string) =>
     }
   });
 
-const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | null = null) =>
+interface SqliteSetupOptions {
+  readonly dbPath?: string | undefined;
+  readonly pendingRecovery?: MigrationRecoveryMarker | null | undefined;
+  readonly divergenceConsent?: string | undefined;
+}
+
+const makeSetup = ({
+  dbPath,
+  pendingRecovery = null,
+  divergenceConsent,
+}: SqliteSetupOptions = {}) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -126,13 +138,24 @@ const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | n
       const migrations = dbPath
         ? pendingRecovery
           ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
-          : runWithPreMigrationBackup(dbPath, runMigrations())
+          : runWithPreMigrationBackup(dbPath, runMigrations(), { divergenceConsent })
         : runMigrations();
-      yield* migrations;
+      yield* migrations.pipe(
+        Effect.catch((cause) =>
+          cause instanceof MigrationSchemaTooNewError && dbPath
+            ? Effect.promise(() =>
+                createMigrationSchemaTooNewStartupBlockError(dbPath, cause),
+              ).pipe(Effect.flatMap(Effect.fail))
+            : Effect.fail(cause),
+        ),
+      );
     }),
   );
 
-export const makeSqlitePersistenceLive = (dbPath: string) =>
+export const makeSqlitePersistenceLive = (
+  dbPath: string,
+  options: { readonly divergenceConsent?: string | undefined } = {},
+) =>
   Effect.acquireRelease(acquireDatabaseLifecycleLock(dbPath), (lock) =>
     releaseDatabaseLifecycleLock(lock).pipe(Effect.orDie),
   ).pipe(
@@ -155,7 +178,11 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         yield* repairSqliteFilePermissions(dbPath);
 
         return Layer.provideMerge(
-          makeSetup(dbPath, pendingRecovery),
+          makeSetup({
+            dbPath,
+            pendingRecovery,
+            divergenceConsent: options.divergenceConsent,
+          }),
           makeRuntimeSqliteLayer({ filename: dbPath }),
         );
       }),
@@ -169,5 +196,7 @@ export const SqlitePersistenceMemory = Layer.provideMerge(
 );
 
 export const layerConfig = Layer.unwrap(
-  Effect.map(Effect.service(ServerConfig), ({ dbPath }) => makeSqlitePersistenceLive(dbPath)),
+  Effect.map(Effect.service(ServerConfig), ({ dbPath, migrationDivergenceConsent }) =>
+    makeSqlitePersistenceLive(dbPath, { divergenceConsent: migrationDivergenceConsent }),
+  ),
 );

@@ -15,6 +15,7 @@ import type {
 import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ModelSelection,
@@ -33,6 +34,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -778,6 +780,28 @@ function makeHarnessLayer(
       ),
   } as unknown as (typeof GitCore)["Service"]);
 
+  const gitManagerLayer = Layer.succeed(GitManager, {
+    resolvePullRequest: ({ reference }: { reference: string }) =>
+      Effect.succeed({
+        pullRequest: {
+          number: 841,
+          title: "Fix created-at thread ordering",
+          url:
+            reference.startsWith("http://") || reference.startsWith("https://")
+              ? reference
+              : "https://github.com/Emanuele-web04/synara/pull/841",
+          baseBranch: "main",
+          headBranch: "fix/created-at-thread-order",
+          state: "open",
+          isDraft: false,
+          mergeability: "mergeable",
+          additions: 12,
+          deletions: 4,
+          changedFiles: 2,
+        },
+      }),
+  } as unknown as (typeof GitManager)["Service"]);
+
   const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
     listModels: ({ provider }: { provider: string }) => {
       const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
@@ -809,9 +833,8 @@ function makeHarnessLayer(
             ],
           },
         ],
-        grok: [{ slug: "grok-build", name: "Grok Build" }],
+        grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
         droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
-        kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto" }],
         opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
         pi: [{ slug: "test-pi", name: "Test Pi" }],
       };
@@ -826,7 +849,6 @@ function makeHarnessLayer(
     "antigravity",
     "grok",
     "droid",
-    "kilo",
     "opencode",
     "pi",
   ];
@@ -1129,6 +1151,7 @@ function makeHarnessLayer(
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
     Layer.provide(gitLayer),
+    Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
     Layer.provide(ServerSettingsService.layerTest()),
@@ -1436,7 +1459,7 @@ describe("AgentGateway", () => {
             tools: Array<{
               name: string;
               description?: string;
-              inputSchema: { properties?: Record<string, unknown> };
+              inputSchema: { properties?: Record<string, unknown>; required?: string[] };
             }>;
           };
         }
@@ -1458,6 +1481,7 @@ describe("AgentGateway", () => {
         "synara_send_message",
         "synara_interrupt_thread",
         "synara_set_thread_title",
+        "synara_set_thread_pull_request",
         "synara_set_thread_archived",
         "synara_set_thread_goal",
         "synara_create_automation",
@@ -1492,6 +1516,27 @@ describe("AgentGateway", () => {
         ["approval-required", "full-access"],
       );
 
+      const readThread = tools.find((tool) => tool.name === "synara_read_thread");
+      const readThreadProperties = readThread?.inputSchema.properties as
+        | Record<string, { maximum?: number; minimum?: number; type?: string }>
+        | undefined;
+      assert.include(readThread?.description ?? "", "long message losslessly");
+      assert.deepInclude(readThreadProperties?.maxMessageChars, {
+        type: "integer",
+        minimum: 50,
+        maximum: 20_000,
+      });
+      assert.deepInclude(readThreadProperties?.messageIndex, {
+        type: "integer",
+        minimum: 0,
+      });
+      assert.deepInclude(readThreadProperties?.messageOffsetChars, {
+        type: "integer",
+        minimum: 0,
+      });
+      assert.deepInclude(readThreadProperties?.messageId, { type: "string" });
+      assert.deepInclude(readThreadProperties?.messageVersion, { type: "string" });
+
       const setThreadGoal = tools.find((tool) => tool.name === "synara_set_thread_goal");
       assert.include(
         setThreadGoal?.description ?? "",
@@ -1507,6 +1552,13 @@ describe("AgentGateway", () => {
       assert.property(setThreadGoal?.inputSchema.properties, "blocked");
       assert.include(setThreadGoal?.description ?? "", "achieved: true");
       assert.include(setThreadGoal?.description ?? "", "blocked: true");
+
+      const setThreadPullRequest = tools.find(
+        (tool) => tool.name === "synara_set_thread_pull_request",
+      );
+      assert.include(setThreadPullRequest?.description ?? "", "own deliverable");
+      assert.include(setThreadPullRequest?.description ?? "", "only reviews");
+      assert.deepEqual(setThreadPullRequest?.inputSchema.required, ["reference"]);
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");
@@ -2009,6 +2061,7 @@ describe("AgentGateway", () => {
         assert.strictEqual("parentThreadId" in create, false);
         assert.strictEqual("subagentNickname" in create, false);
         assert.equal(create.modelSelection.provider, "grok");
+        assert.equal(create.modelSelection.model, DEFAULT_MODEL_BY_PROVIDER.grok);
         // Project and runtime mode default from the calling thread.
         assert.equal(create.projectId, PROJECT_ID);
         assert.equal(create.runtimeMode, "approval-required");
@@ -2025,7 +2078,7 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("starts explicit OpenCode and Kilo plan-agent targets in plan mode", () => {
+  it.effect("starts explicit OpenCode plan-agent targets in plan mode", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -2043,14 +2096,6 @@ describe("AgentGateway", () => {
                 options: { agent: "plan" },
               },
             },
-            {
-              prompt: "plan the Kilo work",
-              target: {
-                provider: "kilo",
-                model: "kilo/kilo-auto/free",
-                options: { agent: "plan" },
-              },
-            },
           ],
         },
       });
@@ -2058,8 +2103,8 @@ describe("AgentGateway", () => {
 
       const creates = harness.dispatched.filter((command) => command.type === "thread.create");
       const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");
-      assert.lengthOf(creates, 2);
-      assert.lengthOf(turns, 2);
+      assert.lengthOf(creates, 1);
+      assert.lengthOf(turns, 1);
       for (const command of [...creates, ...turns]) {
         assert.equal(command.interactionMode, "plan");
         assert.deepInclude(command.modelSelection ?? {}, {
@@ -4815,6 +4860,37 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("associates a resolved pull request with the calling thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_pull_request",
+        args: { reference: "https://github.com/Emanuele-web04/synara/pull/841" },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const result = toolResultJson(response.result);
+      assert.equal(result.threadId, "thread-parent");
+      assert.deepInclude(result.pullRequest as Record<string, unknown>, {
+        number: 841,
+        headBranch: "fix/created-at-thread-order",
+        state: "open",
+      });
+      const dispatched = harness.dispatched[0] as unknown as Record<string, unknown>;
+      assert.deepInclude(dispatched, {
+        type: "thread.meta.update",
+        threadId: "thread-parent",
+      });
+      assert.deepInclude(dispatched.lastKnownPr as Record<string, unknown>, {
+        number: 841,
+        headBranch: "fix/created-at-thread-order",
+        state: "open",
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects thread goals over the contract limit", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -4920,6 +4996,105 @@ describe("AgentGateway", () => {
 
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.equal(toolResultJson(response.result).goal, goal);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("reads a long message losslessly and rejects a stale offset", () => {
+    const shell = makeThreadShell("thread-child");
+    const longText = Array.from({ length: 25_007 }, (_, index) => String(index % 10)).join("");
+    const detail: OrchestrationThread = {
+      ...makeThreadDetail(shell),
+      messages: [
+        {
+          id: MessageId.makeUnsafe("message-long"),
+          role: "assistant",
+          text: longText,
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    };
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [...baseThreads.filter((thread) => thread.id !== shell.id), shell],
+      [],
+      {
+        threadDetails: new Map([[shell.id, detail]]),
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const summaryResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread",
+        args: { threadId: shell.id },
+      });
+      assert.isFalse(isToolError(summaryResponse.result), toolErrorText(summaryResponse.result));
+      const summaryMessage = (
+        toolResultJson(summaryResponse.result).messages as Array<{
+          messageId: string;
+          messageVersion: string;
+        }>
+      )[0]!;
+      const slices: string[] = [];
+      let messageOffsetChars = 0;
+
+      while (true) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread",
+          args: {
+            threadId: shell.id,
+            messageIndex: 0,
+            messageOffsetChars,
+            messageId: summaryMessage.messageId,
+            messageVersion: summaryMessage.messageVersion,
+            maxMessageChars: 10_000,
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const result = toolResultJson(response.result);
+        slices.push((result.messages as Array<{ text: string }>)[0]?.text ?? "");
+        assert.equal(result.effectiveMessageLimit, 1);
+        assert.equal(result.effectiveMaxMessageChars, 10_000);
+        const messagePage = result.messagePage as {
+          messageId: string;
+          messageVersion: string;
+          nextOffsetChars?: number;
+        };
+        assert.equal(messagePage.messageId, summaryMessage.messageId);
+        assert.equal(messagePage.messageVersion, summaryMessage.messageVersion);
+        const nextOffsetChars = messagePage.nextOffsetChars;
+        if (nextOffsetChars === undefined) break;
+        messageOffsetChars = nextOffsetChars;
+      }
+
+      assert.equal(slices.join(""), longText);
+      harness.setThreadDetail({
+        ...detail,
+        messages: [
+          {
+            ...detail.messages[0]!,
+            id: MessageId.makeUnsafe("message-replacement"),
+            text: "x".repeat(25_007),
+          },
+        ],
+      });
+      const stale = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread",
+        args: {
+          threadId: shell.id,
+          messageIndex: 0,
+          messageOffsetChars: 20_000,
+          messageId: summaryMessage.messageId,
+          messageVersion: summaryMessage.messageVersion,
+        },
+      });
+      assert.isTrue(isToolError(stale.result));
+      assert.include(toolErrorText(stale.result), "now identifies message");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

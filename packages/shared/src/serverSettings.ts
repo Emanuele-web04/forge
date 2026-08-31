@@ -71,10 +71,6 @@ export function providerStartOptionsFromServerSettings(
     droid: {
       ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
     },
-    kilo: {
-      ...(providers.kilo.binaryPath ? { binaryPath: providers.kilo.binaryPath } : {}),
-      ...(providers.kilo.serverUrl ? { serverUrl: providers.kilo.serverUrl } : {}),
-    },
     opencode: {
       ...(providers.opencode.binaryPath ? { binaryPath: providers.opencode.binaryPath } : {}),
       ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),

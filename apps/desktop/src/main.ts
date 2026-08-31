@@ -54,13 +54,21 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
+  SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
+import {
+  MIGRATION_DIVERGENCE_CONSENT_ENV,
+  MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
+  type MigrationRuntimeIdentityMismatch,
+  type MigrationSchemaTooNewStartupBlock,
+} from "@synara/shared/migrationRecovery";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
@@ -86,7 +94,22 @@ import {
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
 } from "./desktopAppIcon";
-import { refreshWindowsTaskbarIcon } from "./windowsTaskbarIcon";
+import {
+  applyWindowsTaskbarIcon,
+  collectWindowsShortcutPaths,
+  nextWindowsShellIconCacheKey,
+  resolveWindowsShellIconCacheDirectory,
+  syncWindowsShortcutIcons,
+  windowsShellIconContentKey,
+  windowsShellIconCachePath,
+} from "./windowsTaskbarIcon";
+import {
+  applyWindowsShellAppUserModel,
+  ensureWindowsShellAppUserModelHelper,
+  nativeWindowHandleToHwnd,
+} from "./windowsShellAppUserModel";
+import { createExclusiveApplyQueue } from "./exclusiveApplyQueue";
+import { extractIcoPngImages, toWindowsShellIco } from "./windowsShellIco";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -96,10 +119,18 @@ import {
   settleDeferredDesktopQuitAfterUpdaterFailure,
 } from "./desktopQuitIntent";
 import {
+  makeRunningChatsQuitGuard,
+  quitConfirmationPresentationForPlatform,
+  shouldPromptForRunningChatsBeforeQuit,
+} from "./runningChatsQuitGuard";
+import {
+  hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
+  invalidMigrationStartupRecoveryChoices,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
   resolveDesktopMigrationRecoveryPaths,
+  resolveDesktopMigrationRestoreCandidate,
   restoreDesktopMigrationBackup,
   type DesktopMigrationRecoveryDecision,
   type DesktopMigrationRecoveryOutcome,
@@ -131,6 +162,11 @@ import {
 } from "./backendSupervisionPolicy";
 import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
+import {
+  embeddedDesktopMigrationRuntimeSourceDigest,
+  inspectDesktopMigrationRuntimeIdentity,
+} from "./migrationBundleIdentity";
+import { MigrationConsentHandoff } from "./migrationConsentHandoff";
 import {
   RENDERER_MAX_AUTOMATIC_RELOADS,
   RendererCrashPolicy,
@@ -212,6 +248,12 @@ import {
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
+  readCustomTitleBarPreference,
+  resolveDesktopCustomTitleBarState,
+  resolveDesktopTitleBarFrameOptions,
+  writeCustomTitleBarPreference,
+} from "./desktopCustomTitleBar";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -231,6 +273,14 @@ import {
   sendAppSnapError,
   sendAppSnapState,
 } from "./appSnapIpc";
+
+const requestedSourceBuildMarker = process.env.SYNARA_SOURCE_DESKTOP_BUILD_MARKER;
+if (
+  requestedSourceBuildMarker !== undefined &&
+  requestedSourceBuildMarker !== SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+) {
+  throw new Error("The source desktop launcher and built main are incompatible. Rebuild Synara.");
+}
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -256,6 +306,7 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+  allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
@@ -264,6 +315,7 @@ const BASE_DIR =
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
+const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -306,6 +358,11 @@ const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
 const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+// Provider finalizers stop every owned runtime concurrently, but POSIX leaves
+// extra headroom for the rest of the Effect scope to close cleanly.
+const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
+const POSIX_BACKEND_FORCE_KILL_DELAY_MS = 18_000;
+const POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS = 20_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -318,6 +375,8 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+/** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
+let customTitleBarActive = false;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -341,8 +400,10 @@ let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
+const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
-let desktopStartupBlockedForMigrationRecovery = false;
+let desktopStartupBlockedForDatabaseRestore = false;
+const migrationConsentHandoff = new MigrationConsentHandoff();
 let desktopShutdownComplete = false;
 let desktopProtocolRegistered = false;
 let aboutCommitHashCache: string | null | undefined;
@@ -951,6 +1012,10 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+      // Let V8 persist compiled bytecode for renderer bundles served over this scheme
+      // (Chromium only code-caches http(s) by default), so cold launches skip
+      // recompiling the multi-MB app bundle.
+      codeCache: true,
     },
   },
   {
@@ -1074,6 +1139,56 @@ function resolveBackendCwd(): string {
   return OS.homedir();
 }
 
+async function requireCurrentDesktopMigrationBundle(): Promise<boolean> {
+  try {
+    const mismatch = inspectDesktopMigrationRuntimeIdentity({
+      appRoot: resolveAppRoot(),
+      isPackaged: app.isPackaged,
+      embeddedDigest: embeddedDesktopMigrationRuntimeSourceDigest(),
+    });
+    return mismatch ? rejectDesktopMigrationBundleMismatch(mismatch) : true;
+  } catch (error) {
+    return rejectUnverifiableDesktopMigrationBundle(error);
+  }
+}
+
+async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise<false> {
+  const message = formatErrorMessage(error);
+  writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
+  await dialog.showMessageBox({
+    type: "error",
+    title: "Synara could not verify its server build",
+    message: "The migration source could not be checked safely.",
+    detail: `${message}\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
+    buttons: ["Quit"],
+    defaultId: 0,
+    noLink: true,
+  });
+  requestGracefulAppQuit("migration bundle source check failed");
+  return false;
+}
+
+async function rejectDesktopMigrationBundleMismatch(
+  mismatch: MigrationRuntimeIdentityMismatch,
+): Promise<false> {
+  writeDesktopLogHeader(
+    `migration bundle source mismatch expected=${mismatch.expectedDigest} actual=${mismatch.actualDigest}`,
+  );
+  await dialog.showMessageBox({
+    type: "error",
+    title: "Synara's server build is stale",
+    message: "The built migration code does not match this checkout.",
+    detail:
+      `Expected ${mismatch.expectedDigest}, but the desktop bundle contains ` +
+      `${mismatch.actualDigest}.\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
+    buttons: ["Quit"],
+    defaultId: 0,
+    noLink: true,
+  });
+  requestGracefulAppQuit("stale migration bundle");
+  return false;
+}
+
 function desktopMigrationRecoveryPaths(): DesktopMigrationRecoveryPaths {
   return resolveDesktopMigrationRecoveryPaths({
     baseDir: BASE_DIR,
@@ -1105,7 +1220,7 @@ function formatRecoveryOptionList(options: ReadonlyArray<string>): string {
 
 async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecoveryOutcome> {
   const paths = desktopMigrationRecoveryPaths();
-  desktopStartupBlockedForMigrationRecovery = true;
+  desktopStartupBlockedForDatabaseRestore = true;
   const outcome = await recoverDesktopMigrationIfRequired({
     // The gate opens only once the backend has spent its resume budget, while
     // the post-restore verification checks the marker file itself.
@@ -1199,7 +1314,7 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
     log: writeDesktopLogHeader,
   });
   if (outcome === "continue") {
-    desktopStartupBlockedForMigrationRecovery = false;
+    desktopStartupBlockedForDatabaseRestore = false;
   }
   return outcome;
 }
@@ -1348,13 +1463,7 @@ function handleFatalStartupError(stage: string, error: unknown): void {
     isQuitting = true;
     dialog.showErrorBox("Synara failed to start", `Stage: ${stage}\n${message}${detail}`);
   }
-  if (process.platform === "win32") {
-    requestGracefulAppQuit(`fatal startup (${stage})`);
-    return;
-  }
-  stopBackend();
-  restoreStdIoCapture?.();
-  app.quit();
+  requestGracefulAppQuit(`fatal startup (${stage})`);
 }
 
 function registerDesktopProtocol(): void {
@@ -1870,6 +1979,10 @@ function resolveUserDataPath(): string {
   return resolveDesktopUserDataPath({
     appDataBase,
     userDataDirectoryName: desktopIdentity.userDataDirectoryName,
+    testOverridePath:
+      requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+        ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
+        : undefined,
   });
 }
 
@@ -1928,7 +2041,219 @@ function persistDesktopAppIcon(icon: DesktopAppIcon): void {
   FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
 }
 
-function applyDesktopAppIcon(icon: DesktopAppIcon): void {
+function windowsShortcutSearchDirectories(): string[] {
+  const appData = process.env.APPDATA?.trim() ?? "";
+  const programData =
+    process.env.ProgramData?.trim() ?? Path.join(Path.parse(OS.homedir()).root, "ProgramData");
+  return [
+    Path.join(OS.homedir(), "Desktop"),
+    Path.join(OS.homedir(), "OneDrive", "Desktop"),
+    Path.join(programData, "Microsoft", "Windows", "Start Menu", "Programs"),
+    Path.join(OS.homedir(), "..", "Public", "Desktop"),
+    ...(appData.length > 0
+      ? [
+          Path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs"),
+          Path.join(
+            appData,
+            "Microsoft",
+            "Internet Explorer",
+            "Quick Launch",
+            "User Pinned",
+            "TaskBar",
+          ),
+        ]
+      : []),
+  ];
+}
+
+function syncWindowsTaskbarShortcuts(shellIconPath: string): string[] {
+  // Always point shortcuts at the materialized ICO. Reverting to process.execPath
+  // leaves Explorer serving the previous custom icon from its AUMID cache.
+  const shortcutIconPath = shellIconPath;
+  const shortcutPaths = collectWindowsShortcutPaths({
+    directories: windowsShortcutSearchDirectories(),
+    readdir: (directory) => FS.readdirSync(directory),
+    isDirectory: (path) => {
+      try {
+        return FS.statSync(path).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  });
+  const { matched } = syncWindowsShortcutIcons({
+    iconPath: shortcutIconPath,
+    iconIndex: 0,
+    appId: APP_USER_MODEL_ID,
+    executablePath: process.execPath,
+    shortcutPaths,
+    readShortcut: (shortcutPath) => {
+      try {
+        return shell.readShortcutLink(shortcutPath);
+      } catch {
+        return null;
+      }
+    },
+    updateShortcut: (shortcutPath, iconPath, iconIndex) => {
+      try {
+        const current = shell.readShortcutLink(shortcutPath);
+        return shell.writeShortcutLink(shortcutPath, "update", {
+          ...current,
+          icon: iconPath,
+          iconIndex,
+          appUserModelId: APP_USER_MODEL_ID,
+        });
+      } catch {
+        return false;
+      }
+    },
+  });
+  return matched;
+}
+
+function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): string {
+  const bytes = toWindowsTaskbarIcoBytes(sourcePath);
+  const contentKey = windowsShellIconContentKey(icon, bytes);
+  const cacheKey = nextWindowsShellIconCacheKey(contentKey);
+  const fallbackDirectory = Path.join(STATE_DIR, "taskbar-icons");
+  const directories = [
+    ...new Set([
+      resolveWindowsShellIconCacheDirectory({
+        executablePath: process.execPath,
+        fallbackDirectory,
+      }),
+      fallbackDirectory,
+    ]),
+  ];
+  let lastError: unknown;
+  for (const directory of directories) {
+    try {
+      FS.mkdirSync(directory, { recursive: true });
+      const destinationPath = windowsShellIconCachePath(directory, cacheKey);
+      if (FS.existsSync(destinationPath)) return destinationPath;
+      try {
+        FS.writeFileSync(destinationPath, bytes);
+      } catch (error) {
+        if (!FS.existsSync(destinationPath)) throw error;
+      }
+      return destinationPath;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to materialize Windows shell icon");
+}
+
+const windowsTaskbarIcoBytesCache = new Map<string, Buffer>();
+
+function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
+  const cached = windowsTaskbarIcoBytesCache.get(sourcePath);
+  if (cached) return cached;
+  const sourceBytes = FS.readFileSync(sourcePath);
+  try {
+    if (extractIcoPngImages(sourceBytes).length === 0) {
+      windowsTaskbarIcoBytesCache.set(sourcePath, sourceBytes);
+      return sourceBytes;
+    }
+    const converted = toWindowsShellIco(sourceBytes, (png, size) => {
+      const image = nativeImage.createFromBuffer(png);
+      if (image.isEmpty()) return null;
+      const resized = image.resize({ width: size, height: size });
+      const bgra = resized.toBitmap();
+      if (bgra.length !== size * size * 4) return null;
+      return { width: size, height: size, bgra };
+    });
+    windowsTaskbarIcoBytesCache.set(sourcePath, converted);
+    return converted;
+  } catch {
+    return sourceBytes;
+  }
+}
+
+let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
+let windowsShellStampResolve: (() => void) | null = null;
+let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
+
+function cancelDeferredWindowsShellStamp(): void {
+  if (windowsShellStampTimer === null) return;
+  clearImmediate(windowsShellStampTimer);
+  windowsShellStampTimer = null;
+  const resolve = windowsShellStampResolve;
+  windowsShellStampResolve = null;
+  resolve?.();
+}
+
+function stampWindowsShellAppUserModel(
+  input: Parameters<typeof applyWindowsShellAppUserModel>[0],
+  options?: {
+    flush?: boolean;
+  },
+): void {
+  try {
+    applyWindowsShellAppUserModel(input, Path.join(STATE_DIR, "taskbar-icons"), options);
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to stamp Windows AppUserModel icon properties: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function queueWindowsShellAppUserModelStamp(
+  input: Parameters<typeof applyWindowsShellAppUserModel>[0],
+  options?: {
+    flush?: boolean;
+    immediate?: boolean;
+  },
+): Promise<void> {
+  cancelDeferredWindowsShellStamp();
+  if (options?.immediate === true) {
+    stampWindowsShellAppUserModel(input, options);
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    windowsShellStampResolve = resolve;
+    windowsShellStampTimer = setImmediate(() => {
+      windowsShellStampTimer = null;
+      windowsShellStampResolve = null;
+      stampWindowsShellAppUserModel(input, options);
+      resolve();
+    });
+  });
+}
+
+async function applyDesktopAppIcon(
+  icon: DesktopAppIcon,
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
+  return enqueueDesktopAppIconJob(() => applyDesktopAppIconUnlocked(icon, window, options));
+}
+
+function applyPersistedDesktopAppIcon(
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
+  return enqueueDesktopAppIconJob(() =>
+    applyDesktopAppIconUnlocked(readDesktopAppIcon(), window, options),
+  );
+}
+
+function enqueueDesktopAppIconJob(job: () => Promise<void>): Promise<void> {
+  const run = desktopAppIconApplyTail.then(job, job);
+  desktopAppIconApplyTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function applyDesktopAppIconUnlocked(
+  icon: DesktopAppIcon,
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
   if (
     process.platform !== "darwin" &&
     process.platform !== "linux" &&
@@ -1951,13 +2276,71 @@ function applyDesktopAppIcon(icon: DesktopAppIcon): void {
     app.dock?.setIcon(image);
     return;
   }
-  mainWindow?.setIcon(image);
-  // setIcon updates the window chrome and Alt-Tab artwork, but the Windows
-  // shell caches the taskbar button icon registered for the app identity, so
-  // re-register the live taskbar button to make the new icon take effect.
   if (process.platform === "win32") {
-    refreshWindowsTaskbarIcon(mainWindow);
+    let shellIconPath = iconPath;
+    try {
+      shellIconPath = materializeWindowsShellIcon(icon, iconPath);
+    } catch (error) {
+      console.warn(
+        `[desktop] Failed to materialize Windows taskbar icon: ${formatErrorMessage(error)}`,
+      );
+    }
+    let matchedShortcuts: string[] = [];
+    try {
+      matchedShortcuts = syncWindowsTaskbarShortcuts(shellIconPath);
+    } catch (error) {
+      console.warn(`[desktop] Failed to sync Windows shortcut icons: ${formatErrorMessage(error)}`);
+    }
+    let hwnd: bigint | null = null;
+    try {
+      const handle = window?.getNativeWindowHandle();
+      if (handle) hwnd = nativeWindowHandleToHwnd(handle);
+    } catch {
+      hwnd = null;
+    }
+    // Never block window creation/show on Explorer COM. The helper used to
+    // wait on a synchronous window icon message while Electron waited in
+    // spawnSync — deadlock, no window. Stamp properties on the next turn.
+    try {
+      applyWindowsTaskbarIcon({
+        window,
+        iconPath: shellIconPath,
+        identity: {
+          appId: APP_USER_MODEL_ID,
+          relaunchCommand: `"${process.execPath}"`,
+          relaunchDisplayName: APP_DISPLAY_NAME,
+        },
+        reregisterTaskbarButton: false,
+      });
+    } catch (error) {
+      console.warn(`[desktop] Failed to apply Windows taskbar icon: ${formatErrorMessage(error)}`);
+      try {
+        window?.setIcon(shellIconPath);
+      } catch (iconError) {
+        console.warn(
+          `[desktop] Failed to set Windows window icon: ${formatErrorMessage(iconError)}`,
+        );
+      }
+    }
+    // User-initiated changes stamp immediately so Explorer can finish before
+    // the next click. Startup still defers so window creation is not blocked.
+    await queueWindowsShellAppUserModelStamp(
+      {
+        appId: APP_USER_MODEL_ID,
+        iconPath: shellIconPath,
+        relaunchCommand: `"${process.execPath}"`,
+        displayName: APP_DISPLAY_NAME,
+        shortcutPaths: matchedShortcuts,
+        hwnd,
+      },
+      {
+        flush: options?.flushShellIconCache === true,
+        immediate: options?.flushShellIconCache === true,
+      },
+    );
+    return;
   }
+  window?.setIcon(image);
 }
 
 function applyInitialMacDockIcon(): void {
@@ -3129,6 +3512,8 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
+  const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
+  const migrationDivergenceConsent = migrationConsentHandoff.take();
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -3140,6 +3525,12 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
     ...(app.isPackaged
       ? { [DEVICE_HELPER_SOURCE_DIR_ENV]: Path.join(process.resourcesPath, "device-helper") }
+      : {}),
+    ...(migrationSourceDigest
+      ? { [MIGRATION_RUNTIME_SOURCE_DIGEST_ENV]: migrationSourceDigest }
+      : {}),
+    ...(migrationDivergenceConsent
+      ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
@@ -3275,10 +3666,227 @@ function presentBackendStartupGiveUp(reason: string): void {
   backendLifecycleDialogInFlight = task;
 }
 
+function schemaTooNewRestoreDetail(
+  block: MigrationSchemaTooNewStartupBlock,
+  restoreCandidate: ReturnType<typeof resolveDesktopMigrationRestoreCandidate>,
+): string {
+  if (restoreCandidate) {
+    return (
+      `Synara verified the exact pre-migration backup at:\n${restoreCandidate.backupPath}\n\n` +
+      `Its tracker ends at migration ${restoreCandidate.backupMigrationId}; its shared lineage is compatible ` +
+      "with this build, and it passed SQLite integrity checking."
+    );
+  }
+
+  if (block.recovery.kind === "restore-available") {
+    return "The recorded backup does not match this desktop database exactly, so Synara will not restore it.";
+  }
+
+  switch (block.recovery.reason) {
+    case "missing-provenance":
+      return "No completed migration backup record exists for this database, so Synara cannot choose a backup safely.";
+    case "invalid-provenance":
+      return "The completed migration backup record does not describe this exact database state.";
+    case "invalid-backup":
+      return "The exact recorded backup is missing, unreadable, or failed SQLite integrity checking.";
+    case "incompatible-backup":
+      return "The exact recorded backup has a schema or migration lineage this Synara build cannot open safely.";
+  }
+}
+
+async function handleDesktopSchemaTooNewRecovery(
+  block: MigrationSchemaTooNewStartupBlock,
+): Promise<void> {
+  const paths = desktopMigrationRecoveryPaths();
+  const restoreCandidate = resolveDesktopMigrationRestoreCandidate(paths, block);
+  desktopStartupBlockedForDatabaseRestore = true;
+
+  await recoverDesktopMigrationIfRequired({
+    requiresRecovery: () => true,
+    markerRemains: () =>
+      restoreCandidate === null ||
+      !hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
+    choose: async ({ previousFailure }) => {
+      const restoreFailed = previousFailure?.attempt === "restore";
+      const canInstallUpdate = canInstallUpdateFromRecovery();
+      const releaseUrl = updateState.releaseUrl;
+      const choices: Array<{
+        readonly label: string;
+        readonly decision: DesktopMigrationRecoveryDecision;
+      }> = [];
+
+      if (restoreCandidate) {
+        choices.push({
+          label: restoreFailed ? "Try restore again" : "Restore backup and restart",
+          decision: "restore",
+        });
+      }
+      if (canInstallUpdate) {
+        choices.push({ label: "Update Synara and restart", decision: "install-update" });
+      }
+      if (releaseUrl !== null) {
+        choices.push({ label: "Download latest release", decision: "open-release-page" });
+      }
+      choices.push(
+        { label: "Open logs", decision: "open-logs" },
+        { label: "Quit", decision: "quit" },
+      );
+
+      const result = await dialog.showMessageBox({
+        type: previousFailure === null ? "warning" : "error",
+        title:
+          previousFailure === null
+            ? "This database is newer than Synara"
+            : restoreFailed
+              ? "Database restore failed"
+              : "Synara could not update itself",
+        message:
+          previousFailure === null
+            ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+            : restoreFailed
+              ? "The verified database backup could not be restored."
+              : "The newest Synara release could not be installed.",
+        detail:
+          `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+          `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
+          "The backend and provider processes will remain stopped until you update, restore, or quit.",
+        buttons: choices.map((choice) => choice.label),
+        defaultId: 0,
+        cancelId: choices.length - 1,
+        noLink: true,
+      });
+      return choices[result.response]?.decision ?? "quit";
+    },
+    installUpdate: installLatestUpdateForMigrationRecovery,
+    openReleasePage: () => {
+      const releaseUrl = updateState.releaseUrl;
+      if (releaseUrl !== null) void shell.openExternal(releaseUrl);
+    },
+    openLogs: openDesktopLogDirectory,
+    restore: async () => {
+      if (!restoreCandidate) {
+        throw new Error("No exact compatible migration backup is available.");
+      }
+      await restoreDesktopMigrationBackup({
+        executablePath: process.execPath,
+        nodeArgs: backendNodeArgs(),
+        paths,
+        cwd: resolveBackendCwd(),
+        env: process.env,
+        expectedBackupPath: restoreCandidate.backupPath,
+        expectedProvenancePath: restoreCandidate.provenancePath,
+        verifyRestore: () => hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
+        restoreVerificationFailure:
+          "Migration restore completed without exact completed-provenance verification.",
+      });
+    },
+    requestRestart: () => app.relaunch(),
+    requestQuit: (reason) => requestGracefulAppQuit(reason),
+    formatError: formatErrorMessage,
+    log: writeDesktopLogHeader,
+  });
+}
+
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
   const task = (async () => {
+    if (block.kind === "migration-schema-too-new") {
+      await handleDesktopSchemaTooNewRecovery(block.block);
+      return;
+    }
+
+    if (block.kind === "migration-startup-block-invalid") {
+      desktopStartupBlockedForDatabaseRestore = true;
+      await recoverDesktopMigrationIfRequired({
+        requiresRecovery: () => true,
+        markerRemains: () => true,
+        choose: async ({ previousFailure }) => {
+          const releaseUrl = updateState.releaseUrl;
+          const choices = invalidMigrationStartupRecoveryChoices({
+            canInstallUpdate: canInstallUpdateFromRecovery(),
+            canOpenReleasePage: releaseUrl !== null,
+          });
+          const result = await dialog.showMessageBox({
+            type: "error",
+            title:
+              previousFailure === null
+                ? "Synara could not verify migration recovery"
+                : "Synara could not update itself",
+            message:
+              previousFailure === null
+                ? "The backend stopped for database safety, but its recovery details were invalid."
+                : "The newest Synara release could not be installed.",
+            detail:
+              `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+              "Synara will keep the backend and provider processes stopped. The recovery record is not trusted, so restoring from it is disabled; choose one of the safe actions below.",
+            buttons: choices.map((choice) => choice.label),
+            defaultId: 0,
+            cancelId: choices.length - 1,
+            noLink: true,
+          });
+          return choices[result.response]?.decision ?? "quit";
+        },
+        installUpdate: installLatestUpdateForMigrationRecovery,
+        openReleasePage: () => {
+          const releaseUrl = updateState.releaseUrl;
+          if (releaseUrl !== null) void shell.openExternal(releaseUrl);
+        },
+        openLogs: openDesktopLogDirectory,
+        restore: async () => {
+          throw new Error("Invalid migration recovery details cannot authorize a restore.");
+        },
+        requestRestart: () => undefined,
+        requestQuit: (reason) => requestGracefulAppQuit(reason),
+        formatError: formatErrorMessage,
+        log: writeDesktopLogHeader,
+      });
+      return;
+    }
+
+    if (block.kind === "migration-divergence-consent-required") {
+      const challenge = block.challenge;
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Synara found a different database migration history",
+        message: `Migration ${challenge.firstDivergedId} does not match this build.`,
+        detail:
+          `The database records "${challenge.recordedName}", while this build expects ` +
+          `"${challenge.expectedName}". Continuing will first save an exact backup in:\n` +
+          `${challenge.backupDirectory}\n\nSynara will then rewrite tracker rows from migration ` +
+          `${challenge.firstDivergedId} and replay through ${challenge.targetVersion}. ` +
+          "Older builds may no longer be able to open the upgraded database. No provider or chat process will start until you choose.",
+        buttons: ["Back up and continue", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (result.response === 0) {
+        migrationConsentHandoff.approve(challenge.consentToken);
+        backendLifecycleDialogInFlight = null;
+        await restartBackendAfterCrash("approved migration lineage repair", "lifecycle");
+      } else {
+        requestGracefulAppQuit("migration lineage repair declined");
+      }
+      return;
+    }
+
+    if (block.kind === "migration-runtime-identity-mismatch") {
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's server build does not match",
+        message: "The desktop and server migration code came from different builds.",
+        detail: app.isPackaged
+          ? "Update or reinstall Synara before starting it again. The database was not opened."
+          : "Rebuild with bun run build:desktop before starting Synara again. The database was not opened.",
+        buttons: ["Quit"],
+        defaultId: 0,
+        noLink: true,
+      });
+      requestGracefulAppQuit("migration bundle identity mismatch");
+      return;
+    }
+
     if (block.kind === "migration-recovery-required") {
       const result = await dialog.showMessageBox({
         type: "warning",
@@ -3374,7 +3982,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   // Recovery owns the database until it clears the marker. Callers that restart
   // the backend after an unrelated failure — a given-up update install, say —
   // must not hand it a database the user is being asked how to repair.
-  if (desktopStartupBlockedForMigrationRecovery) {
+  if (desktopStartupBlockedForDatabaseRestore) {
     writeDesktopLogHeader("backend start suppressed while migration recovery is pending");
     return;
   }
@@ -3512,35 +4120,20 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
   return child;
 }
 
-function stopBackend(): void {
-  const child = takeBackendProcessForShutdown();
-  if (!child) return;
-
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }, BACKEND_FORCE_KILL_DELAY_MS).unref();
-  }
-}
-
-async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
+async function stopBackendAndWaitForExit(): Promise<void> {
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
   if (backendChild.exitCode !== null || backendChild.signalCode !== null) return;
 
   if (process.platform === "win32") {
-    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
     try {
       const result = await stopWindowsBackendAndWait({
         child: backendChild,
         backendHttpUrl,
         shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-        forceKillDelayMs,
-        timeoutMs,
+        forceKillDelayMs: BACKEND_FORCE_KILL_DELAY_MS,
+        timeoutMs: BACKEND_SHUTDOWN_TIMEOUT_MS,
       });
       requireWindowsBackendExit(result);
     } catch (error) {
@@ -3550,12 +4143,14 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
     return;
   }
 
-  const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
   try {
     await stopPosixBackendAndWait({
       child: backendChild,
-      forceKillDelayMs,
-      timeoutMs,
+      backendHttpUrl,
+      shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+      terminateDelayMs: POSIX_BACKEND_TERMINATE_DELAY_MS,
+      forceKillDelayMs: POSIX_BACKEND_FORCE_KILL_DELAY_MS,
+      timeoutMs: POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS,
     });
   } catch (error) {
     backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);
@@ -3577,6 +4172,21 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   }
 }
 
+function hideDesktopWindowForImmediateQuit(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      window.setSkipTaskbar(true);
+    }
+    window.hide();
+  } catch (error: unknown) {
+    writeDesktopLogHeader(`hide window for quit failed message=${formatErrorMessage(error)}`);
+  }
+}
+
 // Keeps Electron alive long enough for backend finalizers to reap provider child processes.
 async function shutdownDesktopRuntime(reason: string): Promise<void> {
   if (desktopShutdownPromise) {
@@ -3584,6 +4194,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
+  hideDesktopWindowForImmediateQuit();
   writeDesktopLogHeader(`${reason} shutdown start`);
   const shutdown = runAfterDesktopShutdown(
     stopBackendAndWaitForExit(),
@@ -3614,6 +4225,51 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 }
 
+function isMainRendererAvailable(): boolean {
+  return Boolean(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed() &&
+    !mainWindow.webContents.isCrashed(),
+  );
+}
+
+async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
+  if (
+    !shouldPromptForRunningChatsBeforeQuit(reason) ||
+    runningChatsQuitGuard.hasAllowedQuit() ||
+    isQuitting ||
+    desktopShutdownPromise !== null ||
+    desktopShutdownComplete
+  ) {
+    requestGracefulAppQuit(reason);
+    return;
+  }
+
+  const window = mainWindow;
+  const presentation = quitConfirmationPresentationForPlatform();
+  const allowed = await runningChatsQuitGuard.askRenderer({
+    send: (request) => {
+      if (!isMainRendererAvailable() || !window) {
+        throw new Error("Renderer unavailable.");
+      }
+      if (window.isMinimized()) {
+        window.restore();
+      }
+      window.show();
+      window.focus();
+      window.webContents.send(IPC.quitConfirmationRequest, request);
+    },
+    isRendererAvailable: isMainRendererAvailable,
+    presentation,
+  });
+  if (!allowed) {
+    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    return;
+  }
+  requestGracefulAppQuit(reason);
+}
+
 function requestGracefulAppQuit(reason: string): void {
   if (isUpdaterInstallPreparing) {
     deferDesktopQuitUntilUpdaterSettles(reason);
@@ -3632,6 +4288,11 @@ function requestGracefulAppQuit(reason: string): void {
 
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(IPC.browser.webMcpCompatibilityPolicy);
+  ipcMain.on(IPC.browser.webMcpCompatibilityPolicy, (event: IpcMainEvent) => {
+    event.returnValue = browserManager.isWebMcpCompatibilityAllowed(event.sender.id);
+  });
 
   ipcMain.removeAllListeners(IPC.storageMigration.read);
   ipcMain.on(IPC.storageMigration.read, (event: IpcMainEvent) => {
@@ -3703,6 +4364,11 @@ function registerIpcHandlers(): void {
     return showDesktopConfirmDialog(message, owner);
   });
 
+  ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
+  ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
+    runningChatsQuitGuard.receiveResponse(payload);
+  });
+
   ipcMain.removeHandler(IPC.setTheme);
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
@@ -3717,13 +4383,18 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getAppIcon, () => readDesktopAppIcon());
 
   ipcMain.removeHandler(IPC.setAppIcon);
+  const enqueueDesktopAppIconApply = createExclusiveApplyQueue(async (icon: DesktopAppIcon) => {
+    const shouldPersist = shouldUpdateDesktopAppIcon(readDesktopAppIcon(), icon);
+    if (shouldPersist) persistDesktopAppIcon(icon);
+    // Renderer hydration mirrors this native preference. Avoid reapplying the
+    // icon selected during boot on macOS. Windows still reapplies so a click
+    // on the already-selected icon can retry a failed Explorer refresh.
+    if (!shouldPersist && process.platform !== "win32") return;
+    await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
+  });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
     if (!isDesktopAppIcon(rawIcon)) return;
-    // Renderer hydration mirrors this native preference. Avoid reapplying the icon selected
-    // during boot, especially the bundled default that modern macOS renders itself.
-    if (!shouldUpdateDesktopAppIcon(readDesktopAppIcon(), rawIcon)) return;
-    persistDesktopAppIcon(rawIcon);
-    applyDesktopAppIcon(rawIcon);
+    await enqueueDesktopAppIconApply(rawIcon);
   });
 
   ipcMain.removeHandler(IPC.contextMenu);
@@ -3890,6 +4561,28 @@ function registerIpcHandlers(): void {
     return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
   });
 
+  ipcMain.removeHandler(IPC.customTitleBarGetState);
+  ipcMain.handle(IPC.customTitleBarGetState, async () => getDesktopCustomTitleBarState());
+
+  ipcMain.removeHandler(IPC.customTitleBarSetPreference);
+  ipcMain.handle(IPC.customTitleBarSetPreference, async (_event, rawEnabled: unknown) => {
+    if (typeof rawEnabled !== "boolean") {
+      return getDesktopCustomTitleBarState();
+    }
+    const state = getDesktopCustomTitleBarState();
+    if (!state.supported) {
+      return state;
+    }
+    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, rawEnabled);
+    return getDesktopCustomTitleBarState();
+  });
+
+  ipcMain.removeHandler(IPC.customTitleBarRelaunch);
+  ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
+    app.relaunch();
+    requestGracefulAppQuit("custom-title-bar-relaunch");
+  });
+
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
@@ -3964,13 +4657,23 @@ function registerIpcHandlers(): void {
 function getIconOption(): { icon: string } | Record<string, never> {
   if (process.platform === "darwin") return {}; // macOS uses .icns from app bundle
   if (process.platform !== "linux" && process.platform !== "win32") return {};
+  const icon = readDesktopAppIcon();
   const resourceName = desktopAppIconResourceName({
-    icon: readDesktopAppIcon(),
+    icon,
     platform: process.platform,
     isDarkAppearance: false,
   });
   const iconPath = resolveResourcePath(resourceName);
-  return iconPath ? { icon: iconPath } : {};
+  if (!iconPath) return {};
+  if (process.platform !== "win32") return { icon: iconPath };
+  try {
+    return { icon: materializeWindowsShellIcon(icon, iconPath) };
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to materialize Windows window icon: ${formatErrorMessage(error)}`,
+    );
+    return { icon: iconPath };
+  }
 }
 
 // macOS backs the translucent shell with window vibrancy, so the window is created
@@ -3994,23 +4697,34 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
-// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
-// so the toolbar can occupy the top edge instead of sitting below a native title bar.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows and
+// Linux can use a frameless shell with renderer-owned minimize/maximize/close controls
+// (see Settings → Appearance → Use custom title bar). `frame` is fixed at construction.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
-  if (process.platform === "win32") {
-    return { frame: false };
+  if (process.platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+      // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
+      // so the native lights and the renderer's leading toggle/arrow controls always share
+      // the same vertical center. Tune the height/radius there, never the raw px here.
+      trafficLightPosition: getMacTrafficLightPosition(),
+    };
   }
-  if (process.platform !== "darwin") {
-    return {};
-  }
-  return {
-    titleBarStyle: "hiddenInset",
-    // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
-    // so the native lights and the renderer's leading toggle/arrow controls always share
-    // the same vertical center. Tune the height/radius there, never the raw px here.
-    trafficLightPosition: getMacTrafficLightPosition(),
-  };
+  const preference = readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH);
+  const frameOptions = resolveDesktopTitleBarFrameOptions({
+    platform: process.platform,
+    preference,
+  });
+  customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
+  return frameOptions;
+}
+
+function getDesktopCustomTitleBarState() {
+  return resolveDesktopCustomTitleBarState({
+    platform: process.platform,
+    preference: readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH),
+    active: customTitleBarActive,
+  });
 }
 
 function createWindow(): BrowserWindow {
@@ -4130,6 +4844,9 @@ function createWindow(): BrowserWindow {
       window.maximize();
     }
     window.show();
+    if (process.platform === "win32") {
+      void applyPersistedDesktopAppIcon(window);
+    }
     emitDesktopWindowState(window);
   });
 
@@ -4156,7 +4873,17 @@ function createWindow(): BrowserWindow {
       })
     ) {
       event.preventDefault();
-      requestGracefulAppQuit("window-close");
+      void confirmRunningChatsThenQuit("window-close");
+      return;
+    }
+
+    if (
+      process.platform === "linux" &&
+      !desktopShutdownComplete &&
+      !isUpdaterQuitAndInstallInFlight
+    ) {
+      event.preventDefault();
+      void confirmRunningChatsThenQuit("window-close");
     }
   });
 
@@ -4167,7 +4894,16 @@ function createWindow(): BrowserWindow {
     void window.loadURL(desktopIdentity.entryUrl);
   }
 
+  if (process.platform === "linux" || process.platform === "win32") {
+    try {
+      void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false });
+    } catch (error) {
+      console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
+    }
+  }
+
   window.on("closed", () => {
+    runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -4193,6 +4929,7 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    runningChatsQuitGuard.cancelPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -4234,6 +4971,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   });
   window.webContents.on("responsive", () => {
     writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.webContents.on("did-start-loading", () => {
+    runningChatsQuitGuard.cancelPending();
   });
 
   window.on("closed", clearReloadTimer);
@@ -4380,6 +5121,9 @@ if (!hasSingleInstanceLock) {
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
+  if (!(await requireCurrentDesktopMigrationBundle())) {
+    return;
+  }
   // Ahead of the recovery gate on purpose. A startup that blocks below returns
   // early, and every path that could ship the fix for whatever blocked it lives
   // after that return: an install wedged on a bad migration would be unable to
@@ -4487,7 +5231,7 @@ app.on("before-quit", (event) => {
   }
 
   event.preventDefault();
-  requestGracefulAppQuit("before-quit");
+  void confirmRunningChatsThenQuit("before-quit");
 });
 
 if (hasSingleInstanceLock) {
@@ -4496,6 +5240,15 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
+      if (process.platform === "win32") {
+        try {
+          ensureWindowsShellAppUserModelHelper(Path.join(STATE_DIR, "taskbar-icons"));
+        } catch (error) {
+          console.warn(
+            `[desktop] Failed to prepare Windows shell icon helper: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       applyInitialMacDockIcon();
       registerMacAppearanceIconSync();
       refreshMacIconCacheOnVersionChange();
@@ -4525,7 +5278,7 @@ if (hasSingleInstanceLock) {
       });
 
       app.on("activate", () => {
-        if (desktopStartupBlockedForMigrationRecovery || isQuitting) {
+        if (desktopStartupBlockedForDatabaseRestore || isQuitting) {
           return;
         }
         handleDesktopAppForegrounded();

@@ -125,20 +125,26 @@ export const sendCdpCommand = async <Result = unknown>(
   ensureCdpAttached(runtime.webContents);
   try {
     const operation = runtime.webContents.debugger.sendCommand(method, params) as Promise<Result>;
-    return await drainOnAbort(
-      operation,
-      signal,
-      method === "Runtime.evaluate" || method === "Runtime.callFunctionOn"
-        ? () => {
-            if (runtime.webContents.isDestroyed() || !runtime.webContents.debugger.isAttached())
+    const terminatesJavaScript =
+      method === "Runtime.evaluate" || method === "Runtime.callFunctionOn";
+    const onAbort =
+      errorContext.onAbort || terminatesJavaScript
+        ? async () => {
+            await errorContext.onAbort?.();
+            if (
+              !terminatesJavaScript ||
+              runtime.webContents.isDestroyed() ||
+              !runtime.webContents.debugger.isAttached()
+            ) {
               return;
-            return runtime.webContents.debugger.sendCommand("Runtime.terminateExecution").then(
+            }
+            await runtime.webContents.debugger.sendCommand("Runtime.terminateExecution").then(
               () => undefined,
               () => undefined,
             );
           }
-        : errorContext.onAbort,
-    );
+        : undefined;
+    return await drainOnAbort(operation, signal, onAbort);
   } catch (error) {
     if (signal?.aborted) throw abortReason(signal);
     if (error instanceof BrowserAutomationHostError) throw error;
@@ -201,6 +207,7 @@ export const callFunctionOn = async <Result = unknown>(
     readonly returnByValue?: boolean | undefined;
     readonly arguments?: readonly unknown[] | undefined;
     readonly effectMayHaveCommitted?: boolean | undefined;
+    readonly onAbort?: (() => void | Promise<void>) | undefined;
     readonly signal?: AbortSignal | undefined;
   } = {},
 ): Promise<CdpRemoteObject & { readonly value?: Result }> => {
@@ -220,6 +227,7 @@ export const callFunctionOn = async <Result = unknown>(
       // callFunctionOn executes caller-supplied JavaScript. Default to the safe
       // classification; observation-only callers can explicitly opt out.
       effectMayHaveCommitted: options.effectMayHaveCommitted ?? true,
+      onAbort: options.onAbort,
     },
   );
   throwIfAborted(options.signal);

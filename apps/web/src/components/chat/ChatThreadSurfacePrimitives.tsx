@@ -106,6 +106,7 @@ export function ChatMountLoader() {
 
 export function DeferredChatView(props: {
   threadId: ThreadId;
+  hideHeader?: boolean;
   paneScopeId: string;
   deferMount: boolean;
   surfaceMode: "single" | "split";
@@ -163,6 +164,7 @@ export function DeferredChatView(props: {
     <ChatView
       key={props.paneScopeId}
       threadId={props.threadId}
+      hideHeader={props.hideHeader ?? false}
       paneScopeId={props.paneScopeId}
       surfaceMode={props.surfaceMode}
       presentationMode={props.presentationMode ?? "default"}

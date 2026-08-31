@@ -176,6 +176,48 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    it.effect("defaults watched desktop development to ~/.synara-dev", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          synaraHome: undefined,
+          authToken: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-dev"));
+      }),
+    );
+
+    it.effect("keeps watched Canary desktop data separate from development", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: { SYNARA_DESKTOP_FLAVOR: "canary" },
+          serverOffset: 0,
+          webOffset: 0,
+          synaraHome: undefined,
+          authToken: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-canary"));
+      }),
+    );
+
     it.effect("normalizes bracketed IPv6 hosts for listen and client URL syntax", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({

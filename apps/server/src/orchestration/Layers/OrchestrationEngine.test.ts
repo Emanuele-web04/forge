@@ -2,6 +2,7 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -1182,6 +1183,94 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("loads authoritative pending interactions before expiring a side chat", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+    const projectId = asProjectId("project-sidechat-pending-expiry");
+    const sourceThreadId = ThreadId.makeUnsafe("thread-sidechat-pending-source");
+    const sidechatId = ThreadId.makeUnsafe("thread-sidechat-pending");
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-project"),
+        projectId,
+        title: "Sidechat pending expiry",
+        workspaceRoot: "/tmp/sidechat-pending-expiry",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-source"),
+        threadId: sourceThreadId,
+        projectId,
+        title: "Source thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-create"),
+        threadId: sidechatId,
+        sourceThreadId,
+        sidechatSourceThreadId: sourceThreadId,
+        projectId,
+        title: "Pending side chat",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-approval"),
+        threadId: sidechatId,
+        activity: {
+          id: EventId.makeUnsafe("activity-sidechat-pending-approval"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          payload: {
+            requestId: "approval-sidechat-pending",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.sidechat.expire",
+          commandId: CommandId.makeUnsafe("cmd-sidechat-pending-expire"),
+          threadId: sidechatId,
+          expectedLastActivityAt: createdAt,
+          expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+        }),
+      ),
+    ).rejects.toThrow("still has a pending interaction");
+
+    await system.dispose();
+  });
+
   it("keeps projection health healthy when optional cursors do not exist yet", async () => {
     const system = await createOrchestrationSystem();
     const createdAt = now();
@@ -1370,6 +1459,62 @@ describe("OrchestrationEngine", () => {
       "did not reach captured event fence 1",
     );
     await expect(runtime.runPromise(engine.getReadModel())).resolves.toEqual(beforeRepair);
+
+    await runtime.dispose();
+  });
+
+  it("coalesces concurrent projection repairs and skips an immediate repeat", async () => {
+    let bootstrapCalls = 0;
+    let repairBootstrapCalls = 0;
+    let resolveBootstrapStarted: (() => void) | undefined;
+    let releaseBootstrap: (() => void) | undefined;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      resolveBootstrapStarted = resolve;
+    });
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const blockingProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.sync(() => (bootstrapCalls += 1)).pipe(
+        Effect.flatMap((call) => {
+          if (call === 1) {
+            return Effect.void;
+          }
+          repairBootstrapCalls += 1;
+          resolveBootstrapStarted?.();
+          return Effect.promise(() => bootstrapGate);
+        }),
+      ),
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectDeferredEvent: () => Effect.void,
+    };
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, blockingProjectionPipeline)),
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+
+    const firstRepair = runtime.runPromise(engine.repairState());
+    await bootstrapStarted;
+    const secondRepair = runtime.runPromise(engine.repairState());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBootstrap?.();
+
+    const [firstSnapshot, secondSnapshot] = await Promise.all([firstRepair, secondRepair]);
+    expect(secondSnapshot).toEqual(firstSnapshot);
+    expect(repairBootstrapCalls).toBe(1);
+
+    await runtime.runPromise(engine.repairState());
+    expect(repairBootstrapCalls).toBe(1);
 
     await runtime.dispose();
   });

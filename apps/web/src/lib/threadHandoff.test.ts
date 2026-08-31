@@ -101,14 +101,17 @@ describe("threadHandoff", () => {
     ).toHaveLength(4);
   });
 
-  it("does not import a source provider's configured context window", () => {
-    const activity = (kind: string): OrchestrationThreadActivity => ({
+  it("drops usage invalidated by the latest compaction before handoff appends", () => {
+    const activity = (
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"] = {},
+    ): OrchestrationThreadActivity => ({
       id: EventId.makeUnsafe(`activity-${kind}`),
       createdAt: "2026-07-21T00:00:00.000Z",
       tone: "info",
       kind,
       summary: kind,
-      payload: {},
+      payload,
       turnId: null,
     });
 
@@ -116,11 +119,16 @@ describe("threadHandoff", () => {
       activities: [
         activity("context-window.configured"),
         activity("context-window.updated"),
+        activity("context-compaction", { state: "compacted" }),
+        activity("context-window.updated", { usedTokens: 20_000 }),
         activity("tool.started"),
       ],
     });
 
-    expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+    expect(imported.map(({ kind }) => kind)).toEqual([
+      "context-compaction",
+      "context-window.updated",
+    ]);
   });
 
   it("excludes disabled, missing, unavailable, and unauthenticated handoff targets", () => {
@@ -153,10 +161,10 @@ describe("threadHandoff", () => {
           readyStatus("cursor", { available: false, status: "error" }),
           readyStatus("antigravity"),
           readyStatus("grok", { authStatus: "unauthenticated" }),
-          readyStatus("kilo", { authStatus: "unknown" }),
+          readyStatus("opencode", { authStatus: "unknown" }),
         ],
       }),
-    ).toEqual(["claudeAgent", "kilo"]);
+    ).toEqual(["claudeAgent", "opencode"]);
   });
 
   it("does not expose targets before enabled-provider settings are available", () => {

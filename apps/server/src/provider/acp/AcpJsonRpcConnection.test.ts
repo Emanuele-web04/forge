@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, expect } from "vitest";
 
 import {
@@ -159,47 +160,187 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("loads a resumed session and still prompts normally", () =>
-    Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime;
-      const started = yield* runtime.start();
-      expect(started.sessionId).toBe("mock-session-1");
+  it.effect("suppresses late load replay before an immediate first prompt", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        expect(started.sessionId).toBe("mock-session-1");
 
-      // Resumed sessions drop session/update until a consumer attaches, so the
-      // events stream must be taken before prompting (mirrors the adapters,
-      // which fork the drain right after start()).
-      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
-        Effect.forkChild,
-      );
-      const promptResult = yield* runtime.prompt({
-        prompt: [{ type: "text", text: "hi" }],
-      });
-      expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+        // Resumed sessions drop session/update until a consumer attaches, so the
+        // events stream must be taken before prompting (mirrors the adapters,
+        // which fork the drain right after start()).
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        const promptResult = yield* runtime.prompt({
+          prompt: [{ type: "text", text: "hi" }],
+        });
+        expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "code" });
 
-      // The session/load replay chunk emitted before the consumer attached is
-      // dropped; only the prompt's own events arrive.
-      const notes = Array.from(yield* Fiber.join(eventsFiber));
-      expect(notes.map((note) => note._tag)).toEqual([
-        "PlanUpdated",
-        "AssistantItemStarted",
-        "ContentDelta",
-        "AssistantItemCompleted",
-      ]);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          spawn: {
-            command: bunExe,
-            args: [mockAgentPath],
-          },
-          cwd: process.cwd(),
-          resumeSessionId: "mock-session-1",
-          clientInfo: { name: "synara-test", version: "0.0.0" },
-          authMethodId: "test",
-        }),
+        // The session/load replay chunks are dropped; only the immediate first
+        // prompt's legitimate events arrive after the quiet gate opens.
+        const notes = Array.from(yield* Fiber.join(eventsFiber));
+        expect(notes.map((note) => note._tag)).toEqual([
+          "PlanUpdated",
+          "AssistantItemStarted",
+          "ContentDelta",
+          "AssistantItemCompleted",
+        ]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
+                SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
       ),
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("settles load replay before checking whether a mode write is a no-op", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        // The load response starts in ask mode, then replay reports code mode.
+        // Waiting before reading retained state makes this ask request a real
+        // write instead of incorrectly treating it as an early no-op.
+        yield* runtime.setMode("ask");
+
+        const modeRequest = requestEvents.find(
+          (event) => event.method === "session/set_config_option" && event.status === "started",
+        );
+        expect(modeRequest?.payload).toMatchObject({ configId: "mode", value: "ask" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "ask" });
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  });
+
+  it.effect("settles load replay before applying session configuration", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        yield* runtime.setModel("composer-2");
+
+        expect(yield* runtime.getConfigOptions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "model", currentValue: "composer-2" }),
+          ]),
+        );
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("settles load replay before reading available commands", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        expect(yield* runtime.getAvailableCommands).toEqual([
+          { name: "compact", description: "Compact the current context" },
+        ]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 
@@ -402,6 +543,105 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("forks a loaded session after replay settles without an event consumer", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 1_000,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("preserves the fork RPC timeout after replay reaches its hard cap", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 100,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "0,50,100,150,199",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 1_000,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect(
     "assigns distinct fallback assistant item ids across separate runtime instances",
     () => {
@@ -431,14 +671,16 @@ describe("AcpSessionRuntime", () => {
         return delta?._tag === "ContentDelta" ? delta.itemId : undefined;
       }).pipe(Effect.provide(runtimeLayer), Effect.scoped, Effect.provide(NodeServices.layer));
 
-      return Effect.gen(function* () {
-        const firstItemId = yield* collectFallbackAssistantItemId;
-        const secondItemId = yield* collectFallbackAssistantItemId;
-        const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
-        expect(firstItemId).toMatch(fallbackIdPattern);
-        expect(secondItemId).toMatch(fallbackIdPattern);
-        expect(firstItemId).not.toBe(secondItemId);
-      });
+      return TestClock.withLive(
+        Effect.gen(function* () {
+          const firstItemId = yield* collectFallbackAssistantItemId;
+          const secondItemId = yield* collectFallbackAssistantItemId;
+          const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
+          expect(firstItemId).toMatch(fallbackIdPattern);
+          expect(secondItemId).toMatch(fallbackIdPattern);
+          expect(firstItemId).not.toBe(secondItemId);
+        }),
+      );
     },
   );
 

@@ -12,6 +12,8 @@ import * as path from "node:path";
 import type {
   ProviderComposerCapabilities,
   ProviderKind,
+  ProviderListAgentsResult,
+  ProviderListCommandsResult,
   ProviderListModelsResult,
   ProviderListSkillsResult,
 } from "@synara/contracts";
@@ -229,6 +231,63 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it("skips OpenCode agent and command discovery until re-enabled", async () => {
+    const adapterCalls: string[] = [];
+    const adapter: Partial<ProviderAdapterShape<ProviderAdapterError>> = {
+      listAgents: () => {
+        adapterCalls.push("agents");
+        return Effect.succeed({ agents: [], source: "opencode", cached: false });
+      },
+      listCommands: () => {
+        adapterCalls.push("commands");
+        return Effect.succeed({ commands: [], source: "opencode", cached: false });
+      },
+    };
+    const baseLayer = Layer.mergeAll(
+      makeConfigLayer(),
+      ServerSettingsService.layerTest({
+        providers: { opencode: { enabled: false } },
+      }),
+      makeRegistryLayer(adapter),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+    const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const settings = yield* ServerSettingsService;
+        const disabledAgents = yield* discovery.listAgents({ provider: "opencode", cwd });
+        const disabledCommands = yield* discovery.listCommands({ provider: "opencode", cwd });
+
+        yield* settings.updateSettings({ providers: { opencode: { enabled: true } } });
+        const enabledAgents = yield* discovery.listAgents({ provider: "opencode", cwd });
+        const enabledCommands = yield* discovery.listCommands({ provider: "opencode", cwd });
+
+        return {
+          disabledAgents,
+          disabledCommands,
+          enabledAgents,
+          enabledCommands,
+        };
+      }).pipe(Effect.provide(testLayer)) as Effect.Effect<
+        {
+          disabledAgents: ProviderListAgentsResult;
+          disabledCommands: ProviderListCommandsResult;
+          enabledAgents: ProviderListAgentsResult;
+          enabledCommands: ProviderListCommandsResult;
+        },
+        never,
+        never
+      >,
+    );
+
+    expect(result.disabledAgents).toMatchObject({ agents: [], source: "disabled" });
+    expect(result.disabledCommands).toMatchObject({ commands: [], source: "disabled" });
+    expect(result.enabledAgents.source).toBe("opencode");
+    expect(result.enabledCommands.source).toBe("opencode");
+    expect(adapterCalls).toEqual(["agents", "commands"]);
+  });
+
   it("does not invoke the adapter for a disabled provider", async () => {
     let adapterCalls = 0;
     const result = await runListModels({
