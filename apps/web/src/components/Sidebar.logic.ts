@@ -44,6 +44,7 @@ import {
   type SidebarSplitGroupInfo,
   type SidebarSplitGroupMembership,
 } from "./sidebarSplitGroups";
+import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
 
 const EMPTY_SPLIT_GROUP_MEMBERSHIP: ReadonlyMap<ThreadId, SidebarSplitGroupMembership> = new Map();
 
@@ -934,7 +935,10 @@ export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary,
 }
 
 export interface SidebarThreadTreeRow<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
+  T extends Pick<SidebarThreadSummary, "id"> &
+    Partial<
+      Pick<SidebarThreadSummary, "parentThreadId" | "creationSource" | "sourceThreadId">
+    >,
 > {
   thread: T;
   depth: number;
@@ -943,7 +947,10 @@ export interface SidebarThreadTreeRow<
 
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
 export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
+  T extends Pick<SidebarThreadSummary, "id"> &
+    Partial<
+      Pick<SidebarThreadSummary, "parentThreadId" | "creationSource" | "sourceThreadId">
+    >,
 >(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
@@ -954,7 +961,7 @@ export function buildProjectThreadTree<
   const roots: T[] = [];
 
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = resolveSidebarParentThreadId(thread);
     if (!parentThreadId) {
       roots.push(thread);
       continue;
@@ -1147,7 +1154,10 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 // children with a missing parent — hiding such a parent would make its
 // descendants unreachable anywhere in the sidebar.
 export function getUnpinnedThreadsForSidebar<
-  T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
+  T extends Pick<Thread, "id"> &
+    Partial<
+      Pick<SidebarThreadSummary, "parentThreadId" | "creationSource" | "sourceThreadId">
+    >,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
@@ -1155,7 +1165,7 @@ export function getUnpinnedThreadsForSidebar<
 
   const parentThreadIds = new Set<T["id"]>();
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = resolveSidebarParentThreadId(thread);
     if (parentThreadId !== null) {
       parentThreadIds.add(parentThreadId as T["id"]);
     }

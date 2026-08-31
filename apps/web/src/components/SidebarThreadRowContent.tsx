@@ -14,6 +14,7 @@ import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
+import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
 import { SidebarSplitGroupSurface } from "./SidebarSplitGroupSurface";
 import { BotIcon, TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -194,7 +195,21 @@ export function resolveSubagentRowDescription({
   return `Subagent of ${resolvedParentTitle}${metadata.length > 0 ? ` · ${metadata.join(" · ")}` : ""}`;
 }
 
-function SubagentConnector({ indentPx }: { indentPx: number }) {
+export function resolveChildThreadRowDescription({
+  thread,
+  parentTitle,
+}: {
+  thread: SidebarThreadSummary;
+  parentTitle?: string | null | undefined;
+}): string {
+  if (thread.parentThreadId) {
+    return resolveSubagentRowDescription({ thread, parentTitle });
+  }
+
+  return `Created from ${parentTitle ?? "another thread"}`;
+}
+
+function ChildThreadConnector({ indentPx }: { indentPx: number }) {
   return (
     <span
       aria-hidden="true"
@@ -238,7 +253,8 @@ export function SidebarThreadRowContent({
   suffix?: ReactNode;
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
-  const isSubagentThread = Boolean(thread.parentThreadId);
+  const isChildThread = resolveSidebarParentThreadId(thread) !== null;
+  const isNativeSubagentThread = Boolean(thread.parentThreadId);
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
 
   return (
@@ -249,8 +265,8 @@ export function SidebarThreadRowContent({
           active={splitGroupActive === true}
         />
       ) : null}
-      {variant === "standard" && isSubagentThread ? (
-        <SubagentConnector indentPx={subagentIndentPx} />
+      {variant === "standard" && isChildThread ? (
+        <ChildThreadConnector indentPx={subagentIndentPx} />
       ) : terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
@@ -263,20 +279,20 @@ export function SidebarThreadRowContent({
       <div
         className={cn(
           "flex min-w-0 flex-1 items-center text-left",
-          variant === "standard" && isSubagentThread ? "gap-[5px]" : "gap-1.5",
+          variant === "standard" && isChildThread ? "gap-[5px]" : "gap-1.5",
         )}
       >
         <span
           className={cn(
             "min-w-0 flex-1 truncate-fade text-[length:var(--app-font-size-ui,12px)]",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-            variant === "standard" && isSubagentThread
+            variant === "standard" && isChildThread
               ? "leading-[18px] text-foreground/80"
               : "leading-5",
           )}
           data-testid={variant === "pinned" ? `thread-title-${thread.id}` : undefined}
         >
-          {isSubagentThread ? (
+          {isNativeSubagentThread ? (
             <SidebarSubagentLabel
               thread={thread}
               roleClassName={variant === "standard" ? "text-muted-foreground/42" : undefined}
@@ -285,7 +301,7 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
-        {!isSubagentThread && pendingStatusColorClass ? (
+        {!isChildThread && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"
             className={cn("shrink-0 text-[10px] font-medium", pendingStatusColorClass)}

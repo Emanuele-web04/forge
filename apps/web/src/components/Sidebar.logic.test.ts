@@ -1489,6 +1489,33 @@ describe("getRenderedThreadsForSidebarProject", () => {
 });
 
 describe("buildProjectThreadTree", () => {
+  it("nests Synara-created threads below their source thread", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-created"),
+          creationSource: "synara_mcp",
+          sourceThreadId: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-sibling"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      [ThreadId.makeUnsafe("thread-parent"), 0],
+      [ThreadId.makeUnsafe("thread-created"), 1],
+      [ThreadId.makeUnsafe("thread-sibling"), 0],
+    ]);
+  });
+
   it("keeps child threads visible directly below their parent", () => {
     const rows = buildProjectThreadTree({
       threads: [

@@ -206,7 +206,7 @@ import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
   SidebarThreadRowContent,
-  resolveSubagentRowDescription,
+  resolveChildThreadRowDescription,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
@@ -353,6 +353,7 @@ import {
   buildSidebarSplitGroupIndex,
   type SidebarSplitGroupInfo,
 } from "./sidebarSplitGroups";
+import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
@@ -4923,11 +4924,12 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const isSubagentThread = Boolean(thread.parentThreadId);
+    const sidebarParentThreadId = resolveSidebarParentThreadId(thread);
+    const isSubagentThread = sidebarParentThreadId !== null;
     const subagentDescription = isSubagentThread
-      ? resolveSubagentRowDescription({
+      ? resolveChildThreadRowDescription({
           thread,
-          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
+          parentTitle: sidebarThreadSummaryById[sidebarParentThreadId!]?.title,
         })
       : undefined;
     const pr = prByThreadId.get(thread.id) ?? null;
@@ -5097,11 +5099,12 @@ export default function Sidebar() {
         Boolean(thread.handoff?.sourceProvider),
       threadAutomations: automationsByThreadId.get(thread.id),
     });
-    const isSubagentThread = Boolean(thread.parentThreadId);
+    const sidebarParentThreadId = resolveSidebarParentThreadId(thread);
+    const isSubagentThread = sidebarParentThreadId !== null;
     const subagentDescription = isSubagentThread
-      ? resolveSubagentRowDescription({
+      ? resolveChildThreadRowDescription({
           thread,
-          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
+          parentTitle: sidebarThreadSummaryById[sidebarParentThreadId!]?.title,
         })
       : undefined;
     // Subagents suppress their generic handoff/fork/worktree cluster to keep the
