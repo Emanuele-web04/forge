@@ -124,6 +124,7 @@ describe("SidebarThreadRowContent", () => {
         variant="standard"
         splitGroup={{
           splitViewId: "split-rail",
+          presentation: "card",
           memberIndex: 2,
           memberCount: 3,
           isLeader: false,
@@ -140,6 +141,32 @@ describe("SidebarThreadRowContent", () => {
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
   });
 
+  it("uses a linked indicator instead of a card for remote split members", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({ id: ThreadId.makeUnsafe("thread-linked-split-member") })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        splitGroup={{
+          splitViewId: "split-linked",
+          presentation: "linked",
+          memberIndex: 1,
+          memberCount: 2,
+          isLeader: true,
+          position: "first",
+        }}
+        splitGroupActive
+        splitGroupLinkedLabel="Split view with hoola 2"
+      />,
+    );
+
+    await expect.element(screen.getByLabelText("Split view with hoola 2")).toBeVisible();
+    expect(document.querySelector("[data-testid=sidebar-split-group-surface]")).toBeNull();
+  });
+
   it("draws the shared split-group surface capped to the row position", async () => {
     const screen = await render(
       <SidebarThreadRowContent
@@ -151,6 +178,7 @@ describe("SidebarThreadRowContent", () => {
         variant="standard"
         splitGroup={{
           splitViewId: "split-surface",
+          presentation: "card",
           memberIndex: 1,
           memberCount: 2,
           isLeader: true,

@@ -15,6 +15,7 @@ import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
 import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
+import { SidebarSplitLinkIndicator } from "./SidebarSplitLinkIndicator";
 import { SidebarSplitGroupSurface } from "./SidebarSplitGroupSurface";
 import { BotIcon, TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -238,6 +239,7 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass,
   splitGroup,
   splitGroupActive,
+  splitGroupLinkedLabel,
   suffix,
 }: {
   thread: SidebarThreadSummary;
@@ -250,6 +252,7 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass?: string | null | undefined;
   splitGroup?: SidebarSplitGroupInfo | null | undefined;
   splitGroupActive?: boolean | undefined;
+  splitGroupLinkedLabel?: string | null | undefined;
   suffix?: ReactNode;
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
@@ -259,7 +262,7 @@ export function SidebarThreadRowContent({
 
   return (
     <>
-      {splitGroup ? (
+      {splitGroup?.presentation === "card" ? (
         <SidebarSplitGroupSurface
           position={splitGroup.position}
           active={splitGroupActive === true}
@@ -301,6 +304,12 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
+        {splitGroup?.presentation === "linked" && splitGroupLinkedLabel ? (
+          <SidebarSplitLinkIndicator
+            label={splitGroupLinkedLabel}
+            active={splitGroupActive === true}
+          />
+        ) : null}
         {!isChildThread && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"

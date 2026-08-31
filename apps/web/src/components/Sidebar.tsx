@@ -353,6 +353,7 @@ import {
   buildSidebarSplitGroupIndex,
   type SidebarSplitGroupInfo,
 } from "./sidebarSplitGroups";
+import { SidebarSplitLinkIndicator } from "./SidebarSplitLinkIndicator";
 import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
@@ -1455,6 +1456,15 @@ export default function Sidebar() {
     () => buildSidebarSplitGroupIndex({ splitViewsById, splitViewIdBySourceThreadId }),
     [splitViewIdBySourceThreadId, splitViewsById],
   );
+  const splitGroupMemberThreadIdsByViewId = useMemo(() => {
+    const memberThreadIdsByViewId = new Map<string, ThreadId[]>();
+    for (const [threadId, membership] of splitGroupMembershipByThreadId) {
+      const memberThreadIds = memberThreadIdsByViewId.get(membership.splitViewId) ?? [];
+      memberThreadIds.push(threadId);
+      memberThreadIdsByViewId.set(membership.splitViewId, memberThreadIds);
+    }
+    return memberThreadIdsByViewId;
+  }, [splitGroupMembershipByThreadId]);
   const detachThreadFromSplit = useCallback(
     async (splitGroup: SidebarSplitGroupInfo, threadId: ThreadId) => {
       const result = useSplitViewStore.getState().detachThreadFromSplitView({
@@ -4390,6 +4400,7 @@ export default function Sidebar() {
         sortedSidebarThreadsByProjectId,
         pinnedThreadIds,
         splitGroupMembershipByThreadId,
+        folderIdByThreadId,
         threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4399,6 +4410,7 @@ export default function Sidebar() {
       }),
     [
       activeSidebarThreadId,
+      folderIdByThreadId,
       splitGroupMembershipByThreadId,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
@@ -4422,6 +4434,7 @@ export default function Sidebar() {
       sortedSidebarThreadsByProjectId,
       pinnedThreadIds,
       splitGroupMembershipByThreadId,
+      folderIdByThreadId,
       threadListExtraPagesByProjectCwd,
       normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4431,6 +4444,7 @@ export default function Sidebar() {
     });
   }, [
     activeSidebarThreadId,
+    folderIdByThreadId,
     isOnStudio,
     splitGroupMembershipByThreadId,
     threadListExtraPagesByProjectCwd,
@@ -5128,6 +5142,18 @@ export default function Sidebar() {
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
     });
+    const linkedSplitPeerThreadIds =
+      splitGroup?.presentation === "linked"
+        ? (splitGroupMemberThreadIdsByViewId.get(splitGroup.splitViewId) ?? []).filter(
+            (threadId) => threadId !== thread.id,
+          )
+        : [];
+    const linkedSplitLabel =
+      linkedSplitPeerThreadIds.length === 1
+        ? `Split view with ${sidebarThreadSummaryById[linkedSplitPeerThreadIds[0]!]?.title ?? "another chat"}`
+        : linkedSplitPeerThreadIds.length > 1
+          ? `Split view with ${linkedSplitPeerThreadIds.length} other chats`
+          : null;
 
     return (
       <SidebarMenuSubItem
@@ -5161,7 +5187,7 @@ export default function Sidebar() {
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   // Split rows carry a shared surface that bleeds into the inter-row gap to read as
                   // one contained group; the row's default overflow-hidden would clip that bridge.
-                  splitGroup ? "overflow-visible" : null,
+                  splitGroup?.presentation === "card" ? "overflow-visible" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
@@ -5274,6 +5300,7 @@ export default function Sidebar() {
               splitGroupActive={
                 splitGroup !== null && splitGroup.splitViewId === routeSearch.splitViewId
               }
+              splitGroupLinkedLabel={linkedSplitLabel}
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -5331,6 +5358,14 @@ export default function Sidebar() {
     // Match project disclosure semantics: an active thread does not override an
     // explicit user collapse. The chat stays active while its sidebar group closes.
     const open = collapsedThreadFolderIds[folder.id] !== true;
+    const linkedSplitEntryCount = entries.filter(
+      (entry) => entry.splitGroup?.presentation === "linked",
+    ).length;
+    const linkedSplitActive = entries.some(
+      (entry) =>
+        entry.splitGroup?.presentation === "linked" &&
+        entry.splitGroup.splitViewId === routeSearch.splitViewId,
+    );
     const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
     const dropActive = threadFolderDropTargetKey === dropTargetKey;
     const resolvePointerDropTarget = (event: ReactDragEvent<HTMLElement>) =>
@@ -5392,6 +5427,16 @@ export default function Sidebar() {
             >
               {totalThreadCount}
             </span>
+            {!open && linkedSplitEntryCount > 0 ? (
+              <SidebarSplitLinkIndicator
+                label={
+                  linkedSplitEntryCount === 1
+                    ? "Contains a chat linked to a split view"
+                    : `Contains ${linkedSplitEntryCount} chats linked to split views`
+                }
+                active={linkedSplitActive}
+              />
+            ) : null}
             <DisclosureChevron open={open} className="size-3 text-muted-foreground/55" />
           </SidebarMenuSubButton>
           {/* Offset past the chevron so the strip lands on the thread count it replaces. */}

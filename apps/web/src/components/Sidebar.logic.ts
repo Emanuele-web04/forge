@@ -1018,7 +1018,9 @@ export function getVisibleSidebarEntriesForPreview<
   // Split groups render as one card, so the preview cut moves back to the
   // nearest group boundary instead of slicing a group in half.
   const previewLimit = clampPreviewLimitToSplitGroupBoundary({
-    splitGroupIds: entries.map((entry) => entry.splitGroup?.splitViewId ?? null),
+    splitGroupIds: entries.map((entry) =>
+      entry.splitGroup?.presentation === "card" ? entry.splitGroup.splitViewId : null,
+    ),
     previewLimit: input.previewLimit,
   });
   const hasHiddenEntries = entries.length > previewLimit;
@@ -1066,10 +1068,14 @@ export function getVisibleSidebarEntriesForPreview<
 
   // Revealing one pane of a split reveals the whole group; a lone member with a clipped rail
   // would read as a broken row rather than as part of a split.
-  const activeSplitViewId = activeEntry.splitGroup?.splitViewId ?? null;
+  const activeSplitViewId =
+    activeEntry.splitGroup?.presentation === "card" ? activeEntry.splitGroup.splitViewId : null;
   if (activeSplitViewId) {
     for (const entry of entries) {
-      if (entry.splitGroup?.splitViewId === activeSplitViewId) {
+      if (
+        entry.splitGroup?.presentation === "card" &&
+        entry.splitGroup.splitViewId === activeSplitViewId
+      ) {
         visibleEntryIds.add(entry.rowId);
       }
     }
@@ -1609,6 +1615,7 @@ export function deriveSidebarProjectData(input: {
   sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
   pinnedThreadIds: readonly ThreadId[];
   splitGroupMembershipByThreadId?: ReadonlyMap<ThreadId, SidebarSplitGroupMembership>;
+  folderIdByThreadId?: Readonly<Record<string, string | undefined>>;
   threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
@@ -1680,6 +1687,7 @@ export function deriveSidebarProjectData(input: {
         forceVisibleThreadId: input.activeSidebarThreadId,
       }),
       membershipByThreadId: input.splitGroupMembershipByThreadId ?? EMPTY_SPLIT_GROUP_MEMBERSHIP,
+      containerKeyByThreadId: input.folderIdByThreadId,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
       ({ thread, depth, rootThreadId, splitGroup }) => ({
