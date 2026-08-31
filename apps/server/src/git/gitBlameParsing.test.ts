@@ -135,9 +135,9 @@ describe("git blame porcelain parsing", () => {
       shortSha: "aaaaaaa",
       uncommitted: false,
     });
-    expect(
-      parseGitBlamePorcelain(`${zeroSha256} 3 3 1\nauthor x\n\tvalue\n`)?.uncommitted,
-    ).toBe(true);
+    expect(parseGitBlamePorcelain(`${zeroSha256} 3 3 1\nauthor x\n\tvalue\n`)?.uncommitted).toBe(
+      true,
+    );
   });
 
   it("returns an empty timestamp when author-time is outside the Date range", () => {
