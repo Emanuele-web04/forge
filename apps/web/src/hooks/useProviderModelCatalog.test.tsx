@@ -241,6 +241,19 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("antigravity")).toBe(false);
   });
 
+  it("warms droid discovery only when a surface explicitly prefetches it", () => {
+    readCatalogRenders({
+      selectedProvider: "codex",
+      discoveryEnabled: true,
+      prefetchProviders: ["codex", "droid", "opencode"],
+    });
+    expect(readModelQueryEnabled("droid")).toBe(true);
+
+    mocks.useQuery.mockClear();
+    readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+    expect(readModelQueryEnabled("droid")).toBe(false);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {
