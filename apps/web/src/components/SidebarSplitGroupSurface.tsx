@@ -22,10 +22,10 @@ export function SidebarSplitGroupSurface({
       data-split-position={position}
       data-split-active={active ? "true" : "false"}
       className={cn(
-        "pointer-events-none absolute left-0.5 right-0.5 top-0 -z-10 border-x shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]",
+        "pointer-events-none absolute left-0.5 right-0.5 top-0 -z-10 border-x",
         active
-          ? "border-primary/28 bg-primary/[0.055]"
-          : "border-border/60 bg-muted-foreground/[0.055]",
+          ? "border-primary/20 bg-primary/[0.04]"
+          : "border-border/30 bg-muted-foreground/[0.03]",
         position === "first" ? "rounded-t-lg border-t" : null,
         position === "last" ? "bottom-0 rounded-b-lg border-b" : "-bottom-1",
       )}
