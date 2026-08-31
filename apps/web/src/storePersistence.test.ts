@@ -29,7 +29,7 @@ describe("storePersistence", () => {
     expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
   });
 
-  it("loads with all projects expanded and does not throw when the stored value is corrupt", async () => {
+  it("resets remembered state when the stored value is corrupt", async () => {
     const storage = new Map<string, string>();
     storage.set(PERSISTED_STATE_KEY, '"{"');
     const { readPersistedState, getRememberedProjectUiState } =
@@ -111,7 +111,6 @@ describe("storePersistence", () => {
     readPersistedState(initialState);
     const remembered = getRememberedProjectUiState();
     expect(remembered.projectOrderIndexForCwd("/tmp/project-new")).toBeUndefined();
-    expect(remembered.isProjectExpanded("/tmp/project-new")).toBe(false);
   });
 
   it("preserves legacy payloads that contain only expandedProjectCwds", async () => {
@@ -143,7 +142,7 @@ describe("storePersistence", () => {
       await importStorePersistence(storage);
     readPersistedState(initialState);
     const remembered = getRememberedProjectUiState();
-    expect(remembered.hasLegacyExpandedCwds).toBe(true);
+    expect(remembered.isLegacyExpansionPayload).toBe(true);
     expect(remembered.expandedProjectCount).toBe(0);
     expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
     expect(remembered.isProjectExpanded("/tmp/project-2")).toBe(false);
@@ -162,7 +161,7 @@ describe("storePersistence", () => {
       await importStorePersistence(storage);
     readPersistedState(initialState);
     const remembered = getRememberedProjectUiState();
-    expect(remembered.hasLegacyExpandedCwds).toBe(false);
+    expect(remembered.isLegacyExpansionPayload).toBe(false);
     expect(remembered.projectOrderCount).toBe(0);
     expect(remembered.expandedProjectCount).toBe(0);
   });
@@ -303,6 +302,104 @@ describe("storePersistence", () => {
     };
     persistState(state);
     expect(setItem).not.toHaveBeenCalled();
+    expect(storage.has(PERSISTED_STATE_KEY)).toBe(false);
+  });
+
+  it("stops treating the payload as legacy once modern order state is remembered", async () => {
+    const storage = new Map<string, string>();
+    storage.set(PERSISTED_STATE_KEY, JSON.stringify({ expandedProjectCwds: [] }));
+    const {
+      readPersistedState,
+      rememberProjectState,
+      forgetProjectState,
+      getRememberedProjectUiState,
+    } = await importStorePersistence(storage);
+    readPersistedState(initialState);
+    expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(true);
+
+    rememberProjectState([
+      makeProject({
+        id: ProjectId.makeUnsafe("project-1"),
+        cwd: "/tmp/project-1",
+        expanded: false,
+      }),
+    ]);
+    expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
+
+    // Deleting every project must not re-arm legacy mode: a newly created project
+    // is unknown, not legacy-all-collapsed.
+    forgetProjectState("/tmp/project-1");
+    expect(getRememberedProjectUiState().projectOrderCount).toBe(0);
+    expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
+  });
+
+  it("resets remembered state when the persisted key disappears on a later read", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        projectOrderCwds: ["/tmp/project-1"],
+        expandedProjectCwds: ["/tmp/project-1"],
+        projectNamesByCwd: { "/tmp/project-1": "alpha" },
+      }),
+    );
+    const { readPersistedState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    readPersistedState(initialState);
+    expect(getRememberedProjectUiState().projectOrderCount).toBe(1);
+
+    storage.delete(PERSISTED_STATE_KEY);
+    readPersistedState(initialState);
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectOrderCount).toBe(0);
+    expect(remembered.expandedProjectCount).toBe(0);
+    expect(remembered.projectNameForCwd("/tmp/project-1")).toBeUndefined();
+    expect(remembered.isLegacyExpansionPayload).toBe(false);
+  });
+
+  it("resets remembered state when the stored value becomes corrupt on a later read", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        projectOrderCwds: ["/tmp/project-1"],
+        expandedProjectCwds: ["/tmp/project-1"],
+      }),
+    );
+    const { readPersistedState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    readPersistedState(initialState);
+    expect(getRememberedProjectUiState().projectOrderCount).toBe(1);
+
+    storage.set(PERSISTED_STATE_KEY, '"{"');
+    readPersistedState(initialState);
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectOrderCount).toBe(0);
+    expect(remembered.expandedProjectCount).toBe(0);
+    expect(remembered.isLegacyExpansionPayload).toBe(false);
+  });
+
+  it("swallows localStorage write failures instead of breaking the caller", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    fakeWindow.localStorage.setItem.mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    vi.stubGlobal("window", fakeWindow);
+    vi.resetModules();
+    const { persistState } = await import("./storePersistence");
+    const state: AppState = {
+      ...initialState,
+      threadsHydrated: true,
+      projects: [
+        makeProject({
+          id: ProjectId.makeUnsafe("project-1"),
+          cwd: "/tmp/project-1",
+          expanded: true,
+        }),
+      ],
+    };
+    expect(() => persistState(state)).not.toThrow();
     expect(storage.has(PERSISTED_STATE_KEY)).toBe(false);
   });
 });

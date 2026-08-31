@@ -378,7 +378,7 @@ export function normalizeProject(
   const persistedProjectOrderIndex = rememberedUiState.projectOrderIndexForCwd(workspaceRootKey);
   const hasKnownLegacyExpansion =
     rememberedUiState.projectOrderCount === 0 &&
-    (rememberedUiState.expandedProjectCount > 0 || rememberedUiState.hasLegacyExpandedCwds);
+    (rememberedUiState.expandedProjectCount > 0 || rememberedUiState.isLegacyExpansionPayload);
   const expanded =
     previous?.expanded ??
     (persistedProjectOrderIndex !== undefined || hasKnownLegacyExpansion

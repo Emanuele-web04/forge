@@ -15,7 +15,8 @@ let persistedExpandedProjectCwdsDefined = false;
 
 export interface RememberedProjectUiState {
   expandedProjectCount: number;
-  hasLegacyExpandedCwds: boolean;
+  /** True when the payload read from disk was legacy-shaped (expandedProjectCwds without projectOrderCwds). */
+  isLegacyExpansionPayload: boolean;
   isProjectExpanded: (cwdKey: string) => boolean;
   projectOrderCount: number;
   projectOrderIndexForCwd: (cwdKey: string) => number | undefined;
@@ -26,7 +27,7 @@ const rememberedProjectUiState: RememberedProjectUiState = {
   get expandedProjectCount() {
     return persistedExpandedProjectCwds.size;
   },
-  get hasLegacyExpandedCwds() {
+  get isLegacyExpansionPayload() {
     return persistedExpandedProjectCwdsDefined;
   },
   isProjectExpanded: (cwdKey) => persistedExpandedProjectCwds.has(cwdKey),
@@ -43,6 +44,13 @@ export function projectCwdKey(cwd: string): string {
 
 export function getRememberedProjectUiState(): RememberedProjectUiState {
   return rememberedProjectUiState;
+}
+
+function resetRememberedProjectState(): void {
+  persistedExpandedProjectCwds.clear();
+  persistedProjectOrderByCwd.clear();
+  persistedProjectNamesByCwd.clear();
+  persistedExpandedProjectCwdsDefined = false;
 }
 
 export function rememberProjectState(
@@ -65,6 +73,12 @@ export function rememberProjectState(
       persistedProjectNamesByCwd.delete(cwdKey);
     }
   }
+  // Once modern order state exists in memory, the legacy expandedProjectCwds-only
+  // payload is no longer the authority; otherwise a legacy-payload session that
+  // deletes every project would collapse newly created projects.
+  if (persistedProjectOrderByCwd.size > 0) {
+    persistedExpandedProjectCwdsDefined = false;
+  }
 }
 
 export function forgetProjectState(cwd: string): void {
@@ -78,7 +92,10 @@ export function readPersistedState(initialState: AppState): AppState {
   if (typeof window === "undefined") return initialState;
   try {
     const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
-    if (!raw) return initialState;
+    if (!raw) {
+      resetRememberedProjectState();
+      return initialState;
+    }
     // SAFETY: localStorage is only writable by same-origin scripts. We validate the
     // persisted shape below, discarding any malformed entries and falling back to defaults.
     const parsed = JSON.parse(raw) as {
@@ -86,9 +103,7 @@ export function readPersistedState(initialState: AppState): AppState {
       projectOrderCwds?: string[];
       projectNamesByCwd?: Record<string, string>;
     };
-    persistedExpandedProjectCwds.clear();
-    persistedProjectOrderByCwd.clear();
-    persistedProjectNamesByCwd.clear();
+    resetRememberedProjectState();
     persistedExpandedProjectCwdsDefined =
       Array.isArray(parsed.expandedProjectCwds) && parsed.projectOrderCwds === undefined;
     for (const cwd of Array.isArray(parsed.expandedProjectCwds) ? parsed.expandedProjectCwds : []) {
@@ -116,10 +131,7 @@ export function readPersistedState(initialState: AppState): AppState {
     }
     return { ...initialState };
   } catch {
-    persistedExpandedProjectCwds.clear();
-    persistedProjectOrderByCwd.clear();
-    persistedProjectNamesByCwd.clear();
-    persistedExpandedProjectCwdsDefined = false;
+    resetRememberedProjectState();
     return initialState;
   }
 }
