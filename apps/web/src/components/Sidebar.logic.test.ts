@@ -42,6 +42,7 @@ import {
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
+  resolveActiveSidebarThreadId,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -57,6 +58,7 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { ProjectId, ThreadId } from "@synara/contracts";
+import { groupThreadFolderEntries } from "../sidebarThreadFolderStore";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -1963,6 +1965,49 @@ describe("partitionSidebarThreadsByProjectIds", () => {
 });
 
 describe("deriveSidebarProjectData", () => {
+  it("keeps the focused folder thread visible after Show less returns to the base preview", () => {
+    const project = makeProject({ cwd: "/Users/tester/Code/payment-seeker" });
+    const threads = Array.from({ length: 7 }, (_, index) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+        createdAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        updatedAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const focusedThreadId = threads[6]!.id;
+    const activeSidebarThreadId = resolveActiveSidebarThreadId({
+      focusedThreadId,
+      optimisticThreadId: null,
+      routeThreadId: threads[0]!.id,
+    });
+
+    const derive = (extraPages: number) =>
+      deriveSidebarProjectData({
+        projects: [project],
+        sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
+        pinnedThreadIds: [],
+        threadListExtraPagesByProjectCwd: new Map([[project.cwd, extraPages]]),
+        normalizeProjectCwd: (cwd) => cwd,
+        activeSidebarThreadId,
+        previewLimit: 5,
+        previewPageSize: 5,
+      }).get(project.id);
+
+    expect(derive(1)?.visibleEntries).toHaveLength(7);
+    const foldedEntries = derive(0)?.visibleEntries ?? [];
+    const groupedEntries = groupThreadFolderEntries({
+      entries: foldedEntries,
+      activeFolderIds: new Set(["payment-folder"]),
+      folderIdByThreadId: { [focusedThreadId]: "payment-folder" },
+    });
+
+    expect(
+      groupedEntries.entriesByFolderId.get("payment-folder")?.map((entry) => entry.rowId),
+    ).toContain(focusedThreadId);
+    expect(derive(0)?.canShowLessThreads).toBe(false);
+  });
+
   it("keeps pinned threads in the total project thread count", () => {
     const project = makeProject();
     const pinnedThread = makeSidebarThreadSummary({
