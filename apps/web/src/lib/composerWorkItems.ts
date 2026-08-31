@@ -2,7 +2,8 @@
 // Purpose: Work item (GitHub issue / PR) attachment state, serialization, and parsing.
 // Layer: Web composer utility
 
-import type { WorkItemAttachment } from "@synara/contracts";
+import { WorkItemAttachment } from "@synara/contracts";
+import { Schema } from "effect";
 
 export interface WorkItemDraft extends WorkItemAttachment {
   id: string;
@@ -56,10 +57,10 @@ export function extractTrailingWorkItems(text: string): {
   if (!match) return { promptText: text, workItems: [] };
   const before = text.slice(0, match.index);
   try {
-    const parsed = JSON.parse(match[1]!) as unknown;
+    const parsed: unknown = JSON.parse(match[1]!);
     if (!Array.isArray(parsed)) return { promptText: before, workItems: [] };
     const items = parsed
-      .map((entry: unknown) => parseWorkItemEntry(entry))
+      .map((entry) => parseWorkItemEntry(entry))
       .filter((item): item is WorkItemAttachment => item !== null);
     return { promptText: before, workItems: items };
   } catch {
@@ -68,28 +69,9 @@ export function extractTrailingWorkItems(text: string): {
 }
 
 function parseWorkItemEntry(raw: unknown): WorkItemAttachment | null {
-  if (!raw || typeof raw !== "object") return null;
-  const entry = raw as Record<string, unknown>;
-  const kind = entry.kind === "issue" || entry.kind === "pull-request" ? entry.kind : null;
-  const number = typeof entry.number === "number" ? entry.number : Number(entry.number);
-  const title = typeof entry.title === "string" ? entry.title.trim() : "";
-  const state =
-    entry.state === "open" || entry.state === "closed" || entry.state === "merged"
-      ? entry.state
-      : null;
-  const url = typeof entry.url === "string" ? entry.url.trim() : "";
-  const bodyExcerpt = typeof entry.bodyExcerpt === "string" ? entry.bodyExcerpt : "";
-  const createdAt = typeof entry.createdAt === "string" ? entry.createdAt : "";
-  const updatedAt = typeof entry.updatedAt === "string" ? entry.updatedAt : "";
-  if (
-    !kind ||
-    !Number.isFinite(number) ||
-    number <= 0 ||
-    title.length === 0 ||
-    !state ||
-    url.length === 0
-  ) {
+  try {
+    return Schema.decodeUnknownSync(WorkItemAttachment)(raw);
+  } catch {
     return null;
   }
-  return { kind, number, title, state, url, bodyExcerpt, createdAt, updatedAt };
 }
