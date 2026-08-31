@@ -250,6 +250,12 @@ const PROVIDER_TARGET_OPTION_RULES = {
   }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
+function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptionConfig {
+  const registry: Readonly<Record<ProviderKind, ProviderTargetOptionConfig>> =
+    PROVIDER_TARGET_OPTION_RULES;
+  return registry[provider];
+}
+
 function providerDefaultModel(provider: ProviderKind): string | null {
   return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
@@ -310,7 +316,7 @@ export function loadAgentGatewayProviderCatalog(input: {
 function providerTargetOptionRules(
   provider: ProviderKind,
 ): ReadonlyArray<AgentGatewayTargetOptionRule> {
-  return Object.entries(PROVIDER_TARGET_OPTION_RULES[provider].options)
+  return Object.entries(providerTargetOptionConfig(provider).options)
     .filter(([, option]) => option.advertised)
     .map(([key, { valueType, allowedValues, allowedValuesSource, allowsCustomValue }]) => ({
       key,
@@ -322,7 +328,7 @@ function providerTargetOptionRules(
 }
 
 function providerPrimaryOptionKey(provider: ProviderKind): string {
-  return PROVIDER_TARGET_OPTION_RULES[provider].primaryOptionKey;
+  return providerTargetOptionConfig(provider).primaryOptionKey;
 }
 
 function convertDiscoveredOptionValue(
@@ -481,7 +487,7 @@ function providerOptionRuleSpec(
   provider: ProviderKind,
   optionId: string,
 ): ResolvedProviderTargetOptionRuleSpec | undefined {
-  const rule = PROVIDER_TARGET_OPTION_RULES[provider].options[optionId];
+  const rule = providerTargetOptionConfig(provider).options[optionId];
   return rule ? { key: optionId, ...rule } : undefined;
 }
 
