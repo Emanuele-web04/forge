@@ -72,6 +72,7 @@ function makeSidechatThread(input: {
   readonly threadId: ThreadId;
   readonly sourceThreadId: ThreadId;
   readonly lastActivityAtMs: number;
+  readonly archivedAt?: string | null;
 }): OrchestrationThread {
   const lastActivityAt = new Date(input.lastActivityAtMs).toISOString();
   return {
@@ -95,7 +96,7 @@ function makeSidechatThread(input: {
     activities: [],
     proposedPlans: [],
     checkpoints: [],
-    archivedAt: null,
+    archivedAt: input.archivedAt ?? null,
     deletedAt: null,
   };
 }
@@ -130,6 +131,22 @@ function makeExpiredEvent(threadId: ThreadId, expiredAt: string): OrchestrationE
   };
 }
 
+function makeUnarchivedEvent(threadId: ThreadId, updatedAt: string): OrchestrationEvent {
+  return {
+    sequence: 2,
+    eventId: EventId.makeUnsafe("event-sidechat-unarchived"),
+    type: "thread.unarchived",
+    aggregateKind: "thread",
+    aggregateId: threadId,
+    occurredAt: updatedAt,
+    commandId: CommandId.makeUnsafe("cmd-sidechat-unarchived"),
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    payload: { threadId, updatedAt },
+  };
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -148,13 +165,15 @@ describe("SidechatExpiryReactor", () => {
   async function createHarness(input: {
     readonly nowMs: number;
     readonly lastActivityAtMs: number;
+    readonly archivedAt?: string | null;
   }) {
     const threadId = ThreadId.makeUnsafe("sidechat-expiry-reactor-thread");
     const sourceThreadId = ThreadId.makeUnsafe("sidechat-expiry-reactor-source");
-    const thread = makeSidechatThread({
+    let thread = makeSidechatThread({
       threadId,
       sourceThreadId,
       lastActivityAtMs: input.lastActivityAtMs,
+      archivedAt: input.archivedAt ?? null,
     });
     const clock = makeClock(input.nowMs);
     const commands: OrchestrationCommand[] = [];
@@ -191,6 +210,9 @@ describe("SidechatExpiryReactor", () => {
       commands,
       domainEvents,
       reactor,
+      updateThread: (patch: Partial<OrchestrationThread>) => {
+        thread = { ...thread, ...patch };
+      },
       stopSession,
       threadId,
     };
@@ -232,6 +254,43 @@ describe("SidechatExpiryReactor", () => {
 
     expect(harness.commands.some((command) => command.type === "thread.sidechat.expire")).toBe(
       true,
+    );
+  });
+
+  it("restarts inactivity from unarchive instead of expiring from archived idle time", async () => {
+    const nowMs = SIDECHAT_INACTIVITY_EXPIRY_MS + 1_000;
+    const archivedAt = new Date(1_000).toISOString();
+    const harness = await createHarness({ nowMs, lastActivityAtMs: 0, archivedAt });
+    harness.updateThread({ archivedAt: null });
+
+    await Effect.runPromise(
+      PubSub.publish(
+        harness.domainEvents,
+        makeUnarchivedEvent(harness.threadId, new Date(nowMs).toISOString()),
+      ).pipe(Effect.asVoid),
+    );
+    await waitFor(() =>
+      harness.commands.some((command) => command.type === "thread.sidechat.activity.record"),
+    );
+
+    expect(harness.commands).toContainEqual(
+      expect.objectContaining({
+        type: "thread.sidechat.activity.record",
+        threadId: harness.threadId,
+        activityAt: new Date(nowMs).toISOString(),
+      }),
+    );
+    expect(harness.commands.some((command) => command.type === "thread.sidechat.expire")).toBe(
+      false,
+    );
+
+    harness.clock.advanceTo(nowMs + SIDECHAT_INACTIVITY_EXPIRY_MS);
+    await harness.clock.flushBackgroundEffects();
+    expect(harness.commands).toContainEqual(
+      expect.objectContaining({
+        type: "thread.sidechat.expire",
+        expectedLastActivityAt: new Date(nowMs).toISOString(),
+      }),
     );
   });
 

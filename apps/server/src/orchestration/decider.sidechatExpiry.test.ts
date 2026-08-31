@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
@@ -21,6 +22,8 @@ function makeReadModel(input: {
   expiredAt?: string | null;
   lastActivityAt?: string;
   running?: boolean;
+  hasPendingApprovals?: boolean;
+  hasPendingUserInput?: boolean;
 }): OrchestrationReadModel {
   const running = input.running ?? false;
   const lastActivityAt = input.lastActivityAt ?? LAST_ACTIVITY_AT;
@@ -54,6 +57,8 @@ function makeReadModel(input: {
               assistantMessageId: null,
             }
           : null,
+        hasPendingApprovals: input.hasPendingApprovals ?? false,
+        hasPendingUserInput: input.hasPendingUserInput ?? false,
         handoff: null,
         messages: [],
         session: null,
@@ -108,6 +113,26 @@ describe("side chat expiry decider", () => {
     ).rejects.toThrow("still has a running turn");
   });
 
+  it.each([
+    { interaction: "approval", readModel: makeReadModel({ hasPendingApprovals: true }) },
+    { interaction: "user input", readModel: makeReadModel({ hasPendingUserInput: true }) },
+  ])("defers expiry while $interaction is pending", async ({ readModel }) => {
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.sidechat.expire",
+            commandId: CommandId.makeUnsafe("cmd-expire-pending-sidechat"),
+            threadId: SIDECHAT_THREAD_ID,
+            expectedLastActivityAt: LAST_ACTIVITY_AT,
+            expiredAt: EXPIRED_AT,
+          },
+        }),
+      ),
+    ).rejects.toThrow("still has a pending interaction");
+  });
+
   it("rejects new turns after expiry", async () => {
     await expect(
       Effect.runPromise(
@@ -143,6 +168,42 @@ describe("side chat expiry decider", () => {
             threadId: SIDECHAT_THREAD_ID,
             goalStartedAt: LAST_ACTIVITY_AT,
             trigger: "startup-recovery",
+            createdAt: EXPIRED_AT,
+          },
+        }),
+      ),
+    ).rejects.toThrow("expired after 1 hour of inactivity");
+  });
+
+  it("rejects approval responses after expiry", async () => {
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: makeReadModel({ expiredAt: EXPIRED_AT }),
+          command: {
+            type: "thread.approval.respond",
+            commandId: CommandId.makeUnsafe("cmd-approval-expired-sidechat"),
+            threadId: SIDECHAT_THREAD_ID,
+            requestId: ApprovalRequestId.makeUnsafe("request-expired-sidechat"),
+            decision: "accept",
+            createdAt: EXPIRED_AT,
+          },
+        }),
+      ),
+    ).rejects.toThrow("expired after 1 hour of inactivity");
+  });
+
+  it("rejects user-input responses after expiry", async () => {
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: makeReadModel({ expiredAt: EXPIRED_AT }),
+          command: {
+            type: "thread.user-input.respond",
+            commandId: CommandId.makeUnsafe("cmd-user-input-expired-sidechat"),
+            threadId: SIDECHAT_THREAD_ID,
+            requestId: ApprovalRequestId.makeUnsafe("request-expired-sidechat"),
+            answers: { Decision: "Continue" },
             createdAt: EXPIRED_AT,
           },
         }),

@@ -1298,6 +1298,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Side chat '${command.threadId}' still has a running turn.`,
         });
       }
+      if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' still has a pending interaction.`,
+        });
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -2059,11 +2065,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.approval.respond": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, thread);
       yield* requireApprovalNotResponded({
         readModel,
         command,
@@ -2097,11 +2104,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.user-input.respond": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, thread);
       const answers = omitNullUserInputAnswers(command);
       return {
         ...withEventBase({

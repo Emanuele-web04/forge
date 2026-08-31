@@ -54,7 +54,9 @@ const lastActivityAtMs = (thread: OrchestrationThread, fallbackNowMs: number): n
 const isThreadRunning = (thread: OrchestrationThread): boolean =>
   thread.latestTurn?.state === "running" ||
   thread.session?.status === "starting" ||
-  thread.session?.status === "running";
+  thread.session?.status === "running" ||
+  thread.hasPendingApprovals === true ||
+  thread.hasPendingUserInput === true;
 
 export const makeSidechatExpiryReactor = <TimerHandle>(
   runtime: SidechatExpiryReactorRuntime<TimerHandle>,
@@ -212,11 +214,18 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
               (candidate) => candidate.id === event.payload.threadId,
             );
             if (!thread?.sidechatSourceThreadId || thread.deletedAt) return;
+            const expired = Boolean(thread.sidechatExpiredAt);
+            const restoredActivityAtMs = expired
+              ? lastActivityAtMs(thread, runtime.now())
+              : runtime.now();
+            if (!expired) {
+              yield* recordActivity(thread.id, restoredActivityAtMs);
+            }
             timer.restore({
               threadId: thread.id,
-              lastActivityAtMs: lastActivityAtMs(thread, runtime.now()),
+              lastActivityAtMs: restoredActivityAtMs,
               running: isThreadRunning(thread),
-              expired: Boolean(thread.sidechatExpiredAt),
+              expired,
             });
             return;
           }
