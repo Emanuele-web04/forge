@@ -11,7 +11,7 @@
 ## Tech Debt
 
 - 8 ficheros de test fallan en `main` por un mock de storage roto: `TypeError: getStorage(...).setItem is
-  not a function` en `apps/web/src/lib/storage.ts:116`. Afecta a `chatHotPath.compiler.test.ts`,
+not a function` en `apps/web/src/lib/storage.ts:116`. Afecta a `chatHotPath.compiler.test.ts`,
   `composerDraftStore.attachments.test.ts`, `lib/queuedComposerDrain.test.ts`, `pinnedProjectsStore.test.ts`,
   `pinnedThreadsStore.test.ts`, `sidebarThreadFolderStore.test.ts`, `splitViewStore.test.ts`,
   `workflowRunUiStore.test.ts` (46 tests). Verificado idéntico en HEAD limpio: es preexistente.
