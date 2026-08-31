@@ -3,7 +3,7 @@
 //          agent-drafted GitHub issue flow.
 // Layer: Web feature logic
 
-import { normalizeHomePaths, redactObviousSecrets } from "./feedback";
+import { sanitizeUntrustedText } from "./feedback";
 import type { FeedbackDiagnostics } from "./feedback";
 
 export const SYNARA_UPSTREAM_REPO = "Emanuele-web04/synara";
@@ -141,13 +141,15 @@ export function buildGithubIssueInterviewPrompt(
   input: BuildGithubIssueInterviewPromptInput,
 ): string {
   const sanitizedDetails = defangPromptPlaceholders(
-    escapePromptDelimiters(normalizeHomePaths(redactObviousSecrets(input.details).text)),
+    escapePromptDelimiters(sanitizeUntrustedText(input.details)),
   );
   const safeDiagnostics = defangPromptPlaceholders(
-    escapePromptDelimiters(normalizeHomePaths(redactObviousSecrets(input.diagnosticsSummary).text)),
+    escapePromptDelimiters(sanitizeUntrustedText(input.diagnosticsSummary)),
   );
+  // Replacement strings treat `$&`/`$'` specially, which would let user text
+  // resurrect a placeholder or duplicate the template tail; pass functions.
   return BUG_REPORT_INTERVIEW_PROMPT_TEMPLATE.replaceAll(
     "{{DETAILS}}",
-    sanitizedDetails,
-  ).replaceAll("{{DIAGNOSTICS_SUMMARY}}", safeDiagnostics);
+    () => sanitizedDetails,
+  ).replaceAll("{{DIAGNOSTICS_SUMMARY}}", () => safeDiagnostics);
 }

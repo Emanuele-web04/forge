@@ -128,9 +128,13 @@ export function FeedbackDialogForm({
   const [details, setDetails] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // The form remounts with every open because DialogPopup unmounts its children
+  // once the close transition ends. This effect only covers the quick
+  // reopen-during-exit window, where the form survives and must reset fully.
   useEffect(() => {
     if (open) {
       setCategory(initialCategory ?? null);
+      setDetails("");
     }
   }, [open, initialCategory]);
 

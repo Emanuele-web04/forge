@@ -65,10 +65,14 @@ const SECRET_PATTERNS = [
   /ghu_[A-Za-z0-9]{20,}/gu,
   /ghs_[A-Za-z0-9]{20,}/gu,
   /ghr_[A-Za-z0-9]{20,}/gu,
-  /sk-proj-[A-Za-z0-9]{20,}/gu,
-  /sk-[A-Za-z0-9]{16,}/gu,
-  /AKIA[0-9A-Z]{16}/gu,
-  /ASIA[0-9A-Z]{16}/gu,
+  // The `sk-` families cover modern OpenAI (`sk-proj-…`) and Anthropic
+  // (`sk-ant-…`) keys, whose bodies contain `-`/`_` separators. The lookbehind
+  // keeps ordinary words like `task-0123456789abcdef` from being mangled.
+  /(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/gu,
+  /(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}/gu,
+  /(?<![A-Za-z0-9])ASIA[0-9A-Z]{16}/gu,
   /xoxb-[A-Za-z0-9-]{10,}/gu,
   /AIza[A-Za-z0-9_-]{35}/gu,
   /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{2,}\b/gu,
@@ -77,7 +81,7 @@ const SECRET_PATTERNS = [
 ] as const;
 
 const HOME_PATH_PATTERN =
-  /(?<=^|[\s'"`])(\/Users\/[^/\s,.;:!?()"'`]+|\/home\/[^/\s,.;:!?()"'`]+|\/root\/[^/\s,.;:!?()"'`]+|C:\\Users\\[^/\\\s,.;:!?()"'`]+|C:\/Users\/[^/\s,.;:!?()"'`]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
+  /(?<=^|[\s'"`=(])(\/Users\/[^/\s,.;:!?()"'`]+|\/home\/[^/\s,.;:!?()"'`]+|\/root\/[^/\s,.;:!?()"'`]+|C:\\Users\\[^/\\\s,.;:!?()"'`]+|C:\/Users\/[^/\s,.;:!?()"'`]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
 
 /** Masks high-confidence secrets with `[REDACTED]` and returns the count. */
 export function redactObviousSecrets(text: string): { text: string; redactedCount: number } {
@@ -97,9 +101,13 @@ export function normalizeHomePaths(text: string): string {
   return text.replace(HOME_PATH_PATTERN, "~");
 }
 
-/** Sanitizes user-supplied feedback text before it leaves the app. */
-function sanitizeFeedbackDetails(details: string): string {
-  return normalizeHomePaths(redactObviousSecrets(details).text);
+/**
+ * Single sanitization policy for untrusted text that leaves the app: masks
+ * high-confidence secrets, then normalizes home paths. Both the feedback
+ * endpoint payload and the agent-drafted GitHub issue prompt go through this.
+ */
+export function sanitizeUntrustedText(text: string): string {
+  return normalizeHomePaths(redactObviousSecrets(text).text);
 }
 
 function formatStateFlags(diagnostics: FeedbackThreadContext): string {
@@ -181,7 +189,7 @@ export function buildFeedbackSubmission(input: {
 
   return {
     category: input.category,
-    details: sanitizeFeedbackDetails(input.details.trim()),
+    details: sanitizeUntrustedText(input.details.trim()),
     summary: formatFeedbackSummary({
       category: input.category,
       diagnostics,

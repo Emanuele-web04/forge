@@ -72,6 +72,17 @@ describe("buildGithubIssueInterviewPrompt", () => {
     expect(section(prompt, "initial-report")).not.toContain("I ran into a bug");
   });
 
+  it("treats $-patterns in user input as literal replacement text", () => {
+    const prompt = makePrompt("crash on $& and $' input");
+
+    // `$&` must not resurrect the {{DETAILS}} placeholder and `$'` must not
+    // duplicate the template tail into the report section. `&` is escaped by
+    // the delimiter pass, hence $&amp;.
+    expect(prompt).not.toContain("{{DETAILS}}");
+    expect(section(prompt, "initial-report")).toBe("crash on $&amp; and $' input");
+    expect(prompt.match(/Follow these steps in order/g)?.length).toBe(1);
+  });
+
   it("contains the gh command, confirmation, and fallback", () => {
     const prompt = makePrompt("The sidebar footer button is missing.");
 
@@ -132,6 +143,29 @@ describe("redactObviousSecrets", () => {
     expect(redacted).not.toContain("ghr_0123456789abcdefghijklmnopqrst");
     expect(redactedCount).toBe(4);
   });
+
+  it("redacts modern OpenAI and Anthropic key formats with separator characters", () => {
+    const text =
+      "openai sk-proj-Ab12Cd34Ef56Gh78-Ij90Kl12Mn34Op56Qr78St90 and " +
+      "anthropic sk-ant-api03-Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78";
+
+    const { text: redacted, redactedCount } = redactObviousSecrets(text);
+
+    expect(redacted).not.toContain("sk-proj-Ab12Cd34Ef56Gh78");
+    expect(redacted).not.toContain("sk-ant-api03-Ab12Cd34Ef56Gh78");
+    expect(redactedCount).toBe(2);
+  });
+
+  it("does not mangle ordinary words that merely contain sk- or AKIA", () => {
+    const text = "run id task-0123456789ABCDEF finished, see NOTAKIA0123456789ABCDEF docs";
+
+    const { text: redacted, redactedCount } = redactObviousSecrets(text);
+
+    expect(redacted).toBe(
+      "run id task-0123456789ABCDEF finished, see NOTAKIA0123456789ABCDEF docs",
+    );
+    expect(redactedCount).toBe(0);
+  });
 });
 
 describe("normalizeHomePaths", () => {
@@ -144,8 +178,11 @@ describe("normalizeHomePaths", () => {
     ["/Users/kartik, ok?", "~, ok?"],
     ["C:\\Users\\kartik\\Desktop", "~\\Desktop"],
     ["C:/Users/kartik/dev", "~/dev"],
+    ["HOME=/Users/kartik/dev", "HOME=~/dev"],
+    ["PATH=/Users/kartik/bin:/usr/bin", "PATH=~/bin:/usr/bin"],
+    ["(/Users/kartik/x)", "(~/x)"],
     ["/tmp/users/kartik", "/tmp/users/kartik"],
-  ])("normalizes %p → %p", (input, expected) => {
+  ])("normalizes %s → %s", (input, expected) => {
     expect(normalizeHomePaths(input)).toBe(expected);
   });
 });

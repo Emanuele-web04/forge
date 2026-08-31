@@ -875,7 +875,10 @@ function SidebarHelpMenu({
               <SidebarContextMenuIcon icon={KeyboardIcon} />
               <span>Keybindings</span>
             </MenuItem>
-            <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
+            <MenuItem
+              className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+              onClick={() => onOpenFeedback()}
+            >
               <SidebarContextMenuIcon icon={ChatBubbleIcon} />
               <span>Send feedback</span>
             </MenuItem>
