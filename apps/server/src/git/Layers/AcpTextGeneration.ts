@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { Effect, Option, Ref, Schema, Scope } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { ProviderStartOptions } from "@synara/contracts";
@@ -10,6 +12,35 @@ import {
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
 } from "../textGenerationShared.ts";
+
+export const ACP_TEXT_GENERATION_MAX_OUTPUT_BYTES = 1_000_000;
+
+export interface AcpTextGenerationOutput {
+  readonly text: string;
+  readonly byteLength: number;
+  readonly exceededLimit: boolean;
+}
+
+export function appendAcpTextGenerationOutput(
+  current: AcpTextGenerationOutput,
+  chunk: string,
+  maxBytes = ACP_TEXT_GENERATION_MAX_OUTPUT_BYTES,
+): AcpTextGenerationOutput {
+  if (current.exceededLimit) {
+    return current;
+  }
+
+  const byteLength = current.byteLength + Buffer.byteLength(chunk, "utf8");
+  if (byteLength > maxBytes) {
+    return { ...current, exceededLimit: true };
+  }
+
+  return {
+    text: current.text + chunk,
+    byteLength,
+    exceededLimit: false,
+  };
+}
 
 export function mapError(
   operation: TextGenerationOperation,
@@ -100,7 +131,11 @@ export function runAcpTextGeneration<
       );
     }
 
-    const outputRef = yield* Ref.make("");
+    const outputRef = yield* Ref.make<AcpTextGenerationOutput>({
+      text: "",
+      byteLength: 0,
+      exceededLimit: false,
+    });
     const runtime = yield* config.makeRuntime({
       childProcessSpawner: input.childProcessSpawner,
       settings: config.resolveSettings(input.providerOptions),
@@ -116,7 +151,9 @@ export function runAcpTextGeneration<
       if (content.type !== "text") {
         return Effect.void;
       }
-      return Ref.update(outputRef, (current) => current + content.text);
+      return Ref.update(outputRef, (current) =>
+        appendAcpTextGenerationOutput(current, content.text),
+      );
     });
 
     const mapErrorForOperation = (detail: string, cause?: unknown) =>
@@ -148,7 +185,16 @@ export function runAcpTextGeneration<
       ),
     );
 
-    const rawResult = (yield* Ref.get(outputRef)).trim();
+    const output = yield* Ref.get(outputRef);
+    if (output.exceededLimit) {
+      return yield* Effect.fail(
+        mapErrorForOperation(
+          `${config.providerLabel} output exceeded the ${ACP_TEXT_GENERATION_MAX_OUTPUT_BYTES}-byte limit.`,
+        ),
+      );
+    }
+
+    const rawResult = output.text.trim();
     if (!rawResult) {
       return yield* Effect.fail(
         new TextGenerationError({

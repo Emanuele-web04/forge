@@ -98,13 +98,8 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const {
-    customCodexModels,
-    customOpenCodeModels,
-    customDroidModels,
-    textGenerationModel,
-    textGenerationProvider,
-  } = settings;
+  const { customCodexModels, customOpenCodeModels, textGenerationModel, textGenerationProvider } =
+    settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -129,7 +124,6 @@ export function ModelsSettingsPanel({
         {
           customCodexModels,
           customOpenCodeModels,
-          customDroidModels,
           textGenerationModel,
           textGenerationProvider,
         },
@@ -142,7 +136,6 @@ export function ModelsSettingsPanel({
     [
       customCodexModels,
       customOpenCodeModels,
-      customDroidModels,
       gitWritingCatalogOptionsByProvider.codex,
       gitWritingCatalogOptionsByProvider.droid,
       gitWritingCatalogOptionsByProvider.opencode,

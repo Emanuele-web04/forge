@@ -3,6 +3,7 @@ import {
   CLAUDE_API_EFFORT_OPTIONS,
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
@@ -242,6 +243,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     const droidSlugs = MODEL_OPTIONS_BY_PROVIDER.droid.map((model) => model.slug);
 
     expect(droidSlugs).toContain("gpt-5.5-fast");
+    expect(droidSlugs).toContain(DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL);
     expect(droidSlugs).not.toContain("gpt-5.6-fast");
     expect(getModelCapabilities("droid", "gpt-5.6-sol").supportsFastMode).toBe(false);
   });

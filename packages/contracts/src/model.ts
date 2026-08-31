@@ -537,6 +537,8 @@ type ModelDefinition = {
  * TODO: This should not be a static array, each provider
  * should return its own model list over the WS API.
  */
+export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" as const;
+
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     {
@@ -824,6 +826,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
     },
     {
+      slug: DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+      name: "DeepSeek V4 Flash 0731",
+      capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
+    },
+    {
       slug: "minimax-m3",
       name: "MiniMax M3",
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
@@ -1061,7 +1068,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
-  droid: "deepseek-v4-flash-0731",
+  droid: "claude-opus-4-8",
   opencode: "openai/gpt-5",
 };
 
@@ -1146,10 +1153,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   antigravity: {},
   droid: {
-    droid: "deepseek-v4-flash-0731",
-    factory: "deepseek-v4-flash-0731",
-    deepseek: "deepseek-v4-flash-0731",
-    flash: "deepseek-v4-flash-0731",
+    droid: "claude-opus-4-8",
+    factory: "claude-opus-4-8",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "opus-fast": "claude-opus-4-8-fast",
@@ -1182,6 +1187,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     nemotron: "nemotron-3-ultra",
     kimi: "kimi-k2.7-code",
     "kimi-code": "kimi-k2.7-code",
+    deepseek: "deepseek-v4-pro",
     minimax: "minimax-m3",
   },
   grok: {

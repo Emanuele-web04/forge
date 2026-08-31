@@ -1071,11 +1071,7 @@ export function mapCatalogModelOptionsToAppModelOptions(
 export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
-    | "customCodexModels"
-    | "customOpenCodeModels"
-    | "customDroidModels"
-    | "textGenerationModel"
-    | "textGenerationProvider"
+    "customCodexModels" | "customOpenCodeModels" | "textGenerationModel" | "textGenerationProvider"
   >,
   discoveredOptionsByProvider?: Partial<
     Record<
@@ -1093,7 +1089,7 @@ export function getGitTextGenerationModelOptions(
       : getAppModelOptions("opencode", settings.customOpenCodeModels)),
     ...(discoveredOptionsByProvider?.droid
       ? mapCatalogModelOptionsToAppModelOptions("droid", discoveredOptionsByProvider.droid)
-      : getAppModelOptions("droid", settings.customDroidModels)),
+      : getAppModelOptions("droid", [])),
   ];
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();

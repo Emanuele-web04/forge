@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { dirname } from "node:path";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
+import {
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
@@ -264,7 +268,9 @@ describe("ServerSettingsService", () => {
 
     expect(settings.textGenerationModelSelection.provider).toBe(expectedProvider);
     expect(settings.textGenerationModelSelection.model).toBe(
-      DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
+      expectedProvider === "droid"
+        ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
+        : DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
     );
   });
 });
