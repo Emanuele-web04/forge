@@ -18,10 +18,11 @@ The feedback bug-reporting feature is a single sequential feature. Review fixes 
 ## Evidence
 
 - `cd apps/web && bun run test src/feedbackGithubIssue.test.ts src/feedbackDialogStore.test.ts src/components/SidebarBugReportButton.test.tsx src/components/FeedbackDialog.test.tsx` — 4 test files, 21/21 tests passed.
-- `cd apps/web && bun run test` — 330 test files, 4141 tests passed.
+- `cd apps/web && bun run test` — 331 test files passed, 4 unrelated compiler/import timeout failures.
 - `bun fmt` — passed.
-- `bun lint` — 471 warnings, 0 errors.
+- `bun lint` — 478 warnings, 0 errors.
 - `bun typecheck` — all 7 packages passed.
-- No files changed outside the ledger's file list.
-- Final branch head SHA: `07032bafe047b2adea0ce54cd75c3a781775b91e`.
+- Merged `upstream/main` and resolved `Sidebar.tsx` / `__root.tsx` overlap.
+- Fixed post-merge type error in `apps/web/src/lib/rateLimits.ts`.
+- Final branch head SHA: `ecbfb8fb0380d02d69123604f728f3c660374de7`.
 - No push, PR, or GitHub issue created.
