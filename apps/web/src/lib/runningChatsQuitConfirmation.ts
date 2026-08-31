@@ -3,8 +3,6 @@
 // Layer: UI logic helper
 // Depends on: Sidebar-equivalent "working" signals (running/connecting/live tail).
 
-import type { ThreadId } from "@synara/contracts";
-
 export interface RunningChatQuitCandidate {
   readonly id: string;
   readonly title: string;
@@ -66,7 +64,7 @@ export function listRunningChatsForQuit(
     seen.add(thread.id);
     chats.push({ id: thread.id, title: runningChatDisplayTitle(thread.title) });
   }
-  return chats.toSorted(compareRunningChatSummaries);
+  return chats.sort(compareRunningChatSummaries);
 }
 
 export function listRunningChatsFromDesktopStore(
@@ -107,24 +105,16 @@ export function quitResumeContinuationPrompt(appName = "Synara"): string {
   return `${appName} was closed while this chat was still running. Continue where you left off.`;
 }
 
-/** The server's durable resume record returned by a successful `prepare`. */
-export interface PreparedQuitResumeRecord {
-  readonly recordedThreadIds: readonly ThreadId[];
-  readonly recordedAt: string;
-}
-
 export interface StopRunningChatsForQuitInput {
   readonly chats: ReadonlyArray<Pick<RunningChatQuitSummary, "id">>;
-  readonly dispatchInterrupt: (threadId: string) => Promise<void> | void;
+  readonly dispatchInterrupt: (threadId: string) => Promise<unknown> | unknown;
   /**
    * When set, ask the server to durably record the chats for resume (it also
    * interrupts them) and wait — bounded — for that ack. On failure or timeout
    * fall back to plain interrupts so quit never hangs and never double-resumes.
    */
   readonly resume?: {
-    readonly prepare: (
-      threadIds: ReadonlyArray<string>,
-    ) => Promise<PreparedQuitResumeRecord | void>;
+    readonly prepare: (threadIds: ReadonlyArray<string>) => Promise<unknown>;
     readonly timeoutMs?: number;
   };
 }
@@ -162,7 +152,7 @@ export async function stopRunningChatsForQuit(
 }
 
 /** Resolves true only when `run` settles successfully within `timeoutMs`. */
-async function withBoundedWait<T>(run: () => Promise<T>, timeoutMs: number): Promise<boolean> {
+async function withBoundedWait(run: () => Promise<unknown>, timeoutMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), timeoutMs);

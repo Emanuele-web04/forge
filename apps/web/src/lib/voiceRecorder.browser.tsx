@@ -30,12 +30,9 @@ describe("useVoiceRecorder", () => {
     }
 
     const stopTrack = vi.fn();
-    // SAFETY: The stub implements only the MediaStream surface useVoiceRecorder
-    // touches (getTracks); the remaining MediaStream members are never read during
-    // the recording lifecycle this test exercises.
     const stream = {
-      getTracks: (): ReadonlyArray<{ stop: () => void }> => [{ stop: stopTrack }],
-    } as MediaStream;
+      getTracks: () => [{ stop: stopTrack }],
+    } as unknown as MediaStream;
     vi.spyOn(navigator.mediaDevices, "getUserMedia").mockResolvedValue(stream);
     vi.stubGlobal("AudioContext", DeferredAudioContext);
 

@@ -21,9 +21,7 @@ const baseRequest: ServerVoiceTranscriptionInput = {
   audioBase64: WAV_BASE64,
 };
 
-type MockJsonBody = Record<string, string>;
-
-function outboundJson(body: MockJsonBody, status = 200): OutboundHttpResponse {
+function outboundJson(body: unknown, status = 200): OutboundHttpResponse {
   return {
     status,
     headers: new Headers({ "content-type": "application/json" }),
@@ -49,8 +47,6 @@ describe("transcribeVoiceWithChatGptSession", () => {
 
     const outbound = request.mock.calls[0]?.[0];
     expect(outbound?.url).toBe("https://chatgpt.com/backend-api/transcribe");
-    // SAFETY: The mock request body is always a Uint8Array (outboundJson encodes
-    // JSON with TextEncoder), so the optional body field is narrowed to that form.
     expect(new TextDecoder().decode(outbound?.body as Uint8Array)).not.toContain('name="model"');
   });
 

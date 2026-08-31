@@ -53,7 +53,7 @@ function makeReadModel(input: {
         proposedPlans: [],
         checkpoints: [],
         deletedAt: null,
-        archivedAt: input.archivedAt ?? null,
+        ...(input.archivedAt !== undefined ? { archivedAt: input.archivedAt } : {}),
       },
     ],
   };
