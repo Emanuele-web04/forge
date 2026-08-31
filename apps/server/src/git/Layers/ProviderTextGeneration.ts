@@ -1,10 +1,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ModelSelection, type ProviderKind } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
-import {
-  resolveTextGenerationModelSlug,
-  type ResolvedTextGenerationModel,
-} from "@synara/shared/model";
+import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -21,12 +18,37 @@ import {
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 
+const DROID_SLUG_PREFIX = /^droid[:/](.+)$/;
+
+const parseDroidModelSlug = (model: string | undefined): { readonly model: string } | null => {
+  if (!model) return null;
+  const match = DROID_SLUG_PREFIX.exec(model);
+  if (match && match[1]) return { model: match[1] };
+  return null;
+};
+
 const makeProviderTextGeneration = Effect.gen(function* () {
   const codexTextGeneration = yield* CodexTextGeneration;
   const cursorTextGeneration = yield* CursorTextGeneration;
   const droidTextGeneration = yield* DroidTextGeneration;
   const openCodeTextGeneration = yield* OpenCodeTextGeneration;
   const serverSettings = yield* ServerSettingsService;
+
+  const resolveRequestedProvider = (input: {
+    readonly model?: string;
+    readonly modelSelection?: ModelSelection;
+  }): ProviderKind => {
+    if (input.modelSelection?.provider) {
+      return input.modelSelection.provider;
+    }
+    if (parseOpenCodeModelSlug(input.model) !== null) {
+      return "opencode";
+    }
+    if (parseDroidModelSlug(input.model) !== null) {
+      return "droid";
+    }
+    return "codex";
+  };
 
   const implementationForProvider = (provider: GitTextGenerationProvider): TextGenerationShape => {
     switch (provider) {
@@ -41,47 +63,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     }
   };
 
-  const buildResolvedModelSelection = (
-    resolved: ResolvedTextGenerationModel,
-    options?: unknown,
-  ): ModelSelection =>
-    ({
-      provider: resolved.provider,
-      model: resolved.model,
-      ...(options ? { options } : {}),
-    }) as ModelSelection;
-
-  const resolveFromModelSelection = (
-    modelSelection: ModelSelection,
-  ): { readonly provider: ProviderKind; readonly modelSelection: ModelSelection } => {
-    const resolved = resolveTextGenerationModelSlug(modelSelection.model);
-    if (resolved && resolved.provider === modelSelection.provider) {
-      return {
-        provider: resolved.provider,
-        modelSelection: buildResolvedModelSelection(resolved, modelSelection.options),
-      };
-    }
-    return {
-      provider: modelSelection.provider,
-      modelSelection,
-    };
-  };
-
-  const resolveFromModel = (
-    model: string,
-  ): { readonly provider: ProviderKind; readonly modelSelection: ModelSelection } | null => {
-    const resolved = resolveTextGenerationModelSlug(model);
-    if (!resolved) {
-      return null;
-    }
-    const provider = resolved.provider === "claudeAgent" ? "codex" : resolved.provider;
-    return {
-      provider,
-      modelSelection: buildResolvedModelSelection({ ...resolved, provider }),
-    };
-  };
-
-  const resolveTextGenerationRequest = (
+  const resolveImplementation = (
     operation: string,
     input: {
       readonly model?: string;
@@ -89,6 +71,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     },
   ) =>
     Effect.gen(function* () {
+      const requestedProvider = resolveRequestedProvider(input);
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
           (cause) =>
@@ -99,42 +82,15 @@ const makeProviderTextGeneration = Effect.gen(function* () {
             }),
         ),
       );
-
-      const requested = (() => {
-        if (input.modelSelection?.provider) {
-          return resolveFromModelSelection(input.modelSelection);
-        }
-        const model = input.model?.trim();
-        if (model) {
-          return resolveFromModel(model);
-        }
-        return {
-          provider: settings.textGenerationModelSelection.provider,
-          modelSelection: settings.textGenerationModelSelection,
-        };
-      })();
-
-      if (requested === null) {
-        return yield* Effect.fail(
-          new TextGenerationError({
-            operation,
-            detail: "Unknown model selection.",
-          }),
-        );
-      }
-
-      const requestedProviderIsEnabledDedicated =
-        hasDedicatedTextGenerationProvider(requested.provider) &&
-        settings.providers[requested.provider].enabled;
-      const fallbackModelSelection = requestedProviderIsEnabledDedicated
+      const fallbackModelSelection = hasDedicatedTextGenerationProvider(requestedProvider)
         ? undefined
         : settings.textGenerationModelSelection;
-      const provider = fallbackModelSelection?.provider ?? requested.provider;
+      const provider = fallbackModelSelection?.provider ?? requestedProvider;
       if (!hasDedicatedTextGenerationProvider(provider)) {
         return yield* Effect.fail(
           new TextGenerationError({
             operation,
-            detail: `${PROVIDER_DISPLAY_NAMES[requested.provider]} does not support Git text generation, and no supported fallback is enabled.`,
+            detail: `${PROVIDER_DISPLAY_NAMES[requestedProvider]} does not support Git text generation, and no supported fallback is enabled.`,
           }),
         );
       }
@@ -148,9 +104,6 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       }
       return {
         implementation: implementationForProvider(provider),
-        resolvedModelSelection: requestedProviderIsEnabledDedicated
-          ? requested.modelSelection
-          : undefined,
         fallbackModelSelection,
       };
     });
@@ -166,20 +119,19 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       input: Input,
     ) => Effect.Effect<Output, TextGenerationError>,
   ) =>
-    resolveTextGenerationRequest(operation, input).pipe(
-      Effect.flatMap(({ implementation, resolvedModelSelection, fallbackModelSelection }) => {
-        const mergedInput: Input = resolvedModelSelection
-          ? { ...input, modelSelection: resolvedModelSelection }
-          : input;
-        const finalInput: Input = fallbackModelSelection
-          ? {
-              ...mergedInput,
-              model: fallbackModelSelection.model,
-              modelSelection: fallbackModelSelection,
-            }
-          : mergedInput;
-        return run(implementation, finalInput);
-      }),
+    resolveImplementation(operation, input).pipe(
+      Effect.flatMap(({ implementation, fallbackModelSelection }) =>
+        run(
+          implementation,
+          fallbackModelSelection
+            ? ({
+                ...input,
+                model: fallbackModelSelection.model,
+                modelSelection: fallbackModelSelection,
+              } as Input)
+            : input,
+        ),
+      ),
     );
 
   return {

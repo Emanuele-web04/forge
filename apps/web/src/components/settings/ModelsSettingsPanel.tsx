@@ -2,12 +2,12 @@
 // Purpose: Own model-setting discovery, selection, and custom-model editing workflows.
 // Layer: Settings panel
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import {
-  getModelOptions,
-  normalizeModelSlug,
-  resolveTextGenerationModelSlug,
-} from "@synara/shared/model";
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
+} from "@synara/contracts";
+import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
@@ -20,11 +20,9 @@ import {
   getGitTextGenerationModelOptions,
   isGitTextGenerationSettingsDirty,
   patchCustomModels,
-  resolveGitTextGenerationSelection,
 } from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { PlusIcon, XIcon } from "~/lib/icons";
-import { isProviderKind } from "~/providerOrdering";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -68,22 +66,6 @@ export function validateCustomModelInput(input: {
   if (input.savedModels.includes(normalized)) {
     return { error: "That custom model is already saved." };
   }
-
-  // Droid custom slugs must resolve through the shared text-generation resolver
-  // as `droid/<custom>` or `droid:<custom>` and must not duplicate a built-in.
-  if (input.provider === "droid") {
-    const resolved = resolveTextGenerationModelSlug(input.value);
-    if (!resolved || resolved.provider !== "droid" || !resolved.model) {
-      return { error: "Enter a Droid model slug as droid/<model> or droid:<model>." };
-    }
-    if (getModelOptions("droid").some((option) => option.slug === resolved.model)) {
-      return { error: "That model is already built in." };
-    }
-    if (input.savedModels.includes(resolved.model) && resolved.model !== normalized) {
-      return { error: "That custom model is already saved." };
-    }
-  }
-
   return { model: normalized };
 }
 
@@ -116,18 +98,10 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const {
-    customCodexModels,
-    customDroidModels,
-    customOpenCodeModels,
-    textGenerationModel,
-    textGenerationProvider,
-  } = settings;
-  const { provider: currentGitTextGenerationProvider, model: currentGitTextGenerationModel } =
-    resolveGitTextGenerationSelection({
-      provider: textGenerationProvider,
-      model: textGenerationModel,
-    });
+  const { customCodexModels, customOpenCodeModels, textGenerationModel, textGenerationProvider } =
+    settings;
+  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
+  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
     [currentGitTextGenerationModel, currentGitTextGenerationProvider],
@@ -149,23 +123,19 @@ export function ModelsSettingsPanel({
       getGitTextGenerationModelOptions(
         {
           customCodexModels,
-          customDroidModels,
           customOpenCodeModels,
           textGenerationModel,
           textGenerationProvider,
         },
         {
           codex: gitWritingCatalogOptionsByProvider.codex,
-          droid: gitWritingCatalogOptionsByProvider.droid,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
         },
       ),
     [
       customCodexModels,
-      customDroidModels,
       customOpenCodeModels,
       gitWritingCatalogOptionsByProvider.codex,
-      gitWritingCatalogOptionsByProvider.droid,
       gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
@@ -301,9 +271,9 @@ export function ModelsSettingsPanel({
               onValueChange={(value) => {
                 if (!value) return;
                 const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex);
+                const provider = value.slice(0, separatorIndex) as ProviderKind;
                 const model = value.slice(separatorIndex + 1);
-                if (!isProviderKind(provider) || !model) return;
+                if (!provider || !model) return;
                 updateSettings({
                   textGenerationProvider: provider,
                   textGenerationModel: model,

@@ -1,5 +1,4 @@
 import { Effect, Schema } from "effect";
-import type * as JsonSchema from "effect/JsonSchema";
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ServerGenerateAutomationIntentResult,
@@ -7,11 +6,10 @@ import {
   type ChatAttachment,
 } from "@synara/contracts";
 import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
-import { resolveTextGenerationModelSlug } from "@synara/shared/model";
 
 import { TextGenerationError } from "./Errors.ts";
 
-export function toJsonSchemaObject(schema: Schema.Top): JsonSchema.JsonSchema {
+export function toJsonSchemaObject(schema: Schema.Top): unknown {
   const document = Schema.toJsonSchemaDocument(schema);
   if (document.definitions && Object.keys(document.definitions).length > 0) {
     return {
@@ -84,17 +82,17 @@ export interface RawTextFallback {
   readonly maxWords?: number;
 }
 
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Unknown);
-type JsonObject = typeof JsonObjectSchema.Type;
-
 function stripCodeFences(raw: string): string {
   const fenced = raw.match(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/);
   return (fenced?.[1] ?? raw).trim();
 }
 
-function tryParseJsonObject(text: string): JsonObject | null {
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
   try {
-    return Schema.decodeUnknownSync(Schema.fromJsonString(JsonObjectSchema))(text);
+    const parsed = JSON.parse(text) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -102,13 +100,13 @@ function tryParseJsonObject(text: string): JsonObject | null {
 
 // Prefer the requested field, otherwise the first usable string value, so a wrong-key
 // JSON object (e.g. {"name":"Foo"}) yields "Foo" instead of the literal braces.
-function pickFallbackString(parsed: JsonObject, key: string): string | null {
+function pickFallbackString(parsed: Record<string, unknown>, key: string): string | null {
   const preferred = parsed[key];
-  if (Schema.is(Schema.String)(preferred) && preferred.trim().length > 0) {
+  if (typeof preferred === "string" && preferred.trim().length > 0) {
     return preferred.trim();
   }
   for (const value of Object.values(parsed)) {
-    if (Schema.is(Schema.String)(value) && value.trim().length > 0) {
+    if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();
     }
   }
@@ -143,7 +141,7 @@ export function decodeStructuredTextGenerationOutput<S extends Schema.Top>(input
   readonly raw: string;
   readonly operation: string;
   readonly providerLabel: string;
-  readonly rawTextFallback?: RawTextFallback | undefined;
+  readonly rawTextFallback?: RawTextFallback;
 }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> {
   const decode = Schema.decodeEffect(Schema.fromJsonString(input.schema));
   const toError = (cause: unknown) =>
@@ -271,11 +269,7 @@ export function buildCommitMessagePrompt(input: {
         body: Schema.String,
       });
 
-  return {
-    prompt,
-    outputSchemaJson,
-    rawTextFallback: { key: "subject" } satisfies RawTextFallback,
-  };
+  return { prompt, outputSchemaJson };
 }
 
 export function buildPrContentPrompt(input: {
@@ -337,7 +331,6 @@ export function buildPrContentPrompt(input: {
       title: Schema.String,
       body: Schema.String,
     }),
-    rawTextFallback: { key: "title" } satisfies RawTextFallback,
   };
 }
 
@@ -366,9 +359,9 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
 }
 
 export function buildThreadRecapPrompt(input: {
-  readonly previousRecap?: string | undefined;
+  readonly previousRecap?: string;
   readonly newMaterial: string;
-  readonly currentState?: string | undefined;
+  readonly currentState?: string;
 }) {
   return {
     prompt: [
@@ -409,7 +402,7 @@ export function buildThreadRecapPrompt(input: {
 // Converts an explicit composer trigger into the same automation fields the create API expects.
 export function buildAutomationIntentPrompt(input: {
   readonly message: string;
-  readonly defaultMode?: AutomationMode | undefined;
+  readonly defaultMode?: AutomationMode;
   readonly nowIso: string;
 }) {
   const defaultMode = input.defaultMode ?? "heartbeat";
@@ -481,7 +474,6 @@ export function buildAutomationIntentPrompt(input: {
       limitSection(input.message, 16_000),
     ].join("\n"),
     outputSchemaJson: ServerGenerateAutomationIntentResult,
-    rawTextFallback: { key: "name", maxWords: 12 } satisfies RawTextFallback,
   };
 }
 
@@ -530,13 +522,12 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
       confidence: Schema.Number,
       reason: Schema.String,
     }),
-    rawTextFallback: { key: "reason", maxWords: 30 } satisfies RawTextFallback,
   };
 }
 
 export function buildBranchNamePrompt(input: {
   readonly message: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
 }) {
   const attachmentLines = attachmentMetadataLines(input.attachments);
   const promptSections = [
@@ -571,7 +562,7 @@ export function buildBranchNamePrompt(input: {
 
 export function buildThreadTitlePrompt(input: {
   readonly message: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
 }) {
   const attachmentLines = attachmentMetadataLines(input.attachments);
   const promptSections = [
@@ -610,15 +601,4 @@ export function buildThreadTitlePrompt(input: {
       maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
     } satisfies RawTextFallback,
   };
-}
-
-export function resolveDroidTextGenerationModelSlug(
-  slug: string | null | undefined,
-): string | null {
-  const resolved = resolveTextGenerationModelSlug(slug);
-  return resolved?.provider === "droid" ? resolved.model : null;
-}
-
-export function isDroidTextGenerationModelSlug(slug: string): boolean {
-  return resolveTextGenerationModelSlug(slug)?.provider === "droid";
 }

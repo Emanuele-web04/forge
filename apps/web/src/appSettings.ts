@@ -23,7 +23,6 @@ import {
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
-  resolveTextGenerationModelSlug,
 } from "@synara/shared/model";
 import {
   APP_SNAP_SHORTCUT_KEYS,
@@ -148,16 +147,16 @@ export type ProviderCustomModelConfig = {
   example: string;
 };
 
-const BUILT_IN_MODEL_SLUGS_BY_PROVIDER = {
-  codex: new Set<string>(getModelOptions("codex").map((option) => option.slug)),
-  claudeAgent: new Set<string>(getModelOptions("claudeAgent").map((option) => option.slug)),
-  cursor: new Set<string>(getModelOptions("cursor").map((option) => option.slug)),
-  antigravity: new Set<string>(getModelOptions("antigravity").map((option) => option.slug)),
-  grok: new Set<string>(getModelOptions("grok").map((option) => option.slug)),
-  droid: new Set<string>(getModelOptions("droid").map((option) => option.slug)),
-  opencode: new Set<string>(getModelOptions("opencode").map((option) => option.slug)),
-  pi: new Set<string>(getModelOptions("pi").map((option) => option.slug)),
-} satisfies Record<ProviderKind, ReadonlySet<string>>;
+const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
+  codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
+  cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
+  antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
+  grok: new Set(getModelOptions("grok").map((option) => option.slug)),
+  droid: new Set(getModelOptions("droid").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  pi: new Set(getModelOptions("pi").map((option) => option.slug)),
+};
 
 const withDefaults =
   <
@@ -201,8 +200,12 @@ const PersistedProviderKind = Schema.Literals([
 // providers with no successor subscription (kilo) must not transfer prefs like
 // "hidden" onto another provider, so their list entries are dropped. Unknown
 // values are dropped too instead of failing the whole settings decode.
+const RENAMED_PROVIDERS: Readonly<Record<string, ProviderKind>> = {
+  gemini: "antigravity",
+};
+
 function resolvePersistedProviderListEntry(provider: string): ProviderKind | undefined {
-  const renamed = provider === "gemini" ? "antigravity" : provider;
+  const renamed = RENAMED_PROVIDERS[provider] ?? provider;
   return Schema.is(ProviderKind)(renamed) ? renamed : undefined;
 }
 
@@ -215,7 +218,6 @@ const PersistedProviderKindList = Schema.Array(Schema.String).pipe(
           const resolved = resolvePersistedProviderListEntry(provider);
           return resolved === undefined ? [] : [resolved];
         }),
-      // SAFETY: encoding to JSON re-serializes ProviderKind slugs as plain strings.
       encode: (providers) => providers as ReadonlyArray<string>,
     }),
   ),
@@ -382,30 +384,16 @@ export function isGitTextGenerationSettingsDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
-  const settingsSelection = resolveGitTextGenerationSelection({
-    provider: settings.textGenerationProvider,
-    model: settings.textGenerationModel,
-  });
-  const defaultsSelection = resolveGitTextGenerationSelection({
-    provider: defaults.textGenerationProvider,
-    model: defaults.textGenerationModel,
-  });
   return (
-    settingsSelection.provider !== defaultsSelection.provider ||
-    settingsSelection.model !== defaultsSelection.model
+    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
+    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
+      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
   );
 }
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;
-type ServerProviderSettingValue = string | boolean | readonly string[];
-type MutableProviderPatch<Provider extends keyof MutableServerSettingsProvidersPatch> = Mutable<
-  NonNullable<MutableServerSettingsProvidersPatch[Provider]>
->;
-type MutableProviderStartOptions<Provider extends keyof ProviderStartOptions> = Mutable<
-  NonNullable<ProviderStartOptions[Provider]>
->;
 
 export interface AppModelOption extends ProviderModelOption {
   provider: ProviderKind;
@@ -415,7 +403,7 @@ export interface AppModelOption extends ProviderModelOption {
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
 
-const PROVIDER_CUSTOM_MODEL_CONFIG = {
+const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
   codex: {
     provider: "codex",
     settingsKey: "customCodexModels",
@@ -468,7 +456,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG = {
     title: "Droid",
     description: "Save additional Droid model slugs for the picker and `/model` command.",
     placeholder: "your-droid-model-slug",
-    example: "deepseek-v4-flash-0731",
+    example: "claude-opus-4-8",
   },
   opencode: {
     provider: "opencode",
@@ -488,11 +476,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG = {
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
-} satisfies Record<ProviderKind, ProviderCustomModelConfig>;
+};
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
-export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS;
+// Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
+// persisted config for compatibility, but do not offer an editor it cannot honor.
+export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
+  (config) => config.provider !== "droid",
+);
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -524,7 +516,7 @@ export function normalizeCustomModelSlugs(
 }
 
 export function normalizeChatFontSizePx(value: number | null | undefined): number {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_CHAT_FONT_SIZE_PX;
   }
 
@@ -532,7 +524,7 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
 }
 
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_TERMINAL_FONT_SIZE_PX;
   }
 
@@ -690,65 +682,15 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
   };
 }
 
-export function resolveTextGenerationProvider(input: {
-  readonly provider?: ProviderKind | null | undefined;
-  readonly model?: string | null | undefined;
+function resolveTextGenerationProvider(input: {
+  readonly provider?: ProviderKind | null;
+  readonly model?: string | null;
 }): ProviderKind {
   if (input.provider) {
     return input.provider;
   }
-
-  const resolved = resolveTextGenerationModelSlug(input.model);
-  if (resolved) {
-    return resolved.provider;
-  }
-
-  const model = input.model?.trim() ?? "";
-  if (!model) {
-    return "codex";
-  }
-
-  // Legacy fallbacks for custom or unknown slugs that the shared resolver
-  // could not map to a provider.
-  return model.includes("/") ? "opencode" : "codex";
-}
-
-/**
- * Resolve a git text-generation model selection into a provider and a
- * canonical model slug.
- *
- * Uses the shared `resolveTextGenerationModelSlug` resolver for provider
- * inference and for canonicalizing known built-in/alias slugs, while
- * preserving custom and discovered model identifiers that the shared resolver
- * does not recognize (e.g. `droid/custom`, `openrouter/my-model`).
- */
-export function resolveGitTextGenerationSelection(input: {
-  readonly provider?: ProviderKind | null | undefined;
-  readonly model?: string | null | undefined;
-}): { provider: ProviderKind; model: string } {
-  const provider = input.provider ?? resolveTextGenerationProvider({ model: input.model });
-  const model = input.model?.trim();
-  if (!model) {
-    return {
-      provider,
-      model: getDefaultModel(provider) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-    };
-  }
-
-  const resolved = resolveTextGenerationModelSlug(model);
-  if (
-    resolved &&
-    resolved.provider === provider &&
-    BUILT_IN_MODEL_SLUGS_BY_PROVIDER[provider].has(resolved.model)
-  ) {
-    return { provider, model: resolved.model };
-  }
-
-  const fallbackModel =
-    normalizeModelSlug(model, provider) ??
-    getDefaultModel(provider) ??
-    DEFAULT_GIT_TEXT_GENERATION_MODEL;
-  return { provider, model: fallbackModel };
+  const model = input.model;
+  return model?.includes("/") ? "opencode" : "codex";
 }
 
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
@@ -757,7 +699,6 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
-    hasOwn(patch, "droidBinaryPath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
@@ -767,17 +708,13 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-// SAFETY: generic equality used only while pruning server settings patches; values are
-// JSON-serializable primitives or arrays at this point.
-function serverSettingValuesEqual<T>(left: T, right: T): boolean {
+function serverSettingValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
   return left === right;
 }
 
-// SAFETY: these records are only used inside this function to compare and delete
-// provider-specific patch keys. They are not exposed as public APIs.
 function pruneProviderPatchAgainstCurrentSettings(
   providers: MutableServerSettingsProvidersPatch,
   currentSettings: Pick<ServerSettingsView, "providers">,
@@ -786,15 +723,8 @@ function pruneProviderPatchAgainstCurrentSettings(
     const providerPatch = providers[provider];
     if (!providerPatch) continue;
 
-    // SAFETY: these records are only used inside this function to compare and
-    // delete provider-specific patch keys. They are not exposed as public APIs.
-    const patchRecord = providerPatch as Record<string, ServerProviderSettingValue | undefined>;
-    // SAFETY: current settings values are JSON-serializable primitives or arrays
-    // at this point, and are only read to compare against the patch.
-    const currentRecord = currentSettings.providers[provider] as Record<
-      string,
-      ServerProviderSettingValue | undefined
-    >;
+    const patchRecord = providerPatch as Record<string, unknown>;
+    const currentRecord = currentSettings.providers[provider] as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patchRecord)) {
       const matchesCurrent =
         key === "serverPassword"
@@ -827,60 +757,74 @@ export function appSettingsPatchToServerSettingsPatch(
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    const { provider, model } = resolveGitTextGenerationSelection({
-      provider: patch.textGenerationProvider,
-      model: patch.textGenerationModel,
-    });
-    serverPatch.textGenerationModelSelection = { provider, model };
+    const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+    serverPatch.textGenerationModelSelection = {
+      provider: resolveTextGenerationProvider({
+        ...(patch.textGenerationProvider !== undefined
+          ? { provider: patch.textGenerationProvider }
+          : {}),
+        model,
+      }),
+      model,
+    };
   }
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
     hasOwn(patch, "customCodexModels")
   ) {
-    const codex: MutableProviderPatch<"codex"> = {};
-    if (hasOwn(patch, "codexBinaryPath")) codex.binaryPath = patch.codexBinaryPath ?? "";
-    if (hasOwn(patch, "codexHomePath")) codex.homePath = patch.codexHomePath ?? "";
-    if (hasOwn(patch, "customCodexModels")) codex.customModels = patch.customCodexModels ?? [];
-    providers.codex = codex;
+    providers.codex = {
+      ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
+      ...(hasOwn(patch, "customCodexModels")
+        ? { customModels: patch.customCodexModels ?? [] }
+        : {}),
+    };
   }
   if (hasOwn(patch, "claudeBinaryPath") || hasOwn(patch, "customClaudeModels")) {
-    const claudeAgent: MutableProviderPatch<"claudeAgent"> = {};
-    if (hasOwn(patch, "claudeBinaryPath")) claudeAgent.binaryPath = patch.claudeBinaryPath ?? "";
-    if (hasOwn(patch, "customClaudeModels"))
-      claudeAgent.customModels = patch.customClaudeModels ?? [];
-    providers.claudeAgent = claudeAgent;
+    providers.claudeAgent = {
+      ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customClaudeModels")
+        ? { customModels: patch.customClaudeModels ?? [] }
+        : {}),
+    };
   }
   if (
     hasOwn(patch, "cursorApiEndpoint") ||
     hasOwn(patch, "cursorBinaryPath") ||
     hasOwn(patch, "customCursorModels")
   ) {
-    const cursor: MutableProviderPatch<"cursor"> = {};
-    if (hasOwn(patch, "cursorApiEndpoint")) cursor.apiEndpoint = patch.cursorApiEndpoint ?? "";
-    if (hasOwn(patch, "cursorBinaryPath")) cursor.binaryPath = patch.cursorBinaryPath ?? "";
-    if (hasOwn(patch, "customCursorModels")) cursor.customModels = patch.customCursorModels ?? [];
-    providers.cursor = cursor;
+    providers.cursor = {
+      ...(hasOwn(patch, "cursorApiEndpoint") ? { apiEndpoint: patch.cursorApiEndpoint ?? "" } : {}),
+      ...(hasOwn(patch, "cursorBinaryPath") ? { binaryPath: patch.cursorBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customCursorModels")
+        ? { customModels: patch.customCursorModels ?? [] }
+        : {}),
+    };
   }
   if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
-    const antigravity: MutableProviderPatch<"antigravity"> = {};
-    if (hasOwn(patch, "antigravityBinaryPath"))
-      antigravity.binaryPath = patch.antigravityBinaryPath ?? "";
-    if (hasOwn(patch, "customAntigravityModels"))
-      antigravity.customModels = patch.customAntigravityModels ?? [];
-    providers.antigravity = antigravity;
+    providers.antigravity = {
+      ...(hasOwn(patch, "antigravityBinaryPath")
+        ? { binaryPath: patch.antigravityBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customAntigravityModels")
+        ? { customModels: patch.customAntigravityModels ?? [] }
+        : {}),
+    };
   }
   if (hasOwn(patch, "grokBinaryPath") || hasOwn(patch, "customGrokModels")) {
-    const grok: MutableProviderPatch<"grok"> = {};
-    if (hasOwn(patch, "grokBinaryPath")) grok.binaryPath = patch.grokBinaryPath ?? "";
-    if (hasOwn(patch, "customGrokModels")) grok.customModels = patch.customGrokModels ?? [];
-    providers.grok = grok;
+    providers.grok = {
+      ...(hasOwn(patch, "grokBinaryPath") ? { binaryPath: patch.grokBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
+    };
   }
   if (hasOwn(patch, "droidBinaryPath") || hasOwn(patch, "customDroidModels")) {
-    const droid: MutableProviderPatch<"droid"> = {};
-    if (hasOwn(patch, "droidBinaryPath")) droid.binaryPath = patch.droidBinaryPath ?? "";
-    if (hasOwn(patch, "customDroidModels")) droid.customModels = patch.customDroidModels ?? [];
-    providers.droid = droid;
+    providers.droid = {
+      ...(hasOwn(patch, "droidBinaryPath") ? { binaryPath: patch.droidBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDroidModels")
+        ? { customModels: patch.customDroidModels ?? [] }
+        : {}),
+    };
   }
   if (
     hasOwn(patch, "openCodeBinaryPath") ||
@@ -889,27 +833,32 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "customOpenCodeModels")
   ) {
-    const opencode: MutableProviderPatch<"opencode"> = {};
-    if (hasOwn(patch, "openCodeBinaryPath")) opencode.binaryPath = patch.openCodeBinaryPath ?? "";
-    if (hasOwn(patch, "openCodeExperimentalWebSockets"))
-      opencode.experimentalWebSockets = Boolean(patch.openCodeExperimentalWebSockets);
-    if (hasOwn(patch, "openCodeServerUrl")) opencode.serverUrl = patch.openCodeServerUrl ?? "";
-    if (hasOwn(patch, "openCodeServerPassword"))
-      opencode.serverPassword = patch.openCodeServerPassword ?? "";
-    if (hasOwn(patch, "customOpenCodeModels"))
-      opencode.customModels = patch.customOpenCodeModels ?? [];
-    providers.opencode = opencode;
+    providers.opencode = {
+      ...(hasOwn(patch, "openCodeBinaryPath")
+        ? { binaryPath: patch.openCodeBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
+        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
+        : {}),
+      ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
+      ...(hasOwn(patch, "openCodeServerPassword")
+        ? { serverPassword: patch.openCodeServerPassword ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customOpenCodeModels")
+        ? { customModels: patch.customOpenCodeModels ?? [] }
+        : {}),
+    };
   }
   if (
     hasOwn(patch, "piAgentDir") ||
     hasOwn(patch, "piBinaryPath") ||
     hasOwn(patch, "customPiModels")
   ) {
-    const pi: MutableProviderPatch<"pi"> = {};
-    if (hasOwn(patch, "piAgentDir")) pi.agentDir = patch.piAgentDir ?? "";
-    if (hasOwn(patch, "piBinaryPath")) pi.binaryPath = patch.piBinaryPath ?? "";
-    if (hasOwn(patch, "customPiModels")) pi.customModels = patch.customPiModels ?? [];
-    providers.pi = pi;
+    providers.pi = {
+      ...(hasOwn(patch, "piAgentDir") ? { agentDir: patch.piAgentDir ?? "" } : {}),
+      ...(hasOwn(patch, "piBinaryPath") ? { binaryPath: patch.piBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
+    };
   }
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
@@ -966,8 +915,6 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "textGenerationProvider",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
-      // SAFETY: the loop iterates over keys of AppSettings, so the value is assignable
-      // to the same-keyed property of the migration patch. The cast narrows the union.
       patch[key] = normalizedSettings[key] as never;
     }
   }
@@ -989,8 +936,6 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customPiModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
-      // SAFETY: the loop iterates over string-array keys of AppSettings, so the value
-      // is assignable to the same-keyed property of the migration patch.
       patch[key] = normalizedSettings[key] as never;
     }
   }
@@ -1012,15 +957,13 @@ export function applyLocalAppSettingsPatch(
   patch: Partial<AppSettings>,
 ): AppSettings {
   const { disabledProviders: _disabledProviders, ...localPatch } = patch;
-  const merged = hasOwn(patch, "openCodeServerPassword")
-    ? {
-        ...settings,
-        ...localPatch,
-        openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()),
-      }
-    : { ...settings, ...localPatch };
-
-  return normalizeStoredAppSettings(merged);
+  return normalizeStoredAppSettings({
+    ...settings,
+    ...localPatch,
+    ...(hasOwn(patch, "openCodeServerPassword")
+      ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+      : {}),
+  });
 }
 
 export function getCustomModelsForProvider(
@@ -1046,7 +989,9 @@ export function patchCustomModels(
   };
 }
 
-export function getCustomModelsByProvider(settings: Pick<AppSettings, CustomModelSettingsKey>) {
+export function getCustomModelsByProvider(
+  settings: Pick<AppSettings, CustomModelSettingsKey>,
+): Record<ProviderKind, readonly string[]> {
   return {
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
@@ -1056,7 +1001,7 @@ export function getCustomModelsByProvider(settings: Pick<AppSettings, CustomMode
     droid: getCustomModelsForProvider(settings, "droid"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
-  } satisfies Record<ProviderKind, readonly string[]>;
+  };
 }
 
 export function getAppModelOptions(
@@ -1092,7 +1037,7 @@ export function getAppModelOptions(
       ? normalizeCursorModelVariantBaseId(selectedModel)
       : normalizeModelSlug(selectedModel, provider);
   const selectedModelMatchesExistingName =
-    trimmedSelectedModel !== undefined &&
+    typeof trimmedSelectedModel === "string" &&
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
   if (
     normalizedSelectedModel &&
@@ -1110,7 +1055,7 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "droid" | "opencode";
+type GitTextGenerationDiscoveredProvider = "codex" | "opencode";
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -1126,11 +1071,8 @@ export function mapCatalogModelOptionsToAppModelOptions(
 export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
-    "customCodexModels" | "customDroidModels" | "customOpenCodeModels"
-  > & {
-    textGenerationModel?: string | undefined;
-    textGenerationProvider?: ProviderKind | undefined;
-  },
+    "customCodexModels" | "customOpenCodeModels" | "textGenerationModel" | "textGenerationProvider"
+  >,
   discoveredOptionsByProvider?: Partial<
     Record<
       GitTextGenerationDiscoveredProvider,
@@ -1139,13 +1081,10 @@ export function getGitTextGenerationModelOptions(
   >,
 ): AppModelOption[] {
   const options = [
-    ...(discoveredOptionsByProvider?.codex?.length
+    ...(discoveredOptionsByProvider?.codex
       ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
       : getAppModelOptions("codex", settings.customCodexModels)),
-    ...(discoveredOptionsByProvider?.droid?.length
-      ? mapCatalogModelOptionsToAppModelOptions("droid", discoveredOptionsByProvider.droid)
-      : getAppModelOptions("droid", settings.customDroidModels)),
-    ...(discoveredOptionsByProvider?.opencode?.length
+    ...(discoveredOptionsByProvider?.opencode
       ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
       : getAppModelOptions("opencode", settings.customOpenCodeModels)),
   ];
@@ -1161,18 +1100,15 @@ export function getGitTextGenerationModelOptions(
     deduped.push(option);
   }
 
-  const selected = resolveGitTextGenerationSelection({
-    provider: settings.textGenerationProvider,
-    model: settings.textGenerationModel,
-  });
-  if (!seen.has(`${selected.provider}:${selected.model}`)) {
+  const selectedModel = settings.textGenerationModel?.trim();
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
     deduped.push({
-      provider: selected.provider,
-      slug: selected.model,
-      name: formatProviderModelOptionName({
-        provider: selected.provider,
-        slug: selected.model,
-      }),
+      provider: selectedProvider,
+      slug: selectedModel,
+      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
       isCustom: true,
     });
   }
@@ -1194,7 +1130,7 @@ export function resolveAppModelSelection(
 
 export function getCustomModelOptionsByProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
-) {
+): Record<ProviderKind, ReadonlyArray<ProviderModelOption>> {
   const customModelsByProvider = getCustomModelsByProvider(settings);
   return {
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
@@ -1205,7 +1141,7 @@ export function getCustomModelOptionsByProvider(
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
-  } satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  };
 }
 
 export function getProviderStartOptions(
@@ -1246,52 +1182,69 @@ export function getProviderStartOptions(
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
-  const providerOptions: Mutable<ProviderStartOptions> = {};
-  if (codexBinaryPath || settings.codexHomePath) {
-    const codex: MutableProviderStartOptions<"codex"> = {};
-    if (codexBinaryPath) codex.binaryPath = codexBinaryPath;
-    if (settings.codexHomePath) codex.homePath = settings.codexHomePath;
-    providerOptions.codex = codex;
-  }
-  if (claudeBinaryPath) {
-    const claudeAgent = {
-      binaryPath: claudeBinaryPath,
-    } satisfies MutableProviderStartOptions<"claudeAgent">;
-    providerOptions.claudeAgent = claudeAgent;
-  }
-  if (cursorBinaryPath || settings.cursorApiEndpoint) {
-    const cursor: MutableProviderStartOptions<"cursor"> = {};
-    if (cursorBinaryPath) cursor.binaryPath = cursorBinaryPath;
-    if (settings.cursorApiEndpoint) cursor.apiEndpoint = settings.cursorApiEndpoint;
-    providerOptions.cursor = cursor;
-  }
-  if (antigravityBinaryPath) {
-    const antigravity = {
-      binaryPath: antigravityBinaryPath,
-    } satisfies MutableProviderStartOptions<"antigravity">;
-    providerOptions.antigravity = antigravity;
-  }
-  if (grokBinaryPath) {
-    const grok = { binaryPath: grokBinaryPath } satisfies MutableProviderStartOptions<"grok">;
-    providerOptions.grok = grok;
-  }
-  if (droidBinaryPath) {
-    const droid = { binaryPath: droidBinaryPath } satisfies MutableProviderStartOptions<"droid">;
-    providerOptions.droid = droid;
-  }
-  if (hasOpenCodeStartOptions) {
-    const opencode: MutableProviderStartOptions<"opencode"> = {};
-    if (openCodeBinaryPath) opencode.binaryPath = openCodeBinaryPath;
-    if (settings.openCodeExperimentalWebSockets) opencode.experimentalWebSockets = true;
-    if (settings.openCodeServerUrl) opencode.serverUrl = settings.openCodeServerUrl;
-    providerOptions.opencode = opencode;
-  }
-  if (piBinaryPath || settings.piAgentDir) {
-    const pi: MutableProviderStartOptions<"pi"> = {};
-    if (piBinaryPath) pi.binaryPath = piBinaryPath;
-    if (settings.piAgentDir) pi.agentDir = settings.piAgentDir;
-    providerOptions.pi = pi;
-  }
+  const providerOptions: ProviderStartOptions = {
+    ...(codexBinaryPath || settings.codexHomePath
+      ? {
+          codex: {
+            ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
+            ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+          },
+        }
+      : {}),
+    ...(claudeBinaryPath
+      ? {
+          claudeAgent: {
+            binaryPath: claudeBinaryPath,
+          },
+        }
+      : {}),
+    ...(cursorBinaryPath || settings.cursorApiEndpoint
+      ? {
+          cursor: {
+            ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
+            ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
+          },
+        }
+      : {}),
+    ...(antigravityBinaryPath
+      ? {
+          antigravity: {
+            binaryPath: antigravityBinaryPath,
+          },
+        }
+      : {}),
+    ...(grokBinaryPath
+      ? {
+          grok: {
+            binaryPath: grokBinaryPath,
+          },
+        }
+      : {}),
+    ...(droidBinaryPath
+      ? {
+          droid: {
+            binaryPath: droidBinaryPath,
+          },
+        }
+      : {}),
+    ...(hasOpenCodeStartOptions
+      ? {
+          opencode: {
+            ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
+            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
+            ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
+          },
+        }
+      : {}),
+    ...(piBinaryPath || settings.piAgentDir
+      ? {
+          pi: {
+            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),
+            ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),
+          },
+        }
+      : {}),
+  };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
 }
@@ -1375,11 +1328,10 @@ export function useAppSettings() {
   });
 
   const normalizedLocalSettings = normalizeStoredAppSettings(localSettings);
-  const mergedSettings = { ...normalizedLocalSettings };
-  if (serverSettingsQuery.data) {
-    Object.assign(mergedSettings, serverSettingsToAppSettings(serverSettingsQuery.data));
-  }
-  const settings = normalizeAppSettings(mergedSettings);
+  const settings = normalizeAppSettings({
+    ...normalizedLocalSettings,
+    ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
+  });
 
   useEffect(() => {
     if (normalizedStoredSettingsRef.current) {

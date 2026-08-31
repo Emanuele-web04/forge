@@ -234,26 +234,19 @@ const GROK_CLI_EFFORT_DESCRIPTIONS = {
   xhigh: "Highest effort and reasoning level",
 } as const;
 
-const GROK_CLI_EFFORT_LABELS = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-} as const;
-
 function grokCliEffortOption(
-  value: keyof typeof GROK_CLI_EFFORT_LABELS,
+  value: Exclude<GrokReasoningEffort, "none">,
   options: Pick<EffortOption, "isDefault"> = {},
 ): EffortOption {
   return {
     value,
-    label: GROK_CLI_EFFORT_LABELS[value],
+    label: value === "xhigh" ? "Extra High" : `${value.charAt(0).toUpperCase()}${value.slice(1)}`,
     description: GROK_CLI_EFFORT_DESCRIPTIONS[value],
     ...options,
   };
 }
 
-function baseCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
+function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
   return {
     reasoningEffortLevels,
     supportsFastMode: false,
@@ -261,10 +254,6 @@ function baseCapabilities(reasoningEffortLevels: readonly EffortOption[]): Model
     promptInjectedEffortLevels: [],
     contextWindowOptions: [],
   };
-}
-
-function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
-  return baseCapabilities(reasoningEffortLevels);
 }
 
 const GROK_BUILD_CAPABILITIES = grokCapabilities([
@@ -312,23 +301,12 @@ function cursorCapabilities(input?: {
   const efforts = input?.efforts ?? [];
   const defaultEffort =
     input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
-  const reasoningEffortLevels: EffortOption[] = [];
-  for (const value of efforts) {
-    if (value === defaultEffort) {
-      reasoningEffortLevels.push({
-        value,
-        label: CURSOR_EFFORT_LABELS[value],
-        isDefault: true,
-      });
-    } else {
-      reasoningEffortLevels.push({
-        value,
-        label: CURSOR_EFFORT_LABELS[value],
-      });
-    }
-  }
   return {
-    reasoningEffortLevels,
+    reasoningEffortLevels: efforts.map((value) => ({
+      value,
+      label: CURSOR_EFFORT_LABELS[value],
+      ...(value === defaultEffort ? { isDefault: true as const } : {}),
+    })),
     supportsFastMode: input?.fast ?? false,
     supportsThinkingToggle: input?.thinking ?? false,
     promptInjectedEffortLevels: [],
@@ -354,126 +332,109 @@ const CURSOR_GPT_5_6_CAPABILITIES = cursorCapabilities({
 });
 
 function droidCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
-  return baseCapabilities(reasoningEffortLevels);
-}
-
-const DROID_EFFORT_LABELS = {
-  off: "Off",
-  none: "None",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
-} as const;
-
-type DroidEffortValue = keyof typeof DROID_EFFORT_LABELS;
-
-function droidEffortOption(
-  value: DroidEffortValue,
-  options: Pick<EffortOption, "isDefault"> & { readonly label?: string } = {},
-): EffortOption {
-  const { label, ...rest } = options;
-  return { value, label: label ?? DROID_EFFORT_LABELS[value], ...rest };
+  return {
+    reasoningEffortLevels,
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+    promptInjectedEffortLevels: [],
+    contextWindowOptions: [],
+  };
 }
 
 const DROID_CLAUDE_XHIGH_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high", { isDefault: true }),
-  droidEffortOption("xhigh"),
-  droidEffortOption("max"),
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Max" },
 ]);
 
 const DROID_CLAUDE_MAX_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high", { isDefault: true }),
-  droidEffortOption("max"),
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "max", label: "Max" },
 ]);
 
 const DROID_CLAUDE_BASIC_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off", { isDefault: true }),
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high"),
+  { value: "off", label: "Off", isDefault: true },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
 ]);
 
 const DROID_GPT_MEDIUM_CAPABILITIES = droidCapabilities([
-  droidEffortOption("low"),
-  droidEffortOption("medium", { isDefault: true }),
-  droidEffortOption("high"),
-  droidEffortOption("xhigh"),
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
 ]);
 
 const DROID_GPT_5_6_CAPABILITIES = droidCapabilities([
-  droidEffortOption("none"),
-  droidEffortOption("low"),
-  droidEffortOption("medium", { isDefault: true }),
-  droidEffortOption("high"),
-  droidEffortOption("xhigh"),
-  droidEffortOption("max", { label: "Maximum" }),
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Maximum" },
 ]);
 
 const DROID_GPT_PRO_CAPABILITIES = droidCapabilities([
-  droidEffortOption("medium", { isDefault: true }),
-  droidEffortOption("high"),
-  droidEffortOption("xhigh"),
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
 ]);
 
 const DROID_GPT_HIGH_CAPABILITIES = droidCapabilities([
-  droidEffortOption("none"),
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high", { isDefault: true }),
-  droidEffortOption("xhigh"),
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "xhigh", label: "Extra High" },
 ]);
 
 const DROID_GPT_5_2_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("low", { isDefault: true }),
-  droidEffortOption("medium"),
-  droidEffortOption("high"),
-  droidEffortOption("xhigh"),
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low", isDefault: true },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
 ]);
 
 const DROID_GEMINI_HIGH_CAPABILITIES = droidCapabilities([
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high", { isDefault: true }),
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
 ]);
 
 const DROID_GEMINI_MINIMAL_CAPABILITIES = droidCapabilities([
-  droidEffortOption("minimal"),
-  droidEffortOption("low"),
-  droidEffortOption("medium"),
-  droidEffortOption("high", { isDefault: true }),
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
 ]);
 
 const DROID_CORE_HIGH_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("high", { isDefault: true }),
+  { value: "off", label: "Off" },
+  { value: "high", label: "High", isDefault: true },
 ]);
 
 const DROID_CORE_DEEPSEEK_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("low"),
-  droidEffortOption("high", { isDefault: true }),
-  droidEffortOption("max"),
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "max", label: "Max" },
 ]);
 
-const DROID_DEEPSEEK_FLASH_CAPABILITIES = droidCapabilities([
-  droidEffortOption("off"),
-  droidEffortOption("low", { isDefault: true }),
-  droidEffortOption("high"),
-]);
-
-const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = droidCapabilities([
-  droidEffortOption("high", { isDefault: true }),
-]);
+const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [{ value: "high", label: "High", isDefault: true }],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
 
 // Shared Claude building blocks. Capability shapes repeat across Claude
 // generations, so declare them once and let each model entry override only the
@@ -863,11 +824,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
     },
     {
-      slug: "deepseek-v4-flash-0731",
-      name: "DeepSeek V4 Flash 0731",
-      capabilities: DROID_DEEPSEEK_FLASH_CAPABILITIES,
-    },
-    {
       slug: "minimax-m3",
       name: "MiniMax M3",
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
@@ -1099,7 +1055,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 
 export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
 
-export const DEFAULT_MODEL_BY_PROVIDER = {
+export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
@@ -1107,7 +1063,7 @@ export const DEFAULT_MODEL_BY_PROVIDER = {
   grok: "grok-4.6",
   droid: "deepseek-v4-flash-0731",
   opencode: "openai/gpt-5",
-} satisfies Record<ProviderWithDefaultModel, ModelSlug>;
+};
 
 // Backward compatibility for existing Codex-only call sites.
 export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
@@ -1115,7 +1071,7 @@ export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
-export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
+export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
     "5.5": "gpt-5.5",
     "5.4": "gpt-5.4",
@@ -1192,6 +1148,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   droid: {
     droid: "deepseek-v4-flash-0731",
     factory: "deepseek-v4-flash-0731",
+    deepseek: "deepseek-v4-flash-0731",
+    flash: "deepseek-v4-flash-0731",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "opus-fast": "claude-opus-4-8-fast",
@@ -1224,8 +1182,6 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
     nemotron: "nemotron-3-ultra",
     kimi: "kimi-k2.7-code",
     "kimi-code": "kimi-k2.7-code",
-    deepseek: "deepseek-v4-flash-0731",
-    flash: "deepseek-v4-flash-0731",
     minimax: "minimax-m3",
   },
   grok: {
@@ -1248,7 +1204,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   },
   opencode: {},
   pi: {},
-} satisfies Record<ProviderKind, Record<string, ModelSlug>>;
+};
 
 // ── Agent mention aliases ─────────────────────────────────────────────
 // Re-exported from agentMentions.ts for backward compatibility
@@ -1265,16 +1221,12 @@ export {
 
 // ── Model capabilities index ──────────────────────────────────────────
 
-export const MODEL_CAPABILITIES_INDEX =
-  // SAFETY: built from MODEL_OPTIONS_BY_PROVIDER, which statically maps providers
-  // to model definitions with concrete capabilities. The runtime shape is exactly
-  // provider -> slug -> capabilities.
-  Object.fromEntries(
-    Object.entries(MODEL_OPTIONS_BY_PROVIDER).map(([provider, models]) => [
-      provider,
-      Object.fromEntries(models.map((m) => [m.slug, m.capabilities])),
-    ]),
-  ) as Record<ProviderKind, Record<string, ModelCapabilities>>;
+export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
+  Object.entries(MODEL_OPTIONS_BY_PROVIDER).map(([provider, models]) => [
+    provider,
+    Object.fromEntries(models.map((m) => [m.slug, m.capabilities])),
+  ]),
+) as unknown as Record<ProviderKind, Record<string, ModelCapabilities>>;
 
 Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
   "grok-build-0.1": GROK_BUILD_CAPABILITIES,
@@ -1284,7 +1236,7 @@ Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
 
 // ── Provider display names ────────────────────────────────────────────
 
-export const PROVIDER_DISPLAY_NAMES = {
+export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
@@ -1293,4 +1245,4 @@ export const PROVIDER_DISPLAY_NAMES = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
-} satisfies Record<ProviderKind, string>;
+};

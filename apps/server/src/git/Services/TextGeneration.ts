@@ -264,6 +264,9 @@ export class CursorTextGeneration extends ServiceMap.Service<
   TextGenerationShape
 >()("synara/git/Services/TextGeneration/CursorTextGeneration") {}
 
+/**
+ * DroidTextGeneration - Provider-specific Droid implementation for git text generation.
+ */
 export class DroidTextGeneration extends ServiceMap.Service<
   DroidTextGeneration,
   TextGenerationShape

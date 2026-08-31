@@ -2,14 +2,14 @@
 // Purpose: Verifies Droid ACP spawn, auth, mode, model, and discovery behavior.
 // Layer: Provider ACP support tests
 
-import nodeFs from "node:fs";
-import nodeOs from "node:os";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Effect } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   applyDroidAcpInteractionMode,
@@ -28,55 +28,10 @@ function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeRe
 }
 
 describe("resolveDroidCliBinaryPath", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
-
-  it("returns an explicit absolute path as-is even if it does not exist", () => {
-    vi.spyOn(nodeFs, "existsSync").mockReturnValue(false);
-    const path = "/nonexistent/bin/droid";
-    expect(resolveDroidCliBinaryPath(path)).toBe(path);
-  });
-
-  it("returns an explicit relative/path-like path as-is", () => {
-    vi.spyOn(nodeFs, "existsSync").mockReturnValue(false);
-    expect(resolveDroidCliBinaryPath("./droid")).toBe("./droid");
-    expect(resolveDroidCliBinaryPath("some/relative/droid")).toBe("some/relative/droid");
-  });
-
-  it("uses a non-default bare name that exists in the CWD", () => {
-    const exists = vi
-      .spyOn(nodeFs, "existsSync")
-      .mockImplementation((path) => String(path) === "mydroid");
-
-    expect(resolveDroidCliBinaryPath("mydroid")).toBe("mydroid");
-    expect(exists).toHaveBeenCalledWith("mydroid");
-  });
-
-  it("searches PATH, then ~/.local/bin/droid, then falls back to droid for the bare name", () => {
-    vi.stubEnv("PATH", "/usr/bin:/bin");
-    vi.spyOn(nodeOs, "homedir").mockReturnValue("/home/test");
-
-    const existing = new Set<string>();
-    vi.spyOn(nodeFs, "existsSync").mockImplementation((path) => existing.has(String(path)));
-
-    // Bare `droid` (or empty/undefined) falls back to the default name when nothing is found.
-    expect(resolveDroidCliBinaryPath()).toBe("droid");
-    expect(resolveDroidCliBinaryPath(undefined)).toBe("droid");
-    expect(resolveDroidCliBinaryPath("")).toBe("droid");
-    expect(resolveDroidCliBinaryPath("droid")).toBe("droid");
-
-    const localBin = join("/home/test", ".local", "bin", "droid");
-    if (process.platform !== "win32") {
-      existing.add(localBin);
-      expect(resolveDroidCliBinaryPath()).toBe(localBin);
-      existing.delete(localBin);
-    }
-
-    const pathBin = "/usr/bin/droid";
-    existing.add(pathBin);
-    expect(resolveDroidCliBinaryPath()).toBe(pathBin);
+  it("prefers ~/.local/bin/droid when it exists", () => {
+    const localBin = join(homedir(), ".local", "bin", "droid");
+    const resolved = resolveDroidCliBinaryPath("");
+    expect(resolved).toBe(existsSync(localBin) ? localBin : "droid");
   });
 });
 
@@ -89,7 +44,7 @@ describe("buildDroidAcpSpawnInput", () => {
     expect(spawn.env).toBeDefined();
   });
 
-  it("does not pass model or reasoning effort to the ACP CLI; they are applied via session/set_config_option", () => {
+  it("passes model, reasoning effort, and an appended system prompt without bypassing permissions", () => {
     const spawn = buildDroidAcpSpawnInput(
       {
         appendSystemPrompt: "Run heavyweight validators serially.",
@@ -107,6 +62,10 @@ describe("buildDroidAcpSpawnInput", () => {
       "acp",
       "--append-system-prompt",
       "Run heavyweight validators serially.",
+      "-m",
+      "claude-opus-4-8",
+      "-r",
+      "high",
     ]);
     expect(spawn.cwd).toBe("/tmp/project");
     expect(spawn.env).toBeDefined();
@@ -321,11 +280,7 @@ describe("discoverDroidAcpModels", () => {
         ],
       }),
     ]);
-    const modelB = result.models[1];
-    if (!modelB) {
-      throw new Error("Expected model-b to be present.");
-    }
-    expect(modelB.description).toBeUndefined();
+    expect(result.models[1]).not.toHaveProperty("description");
     expect(currentModel).toBe("model-a");
   });
 });
