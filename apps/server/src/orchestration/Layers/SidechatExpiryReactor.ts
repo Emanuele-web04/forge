@@ -65,6 +65,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const providerService = yield* ProviderService;
     const knownThreadIds = new Set<ThreadId>();
+    const knownSidechatIds = new Set<ThreadId>();
 
     let timer: ReturnType<typeof createSidechatExpiryTimer<TimerHandle>>;
 
@@ -155,6 +156,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
           case "thread.created": {
             knownThreadIds.add(event.payload.threadId);
             if (!event.payload.sidechatSourceThreadId) return;
+            knownSidechatIds.add(event.payload.threadId);
             timer.restore({
               threadId: event.payload.threadId,
               lastActivityAtMs:
@@ -205,6 +207,10 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
             );
             return;
           case "thread.deleted":
+            timer.remove(event.payload.threadId);
+            knownThreadIds.delete(event.payload.threadId);
+            knownSidechatIds.delete(event.payload.threadId);
+            return;
           case "thread.archived":
             timer.remove(event.payload.threadId);
             return;
@@ -214,6 +220,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
               (candidate) => candidate.id === event.payload.threadId,
             );
             if (!thread?.sidechatSourceThreadId || thread.deletedAt) return;
+            knownSidechatIds.add(thread.id);
             const expired = Boolean(thread.sidechatExpiredAt);
             const restoredActivityAtMs = expired
               ? lastActivityAtMs(thread, runtime.now())
@@ -239,11 +246,11 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
       const readModel = yield* orchestrationEngine.getReadModel();
       for (const thread of readModel.threads) {
         knownThreadIds.add(thread.id);
-        if (
-          !thread.sidechatSourceThreadId ||
-          thread.deletedAt !== null ||
-          thread.archivedAt !== null
-        ) {
+        if (!thread.sidechatSourceThreadId) {
+          continue;
+        }
+        knownSidechatIds.add(thread.id);
+        if (thread.deletedAt !== null || thread.archivedAt !== null) {
           continue;
         }
         timer.restore({
@@ -281,7 +288,11 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
       Effect.gen(function* () {
         const now = runtime.now();
         let updated = viewed ? timer.beginView(threadId, now) : timer.endView(threadId, now);
-        if (viewed && !updated && !knownThreadIds.has(threadId)) {
+        if (
+          viewed &&
+          !updated &&
+          (!knownThreadIds.has(threadId) || knownSidechatIds.has(threadId))
+        ) {
           // Shell publication and this reactor consume the same committed event on
           // separate streams. A client can subscribe in that narrow gap, so seed
           // from the authoritative read model instead of losing the view lease.
@@ -294,6 +305,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
             !thread.deletedAt &&
             !thread.archivedAt
           ) {
+            knownSidechatIds.add(threadId);
             timer.restore({
               threadId,
               lastActivityAtMs: lastActivityAtMs(thread, runtime.now()),
