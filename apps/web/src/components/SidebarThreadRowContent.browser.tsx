@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
-import { resolveSubagentRowDescription, SidebarThreadRowContent } from "./SidebarThreadRowContent";
+import {
+  resolveChildThreadRowDescription,
+  resolveSubagentRowDescription,
+  SidebarThreadRowContent,
+} from "./SidebarThreadRowContent";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -85,6 +89,30 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(connector).toHaveAttribute("data-indent", "10");
   });
 
+  it("shows Synara-created threads as indented children", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({
+          id: ThreadId.makeUnsafe("thread-created-row"),
+          title: "Saludo",
+          creationSource: "synara_mcp",
+          sourceThreadId: ThreadId.makeUnsafe("thread-parent-row"),
+        })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        subagentIndentPx={10}
+      />,
+    );
+
+    await expect.element(screen.getByText("Saludo")).toBeVisible();
+    const connector = screen.getByTestId("sidebar-subagent-connector");
+    await expect.element(connector).toBeVisible();
+    await expect.element(connector).toHaveAttribute("data-indent", "10");
+  });
+
   it("uses a simple shared card surface without a per-row split rail", async () => {
     const screen = await render(
       <SidebarThreadRowContent
@@ -96,6 +124,7 @@ describe("SidebarThreadRowContent", () => {
         variant="standard"
         splitGroup={{
           splitViewId: "split-rail",
+          presentation: "card",
           memberIndex: 2,
           memberCount: 3,
           isLeader: false,
@@ -112,6 +141,32 @@ describe("SidebarThreadRowContent", () => {
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
   });
 
+  it("uses a linked indicator instead of a card for remote split members", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({ id: ThreadId.makeUnsafe("thread-linked-split-member") })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        splitGroup={{
+          splitViewId: "split-linked",
+          presentation: "linked",
+          memberIndex: 1,
+          memberCount: 2,
+          isLeader: true,
+          position: "first",
+        }}
+        splitGroupActive
+        splitGroupLinkedLabel="Split view with hoola 2"
+      />,
+    );
+
+    await expect.element(screen.getByLabelText("Split view with hoola 2")).toBeVisible();
+    expect(document.querySelector("[data-testid=sidebar-split-group-surface]")).toBeNull();
+  });
+
   it("draws the shared split-group surface capped to the row position", async () => {
     const screen = await render(
       <SidebarThreadRowContent
@@ -123,6 +178,7 @@ describe("SidebarThreadRowContent", () => {
         variant="standard"
         splitGroup={{
           splitViewId: "split-surface",
+          presentation: "card",
           memberIndex: 1,
           memberCount: 2,
           isLeader: true,
@@ -157,6 +213,18 @@ describe("SidebarThreadRowContent", () => {
         parentTitle: "Implement webhook spec",
       }),
     ).toBe("Subagent of Implement webhook spec · gpt-5.6 · medium · closed");
+  });
+
+  it("describes a Synara-created child without calling it a native subagent", () => {
+    expect(
+      resolveChildThreadRowDescription({
+        thread: makeThread({
+          creationSource: "synara_mcp",
+          sourceThreadId: ThreadId.makeUnsafe("thread-parent"),
+        }),
+        parentTitle: "hola 1",
+      }),
+    ).toBe("Created from hola 1");
   });
 
   it("omits the split-group surface when the row is not part of a split", async () => {
