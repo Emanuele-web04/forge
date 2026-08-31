@@ -1462,7 +1462,28 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.workItemsSearch]: (input) =>
           Effect.gen(function* () {
-            const resolved = yield* resolveGitHubRepository(git, input.cwd);
+            // Trust boundary: the client sends a cwd, but we must verify it is an
+            // absolute, normalized, real directory before running git/gh inside it.
+            const resolvedCwd = path.resolve(input.cwd);
+            if (!path.isAbsolute(input.cwd) || resolvedCwd !== path.normalize(input.cwd)) {
+              return {
+                available: false,
+                errorHint: "Invalid workspace path.",
+                items: [],
+              };
+            }
+            const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
+              Effect.map((info) => info.type === "Directory"),
+              Effect.orElseSucceed(() => false),
+            );
+            if (!cwdExistsAndIsDirectory) {
+              return {
+                available: false,
+                errorHint: "Workspace does not exist.",
+                items: [],
+              };
+            }
+            const resolved = yield* resolveGitHubRepository(git, resolvedCwd);
             if (!resolved.repository) {
               return {
                 available: false,
@@ -1472,6 +1493,7 @@ const makeWsRpcHandlersLayer = () =>
             }
             return yield* pullRequests.searchWorkItems({
               ...input,
+              cwd: resolvedCwd,
               repository: resolved.repository.nameWithOwner,
             });
           }).pipe(
