@@ -3,8 +3,8 @@
  *
  * @module DroidAcpSupport
  */
-import { existsSync } from "node:fs";
-import * as nodeOs from "node:os";
+import nodeFs from "node:fs";
+import nodeOs from "node:os";
 import * as nodePath from "node:path";
 
 import {
@@ -26,6 +26,13 @@ import {
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
 
+/**
+ * Settings that influence Droid ACP runtime construction and startup.
+ *
+ * `model` and `reasoningEffort` are intentionally not passed to the `droid exec`
+ * CLI: ACP mode ignores the `-m` and `-r` flags. They are applied through
+ * `session/set_config_option` by `applyDroidAcpModelSelection`.
+ */
 export interface DroidAcpRuntimeSettings {
   readonly appendSystemPrompt?: string;
   readonly binaryPath?: string;
@@ -78,9 +85,28 @@ export function hasDroidApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean
 /** Honors PATH first, then falls back to Factory's common `~/.local/bin` install location. */
 export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
   const configured = binaryPath?.trim();
+  const name = "droid";
+
   if (configured) {
-    return configured;
+    if (nodePath.isAbsolute(configured) || configured.includes(nodePath.sep)) {
+      // A configured absolute or relative path is used as-is so spawn can report clearly if missing.
+      return configured;
+    }
+    if (configured !== name && nodeFs.existsSync(configured)) {
+      // A non-default bare name that exists in the CWD is used directly.
+      return configured;
+    }
   }
+
+  const found = findDroidOnPath();
+  if (found) {
+    return found;
+  }
+
+  return configured || name;
+}
+
+function findDroidOnPath(): string | undefined {
   const name = "droid";
   const searchPath = process.env.PATH ?? "";
   for (const directory of searchPath.split(nodePath.delimiter)) {
@@ -88,17 +114,17 @@ export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
       continue;
     }
     const candidate = nodePath.join(directory, name);
-    if (existsSync(candidate)) {
+    if (nodeFs.existsSync(candidate)) {
       return candidate;
     }
   }
   if (process.platform !== "win32") {
     const localBin = nodePath.join(nodeOs.homedir(), ".local", "bin", name);
-    if (existsSync(localBin)) {
+    if (nodeFs.existsSync(localBin)) {
       return localBin;
     }
   }
-  return name;
+  return undefined;
 }
 
 export function buildDroidAcpSpawnInput(
@@ -110,14 +136,9 @@ export function buildDroidAcpSpawnInput(
   if (appendSystemPrompt) {
     args.push("--append-system-prompt", appendSystemPrompt);
   }
-  const model = droidSettings?.model?.trim();
-  if (model) {
-    args.push("-m", model);
-  }
-  const reasoningEffort = droidSettings?.reasoningEffort?.trim();
-  if (reasoningEffort) {
-    args.push("-r", reasoningEffort);
-  }
+  // `model` and `reasoningEffort` are intentionally not passed as `-m`/`-r` CLI
+  // flags: `droid exec` ignores them in ACP mode. They are applied through
+  // `session/set_config_option` by `applyDroidAcpModelSelection`.
 
   return {
     command: resolveDroidCliBinaryPath(droidSettings?.binaryPath),
@@ -133,10 +154,11 @@ function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): Reado
 
 export const resolveDroidAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
+  env: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasDroidApiKeyEnv() && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
+    if (hasDroidApiKeyEnv(env) && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
       return DROID_API_KEY_AUTH_METHOD_ID;
     }
     if (authMethodIds.has(DROID_DEVICE_PAIRING_AUTH_METHOD_ID)) {
@@ -170,6 +192,18 @@ export const makeDroidAcpRuntime = (
     );
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
+
+export interface DroidAcpRuntimeShape {
+  readonly make: typeof makeDroidAcpRuntime;
+}
+
+export class DroidAcpRuntime extends ServiceMap.Service<DroidAcpRuntime, DroidAcpRuntimeShape>()(
+  "synara/provider/acp/DroidAcpRuntime",
+) {}
+
+export const DroidAcpRuntimeLayer = Layer.succeed(DroidAcpRuntime, {
+  make: makeDroidAcpRuntime,
+} satisfies DroidAcpRuntimeShape);
 
 /**
  * Applies the requested model and reasoning effort over ACP. `droid exec`
@@ -246,35 +280,53 @@ function droidModelDescriptor(
   reasoning: Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined,
 ): ProviderModelDescriptor {
   const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
+
+  const reasoningEffortOptions = efforts.map((effort) => ({
+    id: effort.value,
+    label: effort.name,
+    description: effort.description ?? undefined,
+  }));
+
   const optionDescriptors = reasoning
     ? [
         {
           id: "reasoningEffort",
           label: reasoning.name,
           type: "select" as const,
-          options: efforts.map((effort) => ({
-            id: effort.value,
-            label: effort.name,
-            ...(effort.description ? { description: effort.description } : {}),
-          })),
-          ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
+          options: reasoningEffortOptions,
+          currentValue: reasoning.currentValue ?? undefined,
         },
       ]
     : undefined;
+
   return {
     slug: model.value,
     name: model.name,
-    ...(model.description ? { description: model.description } : {}),
+    description: model.description ?? undefined,
     supportedReasoningEfforts: efforts.map((effort) => ({
       value: effort.value,
       label: effort.name,
-      ...(effort.description ? { description: effort.description } : {}),
+      description: effort.description ?? undefined,
     })),
-    ...(optionDescriptors ? { optionDescriptors } : {}),
+    optionDescriptors,
     supportsFastMode: false,
     supportsThinkingToggle: false,
   };
 }
+
+const restoreDroidConfigOption = (
+  effect: Effect.Effect<Acp.SetSessionConfigOptionResponse, AcpErrors.AcpError>,
+  configId: string,
+): Effect.Effect<void, never> =>
+  effect.pipe(
+    Effect.tapError((cause) =>
+      Effect.logWarning("droid.acp.discovery.restore_config_option_failed").pipe(
+        Effect.annotateLogs({ configId, cause }),
+      ),
+    ),
+    Effect.orElseSucceed(() => undefined),
+    Effect.asVoid,
+  );
 
 /**
  * Reads the model catalog from ACP and reselects each model so Droid returns that
@@ -323,11 +375,15 @@ export function discoverDroidAcpModels(
     );
 
     if (originalModel) {
-      yield* runtime.setConfigOption(modelConfig.id, originalModel).pipe(Effect.ignore);
+      yield* restoreDroidConfigOption(
+        runtime.setConfigOption(modelConfig.id, originalModel),
+        modelConfig.id,
+      );
       if (originalReasoning) {
-        yield* runtime
-          .setConfigOption(DROID_REASONING_EFFORT_CONFIG_ID, originalReasoning)
-          .pipe(Effect.ignore);
+        yield* restoreDroidConfigOption(
+          runtime.setConfigOption(DROID_REASONING_EFFORT_CONFIG_ID, originalReasoning),
+          DROID_REASONING_EFFORT_CONFIG_ID,
+        );
       }
     }
 
