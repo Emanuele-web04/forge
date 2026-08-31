@@ -42,7 +42,9 @@ function compileEvents(filePath: string): CompilerEvent[] {
 }
 
 describe("ChatMarkdown React Compiler coverage", () => {
-  it("compiles every function in ChatMarkdown.tsx without bailouts", () => {
+  // Full-file React Compiler runs are heavy; the default 5s bound fails on
+  // machine load rather than a real regression (matches ChatMarkdown.test.tsx).
+  it("compiles every function in ChatMarkdown.tsx without bailouts", { timeout: 60_000 }, () => {
     const events = compileEvents(join(import.meta.dirname, "ChatMarkdown.tsx"));
     const errors = events
       .filter((event) => event.kind === "CompileError")

@@ -99,7 +99,7 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
  * The budget only exists to stop a hang, so it is set far above the observed worst case rather
  * than near it; a tight bound here fails the suite for machine load, not for a real regression.
  */
-const COMPILE_TIMEOUT_MS = 240_000;
+const COMPILE_TIMEOUT_MS = 400_000;
 
 describe("chat hot-path React Compiler coverage", () => {
   for (const module of HOT_PATH_MODULES) {
