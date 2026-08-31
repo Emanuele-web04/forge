@@ -364,24 +364,17 @@ describe("MessagesTimeline tail anchor", () => {
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 
       handle().send(FIRST_SENT_MESSAGE_ID);
-      // Give the anchor slide a couple of frames to start.
       await settleFrames(3);
 
-      // Simulate the user taking scroll ownership mid-slide, exactly as ChatView
-      // does when it detaches auto-follow on a wheel/touch/pointer gesture.
       handle().detach();
       const distanceAfterDetach = distanceFromBottomPx(handle());
 
-      // Stream enough content to overflow the reserve. If the tail-anchor hook
-      // incorrectly kept following, the viewport would stick to the bottom.
       handle().growStream(FIRST_STREAMING_MESSAGE_ID, 10);
       for (let frame = 0; frame < 24; frame += 1) {
         await settleFrames(1);
         expect(distanceFromBottomPx(handle())).toBeGreaterThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX / 2);
       }
 
-      // The content grew below the viewport, so the distance from the bottom
-      // must have increased from the moment the user detached.
       expect(distanceFromBottomPx(handle())).toBeGreaterThan(distanceAfterDetach);
     } finally {
       await screen.unmount();

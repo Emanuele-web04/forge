@@ -1,10 +1,3 @@
-// FILE: MessagesTimeline.scrollOwnership.browser.tsx
-// Purpose: Browser regression for user scroll ownership during streaming.
-//          LegendList must stop re-snapping to the bottom immediately after a
-//          wheel/touch/pointer gesture while `followLiveOutput` is on, and must
-//          resume end-follow once the user returns to the bottom.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";
@@ -80,9 +73,7 @@ function ScrollOwnershipTimeline({
     handleRef,
     () => ({
       listRef,
-      startStreaming: () => {
-        setIsStreaming(true);
-      },
+      startStreaming: () => setIsStreaming(true),
       streamChunk: (lines: number) => {
         setEntries((current) => {
           const lastIndex = current.findIndex(
@@ -94,16 +85,12 @@ function ScrollOwnershipTimeline({
               : "";
           const grownText = `${existingText}${"Streamed line of response text.\n\n".repeat(lines)}`;
           const grown = messageEntry("streaming-assistant-message", "assistant", grownText, true);
-          if (lastIndex < 0) {
-            return [...current, grown];
-          }
+          if (lastIndex < 0) return [...current, grown];
           return current.map((entry, index) => (index === lastIndex ? grown : entry));
         });
       },
       releaseUserScroll: () => {
-        flushSync(() => {
-          setIsUserScrollDetached(true);
-        });
+        flushSync(() => setIsUserScrollDetached(true));
       },
     }),
     [],
@@ -134,9 +121,7 @@ function ScrollOwnershipTimeline({
         workspaceRoot={undefined}
         onMessagesWheel={() => handleRef.current?.releaseUserScroll()}
         onIsAtEndChange={(isAtEnd) => {
-          if (isAtEnd) {
-            setIsUserScrollDetached(false);
-          }
+          if (isAtEnd) setIsUserScrollDetached(false);
         }}
       />
     </div>
@@ -145,9 +130,7 @@ function ScrollOwnershipTimeline({
 
 function getScrollContainer(handle: HarnessHandle): HTMLElement {
   const node: unknown = handle.listRef.current?.getScrollableNode?.();
-  if (!(node instanceof HTMLElement)) {
-    throw new Error("scroll container not available");
-  }
+  if (!(node instanceof HTMLElement)) throw new Error("scroll container not available");
   return node;
 }
 
@@ -163,6 +146,40 @@ async function settleFrames(count: number): Promise<void> {
   }
 }
 
+async function startStreamingAndFollow(
+  handle: HarnessHandle,
+  container: HTMLElement,
+): Promise<void> {
+  await expect.poll(() => handle.listRef.current?.getScrollableNode?.() != null).toBe(true);
+  await settleFrames(3);
+  void handle.listRef.current?.scrollToEnd?.({ animated: false });
+  await expect
+    .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
+    .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+  handle.startStreaming();
+  for (let index = 0; index < 8; index += 1) {
+    handle.streamChunk(2);
+    await settleFrames(1);
+  }
+  await expect
+    .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
+    .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+}
+
+function wheelUp(container: HTMLElement, scrollBy: number, eventDelta: number): void {
+  const before = container.scrollTop;
+  container.dispatchEvent(
+    new WheelEvent("wheel", {
+      bubbles: true,
+      deltaY: -eventDelta,
+      clientX: container.clientWidth / 2,
+      clientY: container.clientHeight / 2,
+    }),
+  );
+  container.scrollTop = Math.max(0, before - scrollBy);
+  container.dispatchEvent(new Event("scroll"));
+}
+
 describe("MessagesTimeline scroll ownership", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -173,65 +190,24 @@ describe("MessagesTimeline scroll ownership", () => {
     const screen = await render(<ScrollOwnershipTimeline handleRef={handleRef} />);
 
     try {
-      const handle = () => {
-        if (!handleRef.current) throw new Error("harness not mounted");
-        return handleRef.current;
-      };
+      const handle = handleRef.current;
+      if (!handle) throw new Error("harness not mounted");
+      const container = getScrollContainer(handle);
 
-      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
-      await settleFrames(3);
-      void handle().listRef.current?.scrollToEnd?.({ animated: false });
-
-      const container = getScrollContainer(handle());
-      await expect
-        .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
-
-      handle().startStreaming();
-
-      // Establish live follow with a few streaming chunks.
-      for (let index = 0; index < 8; index += 1) {
-        handle().streamChunk(2);
-        await settleFrames(1);
-      }
-
-      await expect
-        .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
-
+      await startStreamingAndFollow(handle, container);
       const scrollTopBeforeWheel = container.scrollTop;
-
-      // A single wheel up should take ownership from live output.
-      // Synthetic wheel events do not perform the actual scroll, so we move the
-      // viewport explicitly to model the user gesture that LegendList would have
-      // handled natively, while keeping the on-wheel callback as the trigger.
-      container.dispatchEvent(
-        new WheelEvent("wheel", {
-          bubbles: true,
-          deltaY: -100,
-          clientX: container.clientWidth / 2,
-          clientY: container.clientHeight / 2,
-        }),
-      );
-      container.scrollTop = Math.max(0, scrollTopBeforeWheel - 100);
-      container.dispatchEvent(new Event("scroll"));
-
+      wheelUp(container, 100, 100);
       await settleFrames(1);
 
-      const scrollTopAfterWheel = container.scrollTop;
-      expect(scrollTopAfterWheel).toBeLessThan(scrollTopBeforeWheel);
+      expect(container.scrollTop).toBeLessThan(scrollTopBeforeWheel);
 
-      // Continue streaming for 60 frames and assert the viewport is never
-      // re-snapped to the bottom.
-      const samples: number[] = [scrollTopAfterWheel];
+      const samples: number[] = [container.scrollTop];
       for (let frame = 0; frame < 60; frame += 1) {
-        handle().streamChunk(1);
+        handle.streamChunk(1);
         await settleFrames(1);
         samples.push(container.scrollTop);
       }
 
-      // The scroll position may drift slightly but must stay above the pre-wheel
-      // live edge (a re-snap would jump back to or near the bottom).
       for (const scrollTop of samples) {
         expect(scrollTop).toBeLessThan(scrollTopBeforeWheel);
       }
@@ -245,58 +221,23 @@ describe("MessagesTimeline scroll ownership", () => {
     const screen = await render(<ScrollOwnershipTimeline handleRef={handleRef} />);
 
     try {
-      const handle = () => {
-        if (!handleRef.current) throw new Error("harness not mounted");
-        return handleRef.current;
-      };
+      const handle = handleRef.current;
+      if (!handle) throw new Error("harness not mounted");
+      const container = getScrollContainer(handle);
 
-      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
-      await settleFrames(3);
-      void handle().listRef.current?.scrollToEnd?.({ animated: false });
-
-      const container = getScrollContainer(handle());
-      await expect
-        .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
-
-      handle().startStreaming();
-
-      for (let index = 0; index < 8; index += 1) {
-        handle().streamChunk(2);
-        await settleFrames(1);
-      }
-
-      await expect
-        .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
-
-      // Wheel up to detach.
-      const scrollTopBeforeDetach = container.scrollTop;
-      container.dispatchEvent(
-        new WheelEvent("wheel", {
-          bubbles: true,
-          deltaY: -200,
-          clientX: container.clientWidth / 2,
-          clientY: container.clientHeight / 2,
-        }),
-      );
-      container.scrollTop = Math.max(0, scrollTopBeforeDetach - 300);
-      container.dispatchEvent(new Event("scroll"));
+      await startStreamingAndFollow(handle, container);
+      wheelUp(container, 300, 200);
       await settleFrames(3);
 
-      const detachedDistance = distanceFromBottomPx(container);
-      expect(detachedDistance).toBeGreaterThan(AUTO_FOLLOW_TOLERANCE_PX);
+      expect(distanceFromBottomPx(container)).toBeGreaterThan(AUTO_FOLLOW_TOLERANCE_PX);
 
-      // Scroll back to the bottom, like the scroll-to-bottom arrow.
-      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+      void handle.listRef.current?.scrollToEnd?.({ animated: false });
       await expect
         .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 
-      // After returning to the bottom, onIsAtEndChange(true) re-arms follow.
-      // The next streaming chunks must keep the viewport pinned to the tail.
       for (let frame = 0; frame < 24; frame += 1) {
-        handle().streamChunk(1);
+        handle.streamChunk(1);
         await settleFrames(1);
       }
 

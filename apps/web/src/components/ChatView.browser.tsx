@@ -8839,15 +8839,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       sendButton.click();
 
       let sentMessageId: string | null = null;
-      const landingPhrase = "What should we work on?";
 
-      // Wait for the first paint where the optimistic user row has replaced the
-      // centered empty landing. The landing copy must not be present before the
-      // delayed server echo either.
       await vi.waitFor(
         () => {
           const text = document.body.textContent ?? "";
-          expect(text).not.toContain(landingPhrase);
+          expect(text).not.toContain("What should we work on?");
           const userRow = document.querySelector<HTMLElement>(
             "[data-message-id][data-message-role='user']",
           );
@@ -8862,7 +8858,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const pollStartedAt = performance.now();
       while (performance.now() - pollStartedAt < 300) {
-        expect(document.body.textContent ?? "").not.toContain(landingPhrase);
+        expect(document.body.textContent ?? "").not.toContain("What should we work on?");
         await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
       }
 
@@ -8922,7 +8918,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).not.toContain(landingPhrase);
+          expect(document.body.textContent).not.toContain("What should we work on?");
         },
         { timeout: 8_000, interval: 16 },
       );

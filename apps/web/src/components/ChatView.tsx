@@ -5217,15 +5217,10 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
-  // User wheel/touch/pointer gestures take scroll ownership from streaming
-  // auto-follow. A ref mirrors state so the gesture funnel can write without
-  // waiting for the next render, while the render path projects it into the
-  // `followLiveOutput` prop.
+  // User scroll gestures take ownership from streaming auto-follow. Ref updates
+  // are immediate; state updates project into the `followLiveOutput` prop.
   const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
   const isUserScrollDetachedRef = useRef(isUserScrollDetached);
-  useLayoutEffect(() => {
-    isUserScrollDetachedRef.current = isUserScrollDetached;
-  }, [isUserScrollDetached]);
   // The arrow's smooth jump is followed by one exact settle after LegendList
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
