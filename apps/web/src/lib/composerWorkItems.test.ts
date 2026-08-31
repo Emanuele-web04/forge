@@ -23,6 +23,7 @@ describe("composerWorkItems", () => {
     const items = [makeItem("issue", 1), makeItem("pull-request", 2)];
     const prompt = buildAttachedWorkItemsBlock(items);
     expect(prompt).toContain("<attached_work_items>");
+    expect(prompt).not.toContain('"id"');
     const { promptText, workItems } = extractTrailingWorkItems(`Hello${prompt}`);
     expect(promptText).toBe("Hello");
     expect(workItems).toHaveLength(2);
@@ -34,6 +35,26 @@ describe("composerWorkItems", () => {
     expect(buildAttachedWorkItemsBlock([])).toBe("");
     const { promptText, workItems } = extractTrailingWorkItems("Hello");
     expect(promptText).toBe("Hello");
+    expect(workItems).toEqual([]);
+  });
+
+  it("strips the draft id from the serialized block", () => {
+    const block = buildAttachedWorkItemsBlock([makeItem("issue", 1)]);
+    expect(block).not.toContain('"id"');
+    expect(block).toContain('"number"');
+  });
+
+  it("ignores malformed and invalid entries", () => {
+    const badBlock = `\n<attached_work_items>\n[{"kind":"issue","title":"No number","state":"open","url":"http://x","bodyExcerpt":"","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"},123,{"kind":"unknown","number":3,"title":"Bad kind","state":"open","url":"http://x","bodyExcerpt":"","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}]\n</attached_work_items>`;
+    const { workItems } = extractTrailingWorkItems(`Hello${badBlock}`);
+    expect(workItems).toEqual([]);
+  });
+
+  it("rejects out-of-range bodyExcerpt", () => {
+    const item = makeItem("issue", 1);
+    const bigItem = { ...item, bodyExcerpt: "x".repeat(501) };
+    const block = buildAttachedWorkItemsBlock([bigItem]);
+    const { workItems } = extractTrailingWorkItems(`Hello${block}`);
     expect(workItems).toEqual([]);
   });
 });
