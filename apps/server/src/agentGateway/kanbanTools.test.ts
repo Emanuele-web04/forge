@@ -616,6 +616,18 @@ describe("synara_move_kanban_card", () => {
     expect(started).toHaveLength(0);
   });
 
+  it("rejects moving a card in a different project from the caller", async () => {
+    const { tools, started, interrupted } = makeTools({
+      threads: [makeThreadShell("thread-foreign", "project-b")],
+    });
+
+    const result = await move(tools, "thread-foreign", "inProgress", { message: "Start work" });
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("different project");
+    expect(started).toHaveLength(0);
+    expect(interrupted).toHaveLength(0);
+  });
+
   it.each([
     { target: "inProgress", extraArgs: { message: "hi" } },
     { target: "done", extraArgs: {} },

@@ -19,7 +19,7 @@ import {
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
-import { dispatchKanbanDraftCardAsGoal } from "~/lib/kanbanDispatch";
+import { dispatchKanbanDraftCardAsGoal, kanbanDispatchFailureToast } from "~/lib/kanbanDispatch";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { pinActionLabel } from "~/lib/pin";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
@@ -226,28 +226,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           return;
         }
         if (result.kind === "open-thread") {
-          const description =
-            result.reason === "empty"
-              ? "Nothing to send yet — write the prompt in the composer."
-              : result.reason === "worktree-pending"
-                ? "Open the chat to create the worktree with the normal send flow."
-                : "Open the chat to continue this task.";
-          toastManager.add({ type: "info", title: "Finish this draft in the chat", description });
+          toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
           return;
         }
-        if (result.kind === "unavailable") {
-          toastManager.add({
-            type: "error",
-            title: "Not connected",
-            description: "Reconnect to the server before sending drafts.",
-          });
-          return;
-        }
-        toastManager.add({
-          type: "error",
-          title: "Could not send as goal",
-          description: result.message,
-        });
+        // Remaining kinds: "unavailable" | "error".
+        toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
         return;
       }
       if (clicked !== "delete") return;

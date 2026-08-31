@@ -4,8 +4,7 @@ import {
   type SynaraCreateThreadsInput,
 } from "@synara/contracts";
 import {
-  deriveKanbanColumnV2,
-  deriveKanbanAttention,
+  deriveKanbanCardView,
   KANBAN_COLUMN_V2_LABELS,
   type KanbanAttentionFlag,
   type KanbanColumnV2Key,
@@ -102,6 +101,10 @@ function deriveCard(
 ): ReadKanbanCard {
   const pr = thread.lastKnownPr ?? null;
   const input = toKanbanThreadDerivationInput(thread);
+  const view = deriveKanbanCardView(input, {
+    now,
+    needsReview: pr !== null && pr.state === "open",
+  });
   return {
     threadId: thread.id,
     title: thread.title,
@@ -111,11 +114,8 @@ function deriveCard(
     worktreePath: thread.worktreePath,
     lastKnownPr: pr,
     summary: summarizeThreadShell(thread, callerThreadId),
-    attention: deriveKanbanAttention(input, {
-      now,
-      needsReview: pr !== null && pr.state === "open",
-    }),
-    column: deriveKanbanColumnV2(input, { now }),
+    attention: view.attention,
+    column: view.column,
   };
 }
 
@@ -382,11 +382,21 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           );
           if (result.isError) return result;
           const content = result.content[0];
-          const batch = JSON.parse(content?.type === "text" ? content.text : "{}") as {
-            operationId?: string;
-            threadIds?: string[];
-            threads?: Array<{ threadId?: string }>;
-          };
+          // The saga serializes its structured outcome as JSON text; parse
+          // defensively so a malformed block degrades to the raw-result path
+          // (the creation itself already succeeded and stays replayable via
+          // requestId) instead of throwing after a successful dispatch.
+          const batch = (() => {
+            try {
+              return JSON.parse(content?.type === "text" ? content.text : "{}") as {
+                operationId?: string;
+                threadIds?: string[];
+                threads?: Array<{ threadId?: string }>;
+              };
+            } catch {
+              return {};
+            }
+          })();
           // The creation saga returns `threadIds` / per-thread `threads`, never a
           // top-level `threadId`; read the first created thread so the create →
           // read → move loop works against the real contract shape. The card
@@ -469,6 +479,15 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           const card = yield* requireThreadShell(threadId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
           );
+          // Same project scoping as the read tools: a caller may only drive
+          // cards inside its own project, regardless of runtimeMode privilege.
+          if (card.projectId !== caller.projectId) {
+            return yield* Effect.fail(
+              new ToolInputError(
+                `Thread "${threadId}" is in a different project. Only your own project "${caller.projectId}" can be driven.`,
+              ),
+            );
+          }
           yield* assertCallerMayDriveThread(caller, card);
           if ((card.archivedAt ?? null) !== null) {
             return yield* Effect.fail(

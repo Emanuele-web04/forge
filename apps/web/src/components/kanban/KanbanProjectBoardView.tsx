@@ -28,7 +28,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
-import { dispatchKanbanDraftCard } from "../../lib/kanbanDispatch";
+import { dispatchKanbanDraftCard, kanbanDispatchFailureToast } from "../../lib/kanbanDispatch";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import { NeedsReviewFilter } from "./NeedsReviewFilter";
@@ -138,33 +138,12 @@ export function KanbanProjectBoardView({
       return;
     }
     if (result.kind === "open-thread") {
-      const description =
-        result.reason === "empty"
-          ? "Nothing to send yet — write the prompt in the composer."
-          : result.reason === "worktree-pending"
-            ? "Open the chat to create the worktree with the normal send flow."
-            : "Open the chat to continue this task.";
-      toastManager.add({
-        type: "info",
-        title: "Finish this draft in the chat",
-        description,
-      });
+      toastManager.add(kanbanDispatchFailureToast(result, "Could not send draft"));
       onOpenCard(card);
       return;
     }
-    if (result.kind === "unavailable") {
-      toastManager.add({
-        type: "error",
-        title: "Not connected",
-        description: "Reconnect to the server before sending drafts.",
-      });
-      return;
-    }
-    toastManager.add({
-      type: "error",
-      title: "Could not send draft",
-      description: result.message,
-    });
+    // Remaining kinds: "unavailable" | "error".
+    toastManager.add(kanbanDispatchFailureToast(result, "Could not send draft"));
   };
 
   const handleDragStart = (event: DragStartEvent) => {

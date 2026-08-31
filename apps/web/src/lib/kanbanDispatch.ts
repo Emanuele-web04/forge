@@ -63,6 +63,38 @@ export type KanbanDraftDispatchResult =
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
+/**
+ * Shared failure-toast copy for a non-dispatched draft dispatch result, used by
+ * both the drag-to-column and "Send as goal" entry points so their wording
+ * cannot drift. Success toasts stay call-site-specific (different titles, and
+ * only the goal path surfaces a dispatch warning).
+ */
+export function kanbanDispatchFailureToast(
+  result: Exclude<KanbanDraftDispatchResult, { kind: "dispatched" }>,
+  errorTitle: string,
+): { type: "info" | "error"; title: string; description: string } {
+  if (result.kind === "open-thread") {
+    return {
+      type: "info",
+      title: "Finish this draft in the chat",
+      description:
+        result.reason === "empty"
+          ? "Nothing to send yet — write the prompt in the composer."
+          : result.reason === "worktree-pending"
+            ? "Open the chat to create the worktree with the normal send flow."
+            : "Open the chat to continue this task.",
+    };
+  }
+  if (result.kind === "unavailable") {
+    return {
+      type: "error",
+      title: "Not connected",
+      description: "Reconnect to the server before sending drafts.",
+    };
+  }
+  return { type: "error", title: errorTitle, description: result.message };
+}
+
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
   defaultProvider: ProviderKind;
@@ -358,8 +390,11 @@ async function dispatchKanbanDraftThreadOnce(
     if (mode === "goal" && prompt.length > 0) {
       // Attachment-only drafts intentionally dispatch no goal command; a prompt
       // over the cap is clamped so the metadata update never fails validation.
-      const goal =
-        prompt.length > MAX_KANBAN_GOAL_LENGTH ? prompt.slice(0, MAX_KANBAN_GOAL_LENGTH) : prompt;
+      const truncated = prompt.length > MAX_KANBAN_GOAL_LENGTH;
+      const goal = truncated ? prompt.slice(0, MAX_KANBAN_GOAL_LENGTH) : prompt;
+      if (truncated) {
+        goalWarning = `Goal saved truncated to ${MAX_KANBAN_GOAL_LENGTH} characters.`;
+      }
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.meta.update",

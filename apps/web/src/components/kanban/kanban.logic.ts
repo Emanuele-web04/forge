@@ -9,6 +9,7 @@ import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import {
   KANBAN_COLUMN_V2_LABELS,
   deriveKanbanAttention as deriveKanbanAttentionShared,
+  deriveKanbanCardView as deriveKanbanCardViewShared,
   deriveKanbanColumnV2 as deriveKanbanColumnV2Shared,
   hasKanbanLiveWork as hasKanbanLiveWorkShared,
   type KanbanAttentionFlag,
@@ -422,6 +423,26 @@ export function deriveKanbanCardAttention(
   });
 }
 
+/**
+ * One-pass v2 card view (column + attention) for board renders: projects the
+ * web thread once and delegates to the shared single-pass derivation, so the
+ * per-card reason/heartbeat work runs once instead of once per projection.
+ */
+export function deriveKanbanCardViewFromThread(
+  thread: SidebarThreadSummary,
+  opts: {
+    now: number;
+    needsReview?: boolean;
+    lastActivityTimestampMs?: number | null;
+  },
+): { column: KanbanColumnV2Key; attention: KanbanAttentionFlag[] } {
+  const input = toKanbanThreadDerivationInput(thread, opts.lastActivityTimestampMs);
+  return deriveKanbanCardViewShared(input, {
+    now: opts.now,
+    needsReview: opts.needsReview ?? false,
+  });
+}
+
 function resolveThreadCardTimestamp(
   thread: SidebarThreadSummary,
   column: KanbanColumnKey,
@@ -457,21 +478,22 @@ function buildThreadCard(
   v2?: KanbanV2BuildOptions,
 ): KanbanCard {
   const lastActivityTimestampMs = v2?.lastActivityTimestampMsByThreadId?.[thread.id] ?? null;
-  const column = v2
-    ? deriveKanbanColumnV2(thread, v2.now, lastActivityTimestampMs)
-    : deriveKanbanColumn(thread);
-  const composerDraft = resolveComposerDraft(composerDraftByThreadId, thread.id);
-  const timestamp = resolveThreadCardTimestamp(thread, column);
-  const threadProvider = isTerminal
-    ? null
-    : (thread.session?.provider ?? thread.modelSelection.provider);
-  const attention = v2
-    ? deriveKanbanCardAttention(thread, {
+  // One shared derivation feeds both the column and the attention pills; the
+  // classic path keeps its own column derivation (no v2 clock).
+  const cardView = v2
+    ? deriveKanbanCardViewFromThread(thread, {
         now: v2.now,
         needsReview: v2.needsReviewByThreadId?.[thread.id] ?? false,
         lastActivityTimestampMs,
       })
     : null;
+  const column = cardView ? cardView.column : deriveKanbanColumn(thread);
+  const composerDraft = resolveComposerDraft(composerDraftByThreadId, thread.id);
+  const timestamp = resolveThreadCardTimestamp(thread, column);
+  const threadProvider = isTerminal
+    ? null
+    : (thread.session?.provider ?? thread.modelSelection.provider);
+  const attention = cardView ? cardView.attention : null;
   // In Progress cards and Awaiting-you cards whose reason is staleness (stuck)
   // are both live work: the elapsed label tracks their active stretch. Other
   // Awaiting-you reasons (pending/failed) center on the human, not the work.
