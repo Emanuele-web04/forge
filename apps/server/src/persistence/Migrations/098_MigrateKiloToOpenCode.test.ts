@@ -133,7 +133,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.deepStrictEqual(JSON.parse(kiloThread?.modelSelection ?? "null"), {
         provider: "opencode",
         model: "kilo/kilo-auto/free",
-        options: { opencode: { variant: "thread-variant", agent: "thread-agent" } },
+        options: { variant: "thread-variant", agent: "thread-agent" },
       });
       assert.strictEqual(kiloThread?.handoff, "opencode");
 
@@ -150,7 +150,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.deepStrictEqual(JSON.parse(project?.modelSelection ?? "null"), {
         provider: "opencode",
         model: "kilo/kilo-auto/free",
-        options: { opencode: { variant: "project-variant" } },
+        options: { variant: "project-variant" },
       });
 
       const [session] = yield* sql<{ readonly provider: string }>`
@@ -181,7 +181,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.deepStrictEqual(JSON.parse(automation?.modelSelection ?? "null"), {
         provider: "opencode",
         model: "kilo/kilo-auto/free",
-        options: { opencode: { agent: "automation-agent" } },
+        options: { agent: "automation-agent" },
       });
       assert.deepStrictEqual(JSON.parse(automation?.providerOptions ?? "null"), {
         opencode: {
@@ -208,7 +208,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       );
       assert.strictEqual(payloads.get("event-1")?.modelSelection.provider, "opencode");
       assert.deepStrictEqual(payloads.get("event-1")?.modelSelection.options, {
-        opencode: { variant: "event-variant" },
+        variant: "event-variant",
       });
       assert.deepStrictEqual(payloads.get("event-1")?.providerOptions, {
         opencode: { binaryPath: "/event/kilo" },
@@ -216,7 +216,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.strictEqual(payloads.get("event-1")?.handoff.sourceProvider, "opencode");
       assert.strictEqual(payloads.get("event-2")?.defaultModelSelection.provider, "opencode");
       assert.deepStrictEqual(payloads.get("event-2")?.defaultModelSelection.options, {
-        opencode: { agent: "event-agent" },
+        agent: "event-agent",
       });
       assert.strictEqual(payloads.get("event-3")?.provider, "opencode");
       assert.strictEqual(payloads.get("event-3")?.providerName, "opencode");

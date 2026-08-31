@@ -13,13 +13,10 @@ export default Effect.gen(function* () {
     UPDATE projection_threads
     SET model_selection_json = CASE
       WHEN json_type(model_selection_json, '$.options.kilo') IS NOT NULL THEN
-        json_remove(
-          json_set(
-            model_selection_json,
-            '$.provider', 'opencode',
-            '$.options.opencode', json_extract(model_selection_json, '$.options.kilo')
-          ),
-          '$.options.kilo'
+        json_set(
+          model_selection_json,
+          '$.provider', 'opencode',
+          '$.options', json_extract(model_selection_json, '$.options.kilo')
         )
       ELSE json_set(model_selection_json, '$.provider', 'opencode')
     END
@@ -36,13 +33,10 @@ export default Effect.gen(function* () {
     UPDATE projection_projects
     SET default_model_selection_json = CASE
       WHEN json_type(default_model_selection_json, '$.options.kilo') IS NOT NULL THEN
-        json_remove(
-          json_set(
-            default_model_selection_json,
-            '$.provider', 'opencode',
-            '$.options.opencode', json_extract(default_model_selection_json, '$.options.kilo')
-          ),
-          '$.options.kilo'
+        json_set(
+          default_model_selection_json,
+          '$.provider', 'opencode',
+          '$.options', json_extract(default_model_selection_json, '$.options.kilo')
         )
       ELSE json_set(default_model_selection_json, '$.provider', 'opencode')
     END
@@ -71,13 +65,10 @@ export default Effect.gen(function* () {
     UPDATE automation_definitions
     SET model_selection_json = CASE
       WHEN json_type(model_selection_json, '$.options.kilo') IS NOT NULL THEN
-        json_remove(
-          json_set(
-            model_selection_json,
-            '$.provider', 'opencode',
-            '$.options.opencode', json_extract(model_selection_json, '$.options.kilo')
-          ),
-          '$.options.kilo'
+        json_set(
+          model_selection_json,
+          '$.provider', 'opencode',
+          '$.options', json_extract(model_selection_json, '$.options.kilo')
         )
       ELSE json_set(model_selection_json, '$.provider', 'opencode')
     END
@@ -118,14 +109,10 @@ export default Effect.gen(function* () {
     UPDATE orchestration_events
     SET payload_json = CASE
       WHEN json_type(payload_json, '$.modelSelection.options.kilo') IS NOT NULL THEN
-        json_remove(
-          json_set(
-            payload_json,
-            '$.modelSelection.provider', 'opencode',
-            '$.modelSelection.options.opencode',
-            json_extract(payload_json, '$.modelSelection.options.kilo')
-          ),
-          '$.modelSelection.options.kilo'
+        json_set(
+          payload_json,
+          '$.modelSelection.provider', 'opencode',
+          '$.modelSelection.options', json_extract(payload_json, '$.modelSelection.options.kilo')
         )
       ELSE json_set(payload_json, '$.modelSelection.provider', 'opencode')
     END
@@ -136,14 +123,11 @@ export default Effect.gen(function* () {
     UPDATE orchestration_events
     SET payload_json = CASE
       WHEN json_type(payload_json, '$.defaultModelSelection.options.kilo') IS NOT NULL THEN
-        json_remove(
-          json_set(
-            payload_json,
-            '$.defaultModelSelection.provider', 'opencode',
-            '$.defaultModelSelection.options.opencode',
-            json_extract(payload_json, '$.defaultModelSelection.options.kilo')
-          ),
-          '$.defaultModelSelection.options.kilo'
+        json_set(
+          payload_json,
+          '$.defaultModelSelection.provider', 'opencode',
+          '$.defaultModelSelection.options',
+          json_extract(payload_json, '$.defaultModelSelection.options.kilo')
         )
       ELSE json_set(payload_json, '$.defaultModelSelection.provider', 'opencode')
     END
