@@ -201,7 +201,8 @@ const DEVIN_COMPACT_OUTCOME_QUIET_MS = 200;
 const DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
-const ACP_APPROVAL_MODE_ALIASES = ["ask", "approval", "confirm"] as const;
+const ACP_APPROVAL_MODE_ALIASES = ["accept-edits", "code"] as const;
+const ACP_FULL_ACCESS_MODE_ALIASES = ["bypass", "full access"] as const;
 const ACP_IMPLEMENT_MODE_ALIASES = [
   "code",
   "agent",
@@ -414,7 +415,9 @@ export function resolveRequestedModeId(input: {
         ? ACP_PLAN_MODE_ALIASES
         : runtimeMode === "approval-required"
           ? ACP_APPROVAL_MODE_ALIASES
-          : ACP_IMPLEMENT_MODE_ALIASES;
+          : runtimeMode === "full-access"
+            ? ACP_FULL_ACCESS_MODE_ALIASES
+            : ACP_IMPLEMENT_MODE_ALIASES;
 
     // For plan mode, only an exact normalized id or name match is considered
     // safe; whole-token matching is too permissive for a fail-closed gate.
@@ -425,6 +428,9 @@ export function resolveRequestedModeId(input: {
           findModeByWholeTokenAliases(modeState.availableModes, aliases));
 
     if (!targetMode) {
+      if (runtimeMode === "full-access" && interactionMode !== "plan") {
+        return undefined;
+      }
       const requiredBy =
         interactionMode === "plan" ? "plan interaction mode" : `runtime mode "${runtimeMode}"`;
       return yield* new ProviderAdapterValidationError({

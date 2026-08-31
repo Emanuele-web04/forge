@@ -124,9 +124,39 @@ describe("applyDevinSessionConfiguration", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
     expect(calls).toEqual([]);
   });
+
+  it("sets Devin 3000.6.7 Code mode for approval-required sessions", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "smart",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+        { id: "ask", name: "Ask" },
+        { id: "plan", name: "Plan" },
+        { id: "bypass", name: "Full Access" },
+      ],
+    });
+
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime,
+        runtimeMode: "approval-required",
+        interactionMode: undefined,
+      }),
+    );
+
+    expect(calls).toEqual([{ method: "setMode", args: ["accept-edits"] }]);
+  });
 });
 
 describe("resolveRequestedModeId", () => {
+  const devin300067Modes = [
+    { id: "accept-edits", name: "Code" },
+    { id: "smart", name: "Smart" },
+    { id: "ask", name: "Ask" },
+    { id: "plan", name: "Plan" },
+    { id: "bypass", name: "Full Access" },
+  ];
   it("selects plan mode by exact alias", async () => {
     const modeId = await Effect.runPromise(
       resolveRequestedModeId({
@@ -183,6 +213,69 @@ describe("resolveRequestedModeId", () => {
         }),
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+  });
+
+  it("maps approval-required to Code in the real Devin 3000.6.7 catalog", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBe("accept-edits");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        }),
+      ),
+    ).resolves.toBe("plan");
+
+    for (const unavailableModes of [
+      devin300067Modes.filter((mode) => mode.id !== "accept-edits"),
+      [
+        { id: "smart", name: "Smart" },
+        { id: "ask", name: "Ask" },
+      ],
+    ]) {
+      await expect(
+        Effect.runPromise(
+          resolveRequestedModeId({
+            modeState: { currentModeId: "smart", availableModes: unavailableModes },
+            runtimeMode: "approval-required",
+            interactionMode: undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    }
+  });
+
+  it("maps full-access to Full Access without weakening approval-required", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+          runtimeMode: "full-access",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBe("bypass");
   });
 });
 
