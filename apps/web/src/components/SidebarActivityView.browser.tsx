@@ -5,7 +5,7 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -13,6 +13,7 @@ import { render } from "vitest-browser-react";
 import type { Project, SidebarThreadSummary } from "../types";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
+import type { ActivityGroupMode } from "./SidebarActivityView.logic";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
 const PROJECT_B = ProjectId.makeUnsafe("activity-project-b");
@@ -66,7 +67,7 @@ function makeThread(
   };
 }
 
-function renderActivity(input: {
+type RenderActivityInput = {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
@@ -82,7 +83,10 @@ function renderActivity(input: {
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
-}) {
+};
+
+function ActivityViewHarness(input: RenderActivityInput) {
+  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   return (
     <SidebarActivityView
@@ -94,6 +98,8 @@ function renderActivity(input: {
       threadsHydrated
       prByThreadId={input.prByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
+      groupMode={groupMode}
+      onChangeGroupMode={setGroupMode}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
@@ -109,6 +115,10 @@ function renderActivity(input: {
       onAddProject={() => {}}
     />
   );
+}
+
+function renderActivity(input: RenderActivityInput) {
+  return <ActivityViewHarness {...input} />;
 }
 
 describe("SidebarActivityView", () => {

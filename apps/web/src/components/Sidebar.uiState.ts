@@ -5,6 +5,7 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
+import type { ActivityGroupMode } from "./SidebarActivityView.logic";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
@@ -16,6 +17,8 @@ export type SidebarUiState = {
   lastThreadRoute: LastThreadRoute | null;
   /** Swaps the Projects surface for the flat task-feed Activity view. */
   activityViewEnabled: boolean;
+  /** Keeps the Activity feed grouped the same way across remounts and reloads. */
+  activityGroupMode: ActivityGroupMode;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
@@ -25,6 +28,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
   activityViewEnabled: false,
+  activityGroupMode: "time",
 };
 
 // Persisted paging is a request, not a promise: render-time clamping trims it to the real
@@ -85,6 +89,7 @@ export function readSidebarUiState(): SidebarUiState {
         splitViewId?: unknown;
       } | null;
       activityViewEnabled?: boolean;
+      activityGroupMode?: unknown;
     };
 
     const lastThreadRoute =
@@ -133,6 +138,7 @@ export function readSidebarUiState(): SidebarUiState {
       ),
       lastThreadRoute,
       activityViewEnabled: parsed.activityViewEnabled === true,
+      activityGroupMode: parsed.activityGroupMode === "project" ? "project" : "time",
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
@@ -185,6 +191,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
             }
           : null,
         activityViewEnabled: input.activityViewEnabled,
+        activityGroupMode: input.activityGroupMode,
       }),
     );
   } catch {
