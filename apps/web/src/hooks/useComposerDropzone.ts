@@ -13,6 +13,29 @@ export interface ComposerDropzoneFileSplit {
   readonly genericFiles: File[];
 }
 
+export function collectComposerClipboardFiles(
+  clipboardData: Pick<DataTransfer, "files" | "items">,
+): File[] {
+  const files = Array.from(clipboardData.files);
+  const seen = new Set(files.map(fileIdentity));
+  for (const item of Array.from(clipboardData.items)) {
+    if (item.kind !== "file") continue;
+    try {
+      const file = item.getAsFile();
+      if (!file || seen.has(fileIdentity(file))) continue;
+      files.push(file);
+      seen.add(fileIdentity(file));
+    } catch {
+      continue;
+    }
+  }
+  return files;
+}
+
+function fileIdentity(file: File): string {
+  return `${file.name}\0${file.size}\0${file.type}\0${file.lastModified}`;
+}
+
 export function splitComposerDropzoneFiles(files: Iterable<File>): ComposerDropzoneFileSplit {
   const imageFiles: File[] = [];
   const genericFiles: File[] = [];
@@ -171,11 +194,12 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerPaste = (event: ClipboardEvent<HTMLElement>) => {
+    const files = collectComposerClipboardFiles(event.clipboardData);
     if (disabled) {
-      if (event.clipboardData.files.length > 0) event.preventDefault();
+      if (files.length > 0) event.preventDefault();
       return;
     }
-    const handled = handleSplitFiles(splitComposerDropzoneFiles(event.clipboardData.files));
+    const handled = handleSplitFiles(splitComposerDropzoneFiles(files));
     if (handled) event.preventDefault();
   };
 
