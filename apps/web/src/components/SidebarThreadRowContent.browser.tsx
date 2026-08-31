@@ -111,9 +111,13 @@ describe("SidebarThreadRowContent", () => {
     const connector = screen.getByTestId("sidebar-subagent-connector");
     await expect.element(connector).toBeVisible();
     await expect.element(connector).toHaveAttribute("data-indent", "10");
+    await expect.element(screen.getByTestId("sidebar-child-provider-icon")).toHaveAttribute(
+      "data-provider",
+      "codex",
+    );
   });
 
-  it("uses a simple shared card surface without a per-row split rail", async () => {
+  it("uses a quiet linked indicator without a card for colocated split members", async () => {
     const screen = await render(
       <SidebarThreadRowContent
         thread={makeThread({ id: ThreadId.makeUnsafe("thread-split-member") })}
@@ -131,14 +135,14 @@ describe("SidebarThreadRowContent", () => {
           position: "middle",
         }}
         splitGroupActive
+        splitGroupLabel="Split view with hola 1 and hoola 2"
       />,
     );
 
-    const surface = screen.getByTestId("sidebar-split-group-surface");
-    await expect.element(surface).toBeVisible();
-    await expect.element(surface).toHaveAttribute("data-split-position", "middle");
-    expect(getComputedStyle(surface.element()).boxShadow).toBe("none");
-    expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
+    await expect
+      .element(screen.getByLabelText("Split view with hola 1 and hoola 2"))
+      .toBeVisible();
+    expect(document.querySelector("[data-testid=sidebar-split-group-surface]")).toBeNull();
   });
 
   it("uses a linked indicator instead of a card for remote split members", async () => {
@@ -159,37 +163,12 @@ describe("SidebarThreadRowContent", () => {
           position: "first",
         }}
         splitGroupActive
-        splitGroupLinkedLabel="Split view with hoola 2"
+        splitGroupLabel="Split view with hoola 2"
       />,
     );
 
     await expect.element(screen.getByLabelText("Split view with hoola 2")).toBeVisible();
     expect(document.querySelector("[data-testid=sidebar-split-group-surface]")).toBeNull();
-  });
-
-  it("draws the shared split-group surface capped to the row position", async () => {
-    const screen = await render(
-      <SidebarThreadRowContent
-        thread={makeThread({ id: ThreadId.makeUnsafe("thread-split-surface") })}
-        terminalEntryPoint={false}
-        terminalStatus={null}
-        terminalCount={0}
-        isActive={false}
-        variant="standard"
-        splitGroup={{
-          splitViewId: "split-surface",
-          presentation: "card",
-          memberIndex: 1,
-          memberCount: 2,
-          isLeader: true,
-          position: "first",
-        }}
-      />,
-    );
-
-    const surface = screen.getByTestId("sidebar-split-group-surface");
-    await expect.element(surface).toHaveAttribute("data-split-position", "first");
-    await expect.element(surface).toHaveClass("rounded-t-lg");
   });
 
   it("moves the subagent context onto its focusable row description", () => {
