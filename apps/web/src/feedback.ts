@@ -58,6 +58,50 @@ export interface FeedbackSubmission {
 const DEFAULT_FEEDBACK_ENDPOINT = "https://www.trysynara.com/api/feedback";
 const FEEDBACK_REQUEST_TIMEOUT_MS = 20_000;
 
+const SECRET_PATTERNS = [
+  /ghp_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /gho_[A-Za-z0-9]{20,}/gu,
+  /ghu_[A-Za-z0-9]{20,}/gu,
+  /ghs_[A-Za-z0-9]{20,}/gu,
+  /ghr_[A-Za-z0-9]{20,}/gu,
+  /sk-proj-[A-Za-z0-9]{20,}/gu,
+  /sk-[A-Za-z0-9]{16,}/gu,
+  /AKIA[0-9A-Z]{16}/gu,
+  /ASIA[0-9A-Z]{16}/gu,
+  /xoxb-[A-Za-z0-9-]{10,}/gu,
+  /AIza[A-Za-z0-9_-]{35}/gu,
+  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{2,}\b/gu,
+  /bearer\s+[A-Za-z0-9._~+/=-]{16,}\b/giu,
+  /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
+] as const;
+
+const HOME_PATH_PATTERN =
+  /(?<=^|[\s'"`])(\/Users\/[^/\s,.;:!?()"'`]+|\/home\/[^/\s,.;:!?()"'`]+|\/root\/[^/\s,.;:!?()"'`]+|C:\\Users\\[^/\\\s,.;:!?()"'`]+|C:\/Users\/[^/\s,.;:!?()"'`]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
+
+/** Masks high-confidence secrets with `[REDACTED]` and returns the count. */
+export function redactObviousSecrets(text: string): { text: string; redactedCount: number } {
+  let redactedCount = 0;
+  let redacted = text;
+  for (const pattern of SECRET_PATTERNS) {
+    redacted = redacted.replace(pattern, (_match) => {
+      redactedCount += 1;
+      return "[REDACTED]";
+    });
+  }
+  return { text: redacted, redactedCount };
+}
+
+/** Replaces macOS, Linux, `/root`, and Windows home directory prefixes with `~`. */
+export function normalizeHomePaths(text: string): string {
+  return text.replace(HOME_PATH_PATTERN, "~");
+}
+
+/** Sanitizes user-supplied feedback text before it leaves the app. */
+function sanitizeFeedbackDetails(details: string): string {
+  return normalizeHomePaths(redactObviousSecrets(details).text);
+}
+
 function formatStateFlags(diagnostics: FeedbackThreadContext): string {
   const flags: string[] = [];
   if (diagnostics.hasThreadError) flags.push("the thread was in an error state");
@@ -137,7 +181,7 @@ export function buildFeedbackSubmission(input: {
 
   return {
     category: input.category,
-    details: input.details.trim(),
+    details: sanitizeFeedbackDetails(input.details.trim()),
     summary: formatFeedbackSummary({
       category: input.category,
       diagnostics,

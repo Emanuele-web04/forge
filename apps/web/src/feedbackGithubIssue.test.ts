@@ -2,14 +2,13 @@
 
 import { describe, expect, it } from "vitest";
 
+import { normalizeHomePaths, redactObviousSecrets } from "./feedback";
 import {
   buildBugReportDiagnostics,
   buildGithubIssueInterviewPrompt,
   BUG_REPORT_CONFIRMATION_QUESTION,
   escapePromptDelimiters,
   GITHUB_ISSUE_URL,
-  normalizeHomePaths,
-  redactObviousSecrets,
   SYNARA_UPSTREAM_REPO,
 } from "./feedbackGithubIssue";
 
@@ -64,6 +63,15 @@ describe("buildGithubIssueInterviewPrompt", () => {
     );
   });
 
+  it("defangs {{ }} placeholders so a user cannot inject the diagnostics block", () => {
+    const prompt = makePrompt("I typed {{DIAGNOSTICS_SUMMARY}} inside my report.");
+
+    expect(section(prompt, "initial-report")).toBe(
+      "I typed { {DIAGNOSTICS_SUMMARY} } inside my report.",
+    );
+    expect(section(prompt, "initial-report")).not.toContain("I ran into a bug");
+  });
+
   it("contains the gh command, confirmation, and fallback", () => {
     const prompt = makePrompt("The sidebar footer button is missing.");
 
@@ -108,7 +116,21 @@ describe("redactObviousSecrets", () => {
     expect(redacted).not.toContain("MIIEpQIBAAKCAQEA");
     expect(redacted).toContain("[REDACTED]");
     expect(redacted).toContain("normal word sk-loop is fine");
-    expect(redactedCount).toBeGreaterThanOrEqual(7);
+    expect(redactedCount).toBe(10);
+  });
+
+  it("redacts other GitHub OAuth and app token families", () => {
+    const text =
+      "OAuth gho_0123456789abcdefghijklmnopqrst, user ghu_0123456789abcdefghijklmnopqrst, " +
+      "server ghs_0123456789abcdefghijklmnopqrst, refresh ghr_0123456789abcdefghijklmnopqrst";
+
+    const { text: redacted, redactedCount } = redactObviousSecrets(text);
+
+    expect(redacted).not.toContain("gho_0123456789abcdefghijklmnopqrst");
+    expect(redacted).not.toContain("ghu_0123456789abcdefghijklmnopqrst");
+    expect(redacted).not.toContain("ghs_0123456789abcdefghijklmnopqrst");
+    expect(redacted).not.toContain("ghr_0123456789abcdefghijklmnopqrst");
+    expect(redactedCount).toBe(4);
   });
 });
 
@@ -133,5 +155,9 @@ describe("escapePromptDelimiters", () => {
     expect(escapePromptDelimiters("<script>alert(1)</script>")).toBe(
       "&lt;script&gt;alert(1)&lt;/script&gt;",
     );
+  });
+
+  it("escapes ampersands", () => {
+    expect(escapePromptDelimiters("Foo & bar")).toBe("Foo &amp; bar");
   });
 });

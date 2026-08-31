@@ -154,10 +154,30 @@ describe("buildFeedbackSubmission", () => {
       }),
     );
     expect(submission.summary).not.toContain("The composer stopped responding.");
+    expect(submission.details).not.toContain("  ");
     expect(submission).not.toHaveProperty("screenshot");
     expect(submission.diagnostics).not.toHaveProperty("projectPath");
     expect(submission.diagnostics).not.toHaveProperty("threadTitle");
     expect(submission.diagnostics).not.toHaveProperty("messages");
     expect(submission.diagnostics).not.toHaveProperty("logs");
+  });
+
+  it("sanitizes secrets and home paths from details before submission", () => {
+    const submission = buildFeedbackSubmission({
+      category: "bug",
+      details:
+        "My token is ghp_0123456789abcdefghijklmnopqrst and I work in /Users/kartik/scratch.",
+      context: CONTEXT,
+      now: new Date("2026-07-15T18:00:00.000Z"),
+      userAgent: "Synara test agent",
+      platform: "MacIntel",
+      language: "en-US",
+      viewport: { width: 1_440, height: 900 },
+    });
+
+    expect(submission.details).not.toContain("ghp_0123456789abcdefghijklmnopqrst");
+    expect(submission.details).toContain("[REDACTED]");
+    expect(submission.details).not.toContain("/Users/kartik");
+    expect(submission.details).toContain("~/scratch");
   });
 });

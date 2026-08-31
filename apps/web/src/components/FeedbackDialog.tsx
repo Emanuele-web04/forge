@@ -32,16 +32,15 @@ export function FeedbackDialog({
 }: FeedbackDialogProps) {
   const [isSending, setIsSending] = useState(false);
   const [isDraftingIssue, setIsDraftingIssue] = useState(false);
-  const isSendingRef = useRef(false);
-  const isDraftingRef = useRef(false);
+  const isBusyRef = useRef(false);
 
   const disabled = isSending || isDraftingIssue;
 
   const handleSubmit = async (category: FeedbackCategory | null, details: string) => {
-    if (isSendingRef.current) {
+    if (isBusyRef.current) {
       return;
     }
-    isSendingRef.current = true;
+    isBusyRef.current = true;
     setIsSending(true);
     try {
       await submitFeedback(buildFeedbackSubmission({ category, details, context }));
@@ -60,15 +59,15 @@ export function FeedbackDialog({
       });
     } finally {
       setIsSending(false);
-      isSendingRef.current = false;
+      isBusyRef.current = false;
     }
   };
 
   const handleDraftIssue = async (details: string) => {
-    if (!onDraftGithubIssue || disabled || isDraftingRef.current) {
+    if (!onDraftGithubIssue || isBusyRef.current) {
       return;
     }
-    isDraftingRef.current = true;
+    isBusyRef.current = true;
     setIsDraftingIssue(true);
     try {
       await onDraftGithubIssue(details);
@@ -80,7 +79,7 @@ export function FeedbackDialog({
       });
     } finally {
       setIsDraftingIssue(false);
-      isDraftingRef.current = false;
+      isBusyRef.current = false;
     }
   };
 

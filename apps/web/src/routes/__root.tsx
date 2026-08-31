@@ -788,7 +788,7 @@ function GlobalFeedbackDialog() {
 
     const submission = buildFeedbackSubmission({ category: "bug", details, context });
     const prompt = buildGithubIssueInterviewPrompt({
-      details,
+      details: submission.details,
       diagnosticsSummary: buildBugReportDiagnostics(submission.diagnostics),
     });
 
