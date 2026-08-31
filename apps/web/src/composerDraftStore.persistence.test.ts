@@ -167,7 +167,10 @@ describe("composerDraftStore persisted-state hydration", () => {
         [threadId]: {
           prompt: "Continue this draft",
           attachments: [],
-          modelSelectionByProvider: { kilo: kiloSelection },
+          modelSelectionByProvider: {
+            opencode: { provider: "opencode", model: "openai/gpt-5" },
+            kilo: kiloSelection,
+          },
           activeProvider: "kilo",
         },
       },
@@ -180,8 +183,7 @@ describe("composerDraftStore persisted-state hydration", () => {
     expect(hydrated.draftsByThreadId[threadId]?.activeProvider).toBe("opencode");
     expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider.opencode).toEqual({
       provider: "opencode",
-      model: "kilo/kilo-auto/free",
-      options: { variant: "high" },
+      model: "openai/gpt-5",
     });
     expect(hydrated.stickyActiveProvider).toBe("opencode");
     expect(hydrated.stickyModelSelectionByProvider.opencode?.provider).toBe("opencode");
