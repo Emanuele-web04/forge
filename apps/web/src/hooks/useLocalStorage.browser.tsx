@@ -20,9 +20,7 @@ afterEach(() => {
 describe("useLocalStorage cross-window synchronization", () => {
   it("returns to its fallback after another window clears localStorage", async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify("persisted"));
-    const hook = await renderHook(() =>
-      useLocalStorage(STORAGE_KEY, "fallback", Schema.String),
-    );
+    const hook = await renderHook(() => useLocalStorage(STORAGE_KEY, "fallback", Schema.String));
     expect(hook.result.current[0]).toBe("persisted");
 
     window.localStorage.removeItem(STORAGE_KEY);
