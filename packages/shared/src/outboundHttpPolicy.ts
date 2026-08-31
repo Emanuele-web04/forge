@@ -22,6 +22,8 @@ export class OutboundPolicyError extends Error {
 }
 
 const blockedAddresses = new Net.BlockList();
+const ipv4MappedAddresses = new Net.BlockList();
+ipv4MappedAddresses.addSubnet("0.0.0.0", 0, "ipv4");
 
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
@@ -62,7 +64,7 @@ export function isPublicIpAddress(address: string): boolean {
     return !blockedAddresses.check(address, "ipv4");
   }
   if (family === 6) {
-    if (address.toLowerCase().startsWith("::ffff:")) return false;
+    if (ipv4MappedAddresses.check(address, "ipv6")) return false;
     return !blockedAddresses.check(address, "ipv6");
   }
   return false;
