@@ -63,13 +63,6 @@ const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
-export interface StatusUpstreamRefreshCacheTimeToLive {
-  (
-    exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
-    key?: { readonly remoteName: string },
-  ): Duration.Duration;
-}
-
 /**
  * Per-remote exponential backoff for failed `git fetch` upstream refreshes.
  * The failure count lives inside this factory so each `Cache` instance owns its
@@ -87,15 +80,16 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
       exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
       key?: { readonly remoteName: string },
     ): Duration.Duration {
+      const remoteName = key?.remoteName;
       if (Exit.isSuccess(exit) && exit.value === "refreshed") {
-        if (key) {
-          consecutiveFailures.delete(key.remoteName);
+        if (remoteName !== undefined) {
+          consecutiveFailures.delete(remoteName);
         }
         return STATUS_UPSTREAM_REFRESH_INTERVAL;
       }
-      const failures = key ? (consecutiveFailures.get(key.remoteName) ?? 0) : 0;
-      if (key) {
-        consecutiveFailures.set(key.remoteName, failures + 1);
+      const failures = remoteName !== undefined ? (consecutiveFailures.get(remoteName) ?? 0) : 0;
+      if (remoteName !== undefined) {
+        consecutiveFailures.set(remoteName, failures + 1);
       }
       const backoff = Math.min(
         Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,

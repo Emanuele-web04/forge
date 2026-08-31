@@ -18,7 +18,6 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
     const failed = Exit.succeed("failed" as const);
     // A zero TTL re-ran fetch on every git.status for unreachable remotes.
     expect(Duration.toMillis(policy.timeToLive(failed))).toBe(30_000);
-    expect(Duration.toMillis(policy.timeToLive(failed))).toBeGreaterThan(0);
   });
 
   it("throttles failures at least as long as successes", () => {

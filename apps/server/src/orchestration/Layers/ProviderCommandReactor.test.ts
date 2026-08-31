@@ -5179,7 +5179,6 @@ describe("ProviderCommandReactor", () => {
     const startSessionGate = new Promise<void>((resolve) => {
       releaseStartSession = resolve;
     });
-    setTimeout(() => releaseStartSession?.(), 5000);
 
     harness.startSession.mockImplementationOnce((threadId: unknown, input: unknown) =>
       Effect.promise(() => startSessionGate).pipe(
@@ -5206,6 +5205,7 @@ describe("ProviderCommandReactor", () => {
 
     // "starting" is visible immediately, before the provider session resolves.
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "starting");
+    releaseStartSession?.();
     const startingThread = await readHarnessThread(harness);
     expect(startingThread?.session?.activeTurnId).toBeNull();
     expect(startingThread?.latestTurn).toBeNull();
@@ -5215,6 +5215,7 @@ describe("ProviderCommandReactor", () => {
       async () => (await readHarnessThread(harness))?.session?.status === "ready",
       15000,
     );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await dispatchPromise;
     expect(harness.sendTurn).toHaveBeenCalled();
     const readyThread = await readHarnessThread(harness);

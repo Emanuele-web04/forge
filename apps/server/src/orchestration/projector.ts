@@ -64,20 +64,14 @@ const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
 
-// Cap per-message text in the in-memory read model. A single huge message (the
-// largest in the user's DB is 864 KB) otherwise stays duplicated in `text` and in
-// `message_text_segments`. The 512 KB limit matches the durable provider runtime
-// event journal cap and is large enough that ordinary messages are untouched.
+// Cap per-message text in the in-memory read model at the same 512 KB limit as
+// the durable provider runtime event journal. Ordinary messages are untouched.
 const MAX_IN_MEMORY_MESSAGE_TEXT_BYTES = 512 * 1024;
 
 const messageTextEncoder = new TextEncoder();
 const messageTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function compactInMemoryMessageText(text: string): string {
-  if (text.length === 0) {
-    return text;
-  }
-
   const bytes = messageTextEncoder.encode(text);
   if (bytes.length <= MAX_IN_MEMORY_MESSAGE_TEXT_BYTES) {
     return text;
@@ -86,10 +80,6 @@ function compactInMemoryMessageText(text: string): string {
   const marker = `\n\n[synara: message text truncated; original ${bytes.length} bytes]`;
   const markerBytes = messageTextEncoder.encode(marker);
   const target = Math.max(0, MAX_IN_MEMORY_MESSAGE_TEXT_BYTES - markerBytes.length);
-
-  if (target === 0) {
-    return marker;
-  }
 
   // Find the longest valid UTF-8 prefix that fits under the byte budget.
   let low = 0;

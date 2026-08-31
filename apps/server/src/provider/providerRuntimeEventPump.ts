@@ -82,22 +82,16 @@ function shouldLogRetry(attempt: number): boolean {
   return attempt === 1 || (attempt & (attempt - 1)) === 0;
 }
 
-function trimRuntimeEventDetail(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function sanitizeRuntimeEvent(event: ProviderRuntimeEvent): ProviderRuntimeEvent {
   if (event.type === "request.opened") {
-    const trimmed = trimRuntimeEventDetail(event.payload.detail);
-    if (event.payload.detail === trimmed) return event;
-    return { ...event, payload: { ...event.payload, detail: trimmed } };
+    const detail = event.payload.detail?.trim() || undefined;
+    if (event.payload.detail === detail) return event;
+    return { ...event, payload: { ...event.payload, detail } };
   }
   if (event.type === "event.unmapped") {
-    const trimmed = trimRuntimeEventDetail(event.payload.detail);
-    if (event.payload.detail === trimmed) return event;
-    return { ...event, payload: { ...event.payload, detail: trimmed } };
+    const detail = event.payload.detail?.trim() || undefined;
+    if (event.payload.detail === detail) return event;
+    return { ...event, payload: { ...event.payload, detail } };
   }
   return event;
 }

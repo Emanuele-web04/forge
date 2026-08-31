@@ -2127,7 +2127,6 @@ describe("orchestration projector", () => {
       ),
     );
     const compacted = afterHuge.threads[0]?.messages[1]?.text;
-    expect(compacted).toBeDefined();
     expect(compacted?.length).toBeLessThan(hugeText.length);
     expect(compacted?.length).toBeLessThanOrEqual(512 * 1024);
     expect(compacted).toContain("[synara: message text truncated;");
