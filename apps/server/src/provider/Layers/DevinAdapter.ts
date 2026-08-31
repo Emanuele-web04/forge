@@ -1129,6 +1129,24 @@ function settleDevinActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolea
   return true;
 }
 
+export function closeDevinSessionResources(input: {
+  readonly scope: Scope.Closeable;
+  readonly config: Pick<DevinSessionConfig, "cleanup"> | undefined;
+}) {
+  return Effect.gen(function* () {
+    yield* Effect.ignore(Scope.close(input.scope, Exit.void));
+    if (input.config) {
+      yield* Effect.tryPromise(input.config.cleanup).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("devin.acp.session_config_cleanup_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      );
+    }
+  });
+}
+
 export function makeDevinAdapter(
   devinSettings: DevinAcpRuntimeSettings = {},
   options?: DevinAdapterLiveOptions,
@@ -1332,7 +1350,6 @@ export function makeDevinAdapter(
         ctx.stopped = true;
         yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
         ctx.gatewaySessionLease?.release();
-        if (ctx.devinSessionConfig) yield* Effect.promise(ctx.devinSessionConfig.cleanup);
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.sessionConfigReady !== undefined) {
@@ -1347,7 +1364,10 @@ export function makeDevinAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+        yield* closeDevinSessionResources({
+          scope: ctx.scope,
+          config: ctx.devinSessionConfig,
+        });
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "session.exited",

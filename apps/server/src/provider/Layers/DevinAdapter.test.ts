@@ -3,7 +3,7 @@
 // model discovery, and plan-mode fail-closed behavior.
 // Layer: Provider adapter tests
 
-import { Effect, Semaphore } from "effect";
+import { Effect, Exit, Scope, Semaphore } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   applyDevinSessionConfiguration,
   buildDevinPromptMeta,
   buildDevinStaticModelDescriptors,
+  closeDevinSessionResources,
   makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
   parseDevinCliModelList,
@@ -761,5 +762,37 @@ describe("pruneDevinToolCallTurnIds", () => {
     pruneDevinToolCallTurnIds(toolCallTurnIds, asTurnId("turn-A"));
 
     expect(toolCallTurnIds.size).toBe(0);
+  });
+});
+
+describe("closeDevinSessionResources", () => {
+  it("closes the ACP scope before config cleanup and contains cleanup failure", async () => {
+    const calls: string[] = [];
+    const scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(
+      Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          calls.push("scope");
+        }),
+      ),
+    );
+
+    await expect(
+      Effect.runPromise(
+        closeDevinSessionResources({
+          scope,
+          config: {
+            cleanup: async () => {
+              calls.push("config");
+              throw new Error("cleanup rejected");
+            },
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["scope", "config"]);
+    expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
   });
 });
