@@ -52,9 +52,13 @@ layer("098_MigrateKiloToOpenCode", (it) => {
 
       yield* sql`
         INSERT INTO provider_session_runtime (
-          thread_id, provider_name, adapter_key, status, last_seen_at
+          thread_id, provider_name, adapter_key, status, runtime_payload_json, last_seen_at
         )
-        VALUES ('thread-kilo', 'kilo', 'kilo', 'stopped', '2026-01-01T00:00:00Z')
+        VALUES (
+          'thread-kilo', 'kilo', 'kilo', 'stopped',
+          '{"modelSelection":{"provider":"kilo","model":"kilo/kilo-auto/free","options":{"kilo":{"variant":"runtime-variant"}}},"providerOptions":{"kilo":{"binaryPath":"/runtime/kilo"},"opencode":{"binaryPath":"/runtime/opencode"}},"cwd":"/tmp/project"}',
+          '2026-01-01T00:00:00Z'
+        )
       `;
 
       yield* sql`
@@ -82,7 +86,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         )
         VALUES (
           'runtime-event-1', 'thread-kilo', 'session.started',
-          '{"eventId":"runtime-event-1","provider":"kilo","threadId":"thread-kilo","createdAt":"2026-01-01T00:00:00Z","type":"session.started","payload":{}}',
+          '{"eventId":"runtime-event-1","provider":"kilo","threadId":"thread-kilo","createdAt":"2026-01-01T00:00:00Z","type":"session.started","payload":{},"raw":{"source":"kilo.sdk.event","payload":{}}}',
           '2026-01-01T00:00:00Z'
         )
       `;
@@ -114,9 +118,39 @@ layer("098_MigrateKiloToOpenCode", (it) => {
           (
             'event-4', 'thread', 'thread-codex', 1, 'thread.created',
             '2026-01-01T00:00:00Z', 'client',
-            '{"threadId":"thread-codex","modelSelection":{"provider":"codex","model":"gpt-5.5"}}',
+            '{"threadId":"thread-codex","modelSelection":{"provider":"codex","model":"gpt-5.5"},"providerOptions":{"kilo":{"binaryPath":"/unused/kilo"},"opencode":{"binaryPath":"/keep/opencode"}}}',
+            '{}'
+          ),
+          (
+            'event-5', 'thread', 'thread-kilo', 3, 'thread.session-set',
+            '2026-01-01T00:00:01Z', 'server',
+            '{"threadId":"thread-kilo","session":{"providerName":"kilo"}}',
+            '{}'
+          ),
+          (
+            'event-6', 'thread', 'thread-kilo', 4, 'thread.activity-appended',
+            '2026-01-01T00:00:02Z', 'provider',
+            '{"threadId":"thread-kilo","activity":{"payload":{"provider":"kilo"}}}',
             '{}'
           )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, tone, kind, summary, payload_json, created_at
+        ) VALUES (
+          'activity-1', 'thread-kilo', 'info', 'usage', 'Kilo usage',
+          '{"provider":"kilo"}', '2026-01-01T00:00:02Z'
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
+        VALUES ('deleted-kilo', 'kilo', 'kilo/kilo-auto/free', NULL, 1)
+      `;
+      yield* sql`
+        INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, tokens)
+        VALUES ('deleted-kilo', '2026-01-01T00:00:00Z', 'kilo', 10)
       `;
 
       yield* runMigrations();
@@ -162,12 +196,23 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       const [runtimeBinding] = yield* sql<{
         readonly provider: string;
         readonly adapterKey: string;
+        readonly runtimePayload: string;
       }>`
-        SELECT provider_name AS "provider", adapter_key AS "adapterKey"
+        SELECT provider_name AS "provider", adapter_key AS "adapterKey",
+          runtime_payload_json AS "runtimePayload"
         FROM provider_session_runtime WHERE thread_id = 'thread-kilo'
       `;
       assert.strictEqual(runtimeBinding?.provider, "opencode");
       assert.strictEqual(runtimeBinding?.adapterKey, "opencode");
+      assert.deepStrictEqual(JSON.parse(runtimeBinding?.runtimePayload ?? "null"), {
+        modelSelection: {
+          provider: "opencode",
+          model: "kilo/kilo-auto/free",
+          options: { variant: "runtime-variant" },
+        },
+        providerOptions: { opencode: { binaryPath: "/runtime/kilo" } },
+        cwd: "/tmp/project",
+      });
 
       const [automation] = yield* sql<{
         readonly modelSelection: string;
@@ -190,11 +235,13 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         },
       });
 
-      const [runtimeEvent] = yield* sql<{ readonly provider: string }>`
-        SELECT json_extract(event_json, '$.provider') AS "provider"
+      const [runtimeEvent] = yield* sql<{ readonly provider: string; readonly rawSource: string }>`
+        SELECT json_extract(event_json, '$.provider') AS "provider",
+          json_extract(event_json, '$.raw.source') AS "rawSource"
         FROM provider_runtime_events WHERE event_id = 'runtime-event-1'
       `;
       assert.strictEqual(runtimeEvent?.provider, "opencode");
+      assert.strictEqual(runtimeEvent?.rawSource, "opencode.sdk.event");
 
       const eventProviders = yield* sql<{
         readonly eventId: string;
@@ -221,6 +268,25 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.strictEqual(payloads.get("event-3")?.provider, "opencode");
       assert.strictEqual(payloads.get("event-3")?.providerName, "opencode");
       assert.strictEqual(payloads.get("event-4")?.modelSelection.provider, "codex");
+      assert.deepStrictEqual(payloads.get("event-4")?.providerOptions, {
+        opencode: { binaryPath: "/keep/opencode" },
+      });
+      assert.strictEqual(payloads.get("event-5")?.session.providerName, "opencode");
+      assert.strictEqual(payloads.get("event-6")?.activity.payload.provider, "opencode");
+
+      const [activity] = yield* sql<{ readonly provider: string }>`
+        SELECT json_extract(payload_json, '$.provider') AS "provider"
+        FROM projection_thread_activities WHERE activity_id = 'activity-1'
+      `;
+      assert.strictEqual(activity?.provider, "opencode");
+      const [deletedTurn] = yield* sql<{ readonly provider: string }>`
+        SELECT provider FROM profile_stats_deleted_turns WHERE thread_id = 'deleted-kilo'
+      `;
+      const [deletedTokens] = yield* sql<{ readonly provider: string }>`
+        SELECT provider FROM profile_stats_deleted_tokens WHERE thread_id = 'deleted-kilo'
+      `;
+      assert.strictEqual(deletedTurn?.provider, "opencode");
+      assert.strictEqual(deletedTokens?.provider, "opencode");
     }),
   );
 

@@ -10,7 +10,6 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
-  ProviderKind,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -228,10 +227,10 @@ function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch 
   };
 }
 
-// A removed provider's git text-generation selection has no valid model on any
-// current provider. Drop the field so the decoding default applies instead of
-// the whole settings file being quarantined as undecodable.
-function dropRemovedProviderTextGenerationSelection(settings: unknown): unknown {
+// Kilo used the OpenCode-compatible model/options shape. Migrate that one known
+// legacy provider explicitly; genuinely unknown providers must still fail
+// decoding instead of being silently erased during a downgrade.
+function migrateRemovedProviderTextGenerationSelection(settings: unknown): unknown {
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
     return settings;
   }
@@ -240,12 +239,23 @@ function dropRemovedProviderTextGenerationSelection(settings: unknown): unknown 
   if (selection === null || typeof selection !== "object" || Array.isArray(selection)) {
     return settings;
   }
-  const provider = (selection as Record<string, unknown>).provider;
-  if (typeof provider !== "string" || Schema.is(ProviderKind)(provider)) {
+  const selectionRecord = selection as Record<string, unknown>;
+  if (selectionRecord.provider !== "kilo") {
     return settings;
   }
-  const { textGenerationModelSelection: _removed, ...rest } = record;
-  return rest;
+  const options = selectionRecord.options;
+  const migratedOptions =
+    options !== null && typeof options === "object" && !Array.isArray(options) && "kilo" in options
+      ? (options as Record<string, unknown>).kilo
+      : options;
+  return {
+    ...record,
+    textGenerationModelSelection: {
+      ...selectionRecord,
+      provider: "opencode",
+      ...(migratedOptions === undefined ? {} : { options: migratedOptions }),
+    },
+  };
 }
 
 function decodeSettingsFromJson(settingsPath: string, raw: string) {
@@ -256,7 +266,7 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
         ? (parsed as { revision?: unknown; migrationVersion?: unknown; settings: unknown })
         : null;
     const decoded = Schema.decodeUnknownExit(ServerSettings)(
-      dropRemovedProviderTextGenerationSelection(envelope?.settings ?? parsed),
+      migrateRemovedProviderTextGenerationSelection(envelope?.settings ?? parsed),
     );
     if (decoded._tag === "Failure") {
       return { _tag: "Failure" as const, error: Cause.pretty(decoded.cause) };

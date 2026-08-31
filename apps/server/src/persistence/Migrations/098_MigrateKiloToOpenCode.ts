@@ -62,6 +62,59 @@ export default Effect.gen(function* () {
   `;
 
   yield* sql`
+    UPDATE provider_session_runtime
+    SET runtime_payload_json = json_remove(
+      json_set(
+        runtime_payload_json,
+        '$.providerOptions.opencode',
+        CASE
+          WHEN json_extract(runtime_payload_json, '$.modelSelection.provider') = 'kilo'
+            OR json_type(runtime_payload_json, '$.providerOptions.opencode') IS NULL
+          THEN json_extract(runtime_payload_json, '$.providerOptions.kilo')
+          ELSE json_extract(runtime_payload_json, '$.providerOptions.opencode')
+        END
+      ),
+      '$.providerOptions.kilo'
+    )
+    WHERE json_type(runtime_payload_json, '$.providerOptions.kilo') IS NOT NULL
+  `;
+
+  yield* sql`
+    UPDATE provider_session_runtime
+    SET runtime_payload_json = CASE
+      WHEN json_type(runtime_payload_json, '$.modelSelection.options.kilo') IS NOT NULL THEN
+        json_set(
+          runtime_payload_json,
+          '$.modelSelection.provider', 'opencode',
+          '$.modelSelection.options',
+          json_extract(runtime_payload_json, '$.modelSelection.options.kilo')
+        )
+      ELSE json_set(runtime_payload_json, '$.modelSelection.provider', 'opencode')
+    END
+    WHERE json_extract(runtime_payload_json, '$.modelSelection.provider') = 'kilo'
+  `;
+
+  // Provider options are a bundle for every provider. Preserve an existing
+  // OpenCode entry unless this automation itself selected Kilo.
+  yield* sql`
+    UPDATE automation_definitions
+    SET provider_options_json = json_remove(
+      json_set(
+        provider_options_json,
+        '$.opencode',
+        CASE
+          WHEN json_extract(model_selection_json, '$.provider') = 'kilo'
+            OR json_type(provider_options_json, '$.opencode') IS NULL
+          THEN json_extract(provider_options_json, '$.kilo')
+          ELSE json_extract(provider_options_json, '$.opencode')
+        END
+      ),
+      '$.kilo'
+    )
+    WHERE json_type(provider_options_json, '$.kilo') IS NOT NULL
+  `;
+
+  yield* sql`
     UPDATE automation_definitions
     SET model_selection_json = CASE
       WHEN json_type(model_selection_json, '$.options.kilo') IS NOT NULL THEN
@@ -76,21 +129,15 @@ export default Effect.gen(function* () {
   `;
 
   yield* sql`
-    UPDATE automation_definitions
-    SET provider_options_json = json_remove(
-      json_set(
-        provider_options_json,
-        '$.opencode', json_extract(provider_options_json, '$.kilo')
-      ),
-      '$.kilo'
-    )
-    WHERE json_type(provider_options_json, '$.kilo') IS NOT NULL
+    UPDATE provider_runtime_events
+    SET event_json = json_set(event_json, '$.provider', 'opencode')
+    WHERE json_extract(event_json, '$.provider') = 'kilo'
   `;
 
   yield* sql`
     UPDATE provider_runtime_events
-    SET event_json = json_set(event_json, '$.provider', 'opencode')
-    WHERE json_extract(event_json, '$.provider') = 'kilo'
+    SET event_json = json_set(event_json, '$.raw.source', 'opencode.sdk.event')
+    WHERE json_extract(event_json, '$.raw.source') = 'kilo.sdk.event'
   `;
 
   yield* sql`
@@ -103,6 +150,40 @@ export default Effect.gen(function* () {
     UPDATE orchestration_events
     SET payload_json = json_set(payload_json, '$.providerName', 'opencode')
     WHERE json_extract(payload_json, '$.providerName') = 'kilo'
+  `;
+
+  yield* sql`
+    UPDATE orchestration_events
+    SET payload_json = json_set(payload_json, '$.session.providerName', 'opencode')
+    WHERE json_extract(payload_json, '$.session.providerName') = 'kilo'
+  `;
+
+  yield* sql`
+    UPDATE orchestration_events
+    SET payload_json = json_set(payload_json, '$.activity.payload.provider', 'opencode')
+    WHERE json_extract(payload_json, '$.activity.payload.provider') = 'kilo'
+  `;
+
+  // Move Kilo start options before rewriting the selection so we can preserve
+  // the options that belong to a Kilo-selected command without overwriting an
+  // unrelated, already-valid OpenCode bundle.
+  yield* sql`
+    UPDATE orchestration_events
+    SET payload_json = json_remove(
+      json_set(
+        payload_json,
+        '$.providerOptions.opencode',
+        CASE
+          WHEN json_extract(payload_json, '$.modelSelection.provider') = 'kilo'
+            OR json_extract(payload_json, '$.defaultModelSelection.provider') = 'kilo'
+            OR json_type(payload_json, '$.providerOptions.opencode') IS NULL
+          THEN json_extract(payload_json, '$.providerOptions.kilo')
+          ELSE json_extract(payload_json, '$.providerOptions.opencode')
+        END
+      ),
+      '$.providerOptions.kilo'
+    )
+    WHERE json_type(payload_json, '$.providerOptions.kilo') IS NOT NULL
   `;
 
   yield* sql`
@@ -136,19 +217,25 @@ export default Effect.gen(function* () {
 
   yield* sql`
     UPDATE orchestration_events
-    SET payload_json = json_remove(
-      json_set(
-        payload_json,
-        '$.providerOptions.opencode', json_extract(payload_json, '$.providerOptions.kilo')
-      ),
-      '$.providerOptions.kilo'
-    )
-    WHERE json_type(payload_json, '$.providerOptions.kilo') IS NOT NULL
+    SET payload_json = json_set(payload_json, '$.handoff.sourceProvider', 'opencode')
+    WHERE json_extract(payload_json, '$.handoff.sourceProvider') = 'kilo'
   `;
 
   yield* sql`
-    UPDATE orchestration_events
-    SET payload_json = json_set(payload_json, '$.handoff.sourceProvider', 'opencode')
-    WHERE json_extract(payload_json, '$.handoff.sourceProvider') = 'kilo'
+    UPDATE projection_thread_activities
+    SET payload_json = json_set(payload_json, '$.provider', 'opencode')
+    WHERE json_extract(payload_json, '$.provider') = 'kilo'
+  `;
+
+  yield* sql`
+    UPDATE profile_stats_deleted_turns
+    SET provider = 'opencode'
+    WHERE provider = 'kilo'
+  `;
+
+  yield* sql`
+    UPDATE profile_stats_deleted_tokens
+    SET provider = 'opencode'
+    WHERE provider = 'kilo'
   `;
 });

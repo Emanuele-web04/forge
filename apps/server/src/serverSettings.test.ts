@@ -117,7 +117,7 @@ describe("ServerSettingsService", () => {
     );
   });
 
-  it("drops a removed provider's text-generation selection instead of quarantining settings", async () => {
+  it("migrates a removed Kilo text-generation selection to OpenCode", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {
         const service = yield* ServerSettingsService;
@@ -146,12 +146,12 @@ describe("ServerSettingsService", () => {
       }),
     );
 
-    // The rest of the settings survive; only the undecodable selection resets.
+    // The rest of the settings and the OpenCode-compatible model survive.
     expect(result.settingsFileExists).toBe(true);
     expect(result.settings.enableProviderUpdateChecks).toBe(false);
     expect(result.settings.textGenerationModelSelection).toMatchObject({
-      provider: "codex",
-      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      provider: "opencode",
+      model: "kilo/kilo-auto/free",
     });
   });
 
