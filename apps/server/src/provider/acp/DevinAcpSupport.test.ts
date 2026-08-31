@@ -127,6 +127,15 @@ describe("makeDevinAcpRuntime", () => {
 
       expect(runtime).toBe(fakeRuntime);
       expect(capturedOptions?.authPolicy).toBe("on-demand");
+      expect(capturedOptions?.validateInitializeResult).toBeTypeOf("function");
+
+      await expect(
+        Effect.runPromise(
+          capturedOptions!.validateInitializeResult!(
+            initializeWithAuthMethods(["cached_token", "api_key"]),
+          ),
+        ),
+      ).resolves.toBeUndefined();
     } finally {
       layerSpy.mockRestore();
       vi.unstubAllEnvs();
@@ -220,6 +229,46 @@ describe("resolveDevinAcpAuthMethodId", () => {
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
     expect(error.message).toContain("will not open a browser during a message send");
     expect(error.message).toContain("devin-browser");
+  });
+
+  it("fails the production validator early with interactive-only login guidance", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+    vi.stubEnv("HOME", "/tmp/synara-devin-acp-runtime-interactive-test");
+    vi.stubEnv("XDG_DATA_HOME", "/tmp/synara-devin-acp-runtime-interactive-test");
+    vi.stubEnv("APPDATA", "/tmp/synara-devin-acp-runtime-interactive-test");
+    vi.stubEnv("WINDSURF_API_KEY", "");
+    vi.stubEnv("DEVIN_API_KEY", "");
+    vi.stubEnv("windsurf_api_key", "");
+
+    try {
+      await Effect.runPromise(
+        makeDevinAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          devinSettings: undefined,
+          runtimeMode: "approval-required",
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      const error = await Effect.runPromise(
+        capturedOptions!.validateInitializeResult!(
+          initializeWithAuthMethods(["devin-browser"]),
+        ).pipe(Effect.flip),
+      );
+
+      expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+      expect(error.message).toContain("will not open a browser during a message send");
+      expect(error.message).toContain("Set WINDSURF_API_KEY or log in with Devin CLI");
+    } finally {
+      layerSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("reports unknown or empty auth advertisements as a compatibility mismatch", async () => {

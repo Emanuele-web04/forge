@@ -449,6 +449,121 @@ describe("isAcpAuthRequiredError", () => {
   });
 });
 
+describe("AcpSessionRuntime initialize validation", () => {
+  const makeRuntimeLayer = (
+    agentApp: OfficialAcp.AgentApp,
+    validateInitializeResult: NonNullable<
+      Parameters<typeof AcpSessionRuntime.layer>[0]["validateInitializeResult"]
+    >,
+  ) => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentInput = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        return Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => controller.enqueue(chunk));
+      },
+    });
+    const agentOutput = new WritableStream<Uint8Array>({
+      write(chunk) {
+        return Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined);
+      },
+    });
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+
+    return AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "synara-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      validateInitializeResult,
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+  };
+
+  it("validates after initialize and before session/new", async () => {
+    const calls: string[] = [];
+    const agentApp = OfficialAcp.agent({ name: "initialize-validation-agent" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => {
+        calls.push("initialize");
+        return { protocolVersion: 1, agentCapabilities: {}, authMethods: [] };
+      })
+      .onRequest(OfficialAcp.methods.agent.session.new, () => {
+        calls.push("session/new");
+        return { sessionId: "validated-session" };
+      });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        return yield* runtime.start();
+      }).pipe(
+        Effect.provide(
+          makeRuntimeLayer(agentApp, () =>
+            Effect.sync(() => {
+              calls.push("validate");
+            }),
+          ),
+        ),
+        Effect.scoped,
+      ),
+    );
+
+    expect(result.sessionId).toBe("validated-session");
+    expect(calls).toEqual(["initialize", "validate", "session/new"]);
+  });
+
+  it("does not create a session when initialize validation fails", async () => {
+    let sessionNewCalls = 0;
+    const validationError = new AcpErrors.AcpRequestError({
+      code: -32602,
+      errorMessage: "initialize rejected",
+    });
+    const agentApp = OfficialAcp.agent({ name: "initialize-validation-agent" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+      }))
+      .onRequest(OfficialAcp.methods.agent.session.new, () => {
+        sessionNewCalls += 1;
+        return { sessionId: "must-not-exist" };
+      });
+
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        return yield* runtime.start();
+      }).pipe(
+        Effect.provide(makeRuntimeLayer(agentApp, () => Effect.fail(validationError))),
+        Effect.scoped,
+        Effect.flip,
+      ),
+    );
+
+    expect(error).toBe(validationError);
+    expect(sessionNewCalls).toBe(0);
+  });
+});
+
 describe("AcpSessionRuntime startup timeouts", () => {
   // Per-step budget; the aggregate handshake budget stays far above it so the
   // step timeout is what fires first.

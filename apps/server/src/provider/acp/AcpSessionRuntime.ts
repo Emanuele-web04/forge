@@ -276,6 +276,9 @@ export interface AcpSessionRuntimeOptions {
   readonly resolveAuthMethodId?: (
     initializeResult: Acp.InitializeResponse,
   ) => Effect.Effect<string, AcpErrors.AcpError>;
+  readonly validateInitializeResult?: (
+    initializeResult: Acp.InitializeResponse,
+  ) => Effect.Effect<void, AcpErrors.AcpError>;
   /**
    * Provider-specific metadata attached as `_meta` to session/new, session/load,
    * and session/resume requests. Grok registers client hooks through it.
@@ -1668,6 +1671,10 @@ const makeAcpSessionRuntime = (
             acp.agent.initialize(initializePayload),
           ),
         );
+
+        if (options.validateInitializeResult !== undefined) {
+          yield* options.validateInitializeResult(initializeResult);
+        }
 
         // Tracks whether authenticate has already been run so the on-demand
         // path only retries session setup once.
