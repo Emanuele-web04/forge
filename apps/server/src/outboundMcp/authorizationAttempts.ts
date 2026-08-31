@@ -18,6 +18,8 @@ export type AuthorizationAttemptRegistry = {
 
 const randomOpaqueValue = (): string => randomBytes(32).toString("hex");
 
+export const MAX_AUTHORIZATION_ATTEMPT_TTL_MS = 10 * 60 * 1000;
+
 function statesMatch(expected: string, received: string): boolean {
   const expectedBytes = Buffer.from(expected, "utf8");
   const receivedBytes = Buffer.from(received, "utf8");
@@ -32,6 +34,11 @@ export function makeAuthorizationAttemptRegistry(options: {
 }): AuthorizationAttemptRegistry {
   if (!Number.isFinite(options.ttlMs) || options.ttlMs <= 0) {
     throw new Error("Authorization attempt TTL must be a positive finite number.");
+  }
+  if (options.ttlMs > MAX_AUTHORIZATION_ATTEMPT_TTL_MS) {
+    throw new Error(
+      `Authorization attempt TTL must not exceed ${MAX_AUTHORIZATION_ATTEMPT_TTL_MS}ms.`,
+    );
   }
 
   const attempts = new Map<string, AuthorizationAttempt>();

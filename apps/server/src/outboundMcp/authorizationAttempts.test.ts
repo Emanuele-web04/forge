@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { makeAuthorizationAttemptRegistry } from "./authorizationAttempts.ts";
 
 describe("AuthorizationAttemptRegistry", () => {
+  it("rejects an authorization attempt TTL longer than ten minutes", () => {
+    expect(() => makeAuthorizationAttemptRegistry({ ttlMs: 600_001 })).toThrow(
+      "Authorization attempt TTL must not exceed 600000ms.",
+    );
+  });
+
   it("consumes matching state exactly once with its saved PKCE verifier", () => {
     const attempts = makeAuthorizationAttemptRegistry({ ttlMs: 10 * 60 * 1000 });
     const created = attempts.create("paraty", new URL("http://127.0.0.1:58090/oauth/callback"));
