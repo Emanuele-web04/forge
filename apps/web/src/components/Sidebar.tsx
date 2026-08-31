@@ -5030,6 +5030,9 @@ export default function Sidebar() {
                     isSelected,
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
+                  // Split rows carry a shared surface that bleeds into the inter-row gap to read as
+                  // one contained group; the row's default overflow-hidden would clip that bridge.
+                  splitGroup ? "overflow-visible" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({

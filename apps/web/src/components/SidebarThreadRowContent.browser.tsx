@@ -107,9 +107,34 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(rail).toHaveAttribute("data-split-view-id", "split-rail");
     await expect.element(rail).toHaveAttribute("data-split-position", "middle");
     await expect.element(rail).toHaveAttribute("data-split-member", "2/3");
+    await expect.element(rail).toHaveAttribute("aria-label", "Split view · pane 2 of 3");
   });
 
-  it("omits the split-group rail when the row is not part of a split", async () => {
+  it("draws the shared split-group surface capped to the row position", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({ id: ThreadId.makeUnsafe("thread-split-surface") })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        splitGroup={{
+          splitViewId: "split-surface",
+          memberIndex: 1,
+          memberCount: 2,
+          isLeader: true,
+          position: "first",
+        }}
+      />,
+    );
+
+    const surface = screen.getByTestId("sidebar-split-group-surface");
+    await expect.element(surface).toHaveAttribute("data-split-position", "first");
+    await expect.element(surface).toHaveClass("rounded-t-md");
+  });
+
+  it("omits the split-group rail and surface when the row is not part of a split", async () => {
     const screen = await render(
       <SidebarThreadRowContent
         thread={makeThread({ id: ThreadId.makeUnsafe("thread-no-split") })}
@@ -124,5 +149,6 @@ describe("SidebarThreadRowContent", () => {
 
     await expect.element(screen.getByText("Shared thread row")).toBeVisible();
     expect(document.querySelectorAll("[data-testid=sidebar-split-group-rail]")).toHaveLength(0);
+    expect(document.querySelectorAll("[data-testid=sidebar-split-group-surface]")).toHaveLength(0);
   });
 });

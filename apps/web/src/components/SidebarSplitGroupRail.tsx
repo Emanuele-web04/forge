@@ -1,44 +1,90 @@
 // FILE: SidebarSplitGroupRail.tsx
-// Purpose: Draws the leading rail that ties sidebar rows belonging to the same split view together.
+// Purpose: Presents sidebar rows that share a split view as one contained group — a subtle shared
+//          surface tying the rows together plus a compact side-by-side panes indicator per row.
 // Layer: Sidebar UI primitive
-// Exports: SidebarSplitGroupRail
+// Exports: SidebarSplitGroupSurface (the shared card behind the rows), SidebarSplitGroupRail (the
+//          leading split indicator)
 
 import { pluralize } from "@synara/shared/text";
 
-import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
+import type { SidebarSplitGroupInfo, SidebarSplitGroupPosition } from "./sidebarSplitGroups";
 import { cn } from "../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-const PANE_CELL_COUNT = 4;
+// Visual cap on how many panes the indicator draws. Real split trees are 2–4 panes; anything larger
+// is approximated so the glyph stays legible and the leading slot keeps a stable width.
+const MAX_PANE_CELLS = 4;
 
-// Approximates the split layout as a 2x2 grid with one cell filled per member. The real pane tree
-// can be a 1x2, 1x3, or 2x2 arrangement, so this reads as "how many chats share this view" rather
-// than as an exact map of the geometry.
-function SplitLayoutGlyph({ memberCount, active }: { memberCount: number; active: boolean }) {
+// Draws the split as a row of side-by-side panes (never a 2x2 grid, which reads as a folder/app
+// grid). The cell for this row's own pane is filled; the rest sit faint, so a member both signals
+// "this is a split view" and shows which pane it is.
+function SplitPanesGlyph({
+  memberIndex,
+  memberCount,
+  active,
+}: {
+  memberIndex: number;
+  memberCount: number;
+  active: boolean;
+}) {
+  const cellCount = Math.min(Math.max(memberCount, 2), MAX_PANE_CELLS);
+  const activeCell = Math.min(Math.max(memberIndex, 1), cellCount);
+
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "grid size-[9px] grid-cols-2 gap-px overflow-hidden rounded-[2px] p-px ring-1",
+        "flex h-[9px] items-stretch gap-px rounded-[2px] p-px ring-1",
         active ? "ring-primary/55" : "ring-border/60",
       )}
     >
-      {Array.from({ length: PANE_CELL_COUNT }, (_, cellIndex) => (
+      {Array.from({ length: cellCount }, (_, cellIndex) => (
         <span
           key={cellIndex}
           className={cn(
-            "rounded-[0.5px]",
-            cellIndex < memberCount
+            "w-[2.5px] rounded-[1px]",
+            cellIndex + 1 === activeCell
               ? active
-                ? "bg-primary/75"
-                : "bg-muted-foreground/55"
+                ? "bg-primary/80"
+                : "bg-muted-foreground/65"
               : active
-                ? "bg-primary/18"
-                : "bg-muted-foreground/16",
+                ? "bg-primary/20"
+                : "bg-muted-foreground/18",
           )}
         />
       ))}
     </span>
+  );
+}
+
+// The shared card behind every row of a split group. Rendered as a decorative layer beneath the row
+// content (negative z sits above the row's own hover/active fill but below its text and icons). Side
+// borders run the full height of every member; the top/bottom caps and rounded corners land only on
+// the group's ends, and non-last rows bleed past their box (the row button opts into overflow-visible
+// for split rows) to bridge the inter-row gap so the whole span reads as one contained surface rather
+// than stacked pills. The bleed clears the widest list gap (gap-1, 4px); overshoot on tighter lists
+// just tucks under the next member's own surface, so it is safe.
+export function SidebarSplitGroupSurface({
+  position,
+  active,
+}: {
+  position: SidebarSplitGroupPosition;
+  active: boolean;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="sidebar-split-group-surface"
+      data-split-position={position}
+      className={cn(
+        "pointer-events-none absolute left-0 right-0 top-0 -z-10 border-x",
+        active
+          ? "border-primary/30 bg-primary/[0.06]"
+          : "border-border/55 bg-muted-foreground/[0.04]",
+        position === "first" ? "rounded-t-md border-t" : null,
+        position === "last" ? "bottom-0 rounded-b-md border-b" : "-bottom-1",
+      )}
+    />
   );
 }
 
@@ -49,53 +95,33 @@ export function SidebarSplitGroupRail({
   splitGroup: SidebarSplitGroupInfo;
   active: boolean;
 }) {
-  const lineClass = cn("absolute left-[5px] w-px", active ? "bg-primary/45" : "bg-border/45");
-  const verticalSpanClass =
-    splitGroup.position === "first"
-      ? "top-1/2 bottom-0 rounded-t-full"
-      : splitGroup.position === "last"
-        ? "top-0 bottom-1/2 rounded-b-full"
-        : "top-0 bottom-0";
+  const paneLabel = `Split view · pane ${splitGroup.memberIndex} of ${splitGroup.memberCount}`;
 
-  const rail = (
+  const glyph = (
     <span
+      role="img"
+      aria-label={paneLabel}
       data-testid="sidebar-split-group-rail"
       data-split-view-id={splitGroup.splitViewId}
       data-split-position={splitGroup.position}
       data-split-member={`${splitGroup.memberIndex}/${splitGroup.memberCount}`}
-      className="relative inline-flex h-3.5 w-3 shrink-0 items-center"
+      className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
     >
-      <span aria-hidden="true" className={cn(lineClass, verticalSpanClass)} />
-      <span
-        aria-hidden="true"
-        className={cn(
-          "absolute left-[5px] top-1/2 h-px w-1.5 -translate-y-1/2",
-          active ? "bg-primary/45" : "bg-border/45",
-        )}
+      <SplitPanesGlyph
+        memberIndex={splitGroup.memberIndex}
+        memberCount={splitGroup.memberCount}
+        active={active}
       />
-      {splitGroup.isLeader ? (
-        <span className="absolute left-[1px] top-1/2 -translate-y-1/2">
-          <SplitLayoutGlyph memberCount={splitGroup.memberCount} active={active} />
-        </span>
-      ) : (
-        <span
-          aria-hidden="true"
-          className={cn(
-            "absolute left-[5px] top-1/2 size-[4px] -translate-x-1/2 -translate-y-1/2 rounded-full",
-            active ? "bg-primary/60" : "bg-border/70",
-          )}
-        />
-      )}
     </span>
   );
 
   if (!splitGroup.isLeader) {
-    return rail;
+    return glyph;
   }
 
   return (
     <Tooltip>
-      <TooltipTrigger render={rail} />
+      <TooltipTrigger render={glyph} />
       <TooltipPopup side="top">
         {`Split view · ${splitGroup.memberCount} ${pluralize(splitGroup.memberCount, "chat")}`}
       </TooltipPopup>

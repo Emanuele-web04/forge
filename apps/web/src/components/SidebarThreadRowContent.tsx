@@ -14,7 +14,7 @@ import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
-import { SidebarSplitGroupRail } from "./SidebarSplitGroupRail";
+import { SidebarSplitGroupRail, SidebarSplitGroupSurface } from "./SidebarSplitGroupRail";
 import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
@@ -210,7 +210,13 @@ export function SidebarThreadRowContent({
   return (
     <>
       {splitGroup ? (
-        <SidebarSplitGroupRail splitGroup={splitGroup} active={splitGroupActive === true} />
+        <>
+          <SidebarSplitGroupSurface
+            position={splitGroup.position}
+            active={splitGroupActive === true}
+          />
+          <SidebarSplitGroupRail splitGroup={splitGroup} active={splitGroupActive === true} />
+        </>
       ) : null}
       {variant === "standard" && isSubagentThread ? (
         <span
