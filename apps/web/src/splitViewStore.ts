@@ -91,6 +91,15 @@ interface RemovePaneFromSplitViewInput {
   paneId: PaneId;
 }
 
+interface DetachThreadFromSplitViewInput {
+  splitViewId: SplitViewId;
+  threadId: ThreadId;
+}
+
+export type DetachThreadFromSplitViewResult =
+  | { kind: "split"; splitViewId: SplitViewId; focusedThreadId: ThreadId }
+  | { kind: "single"; threadId: ThreadId };
+
 interface SplitViewStore {
   hasHydrated: boolean;
   splitViewsById: Record<SplitViewId, SplitView | undefined>;
@@ -101,6 +110,9 @@ interface SplitViewStore {
   replacePaneThread: (splitViewId: SplitViewId, paneId: PaneId, threadId: ThreadId | null) => void;
   dropThreadOnPane: (input: DropThreadOnPaneInput) => boolean;
   removePaneFromSplitView: (input: RemovePaneFromSplitViewInput) => boolean;
+  detachThreadFromSplitView: (
+    input: DetachThreadFromSplitViewInput,
+  ) => DetachThreadFromSplitViewResult | null;
   setFocusedPane: (splitViewId: SplitViewId, paneId: PaneId) => void;
   setRatioForNode: (splitViewId: SplitViewId, splitNodeId: PaneId, ratio: number) => void;
   setPanePanelState: (
@@ -617,6 +629,25 @@ export const useSplitViewStore = create<SplitViewStore>()(
           };
         });
         return true;
+      },
+      detachThreadFromSplitView: ({ splitViewId, threadId }) => {
+        const splitView = get().splitViewsById[splitViewId];
+        if (!splitView) return null;
+        const paneId = resolveSplitViewPaneIdForThread(splitView, threadId);
+        if (!paneId) return null;
+        if (!get().removePaneFromSplitView({ splitViewId, paneId })) return null;
+
+        const nextSplitView = get().splitViewsById[splitViewId];
+        if (!nextSplitView) return null;
+        const nextThreadIds = resolveSplitViewThreadIds(nextSplitView);
+        if (nextThreadIds.length <= 1) {
+          const remainingThreadId = nextThreadIds[0] ?? null;
+          get().removeSplitView(splitViewId);
+          return remainingThreadId ? { kind: "single", threadId: remainingThreadId } : null;
+        }
+
+        const focusedThreadId = resolveSplitViewFocusedThreadId(nextSplitView);
+        return focusedThreadId ? { kind: "split", splitViewId, focusedThreadId } : null;
       },
       setFocusedPane: (splitViewId, paneId) =>
         set((state) =>

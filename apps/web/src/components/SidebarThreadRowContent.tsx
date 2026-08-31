@@ -14,7 +14,7 @@ import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
-import { SidebarSplitGroupRail, SidebarSplitGroupSurface } from "./SidebarSplitGroupRail";
+import { SidebarSplitGroupSurface } from "./SidebarSplitGroupSurface";
 import { BotIcon, TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
@@ -198,12 +198,14 @@ function SubagentConnector({ indentPx }: { indentPx: number }) {
   return (
     <span
       aria-hidden="true"
+      data-testid="sidebar-subagent-connector"
+      data-indent={indentPx}
       className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
       style={{ marginLeft: `${indentPx}px` }}
     >
       <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
       <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-      <span className="sidebar-icon-chip absolute left-1.5 top-1/2 inline-flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground/75">
+      <span className="sidebar-icon-chip absolute left-1.5 top-1/2 inline-flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border/55 bg-background/90 text-muted-foreground/75 shadow-sm">
         <BotIcon className="size-2" />
       </span>
     </span>
@@ -242,13 +244,10 @@ export function SidebarThreadRowContent({
   return (
     <>
       {splitGroup ? (
-        <>
-          <SidebarSplitGroupSurface
-            position={splitGroup.position}
-            active={splitGroupActive === true}
-          />
-          <SidebarSplitGroupRail splitGroup={splitGroup} active={splitGroupActive === true} />
-        </>
+        <SidebarSplitGroupSurface
+          position={splitGroup.position}
+          active={splitGroupActive === true}
+        />
       ) : null}
       {variant === "standard" && isSubagentThread ? (
         <SubagentConnector indentPx={subagentIndentPx} />

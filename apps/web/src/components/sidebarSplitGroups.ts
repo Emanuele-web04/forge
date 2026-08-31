@@ -19,9 +19,9 @@ export interface SidebarSplitGroupInfo {
   /** 1-based pane order among the members actually rendered in this list. */
   memberIndex: number;
   memberCount: number;
-  /** True on the first row of the first member; owns the group's layout glyph. */
+  /** True on the first row of the first member; useful for group-level affordances. */
   isLeader: boolean;
-  /** Where this row sits inside the group's row span, so the rail can cap its ends. */
+  /** Where this row sits inside the group's row span, so the card can cap its ends. */
   position: SidebarSplitGroupPosition;
 }
 
@@ -110,7 +110,7 @@ export function applySidebarSplitGroups<T extends GroupableRow>(input: {
   const groupedBlockIndexesByGroupId = new Map<SplitViewId, number[]>();
   for (const [groupId, groupBlockIndexes] of blockIndexesByGroupId) {
     // A single visible member is not a group: the siblings are archived, filtered out, or live in
-    // another project's list, and a rail spanning one row would only add noise.
+    // another project's list, and a card around one row would only add noise.
     if (groupBlockIndexes.length < 2) continue;
     groupedBlockIndexesByGroupId.set(
       groupId,
@@ -196,7 +196,7 @@ export function clampPreviewLimitToSplitGroupBoundary(input: {
 }
 
 // Keeps range-selection order (shift-click) aligned with the grouped order the user sees. Ids that
-// have no row — collapsed subagents, rows past the preview cut — keep their original relative order
+// have no row — filtered subagents or rows past the preview cut — keep their original relative order
 // after the visible ones.
 export function reorderThreadIdsByRowOrder(input: {
   threadIds: readonly ThreadId[];

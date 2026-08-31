@@ -371,6 +371,7 @@ import {
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { stripDiffSearchParams } from "../diffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
@@ -389,7 +390,11 @@ import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
-import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import {
+  resolveSplitViewFocusedThreadId,
+  selectSplitView,
+  useSplitViewStore,
+} from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import {
   hasThreadDragType,
@@ -671,8 +676,13 @@ type ThreadMetaChip = {
 export function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-    | "creationSource" | "sourceThreadId"
+    | "forkSourceThreadId"
+    | "sidechatSourceThreadId"
+    | "envMode"
+    | "worktreePath"
+    | "handoff"
+    | "creationSource"
+    | "sourceThreadId"
   >;
   includeHandoffBadge: boolean;
   /**
@@ -1443,6 +1453,59 @@ export default function Sidebar() {
   const splitGroupMembershipByThreadId = useMemo(
     () => buildSidebarSplitGroupIndex({ splitViewsById, splitViewIdBySourceThreadId }),
     [splitViewIdBySourceThreadId, splitViewsById],
+  );
+  const detachThreadFromSplit = useCallback(
+    async (splitGroup: SidebarSplitGroupInfo, threadId: ThreadId) => {
+      const result = useSplitViewStore.getState().detachThreadFromSplitView({
+        splitViewId: splitGroup.splitViewId,
+        threadId,
+      });
+      if (!result || routeSearch.splitViewId !== splitGroup.splitViewId) return;
+
+      if (result.kind === "split") {
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: result.focusedThreadId },
+          replace: true,
+          search: (previous) => ({
+            ...stripDiffSearchParams(previous),
+            splitViewId: result.splitViewId,
+          }),
+        });
+        return;
+      }
+
+      await navigate({
+        to: "/$threadId",
+        params: { threadId: result.threadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
+      });
+    },
+    [navigate, routeSearch.splitViewId],
+  );
+  const dissolveSplitView = useCallback(
+    async (splitGroup: SidebarSplitGroupInfo) => {
+      const splitView = useSplitViewStore.getState().splitViewsById[splitGroup.splitViewId];
+      if (!splitView) return;
+      const focusedThreadId = resolveSplitViewFocusedThreadId(splitView);
+      useSplitViewStore.getState().removeSplitView(splitGroup.splitViewId);
+      if (!focusedThreadId || routeSearch.splitViewId !== splitGroup.splitViewId) return;
+
+      await navigate({
+        to: "/$threadId",
+        params: { threadId: focusedThreadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
+      });
+    },
+    [navigate, routeSearch.splitViewId],
   );
 
   useEffect(() => {
@@ -3270,10 +3333,13 @@ export default function Sidebar() {
       position: { x: number; y: number },
       options?: {
         extraItems?: Array<{
-          id: "return-to-single-chat";
+          id: "return-to-single-chat" | "remove-from-split" | "dissolve-split";
           label: string;
+          separatorBefore?: boolean;
         }>;
-        onExtraAction?: (itemId: "return-to-single-chat") => Promise<void> | void;
+        onExtraAction?: (
+          itemId: "return-to-single-chat" | "remove-from-split" | "dissolve-split",
+        ) => Promise<void> | void;
       },
     ) => {
       const api = readNativeApi();
@@ -3507,8 +3573,12 @@ export default function Sidebar() {
         moveThreadsToFolder([threadId], clicked.slice("folder:".length));
         return;
       }
-      if (clicked === "return-to-single-chat") {
-        await options?.onExtraAction?.("return-to-single-chat");
+      if (
+        clicked === "return-to-single-chat" ||
+        clicked === "remove-from-split" ||
+        clicked === "dissolve-split"
+      ) {
+        await options?.onExtraAction?.(clicked);
         return;
       }
       if (clicked === "archive") {
@@ -4637,15 +4707,31 @@ export default function Sidebar() {
     threadId: ThreadId;
     toneClassName: string;
     isPinned: boolean;
+    splitGroup?: SidebarSplitGroupInfo | null;
     includePinToggle?: boolean;
     compact?: boolean;
   }) {
     const compact = input.compact === true;
     const includePinToggle = input.includePinToggle !== false;
+    const splitGroup = input.splitGroup ?? null;
 
     return (
       <SidebarRowHoverActions testId={`thread-hover-actions-${input.threadId}`}>
         <div className="pointer-events-auto inline-flex items-center gap-2">
+          {splitGroup ? (
+            <SidebarIconButton
+              icon={XIcon}
+              label="Remove from split view"
+              size="sm"
+              title="Remove from split view"
+              className={input.toneClassName}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void detachThreadFromSplit(splitGroup, input.threadId);
+              }}
+            />
+          ) : null}
           {includePinToggle ? (
             <ThreadPinToggleButton
               pinned={input.isPinned}
@@ -5143,10 +5229,32 @@ export default function Sidebar() {
                   if (selectedThreadIds.size > 0) {
                     clearSelection();
                   }
-                  void handleThreadContextMenu(thread.id, {
-                    x: event.clientX,
-                    y: event.clientY,
-                  });
+                  void handleThreadContextMenu(
+                    thread.id,
+                    {
+                      x: event.clientX,
+                      y: event.clientY,
+                    },
+                    splitGroup && !isSubagentThread
+                      ? {
+                          extraItems: [
+                            {
+                              id: "remove-from-split",
+                              label: "Remove from split view",
+                              separatorBefore: true,
+                            },
+                            { id: "dissolve-split", label: "End split view" },
+                          ],
+                          onExtraAction: async (itemId) => {
+                            if (itemId === "remove-from-split") {
+                              await detachThreadFromSplit(splitGroup, thread.id);
+                            } else if (itemId === "dissolve-split") {
+                              await dissolveSplitView(splitGroup);
+                            }
+                          },
+                        }
+                      : undefined,
+                  );
                 }}
               />
             }
@@ -5200,6 +5308,7 @@ export default function Sidebar() {
                   toneClassName: secondaryMetaClass,
                   isPinned,
                   compact: isSubagentThread,
+                  splitGroup: isSubagentThread ? null : splitGroup,
                 }),
               })}
             </div>
