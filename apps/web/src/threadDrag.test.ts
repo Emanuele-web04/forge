@@ -5,6 +5,7 @@ import {
   hasThreadDragType,
   parseThreadDragPayload,
   resolveSidebarFolderDropTarget,
+  resolveThreadFolderMenuTarget,
   THREAD_DRAG_MIME,
 } from "./threadDrag";
 
@@ -34,12 +35,17 @@ describe("threadDrag", () => {
     ).toBeNull();
   });
 
-  it("treats the folder's left gutter as the project root", () => {
+  it("gives the folder's project-root gutter a usable drag target", () => {
     expect(
-      resolveSidebarFolderDropTarget({ clientX: 118, containerLeft: 100, folderId: "folder-a" }),
+      resolveSidebarFolderDropTarget({ clientX: 142, containerLeft: 100, folderId: "folder-a" }),
     ).toBeNull();
     expect(
-      resolveSidebarFolderDropTarget({ clientX: 121, containerLeft: 100, folderId: "folder-a" }),
+      resolveSidebarFolderDropTarget({ clientX: 145, containerLeft: 100, folderId: "folder-a" }),
     ).toBe("folder-a");
+  });
+
+  it("maps the project-root menu action to an unassigned thread", () => {
+    expect(resolveThreadFolderMenuTarget("folder:root")).toBeNull();
+    expect(resolveThreadFolderMenuTarget("folder:folder-a")).toBe("folder-a");
   });
 });

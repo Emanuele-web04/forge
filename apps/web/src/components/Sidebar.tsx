@@ -402,6 +402,7 @@ import {
   hasThreadDragType,
   parseThreadDragPayload,
   resolveSidebarFolderDropTarget,
+  resolveThreadFolderMenuTarget,
   THREAD_DRAG_MIME,
 } from "../threadDrag";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
@@ -3581,7 +3582,7 @@ export default function Sidebar() {
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("folder:")) {
-        moveThreadsToFolder([threadId], clicked.slice("folder:".length));
+        moveThreadsToFolder([threadId], resolveThreadFolderMenuTarget(clicked));
         return;
       }
       if (

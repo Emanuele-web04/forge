@@ -1,18 +1,21 @@
 // FILE: threadDrag.ts
 // Purpose: Shares the sidebar thread drag payload contract across drop targets.
 // Layer: Web UI utility
-// Exports: drag MIME, payload parser, and drag-type guard.
+// Exports: drag payload helpers and virtual-folder drop/menu target resolvers.
 
 import type { ThreadId } from "@synara/contracts";
 
 // Custom MIME so file drops and other native drags cannot trigger thread actions.
 export const THREAD_DRAG_MIME = "application/x-synara-thread";
+const THREAD_FOLDER_ACTION_PREFIX = "folder:";
 
 export interface ThreadDragPayload {
   threadId: ThreadId;
 }
 
-export const SIDEBAR_FOLDER_ROOT_GUTTER_PX = 20;
+// Match the minimum comfortable pointer target used by the rest of the UI. The
+// previous 20px rail made dragging a thread out of a folder needlessly precise.
+export const SIDEBAR_FOLDER_ROOT_GUTTER_PX = 44;
 
 type ThreadDragDataTransfer = Pick<DataTransfer, "getData" | "types">;
 
@@ -42,4 +45,9 @@ export function resolveSidebarFolderDropTarget(input: {
   return input.clientX <= input.containerLeft + SIDEBAR_FOLDER_ROOT_GUTTER_PX
     ? null
     : input.folderId;
+}
+
+export function resolveThreadFolderMenuTarget(actionId: string): string | null {
+  const target = actionId.slice(THREAD_FOLDER_ACTION_PREFIX.length);
+  return target === "root" ? null : target;
 }
