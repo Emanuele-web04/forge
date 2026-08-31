@@ -3,10 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  FAVORITE_MODEL_STORAGE_KEYS,
-  migrateLegacyKiloFavoriteModelSlugs,
-} from "./modelFavorites";
+import { FAVORITE_MODEL_STORAGE_KEYS, migrateLegacyKiloFavoriteModelSlugs } from "./modelFavorites";
 
 const LEGACY_KILO_KEY = "synara:kilo-favourite-models:v1";
 
