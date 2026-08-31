@@ -63,12 +63,6 @@ export type KanbanDraftDispatchResult =
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
-/**
- * Shared failure-toast copy for a non-dispatched draft dispatch result, used by
- * both the drag-to-column and "Send as goal" entry points so their wording
- * cannot drift. Success toasts stay call-site-specific (different titles, and
- * only the goal path surfaces a dispatch warning).
- */
 export function kanbanDispatchFailureToast(
   result: Exclude<KanbanDraftDispatchResult, { kind: "dispatched" }>,
   errorTitle: string,
@@ -79,7 +73,7 @@ export function kanbanDispatchFailureToast(
       title: "Finish this draft in the chat",
       description:
         result.reason === "empty"
-          ? "Nothing to send yet — write the prompt in the composer."
+          ? "Nothing to send yet. Write the prompt in the composer."
           : result.reason === "worktree-pending"
             ? "Open the chat to create the worktree with the normal send flow."
             : "Open the chat to continue this task.",

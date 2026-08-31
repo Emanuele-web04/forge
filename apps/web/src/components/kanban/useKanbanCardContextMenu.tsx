@@ -229,7 +229,6 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
           return;
         }
-        // Remaining kinds: "unavailable" | "error".
         toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
         return;
       }

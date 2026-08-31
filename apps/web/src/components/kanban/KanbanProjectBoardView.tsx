@@ -142,7 +142,6 @@ export function KanbanProjectBoardView({
       onOpenCard(card);
       return;
     }
-    // Remaining kinds: "unavailable" | "error".
     toastManager.add(kanbanDispatchFailureToast(result, "Could not send draft"));
   };
 

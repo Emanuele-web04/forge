@@ -489,6 +489,56 @@ describe("synara_create_kanban_task", () => {
     expect(result.isError).toBe(true);
     expect((jsonText(result) as { __errorText?: string }).__errorText).toContain("creation failed");
   });
+
+  it("falls back to the raw saga result when its payload is not valid JSON", async () => {
+    const sagaContent = [{ type: "text" as const, text: "{not json" }];
+    const { tools } = makeTools({
+      threads: [],
+      runCreateThreads: () => Effect.succeed({ isError: false, content: sagaContent }),
+    });
+
+    const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      requestId: "req-malformed-json",
+    });
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual(sagaContent);
+  });
+
+  it.each([
+    { label: "string-threadIds", payload: { operationId: "op-1", threadIds: "thread-x" } },
+    { label: "numeric-threadIds-entry", payload: { operationId: "op-1", threadIds: [42] } },
+    {
+      label: "object-threadIds",
+      payload: { operationId: "op-1", threadIds: { 0: "thread-x" } },
+    },
+    {
+      label: "numeric-threadId-in-threads",
+      payload: { operationId: "op-1", threads: [{ threadId: 42 }] },
+    },
+    {
+      label: "string-element-in-threads",
+      payload: { operationId: "op-1", threads: ["thread-x"] },
+    },
+    { label: "numeric-operationId", payload: { operationId: 7, threadIds: ["thread-x"] } },
+  ])(
+    "falls back to the raw saga result for valid JSON with a wrong-shaped $label",
+    async ({ payload }) => {
+      const sagaText = JSON.stringify(payload);
+      const sagaContent = [{ type: "text" as const, text: sagaText }];
+      const { tools } = makeTools({
+        threads: [],
+        runCreateThreads: () => Effect.succeed({ isError: false, content: sagaContent }),
+      });
+
+      const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+        title: "Fix bug",
+        requestId: "req-wrong-shape",
+      });
+      expect(result.isError).toBe(false);
+      expect(result.content).toEqual(sagaContent);
+    },
+  );
 });
 
 describe("synara_move_kanban_card", () => {

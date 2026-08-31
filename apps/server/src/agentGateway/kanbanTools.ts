@@ -4,7 +4,8 @@ import {
   type SynaraCreateThreadsInput,
 } from "@synara/contracts";
 import {
-  deriveKanbanCardView,
+  deriveKanbanColumnV2,
+  deriveKanbanAttention,
   KANBAN_COLUMN_V2_LABELS,
   type KanbanAttentionFlag,
   type KanbanColumnV2Key,
@@ -101,10 +102,6 @@ function deriveCard(
 ): ReadKanbanCard {
   const pr = thread.lastKnownPr ?? null;
   const input = toKanbanThreadDerivationInput(thread);
-  const view = deriveKanbanCardView(input, {
-    now,
-    needsReview: pr !== null && pr.state === "open",
-  });
   return {
     threadId: thread.id,
     title: thread.title,
@@ -114,8 +111,11 @@ function deriveCard(
     worktreePath: thread.worktreePath,
     lastKnownPr: pr,
     summary: summarizeThreadShell(thread, callerThreadId),
-    attention: view.attention,
-    column: view.column,
+    attention: deriveKanbanAttention(input, {
+      now,
+      needsReview: pr !== null && pr.state === "open",
+    }),
+    column: deriveKanbanColumnV2(input, { now }),
   };
 }
 
@@ -382,27 +382,68 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           );
           if (result.isError) return result;
           const content = result.content[0];
-          // The saga serializes its structured outcome as JSON text; parse
-          // defensively so a malformed block degrades to the raw-result path
-          // (the creation itself already succeeded and stays replayable via
-          // requestId) instead of throwing after a successful dispatch.
           const batch = (() => {
-            try {
-              return JSON.parse(content?.type === "text" ? content.text : "{}") as {
-                operationId?: string;
-                threadIds?: string[];
-                threads?: Array<{ threadId?: string }>;
-              };
-            } catch {
-              return {};
+            if (content?.type !== "text") {
+              return null;
             }
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(content.text);
+            } catch {
+              return null;
+            }
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+              return null;
+            }
+            const record = parsed as Record<string, unknown>;
+            if (record.operationId !== undefined && typeof record.operationId !== "string") {
+              return null;
+            }
+            const threads = Array.isArray(record.threads) ? record.threads : undefined;
+            if (record.threads !== undefined && threads === undefined) {
+              return null;
+            }
+            const threadIds = Array.isArray(record.threadIds) ? record.threadIds : undefined;
+            if (record.threadIds !== undefined && threadIds === undefined) {
+              return null;
+            }
+            const firstThread =
+              threads !== undefined && threads.length > 0 ? threads[0] : undefined;
+            if (
+              firstThread !== undefined &&
+              (typeof firstThread !== "object" ||
+                firstThread === null ||
+                Array.isArray(firstThread))
+            ) {
+              return null;
+            }
+            const fromThreadsThreadId =
+              typeof firstThread === "object" && firstThread !== null
+                ? (firstThread as Record<string, unknown>).threadId
+                : undefined;
+            if (fromThreadsThreadId !== undefined && typeof fromThreadsThreadId !== "string") {
+              return null;
+            }
+            if (Array.isArray(threadIds) && threadIds.some((id) => typeof id !== "string")) {
+              return null;
+            }
+            const fromThreadIds = Array.isArray(threadIds) ? threadIds[0] : undefined;
+            return {
+              operationId: typeof record.operationId === "string" ? record.operationId : undefined,
+              createdThreadId:
+                typeof fromThreadsThreadId === "string"
+                  ? fromThreadsThreadId
+                  : typeof fromThreadIds === "string"
+                    ? fromThreadIds
+                    : undefined,
+            };
           })();
           // The creation saga returns `threadIds` / per-thread `threads`, never a
           // top-level `threadId`; read the first created thread so the create →
           // read → move loop works against the real contract shape. The card
           // view is decoration: a projection that has not caught up yet must not
           // turn an already-successful creation into a tool error.
-          const createdThreadId = batch.threads?.[0]?.threadId ?? batch.threadIds?.[0];
+          const createdThreadId = batch?.createdThreadId;
           if (!createdThreadId) return result;
           const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
           const createdCard = Option.isSome(threadShell)
@@ -418,7 +459,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               })()
             : { threadId: createdThreadId, title, column: "inProgress" as const, attention: [] };
           return mcpToolResultJson({
-            operationId: batch.operationId,
+            operationId: batch?.operationId,
             threadId: createdThreadId,
             title: createdCard.title,
             status: "task_dispatched",
@@ -479,8 +520,6 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           const card = yield* requireThreadShell(threadId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
           );
-          // Same project scoping as the read tools: a caller may only drive
-          // cards inside its own project, regardless of runtimeMode privilege.
           if (card.projectId !== caller.projectId) {
             return yield* Effect.fail(
               new ToolInputError(
