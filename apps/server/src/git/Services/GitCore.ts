@@ -70,7 +70,7 @@ export interface GitBranchContext {
   readonly upstreamRef: string | null;
 }
 
-export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree";
+export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree" | "ref";
 
 export interface GitPreparedCommitContext {
   stagedSummary: string;
@@ -262,6 +262,7 @@ export interface GitCoreShape {
   readonly readDiffStats: (
     cwd: string,
     scope: GitDiffScope,
+    ref?: string,
   ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitCommandError>;
 
   /**

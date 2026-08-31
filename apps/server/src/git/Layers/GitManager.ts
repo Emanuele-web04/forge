@@ -1448,6 +1448,16 @@ export const makeGitManager = Effect.gen(function* () {
   // identical to the ones a client-side parse produced, so no surface changes what it displays.
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
+      if (input.scope === "ref") {
+        const compareRef = input.compareRef?.trim() ?? "";
+        if (compareRef.length === 0) {
+          return yield* gitManagerError(
+            "readWorkingTreeDiffStats",
+            "A branch or commit is required to compare the working tree against.",
+          );
+        }
+        return yield* gitCore.readDiffStats(input.cwd, "ref", compareRef);
+      }
       return yield* gitCore.readDiffStats(input.cwd, input.scope ?? "workingTree");
     },
   );

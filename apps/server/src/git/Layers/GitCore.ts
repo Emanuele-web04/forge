@@ -1911,7 +1911,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope) =>
+    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope, ref) =>
       Effect.gen(function* () {
         let trackedArgs: ReadonlyArray<string>;
         let includeUntracked = false;
@@ -1926,6 +1926,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           case "branch": {
             const mergeBase = yield* resolveBranchMergeBase(cwd);
             trackedArgs = ["diff", "--numstat", "-z", "--minimal", "--no-ext-diff", mergeBase];
+            includeUntracked = true;
+            break;
+          }
+          case "ref": {
+            const compareRef = (ref ?? "").trim();
+            const verified = yield* executeGit(
+              "GitCore.readDiffStats.verifyRef",
+              cwd,
+              ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
+              { allowNonZeroExit: true },
+            );
+            const resolvedRef = verified.stdout.trim();
+            if (verified.code !== 0 || resolvedRef.length === 0) {
+              return yield* createGitCommandError(
+                "GitCore.readDiffStats.verifyRef",
+                cwd,
+                ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
+                `Cannot resolve "${compareRef}" to a commit in this repository.`,
+              );
+            }
+            trackedArgs = ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef];
             includeUntracked = true;
             break;
           }
