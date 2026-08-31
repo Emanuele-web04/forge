@@ -38,11 +38,7 @@ import {
   threadTurnStatesEqual,
   type ProjectNormalizationInput,
 } from "./storeNormalization";
-import {
-  projectCwdKey,
-  rememberProjectLocalNames,
-  rememberProjectUiState,
-} from "./storePersistence";
+import { forgetProjectState, projectCwdKey, rememberProjectState } from "./storePersistence";
 import {
   EMPTY_ACTIVITY_BY_THREAD,
   EMPTY_ACTIVITY_IDS_BY_THREAD,
@@ -1085,6 +1081,11 @@ function removeProjectState(state: AppState, projectId: Project["id"]): AppState
     }
   }
 
+  const removedProject = state.projects.find((project) => project.id === projectId);
+  if (removedProject) {
+    forgetProjectState(removedProject.cwd);
+  }
+
   const nextProjects = state.projects.some((project) => project.id === projectId)
     ? state.projects.filter((project) => project.id !== projectId)
     : state.projects;
@@ -1247,8 +1248,7 @@ export function syncServerShellSnapshot(
   if (isStaleSnapshot(state, snapshot.snapshotSequence)) {
     return state;
   }
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
@@ -1399,8 +1399,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   if (isStaleSnapshot(state, readModel.snapshotSequence)) {
     return state;
   }
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   // Ids the server still reports as live at this snapshot sequence; anything else is either

@@ -45,8 +45,8 @@ export function getRememberedProjectUiState(): RememberedProjectUiState {
   return rememberedProjectUiState;
 }
 
-export function rememberProjectUiState(
-  projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>,
+export function rememberProjectState(
+  projects: ReadonlyArray<Pick<Project, "cwd" | "expanded" | "localName">>,
 ): void {
   for (const project of projects) {
     const cwdKey = projectCwdKey(project.cwd);
@@ -58,14 +58,6 @@ export function rememberProjectUiState(
     if (!persistedProjectOrderByCwd.has(cwdKey)) {
       persistedProjectOrderByCwd.set(cwdKey, persistedProjectOrderByCwd.size);
     }
-  }
-}
-
-export function rememberProjectLocalNames(
-  projects: ReadonlyArray<Pick<Project, "cwd" | "localName">>,
-): void {
-  for (const project of projects) {
-    const cwdKey = projectCwdKey(project.cwd);
     const localName = project.localName?.trim() ?? "";
     if (localName.length > 0) {
       persistedProjectNamesByCwd.set(cwdKey, localName);
@@ -75,11 +67,20 @@ export function rememberProjectLocalNames(
   }
 }
 
+export function forgetProjectState(cwd: string): void {
+  const cwdKey = projectCwdKey(cwd);
+  persistedExpandedProjectCwds.delete(cwdKey);
+  persistedProjectOrderByCwd.delete(cwdKey);
+  persistedProjectNamesByCwd.delete(cwdKey);
+}
+
 export function readPersistedState(initialState: AppState): AppState {
   if (typeof window === "undefined") return initialState;
   try {
     const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
     if (!raw) return initialState;
+    // SAFETY: localStorage is only writable by same-origin scripts. We validate the
+    // persisted shape below, discarding any malformed entries and falling back to defaults.
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
@@ -123,7 +124,7 @@ export function persistState(state: AppState): void {
     for (const project of state.projects) {
       const localName = project.localName?.trim();
       if (localName && localName.length > 0) {
-        projectNamesByCwd[project.cwd] = localName;
+        projectNamesByCwd[projectCwdKey(project.cwd)] = localName;
       }
     }
     window.localStorage.setItem(
@@ -131,8 +132,8 @@ export function persistState(state: AppState): void {
       JSON.stringify({
         expandedProjectCwds: state.projects
           .filter((project) => project.expanded)
-          .map((project) => project.cwd),
-        projectOrderCwds: state.projects.map((project) => project.cwd),
+          .map((project) => projectCwdKey(project.cwd)),
+        projectOrderCwds: state.projects.map((project) => projectCwdKey(project.cwd)),
         projectNamesByCwd,
       }),
     );

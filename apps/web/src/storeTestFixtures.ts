@@ -16,6 +16,7 @@ import {
 import { getThreadsFromState } from "./threadDerivation";
 import type { AppState } from "./storeState";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { vi, type Mock } from "vitest";
 
 export function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -271,3 +272,30 @@ export function makeReadModelProject(
 }
 
 export const threadsOf = getThreadsFromState;
+
+export function makeFakeWindow(storage: Map<string, string>): {
+  localStorage: {
+    getItem: (key: string) => string | null;
+    setItem: Mock<(key: string, value: string) => void>;
+    removeItem: (key: string) => void;
+    clear: () => void;
+  };
+  addEventListener: Mock<() => void>;
+} {
+  const setItem = vi.fn((key: string, value: string) => {
+    storage.set(key, value);
+  });
+  return {
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem,
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      clear: () => {
+        storage.clear();
+      },
+    },
+    addEventListener: vi.fn(),
+  };
+}

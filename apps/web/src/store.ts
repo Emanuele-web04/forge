@@ -31,12 +31,7 @@ import {
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
-import {
-  persistState,
-  readPersistedState,
-  rememberProjectLocalNames,
-  rememberProjectUiState,
-} from "./storePersistence";
+import { persistState, readPersistedState, rememberProjectState } from "./storePersistence";
 import { initialState, type AppState } from "./storeState";
 import type { Project, ThreadWorkspacePatch } from "./types";
 
@@ -353,8 +348,7 @@ let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
   if (state.projects !== lastRememberedProjects) {
     lastRememberedProjects = state.projects;
-    rememberProjectUiState(state.projects);
-    rememberProjectLocalNames(state.projects);
+    rememberProjectState(state.projects);
   }
   debouncedPersistState.maybeExecute(state);
 });

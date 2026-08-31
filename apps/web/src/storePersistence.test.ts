@@ -4,29 +4,10 @@
 import { ProjectId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { makeProject } from "./storeTestFixtures";
+import { makeFakeWindow, makeProject } from "./storeTestFixtures";
 import { initialState } from "./storeState";
 import type { AppState } from "./storeState";
 import { PERSISTED_STATE_KEY } from "./storePersistence";
-
-function makeFakeWindow(storage: Map<string, string>) {
-  const setItem = vi.fn((key: string, value: string) => {
-    storage.set(key, value);
-  });
-  return {
-    localStorage: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem,
-      removeItem: (key: string) => {
-        storage.delete(key);
-      },
-      clear: () => {
-        storage.clear();
-      },
-    },
-    addEventListener: vi.fn(),
-  };
-}
 
 async function importStorePersistence(storage: Map<string, string>) {
   vi.stubGlobal("window", makeFakeWindow(storage));
@@ -177,13 +158,9 @@ describe("storePersistence", () => {
 
   it("writes projectOrderCwds for every project and expandedProjectCwds only for expanded projects", async () => {
     const storage = new Map<string, string>();
-    const setItem = vi.fn((key: string, value: string) => {
-      storage.set(key, value);
-    });
-    vi.stubGlobal("window", {
-      localStorage: { getItem: () => null, setItem, removeItem: vi.fn(), clear: vi.fn() },
-      addEventListener: vi.fn(),
-    });
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
     vi.resetModules();
     try {
       const { persistState } = await import("./storePersistence");
@@ -224,13 +201,8 @@ describe("storePersistence", () => {
 
   it("removes a deleted project from both persisted project lists on the next write", async () => {
     const storage = new Map<string, string>();
-    const setItem = vi.fn((key: string, value: string) => {
-      storage.set(key, value);
-    });
-    vi.stubGlobal("window", {
-      localStorage: { getItem: () => null, setItem, removeItem: vi.fn(), clear: vi.fn() },
-      addEventListener: vi.fn(),
-    });
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
     vi.resetModules();
     try {
       const { persistState } = await import("./storePersistence");
@@ -277,13 +249,9 @@ describe("storePersistence", () => {
 
   it("does not call localStorage.setItem while threadsHydrated is false", async () => {
     const storage = new Map<string, string>();
-    const setItem = vi.fn((key: string, value: string) => {
-      storage.set(key, value);
-    });
-    vi.stubGlobal("window", {
-      localStorage: { getItem: () => null, setItem, removeItem: vi.fn(), clear: vi.fn() },
-      addEventListener: vi.fn(),
-    });
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
     vi.resetModules();
     try {
       const { persistState } = await import("./storePersistence");
