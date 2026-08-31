@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import treeKill from "tree-kill";
 
 const PROCESS_TREE_SCAN_TIMEOUT_MS = 1_000;
+const PROCESS_TREE_CAPTURE_ATTEMPTS = 2;
 // Full-system `ps` output scales with host process count and command-line
 // length (Electron helpers alone run to kilobytes per line); an undersized cap
 // makes snapshot failure routine on busy machines.
@@ -201,7 +202,14 @@ export function createProcessTreeKiller(
         // tree-kill delegates to taskkill /T on Windows, which owns descendant traversal.
         return { descendants: [], captureComplete: true };
       }
-      const childrenByParentPid = deps.captureChildrenMap();
+      let childrenByParentPid: ProcessChildrenMap | null = null;
+      for (
+        let attempt = 0;
+        attempt < PROCESS_TREE_CAPTURE_ATTEMPTS && !childrenByParentPid;
+        attempt += 1
+      ) {
+        childrenByParentPid = deps.captureChildrenMap();
+      }
       if (!childrenByParentPid) return { descendants: [], captureComplete: false };
       return {
         descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
