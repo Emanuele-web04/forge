@@ -2983,6 +2983,27 @@ export default function Sidebar() {
     [assignThreadsToFolder, removeFromSelection],
   );
 
+  // A thread started from a folder row belongs to that folder from the first keystroke:
+  // the draft id is stable through promotion, so assigning it here survives thread.create.
+  const createThreadInFolder = useCallback(
+    async (folder: SidebarThreadFolder) => {
+      const threadId = await handleNewThread(folder.projectId, {
+        envMode: resolveSidebarNewThreadEnvMode({
+          defaultEnvMode: appSettings.defaultThreadEnvMode,
+        }),
+      });
+      if (!threadId) return;
+      assignThreadsToFolder(folder.id, [threadId]);
+      setThreadFolderCollapsed(folder.id, false);
+    },
+    [
+      appSettings.defaultThreadEnvMode,
+      assignThreadsToFolder,
+      handleNewThread,
+      setThreadFolderCollapsed,
+    ],
+  );
+
   const clearSidebarThreadDrag = useCallback(() => {
     sidebarThreadDragIdsRef.current = [];
     setSidebarThreadDragProjectId(null);
@@ -4605,7 +4626,7 @@ export default function Sidebar() {
     const includePinToggle = input.includePinToggle !== false;
 
     return (
-      <SidebarRowHoverActions threadId={input.threadId}>
+      <SidebarRowHoverActions testId={`thread-hover-actions-${input.threadId}`}>
         <div className="pointer-events-auto inline-flex items-center gap-2">
           {includePinToggle ? (
             <ThreadPinToggleButton
@@ -5181,7 +5202,7 @@ export default function Sidebar() {
           handleThreadFolderDrop(event, folder.projectId, resolvePointerDropTarget(event))
         }
       >
-        <SidebarMenuSubItem className="w-full">
+        <SidebarMenuSubItem className="group/thread-folder-row w-full">
           <SidebarMenuSubButton
             render={<button type="button" />}
             size="sm"
@@ -5206,11 +5227,44 @@ export default function Sidebar() {
             <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-xs,11px)] font-normal text-muted-foreground/82">
               {folder.name}
             </span>
-            <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42">
+            <span
+              className={cn(
+                "shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42 transition-opacity",
+                // Yields its slot to the new-thread action so the row keeps its full
+                // width instead of permanently reserving space for a hover control.
+                sidebarHoverRevealHideClassName("thread-folder-row"),
+              )}
+            >
               {totalThreadCount}
             </span>
             <DisclosureChevron open={open} className="size-3 text-muted-foreground/55" />
           </SidebarMenuSubButton>
+          {/* Offset past the chevron so the strip lands on the thread count it replaces. */}
+          <SidebarRowHoverActions
+            row="thread-folder-row"
+            testId={`thread-folder-hover-actions-${folder.id}`}
+            className="right-5"
+          >
+            <SidebarIconButton
+              icon={NewThreadIcon}
+              size="sm"
+              label={`Create new thread in ${folder.name}`}
+              tooltip="New thread in folder"
+              tooltipSide="top"
+              onMouseEnter={() => {
+                prefetchModelsForProjectNewThread(folder.projectId);
+              }}
+              onFocus={() => {
+                prefetchModelsForProjectNewThread(folder.projectId);
+              }}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                prefetchModelsForProjectNewThread(folder.projectId, { includeDroid: true });
+                void createThreadInFolder(folder);
+              }}
+            />
+          </SidebarRowHoverActions>
         </SidebarMenuSubItem>
         <div className={disclosureShellClassName(open)}>
           <div className={DISCLOSURE_INNER_CLASS}>
