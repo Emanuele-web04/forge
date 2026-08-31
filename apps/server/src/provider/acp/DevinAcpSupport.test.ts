@@ -78,6 +78,23 @@ describe("buildDevinAcpSpawnInput", () => {
       cwd: "/tmp/project",
     });
   });
+
+  it("uses the scoped config environment without placing secrets in args", () => {
+    const spawn = buildDevinAcpSpawnInput(undefined, "/tmp/project", "approval-required", {
+      HOME: "/real/home",
+      XDG_DATA_HOME: "/real/data",
+      XDG_CONFIG_HOME: "/private/config",
+      SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN: "bootstrap-must-not-propagate",
+    });
+
+    expect(spawn.args).toEqual(["acp"]);
+    expect(spawn.env).toMatchObject({
+      HOME: "/real/home",
+      XDG_DATA_HOME: "/real/data",
+      XDG_CONFIG_HOME: "/private/config",
+    });
+    expect(JSON.stringify(spawn.args)).not.toContain("bootstrap-must-not-propagate");
+  });
 });
 
 describe("makeDevinAcpRuntime", () => {

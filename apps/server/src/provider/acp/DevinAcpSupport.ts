@@ -37,6 +37,7 @@ export interface DevinAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly devinSettings: DevinAcpRuntimeSettings | null | undefined;
   readonly runtimeMode: RuntimeMode;
+  readonly sessionConfig?: { readonly childEnvironment: NodeJS.ProcessEnv };
 }
 
 const DEVIN_API_KEY_AUTH_METHOD_IDS = new Set([
@@ -289,6 +290,7 @@ export function buildDevinAcpSpawnInput(
   devinSettings: DevinAcpRuntimeSettings | null | undefined,
   cwd: string,
   runtimeMode: RuntimeMode,
+  childEnvironment?: NodeJS.ProcessEnv,
 ): AcpSpawnInput {
   // Devin's permission prompts surface through ACP request_permission events;
   // the session itself needs no permission-mode flag to keep that flow intact.
@@ -301,14 +303,15 @@ export function buildDevinAcpSpawnInput(
 
   // The Devin ACP server expects `WINDSURF_API_KEY`. If only the lowercase
   // variant is present, normalize it to the canonical key for the child.
-  const apiKey = getDevinApiKeyEnv();
+  const baseEnv = childEnvironment ?? process.env;
+  const apiKey = getDevinApiKeyEnv(baseEnv);
   const overrides: NodeJS.ProcessEnv = apiKey ? { WINDSURF_API_KEY: apiKey } : {};
 
   return {
     command: devinSettings?.binaryPath || "devin",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "devin", overrides }),
+    env: buildProviderChildEnvironment({ provider: "devin", baseEnv, overrides }),
   };
 }
 
@@ -385,7 +388,12 @@ export const makeDevinAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildDevinAcpSpawnInput(input.devinSettings, input.cwd, input.runtimeMode),
+        spawn: buildDevinAcpSpawnInput(
+          input.devinSettings,
+          input.cwd,
+          input.runtimeMode,
+          input.sessionConfig?.childEnvironment,
+        ),
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
           resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
