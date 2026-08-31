@@ -5166,7 +5166,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("PR-A: slow provider adapter status sequence", async () => {
+  it("shows the starting status before a slow provider session resolves and then runs the turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const turnId = asTurnId("turn-1");
@@ -5203,14 +5203,12 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // "starting" is visible immediately, before the provider session resolves.
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "starting");
     releaseStartSession?.();
     const startingThread = await readHarnessThread(harness);
     expect(startingThread?.session?.activeTurnId).toBeNull();
     expect(startingThread?.latestTurn).toBeNull();
 
-    // After the slow startSession resolves, the session becomes "ready".
     await waitFor(
       async () => (await readHarnessThread(harness))?.session?.status === "ready",
       15000,
@@ -5222,8 +5220,6 @@ describe("ProviderCommandReactor", () => {
     expect(readyThread?.session?.activeTurnId).toBeNull();
     expect(readyThread?.latestTurn).toBeNull();
 
-    // Runtime dispatch flips to "running" and binds the active turn; only then
-    // does latestTurn.startedAt appear.
     const runningAt = new Date().toISOString();
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
