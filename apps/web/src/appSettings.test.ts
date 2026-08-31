@@ -280,6 +280,7 @@ describe("getGitTextGenerationModelOptions", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: ["custom/codex-model"],
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+      customDroidModels: [],
       textGenerationModel: "openai/gpt-5",
       textGenerationProvider: "opencode",
     });
@@ -294,6 +295,7 @@ describe("getGitTextGenerationModelOptions", () => {
       {
         customCodexModels: [],
         customOpenCodeModels: [],
+        customDroidModels: [],
         textGenerationModel: "openrouter/custom-model",
         textGenerationProvider: "opencode",
       },
@@ -310,6 +312,7 @@ describe("getGitTextGenerationModelOptions", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customOpenCodeModels: [],
+      customDroidModels: [],
       textGenerationModel: "openrouter/custom-model",
       textGenerationProvider: "opencode",
     });
@@ -326,6 +329,7 @@ describe("getGitTextGenerationModelOptions", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customOpenCodeModels: [],
+      customDroidModels: [],
       textGenerationModel: "opencode-go/kimi-k2.6",
       textGenerationProvider: "opencode",
     });
@@ -336,6 +340,39 @@ describe("getGitTextGenerationModelOptions", () => {
       provider: "opencode",
       isCustom: true,
     });
+  });
+
+  it("offers Droid models to a user currently on Codex", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      customDroidModels: ["particle/deepseek-v4-flash-0731"],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(
+      options.some(
+        (option) =>
+          option.provider === "droid" && option.slug === "particle/deepseek-v4-flash-0731",
+      ),
+    ).toBe(true);
+    expect(options.some((option) => option.provider === "codex")).toBe(true);
+  });
+
+  it("offers built-in Droid models to a user currently on Codex", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      customDroidModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "droid" && option.slug === "auto")).toBe(
+      true,
+    );
+    expect(options.some((option) => option.provider === "codex")).toBe(true);
   });
 });
 

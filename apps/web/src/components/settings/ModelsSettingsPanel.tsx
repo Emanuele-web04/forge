@@ -46,7 +46,7 @@ type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
 
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "opencode"] as const;
+const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "droid", "opencode"] as const;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -98,8 +98,13 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const { customCodexModels, customOpenCodeModels, textGenerationModel, textGenerationProvider } =
-    settings;
+  const {
+    customCodexModels,
+    customOpenCodeModels,
+    customDroidModels,
+    textGenerationModel,
+    textGenerationProvider,
+  } = settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -124,18 +129,22 @@ export function ModelsSettingsPanel({
         {
           customCodexModels,
           customOpenCodeModels,
+          customDroidModels,
           textGenerationModel,
           textGenerationProvider,
         },
         {
           codex: gitWritingCatalogOptionsByProvider.codex,
+          droid: gitWritingCatalogOptionsByProvider.droid,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
         },
       ),
     [
       customCodexModels,
       customOpenCodeModels,
+      customDroidModels,
       gitWritingCatalogOptionsByProvider.codex,
+      gitWritingCatalogOptionsByProvider.droid,
       gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
