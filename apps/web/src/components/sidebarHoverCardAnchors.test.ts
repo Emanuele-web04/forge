@@ -9,9 +9,7 @@ describe("abbreviateHomePath", () => {
   });
 
   it("collapses Windows home paths case-insensitively", () => {
-    expect(abbreviateHomePath("C:\\Users\\Me\\project", "c:\\users\\me")).toBe(
-      "~\\project",
-    );
+    expect(abbreviateHomePath("C:\\Users\\Me\\project", "c:\\users\\me")).toBe("~\\project");
     expect(abbreviateHomePath("C:/Users/Me/project", "c:\\users\\me")).toBe("~/project");
     expect(abbreviateHomePath("C:\\Users\\Me", "c:\\users\\me\\")).toBe("~");
   });
