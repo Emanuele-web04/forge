@@ -5,63 +5,38 @@ import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGenerationError } from "../Errors.ts";
-import {
-  hasDedicatedTextGenerationProvider,
-  type GitTextGenerationProvider,
-} from "../textGenerationSelection.ts";
-import {
-  CodexTextGeneration,
-  CursorTextGeneration,
-  DroidTextGeneration,
-  OpenCodeTextGeneration,
-  type TextGenerationShape,
-  TextGeneration,
-} from "../Services/TextGeneration.ts";
-
-const DROID_SLUG_PREFIX = /^droid[:/](.+)$/;
+import * as TextGen from "../Services/TextGeneration.ts";
+import * as Selection from "../textGenerationSelection.ts";
 
 const parseDroidModelSlug = (model: string | undefined): { readonly model: string } | null => {
-  if (!model) return null;
-  const match = DROID_SLUG_PREFIX.exec(model);
-  if (match && match[1]) return { model: match[1] };
-  return null;
+  const match = model && /^droid[:/](.+)$/.exec(model);
+  return match && match[1] ? { model: match[1] } : null;
 };
 
 const makeProviderTextGeneration = Effect.gen(function* () {
-  const codexTextGeneration = yield* CodexTextGeneration;
-  const cursorTextGeneration = yield* CursorTextGeneration;
-  const droidTextGeneration = yield* DroidTextGeneration;
-  const openCodeTextGeneration = yield* OpenCodeTextGeneration;
+  const codexTextGeneration = yield* TextGen.CodexTextGeneration;
+  const cursorTextGeneration = yield* TextGen.CursorTextGeneration;
+  const droidTextGeneration = yield* TextGen.DroidTextGeneration;
+  const openCodeTextGeneration = yield* TextGen.OpenCodeTextGeneration;
   const serverSettings = yield* ServerSettingsService;
 
   const resolveRequestedProvider = (input: {
     readonly model?: string;
     readonly modelSelection?: ModelSelection;
-  }): ProviderKind => {
-    if (input.modelSelection?.provider) {
-      return input.modelSelection.provider;
-    }
-    if (parseOpenCodeModelSlug(input.model) !== null) {
-      return "opencode";
-    }
-    if (parseDroidModelSlug(input.model) !== null) {
-      return "droid";
-    }
-    return "codex";
-  };
+  }): ProviderKind =>
+    input.modelSelection?.provider ??
+    (parseDroidModelSlug(input.model) !== null
+      ? "droid"
+      : parseOpenCodeModelSlug(input.model) !== null
+        ? "opencode"
+        : "codex");
 
-  const implementationForProvider = (provider: GitTextGenerationProvider): TextGenerationShape => {
-    switch (provider) {
-      case "cursor":
-        return cursorTextGeneration;
-      case "droid":
-        return droidTextGeneration;
-      case "opencode":
-        return openCodeTextGeneration;
-      case "codex":
-        return codexTextGeneration;
-    }
-  };
+  const implementations = {
+    codex: codexTextGeneration,
+    cursor: cursorTextGeneration,
+    droid: droidTextGeneration,
+    opencode: openCodeTextGeneration,
+  } satisfies Record<Selection.GitTextGenerationProvider, TextGen.TextGenerationShape>;
 
   const resolveImplementation = (
     operation: string,
@@ -82,11 +57,11 @@ const makeProviderTextGeneration = Effect.gen(function* () {
             }),
         ),
       );
-      const fallbackModelSelection = hasDedicatedTextGenerationProvider(requestedProvider)
+      const fallbackModelSelection = Selection.hasDedicatedTextGenerationProvider(requestedProvider)
         ? undefined
         : settings.textGenerationModelSelection;
       const provider = fallbackModelSelection?.provider ?? requestedProvider;
-      if (!hasDedicatedTextGenerationProvider(provider)) {
+      if (!Selection.hasDedicatedTextGenerationProvider(provider)) {
         return yield* Effect.fail(
           new TextGenerationError({
             operation,
@@ -96,16 +71,10 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       }
       if (!settings.providers[provider].enabled) {
         return yield* Effect.fail(
-          new TextGenerationError({
-            operation,
-            detail: providerDisabledSettingsMessage(provider),
-          }),
+          new TextGenerationError({ operation, detail: providerDisabledSettingsMessage(provider) }),
         );
       }
-      return {
-        implementation: implementationForProvider(provider),
-        fallbackModelSelection,
-      };
+      return { implementation: implementations[provider], fallbackModelSelection };
     });
 
   const call = <
@@ -115,7 +84,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     operation: string,
     input: Input,
     run: (
-      implementation: TextGenerationShape,
+      implementation: TextGen.TextGenerationShape,
       input: Input,
     ) => Effect.Effect<Output, TextGenerationError>,
   ) =>
@@ -134,40 +103,26 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       ),
     );
 
-  return {
-    generateCommitMessage: (input) =>
-      call("generateCommitMessage", input, (implementation, value) =>
-        implementation.generateCommitMessage(value),
-      ),
-    generatePrContent: (input) =>
-      call("generatePrContent", input, (implementation, value) =>
-        implementation.generatePrContent(value),
-      ),
-    generateDiffSummary: (input) =>
-      call("generateDiffSummary", input, (implementation, value) =>
-        implementation.generateDiffSummary(value),
-      ),
-    generateBranchName: (input) =>
-      call("generateBranchName", input, (implementation, value) =>
-        implementation.generateBranchName(value),
-      ),
-    generateThreadTitle: (input) =>
-      call("generateThreadTitle", input, (implementation, value) =>
-        implementation.generateThreadTitle(value),
-      ),
-    generateThreadRecap: (input) =>
-      call("generateThreadRecap", input, (implementation, value) =>
-        implementation.generateThreadRecap(value),
-      ),
-    generateAutomationIntent: (input) =>
-      call("generateAutomationIntent", input, (implementation, value) =>
-        implementation.generateAutomationIntent(value),
-      ),
-    evaluateAutomationCompletion: (input) =>
-      call("evaluateAutomationCompletion", input, (implementation, value) =>
-        implementation.evaluateAutomationCompletion(value),
-      ),
-  } satisfies TextGenerationShape;
+  const operations = [
+    "generateCommitMessage",
+    "generatePrContent",
+    "generateDiffSummary",
+    "generateBranchName",
+    "generateThreadTitle",
+    "generateThreadRecap",
+    "generateAutomationIntent",
+    "evaluateAutomationCompletion",
+  ] as const;
+
+  return Object.fromEntries(
+    operations.map((op) => [
+      op,
+      (input: unknown) => call(op, input as never, (impl, value) => (impl as any)[op](value)),
+    ]),
+  ) as unknown as TextGen.TextGenerationShape;
 });
 
-export const ProviderTextGenerationLive = Layer.effect(TextGeneration, makeProviderTextGeneration);
+export const ProviderTextGenerationLive = Layer.effect(
+  TextGen.TextGeneration,
+  makeProviderTextGeneration,
+);
