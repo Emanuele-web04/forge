@@ -1198,13 +1198,25 @@ const makeAcpSessionRuntime = (
         yield* Ref.set(acceptingSessionUpdatesRef, true);
 
         const epoch = yield* getSessionEpoch();
-        for (const notification of sessionPending.notifications) {
-          yield* applySessionNotification(
-            notification,
+        const offer = offerSessionEvent(sessionId, epoch);
+        const apply = (notification: Acp.SessionNotification) =>
+          processSessionUpdate({
+            getSessionEpoch,
+            offer,
             sessionId,
             epoch,
-            replay === "bounded-only",
-          );
+            availableCommandsRef,
+            configOptionsRef,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            resolveConfigOptionUpdateWaiters,
+            skipTranscriptEvents: replay === "bounded-only",
+            params: notification,
+          });
+        for (const notification of sessionPending.notifications) {
+          yield* apply(notification);
         }
 
         // Notifications can race into the pending buffer between the capture
@@ -1216,12 +1228,7 @@ const makeAcpSessionRuntime = (
           const racedPending = raced.get(sessionId);
           if (!racedPending || racedPending.notifications.length === 0) break;
           for (const notification of racedPending.notifications) {
-            yield* applySessionNotification(
-              notification,
-              sessionId,
-              epoch,
-              replay === "bounded-only",
-            );
+            yield* apply(notification);
           }
         }
       });
@@ -1277,8 +1284,23 @@ const makeAcpSessionRuntime = (
           const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
           const racedPending = raced.get(sessionId);
           if (!racedPending || racedPending.notifications.length === 0) return;
+          const offer = offerSessionEvent(sessionId, epoch);
           for (const notification of racedPending.notifications) {
-            yield* applySessionNotification(notification, sessionId, epoch, false);
+            yield* processSessionUpdate({
+              getSessionEpoch,
+              offer,
+              sessionId,
+              epoch,
+              availableCommandsRef,
+              configOptionsRef,
+              modeStateRef,
+              toolCallsRef,
+              assistantSegmentRef,
+              runtimeInstanceId,
+              resolveConfigOptionUpdateWaiters,
+              skipTranscriptEvents: false,
+              params: notification,
+            });
           }
         }
       });
@@ -1375,28 +1397,6 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    const applySessionNotification = (
-      notification: Acp.SessionNotification,
-      sessionId: string,
-      epoch: SessionEpoch,
-      skipTranscriptEvents: boolean,
-    ) =>
-      processSessionUpdate({
-        getSessionEpoch,
-        offer: offerSessionEvent(sessionId, epoch),
-        sessionId,
-        epoch,
-        availableCommandsRef,
-        configOptionsRef,
-        modeStateRef,
-        toolCallsRef,
-        assistantSegmentRef,
-        runtimeInstanceId,
-        resolveConfigOptionUpdateWaiters,
-        skipTranscriptEvents,
-        params: notification,
-      });
-
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
         const epoch = yield* getSessionEpoch();
@@ -1427,13 +1427,26 @@ const makeAcpSessionRuntime = (
 
         if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
 
+        const offer = offerSessionEvent(sessionId, epoch);
+        const apply = (suppress: boolean) =>
+          processSessionUpdate({
+            getSessionEpoch,
+            offer,
+            sessionId,
+            epoch,
+            availableCommandsRef,
+            configOptionsRef,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            resolveConfigOptionUpdateWaiters,
+            skipTranscriptEvents: suppress,
+            params: notification,
+          });
         return yield* loadReplayGate === undefined
-          ? applySessionNotification(notification, sessionId, epoch, false)
-          : loadReplayGate.suppressUpdate.pipe(
-              Effect.flatMap((suppress) =>
-                applySessionNotification(notification, sessionId, epoch, suppress),
-              ),
-            );
+          ? apply(false)
+          : loadReplayGate.suppressUpdate.pipe(Effect.flatMap(apply));
       }),
     );
 
@@ -1870,7 +1883,12 @@ const makeAcpSessionRuntime = (
             yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
           }
 
-          return { sessionId, sessionSetupResult, sessionSetupMethod };
+          return {
+            sessionId,
+            sessionSetupResult,
+            resumedExistingSession,
+            sessionSetupMethod,
+          };
         });
 
         const setup =
@@ -1889,13 +1907,14 @@ const makeAcpSessionRuntime = (
         // setSessionEpoch already installed the setup baseline and replayed pending
         // updates through the same reducer, so no separate post-setup mutation is
         // needed here.
-        return {
+        const nextState = {
           sessionId,
           initializeResult,
           sessionSetupResult,
           modelConfigId: extractModelConfigId(sessionSetupResult),
           sessionSetupMethod,
         } satisfies AcpStartedState;
+        return nextState;
       }).pipe(
         Effect.tap(() =>
           Effect.gen(function* () {
@@ -1987,9 +2006,13 @@ const makeAcpSessionRuntime = (
       getSessionEpoch,
       getPendingSessionNotificationCount: () =>
         Ref.get(pendingSessionStateRef).pipe(
-          Effect.map((map) =>
-            [...map.values()].reduce((total, state) => total + state.notifications.length, 0),
-          ),
+          Effect.map((map) => {
+            let total = 0;
+            for (const state of map.values()) {
+              total += state.notifications.length;
+            }
+            return total;
+          }),
         ),
       getConfigOptions,
       getAvailableCommands,
