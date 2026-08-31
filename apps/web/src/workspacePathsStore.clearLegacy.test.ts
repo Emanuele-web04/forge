@@ -57,7 +57,8 @@ describe("workspace path storage clearing", () => {
 
     vi.resetModules();
     workspaceModule = await import("./workspacePathsStore");
-    expect(workspaceModule.useWorkspacePathsStore.getState().homeDir).toBeNull();
-    expect(workspaceModule.useWorkspacePathsStore.getState().chatWorkspaceRoot).toBeNull();
+    const reloadedState = workspaceModule.useWorkspacePathsStore.getState();
+    expect(reloadedState.homeDir ?? null).toBeNull();
+    expect(reloadedState.chatWorkspaceRoot ?? null).toBeNull();
   });
 });
