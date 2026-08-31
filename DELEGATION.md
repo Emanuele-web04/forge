@@ -25,4 +25,4 @@ The feedback bug-reporting feature is a single sequential feature. Review fixes 
 - Merged `upstream/main` and resolved `Sidebar.tsx` / `__root.tsx` overlap.
 - Fixed post-merge type error in `apps/web/src/lib/rateLimits.ts`.
 - Final branch head SHA: `ecbfb8fb0380d02d69123604f728f3c660374de7`.
-- No push, PR, or GitHub issue created.
+- Opened PR: https://github.com/Emanuele-web04/synara/pull/862
