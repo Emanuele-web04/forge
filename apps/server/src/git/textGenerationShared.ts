@@ -141,7 +141,7 @@ export function decodeStructuredTextGenerationOutput<S extends Schema.Top>(input
   readonly raw: string;
   readonly operation: string;
   readonly providerLabel: string;
-  readonly rawTextFallback?: RawTextFallback;
+  readonly rawTextFallback?: RawTextFallback | undefined;
 }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> {
   const decode = Schema.decodeEffect(Schema.fromJsonString(input.schema));
   const toError = (cause: unknown) =>

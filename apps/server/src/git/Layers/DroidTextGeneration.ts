@@ -35,8 +35,10 @@ import {
 
 const resolveDroidModelSelection = (input: {
   modelSelection?: ModelSelection;
-}): DroidModelSelection | null =>
-  input.modelSelection?.provider === "droid" ? (input.modelSelection as DroidModelSelection) : null;
+}): DroidModelSelection | null => {
+  const selection = input.modelSelection;
+  return selection?.provider === "droid" ? selection : null;
+};
 
 const resolveDroidSettings = (
   options?: ProviderStartOptions,
@@ -73,11 +75,11 @@ function runDroidAcp<S extends Schema.Top>(
       return Ref.update(outputRef, (current) => current + content.text);
     });
     const mapOpError = (detail: string, cause?: unknown) =>
-      new TextGenerationError({
-        operation: input.operation,
-        detail,
-        ...(cause !== undefined ? { cause } : {}),
-      });
+      new TextGenerationError(
+        cause === undefined
+          ? { operation: input.operation, detail }
+          : { operation: input.operation, detail, cause },
+      );
     yield* runtime.start();
     yield* applyDroidAcpInteractionMode({
       runtime,
