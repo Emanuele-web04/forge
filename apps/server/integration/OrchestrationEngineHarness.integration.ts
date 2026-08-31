@@ -411,7 +411,8 @@ export const makeOrchestrationIntegrationHarness = (
           .pipe(
             Effect.map(
               (snapshot) =>
-                snapshot.threads.find((thread: OrchestrationThread) => thread.id === threadId) ?? null,
+                snapshot.threads.find((thread: OrchestrationThread) => thread.id === threadId) ??
+                null,
             ),
           ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),

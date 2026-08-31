@@ -460,7 +460,9 @@ describe("AcpSessionRuntime initialize validation", () => {
     const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
     const agentInput = new ReadableStream<Uint8Array>({
       pull(controller) {
-        return Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => controller.enqueue(chunk));
+        return Effect.runPromise(Queue.take(clientToAgent)).then((chunk) =>
+          controller.enqueue(chunk),
+        );
       },
     });
     const agentOutput = new WritableStream<Uint8Array>({
