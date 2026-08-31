@@ -69,7 +69,7 @@ import {
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
-import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { ServerConfig } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
@@ -203,15 +203,6 @@ const DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
 const ACP_APPROVAL_MODE_ALIASES = ["accept-edits", "code"] as const;
 const ACP_FULL_ACCESS_MODE_ALIASES = ["bypass", "full access"] as const;
-const ACP_IMPLEMENT_MODE_ALIASES = [
-  "code",
-  "agent",
-  "implement",
-  "chat",
-  "work",
-  "default",
-] as const;
-
 const DEVIN_PLAN_MODE_PROMPT_PREFIX = [
   "Devin plan mode is active.",
   "Do not implement or mutate files in this turn.",
@@ -310,17 +301,6 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   gatewaySessionLease: AgentGatewaySessionLease | undefined;
 }
 
-function resolveDevinSessionCwd(
-  inputCwd: string | undefined,
-  serverConfig: ServerConfigShape,
-): string | undefined {
-  return resolveAcpSessionCwd({
-    inputCwd,
-    serverCwd: serverConfig.cwd,
-    homeDir: serverConfig.homeDir,
-  });
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -415,9 +395,7 @@ export function resolveRequestedModeId(input: {
         ? ACP_PLAN_MODE_ALIASES
         : runtimeMode === "approval-required"
           ? ACP_APPROVAL_MODE_ALIASES
-          : runtimeMode === "full-access"
-            ? ACP_FULL_ACCESS_MODE_ALIASES
-            : ACP_IMPLEMENT_MODE_ALIASES;
+          : ACP_FULL_ACCESS_MODE_ALIASES;
 
     // For plan mode, only an exact normalized id or name match is considered
     // safe; whole-token matching is too permissive for a fail-closed gate.
@@ -1560,7 +1538,11 @@ export function makeDevinAdapter(
             });
           }
 
-          const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
+          const cwd = resolveAcpSessionCwd({
+            inputCwd: input.cwd,
+            serverCwd: serverConfig.cwd,
+            homeDir: serverConfig.homeDir,
+          });
           if (cwd === undefined) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
@@ -2628,7 +2610,11 @@ export function makeDevinAdapter(
     const listCommands: NonNullable<DevinAdapterShape["listCommands"]> = (
       input: ProviderListCommandsInput,
     ) => {
-      const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
+      const cwd = resolveAcpSessionCwd({
+        inputCwd: input.cwd,
+        serverCwd: serverConfig.cwd,
+        homeDir: serverConfig.homeDir,
+      });
       const cacheKey =
         cwd === undefined
           ? undefined
@@ -2646,7 +2632,11 @@ export function makeDevinAdapter(
       }
       return discoveryLock.withPermits(1)(
         Effect.gen(function* () {
-          const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
+          const cwd = resolveAcpSessionCwd({
+            inputCwd: input.cwd,
+            serverCwd: serverConfig.cwd,
+            homeDir: serverConfig.homeDir,
+          });
           if (!cwd) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,

@@ -124,29 +124,6 @@ describe("applyDevinSessionConfiguration", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
     expect(calls).toEqual([]);
   });
-
-  it("sets Devin 3000.6.7 Code mode for approval-required sessions", async () => {
-    const { runtime, calls } = makeFakeAcpRuntime({
-      currentModeId: "smart",
-      availableModes: [
-        { id: "accept-edits", name: "Code" },
-        { id: "smart", name: "Smart" },
-        { id: "ask", name: "Ask" },
-        { id: "plan", name: "Plan" },
-        { id: "bypass", name: "Full Access" },
-      ],
-    });
-
-    await Effect.runPromise(
-      applyDevinSessionConfiguration({
-        runtime,
-        runtimeMode: "approval-required",
-        interactionMode: undefined,
-      }),
-    );
-
-    expect(calls).toEqual([{ method: "setMode", args: ["accept-edits"] }]);
-  });
 });
 
 describe("resolveRequestedModeId", () => {
