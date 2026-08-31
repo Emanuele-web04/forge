@@ -5142,17 +5142,17 @@ export default function Sidebar() {
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
     });
-    const linkedSplitPeerThreadIds =
-      splitGroup?.presentation === "linked"
+    const splitPeerThreadIds =
+      splitGroup
         ? (splitGroupMemberThreadIdsByViewId.get(splitGroup.splitViewId) ?? []).filter(
             (threadId) => threadId !== thread.id,
           )
         : [];
-    const linkedSplitLabel =
-      linkedSplitPeerThreadIds.length === 1
-        ? `Split view with ${sidebarThreadSummaryById[linkedSplitPeerThreadIds[0]!]?.title ?? "another chat"}`
-        : linkedSplitPeerThreadIds.length > 1
-          ? `Split view with ${linkedSplitPeerThreadIds.length} other chats`
+    const splitGroupLabel =
+      splitPeerThreadIds.length === 1
+        ? `Split view with ${sidebarThreadSummaryById[splitPeerThreadIds[0]!]?.title ?? "another chat"}`
+        : splitPeerThreadIds.length > 1
+          ? `Split view with ${splitPeerThreadIds.length} other chats`
           : null;
 
     return (
@@ -5185,9 +5185,6 @@ export default function Sidebar() {
                     isSelected,
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  // Split rows carry a shared surface that bleeds into the inter-row gap to read as
-                  // one contained group; the row's default overflow-hidden would clip that bridge.
-                  splitGroup?.presentation === "card" ? "overflow-visible" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
@@ -5300,7 +5297,7 @@ export default function Sidebar() {
               splitGroupActive={
                 splitGroup !== null && splitGroup.splitViewId === routeSearch.splitViewId
               }
-              splitGroupLinkedLabel={linkedSplitLabel}
+              splitGroupLabel={splitGroupLabel}
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }

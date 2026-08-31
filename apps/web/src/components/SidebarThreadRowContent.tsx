@@ -16,8 +16,7 @@ import type { SidebarThreadSummary } from "../types";
 import type { SidebarSplitGroupInfo } from "./sidebarSplitGroups";
 import { resolveSidebarParentThreadId } from "./sidebarThreadHierarchy";
 import { SidebarSplitLinkIndicator } from "./SidebarSplitLinkIndicator";
-import { SidebarSplitGroupSurface } from "./SidebarSplitGroupSurface";
-import { BotIcon, TerminalIcon } from "../lib/icons";
+import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
@@ -210,7 +209,15 @@ export function resolveChildThreadRowDescription({
   return `Created from ${parentTitle ?? "another thread"}`;
 }
 
-function ChildThreadConnector({ indentPx }: { indentPx: number }) {
+function ChildThreadConnector({
+  indentPx,
+  thread,
+}: {
+  indentPx: number;
+  thread: SidebarThreadSummary;
+}) {
+  const provider = thread.session?.provider ?? thread.modelSelection.provider;
+
   return (
     <span
       aria-hidden="true"
@@ -221,8 +228,12 @@ function ChildThreadConnector({ indentPx }: { indentPx: number }) {
     >
       <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
       <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-      <span className="sidebar-icon-chip absolute left-1.5 top-1/2 inline-flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border/55 bg-background/90 text-muted-foreground/75 shadow-sm">
-        <BotIcon className="size-2" />
+      <span
+        className="sidebar-icon-chip absolute left-1.5 top-1/2 inline-flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border/55 bg-background/90 shadow-sm"
+        data-testid="sidebar-child-provider-icon"
+        data-provider={provider}
+      >
+        <ProviderIcon provider={provider} className="size-2.5" />
       </span>
     </span>
   );
@@ -239,7 +250,7 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass,
   splitGroup,
   splitGroupActive,
-  splitGroupLinkedLabel,
+  splitGroupLabel,
   suffix,
 }: {
   thread: SidebarThreadSummary;
@@ -252,7 +263,7 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass?: string | null | undefined;
   splitGroup?: SidebarSplitGroupInfo | null | undefined;
   splitGroupActive?: boolean | undefined;
-  splitGroupLinkedLabel?: string | null | undefined;
+  splitGroupLabel?: string | null | undefined;
   suffix?: ReactNode;
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
@@ -262,14 +273,8 @@ export function SidebarThreadRowContent({
 
   return (
     <>
-      {splitGroup?.presentation === "card" ? (
-        <SidebarSplitGroupSurface
-          position={splitGroup.position}
-          active={splitGroupActive === true}
-        />
-      ) : null}
       {variant === "standard" && isChildThread ? (
-        <ChildThreadConnector indentPx={subagentIndentPx} />
+        <ChildThreadConnector indentPx={subagentIndentPx} thread={thread} />
       ) : terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
@@ -304,9 +309,9 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
-        {splitGroup?.presentation === "linked" && splitGroupLinkedLabel ? (
+        {splitGroup && splitGroupLabel ? (
           <SidebarSplitLinkIndicator
-            label={splitGroupLinkedLabel}
+            label={splitGroupLabel}
             active={splitGroupActive === true}
           />
         ) : null}
