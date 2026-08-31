@@ -2362,6 +2362,29 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("recognizes credentials saved by devin auth login", () => {
+      let credentialsRead = false;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => {
+          credentialsRead = true;
+          return { apiKey: "stored-test-key" };
+        });
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(credentialsRead, true);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
     it.effect("returns unavailable when Devin CLI is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkDevinProviderStatus;

@@ -70,6 +70,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
@@ -213,6 +214,7 @@ const DEVIN_PLAN_MODE_PROMPT_PREFIX = [
 interface DevinAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly makeAcpRuntime?: typeof makeDevinAcpRuntime;
 }
 
 interface PendingApproval {
@@ -553,11 +555,7 @@ export function makeCachedDevinModelDiscovery<E, R>(input: {
 }
 
 function collectStreamAsString<E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> {
-  return Stream.runFold(
-    stream,
-    () => "",
-    (acc, chunk) => acc + new TextDecoder().decode(chunk),
-  );
+  return collectUint8StreamText({ stream }).pipe(Effect.map(({ text }) => text));
 }
 
 function isDevinAcpDebugEnabled(): boolean {
@@ -1151,6 +1149,7 @@ export function makeDevinAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const createAcpRuntime = options?.makeAcpRuntime ?? makeDevinAcpRuntime;
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
@@ -1183,7 +1182,7 @@ export function makeDevinAdapter(
       readonly binaryPath?: string;
       readonly cwd: string;
     }) =>
-      makeDevinAcpRuntime({
+      createAcpRuntime({
         devinSettings: {
           ...(devinSettings.binaryPath ? { binaryPath: devinSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
@@ -1672,7 +1671,7 @@ export function makeDevinAdapter(
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
 
-          const acp = yield* makeDevinAcpRuntime({
+          const acp = yield* createAcpRuntime({
             devinSettings: effectiveDevinSettings,
             childProcessSpawner,
             cwd,
@@ -2229,6 +2228,13 @@ export function makeDevinAdapter(
             provider: PROVIDER,
             operation: "sendTurn",
             issue: "Another Devin turn is still starting for this thread.",
+          });
+        }
+        if (ctx.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Another Devin turn is already active for this thread.",
           });
         }
         ctx.turnStarting = true;

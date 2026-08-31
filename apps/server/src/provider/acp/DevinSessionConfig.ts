@@ -35,7 +35,10 @@ export interface DevinSessionConfigInput {
 }
 
 function userMcpConfigPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
-  if (platform === "win32") return undefined;
+  if (platform === "win32") {
+    const appData = env.APPDATA?.trim();
+    return appData ? path.join(appData, "devin", "mcp_config.json") : undefined;
+  }
   const home = env.HOME?.trim();
   const configHome = env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
   if (!configHome) return undefined;
@@ -61,11 +64,6 @@ export async function createDevinSessionConfig(
 ): Promise<DevinSessionConfig> {
   const env = input.env ?? process.env;
   const platform = input.platform ?? process.platform;
-  if (platform === "win32") {
-    throw new Error(
-      "Devin MCP federation is disabled on Windows until config redirection is verified.",
-    );
-  }
   const userConfig = await readUserConfig(userMcpConfigPath(env, platform));
   const userServers = userConfig.mcpServers;
   if (
@@ -89,7 +87,9 @@ export async function createDevinSessionConfig(
     await chmod(root, 0o700);
     const home = env.HOME?.trim();
     const sourceConfigHome =
-      env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
+      platform === "win32"
+        ? env.APPDATA?.trim()
+        : env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
     for (const namespace of ["devin", "cognition"] as const) {
       if (!sourceConfigHome) break;
       const sourceSkills = path.join(sourceConfigHome, namespace, "skills");
@@ -98,7 +98,7 @@ export async function createDevinSessionConfig(
       await access(sourceSkills).then(
         async () => {
           await mkdir(targetNamespace, { recursive: true, mode: 0o700 });
-          await symlink(sourceSkills, targetSkills, "dir");
+          await symlink(sourceSkills, targetSkills, platform === "win32" ? "junction" : "dir");
         },
         () => undefined,
       );
@@ -133,7 +133,7 @@ export async function createDevinSessionConfig(
       configPath,
       childEnvironment: {
         ...env,
-        XDG_CONFIG_HOME: root,
+        ...(platform === "win32" ? { APPDATA: root } : { XDG_CONFIG_HOME: root }),
       },
       installed: true,
       cleanup,

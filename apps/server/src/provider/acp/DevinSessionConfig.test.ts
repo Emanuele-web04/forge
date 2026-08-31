@@ -100,9 +100,28 @@ describe("createDevinSessionConfig", () => {
     configs.push(second);
   });
 
-  it("fails closed on Windows instead of overriding APPDATA", async () => {
-    await expect(createDevinSessionConfig(await makeInput({ platform: "win32" }))).rejects.toThrow(
-      "disabled on Windows",
+  it("isolates the Windows MCP config through APPDATA", async () => {
+    const baseInput = await makeInput();
+    const appData = path.join(baseInput.tmpDir, "appdata");
+    const sourceConfig = path.join(appData, "devin", "mcp_config.json");
+    await mkdir(path.dirname(sourceConfig), { recursive: true });
+    await writeFile(
+      sourceConfig,
+      JSON.stringify({ mcpServers: { github: { url: "https://example.test/mcp" } } }),
     );
+
+    const config = await createDevinSessionConfig({
+      ...baseInput,
+      platform: "win32",
+      env: { ...baseInput.env, APPDATA: appData },
+    });
+    configs.push(config);
+
+    expect(config.childEnvironment.APPDATA).toBe(config.root);
+    expect(JSON.parse(await readFile(config.configPath, "utf8")).mcpServers).toMatchObject({
+      github: { url: "https://example.test/mcp" },
+      synara: { transport: "stdio" },
+    });
+    expect(await readFile(sourceConfig, "utf8")).not.toContain("synara");
   });
 });

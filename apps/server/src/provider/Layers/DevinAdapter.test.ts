@@ -3,12 +3,15 @@
 // model discovery, and plan-mode fail-closed behavior.
 // Layer: Provider adapter tests
 
-import { Effect, Exit, Scope, Semaphore } from "effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { TurnId } from "@synara/contracts";
+import { ThreadId, TurnId } from "@synara/contracts";
+import { Deferred, Effect, Exit, Layer, Scope, Semaphore, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { ServerConfig } from "../../config.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import {
   applyDevinSessionConfiguration,
   buildDevinPromptMeta,
@@ -16,6 +19,7 @@ import {
   closeDevinSessionResources,
   makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
+  makeDevinAdapterLive,
   parseDevinCliModelList,
   pruneDevinToolCallTurnIds,
   resolveDevinEffectiveModel,
@@ -56,6 +60,120 @@ function makeFakeAcpRuntime(initialModeState?: {
   };
   return { runtime, calls };
 }
+
+function makeLifecycleAcpRuntime(
+  prompt: AcpSessionRuntimeShape["prompt"] = () =>
+    Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+): AcpSessionRuntimeShape {
+  const registerHandler = () => Effect.void;
+  return {
+    handleRequestPermission: registerHandler,
+    handleElicitation: registerHandler,
+    handleReadTextFile: registerHandler,
+    handleWriteTextFile: registerHandler,
+    handleCreateTerminal: registerHandler,
+    handleTerminalOutput: registerHandler,
+    handleTerminalWaitForExit: registerHandler,
+    handleTerminalKill: registerHandler,
+    handleTerminalRelease: registerHandler,
+    handleSessionUpdate: registerHandler,
+    handleElicitationComplete: registerHandler,
+    handleExtRequest: registerHandler,
+    handleExtNotification: registerHandler,
+    start: () =>
+      Effect.succeed({
+        sessionId: "devin-test-session",
+        initializeResult: {} as Acp.InitializeResponse,
+        sessionSetupResult: {} as Acp.NewSessionResponse,
+        modelConfigId: undefined,
+        sessionSetupMethod: "new",
+      }),
+    awaitExit: Effect.never,
+    getEvents: () => Stream.never,
+    sessionUpdatesEnqueuedCount: Effect.succeed(0),
+    supportsSessionFork: Effect.succeed(false),
+    supportsSessionRecovery: Effect.succeed(true),
+    getModeState: Effect.succeed({
+      currentModeId: "bypass",
+      availableModes: [{ id: "bypass", name: "Full Access" }],
+    }),
+    getSessionEpoch: () => Effect.succeed(0 as never),
+    getPendingSessionNotificationCount: () => Effect.succeed(0),
+    getConfigOptions: Effect.succeed([]),
+    getAvailableCommands: Effect.succeed([]),
+    awaitLoadReplayReady: Effect.void,
+    prompt,
+    cancel: Effect.void,
+    setMode: () => Effect.succeed({} as Acp.SetSessionModeResponse),
+    setConfigOption: () => Effect.succeed({} as Acp.SetSessionConfigOptionResponse),
+    setModel: () => Effect.void,
+    forkSession: () => Effect.succeed({} as Acp.ForkSessionResponse),
+    request: () => Effect.succeed({}),
+    notify: () => Effect.void,
+  } as AcpSessionRuntimeShape;
+}
+
+function makeDevinAdapterTestLayer(runtime: AcpSessionRuntimeShape) {
+  return makeDevinAdapterLive(
+    {},
+    {
+      makeAcpRuntime: () => Effect.succeed(runtime),
+    },
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+describe("Devin adapter lifecycle", () => {
+  it("rejects an overlapping send without replacing the active turn", async () => {
+    const promptStarted = await Effect.runPromise(Deferred.make<void>());
+    const runtime = makeLifecycleAcpRuntime(() =>
+      Deferred.succeed(promptStarted, undefined).pipe(Effect.andThen(Effect.never)),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-overlap");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+
+        const firstTurn = yield* adapter.sendTurn({
+          threadId,
+          input: "first",
+          attachments: [],
+        });
+        yield* Deferred.await(promptStarted);
+
+        const duplicateError = yield* adapter
+          .sendTurn({ threadId, input: "second", attachments: [] })
+          .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }));
+        expect(duplicateError).toMatchObject({
+          _tag: "ProviderAdapterValidationError",
+          operation: "sendTurn",
+        });
+
+        const runningSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === threadId,
+        );
+        expect(runningSession?.activeTurnId).toBe(firstTurn.turnId);
+
+        yield* adapter.interruptTurn(threadId, firstTurn.turnId);
+        const readySession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === threadId,
+        );
+        expect(readySession?.activeTurnId).toBeUndefined();
+        expect(readySession?.status).toBe("ready");
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime))),
+    );
+  });
+});
 
 describe("applyDevinSessionConfiguration", () => {
   it("sets plan mode when requested", async () => {

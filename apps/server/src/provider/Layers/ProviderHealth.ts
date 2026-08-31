@@ -65,7 +65,11 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
-import { hasDevinApiKeyEnv, resolveDevinBinaryPath } from "../acp/DevinAcpSupport";
+import {
+  hasDevinApiKeyEnv,
+  readDevinStoredCredentials,
+  resolveDevinBinaryPath,
+} from "../acp/DevinAcpSupport";
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
@@ -1828,6 +1832,7 @@ export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
 export const makeCheckDevinProviderStatus = (
   binaryPath?: string,
+  readStoredCredentials: typeof readDevinStoredCredentials = readDevinStoredCredentials,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -1884,7 +1889,9 @@ export const makeCheckDevinProviderStatus = (
     const parsedVersion = parseGenericCliVersion(
       `${versionResult.stdout}\n${versionResult.stderr}`,
     );
-    const hasApiKey = hasDevinApiKeyEnv();
+    const storedCredentials = yield* Effect.promise(() => readStoredCredentials());
+    const hasApiKey =
+      hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
 
     return {
       provider: DEVIN_PROVIDER,
