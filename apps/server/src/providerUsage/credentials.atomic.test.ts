@@ -14,9 +14,9 @@ const tempDirectories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
-    tempDirectories.splice(0).map((directory) =>
-      fs.rm(directory, { recursive: true, force: true }),
-    ),
+    tempDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
