@@ -105,7 +105,10 @@ import {
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
-import { resolveAcpTurnIdleTimeoutMs } from "../acp/AcpTurnIdleWatchdog.ts";
+import {
+  isAcpTurnProgressEventTag,
+  resolveAcpTurnIdleTimeoutMs,
+} from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
@@ -1048,9 +1051,9 @@ export function makeDroidAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
