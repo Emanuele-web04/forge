@@ -302,6 +302,7 @@ function cursorCapabilities(input?: {
   const defaultEffort =
     input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
   return {
+    // eslint-disable-next-line oxc/no-map-spread
     reasoningEffortLevels: efforts.map((value) => ({
       value,
       label: CURSOR_EFFORT_LABELS[value],
@@ -426,6 +427,12 @@ const DROID_CORE_DEEPSEEK_CAPABILITIES = droidCapabilities([
   { value: "low", label: "Low" },
   { value: "high", label: "High", isDefault: true },
   { value: "max", label: "Max" },
+]);
+
+const DROID_DEEPSEEK_FLASH_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low", isDefault: true },
+  { value: "high", label: "High" },
 ]);
 
 const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
@@ -824,6 +831,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
     },
     {
+      slug: "deepseek-v4-flash-0731",
+      name: "DeepSeek V4 Flash 0731",
+      capabilities: DROID_DEEPSEEK_FLASH_CAPABILITIES,
+    },
+    {
       slug: "minimax-m3",
       name: "MiniMax M3",
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
@@ -1061,7 +1073,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
-  droid: "claude-opus-4-8",
+  droid: "deepseek-v4-flash-0731",
   opencode: "openai/gpt-5",
 };
 
@@ -1146,8 +1158,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   antigravity: {},
   droid: {
-    droid: "claude-opus-4-8",
-    factory: "claude-opus-4-8",
+    droid: "deepseek-v4-flash-0731",
+    factory: "deepseek-v4-flash-0731",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "opus-fast": "claude-opus-4-8-fast",
@@ -1180,7 +1192,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     nemotron: "nemotron-3-ultra",
     kimi: "kimi-k2.7-code",
     "kimi-code": "kimi-k2.7-code",
-    deepseek: "deepseek-v4-pro",
+    deepseek: "deepseek-v4-flash-0731",
+    flash: "deepseek-v4-flash-0731",
     minimax: "minimax-m3",
   },
   grok: {

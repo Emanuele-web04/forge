@@ -456,7 +456,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Droid",
     description: "Save additional Droid model slugs for the picker and `/model` command.",
     placeholder: "your-droid-model-slug",
-    example: "claude-opus-4-8",
+    example: "deepseek-v4-flash-0731",
   },
   opencode: {
     provider: "opencode",
@@ -699,6 +699,7 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
+    hasOwn(patch, "droidBinaryPath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
@@ -1055,7 +1056,7 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "opencode";
+type GitTextGenerationDiscoveredProvider = "codex" | "droid" | "opencode";
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -1071,7 +1072,11 @@ export function mapCatalogModelOptionsToAppModelOptions(
 export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
-    "customCodexModels" | "customOpenCodeModels" | "textGenerationModel" | "textGenerationProvider"
+    | "customCodexModels"
+    | "customDroidModels"
+    | "customOpenCodeModels"
+    | "textGenerationModel"
+    | "textGenerationProvider"
   >,
   discoveredOptionsByProvider?: Partial<
     Record<
@@ -1081,10 +1086,13 @@ export function getGitTextGenerationModelOptions(
   >,
 ): AppModelOption[] {
   const options = [
-    ...(discoveredOptionsByProvider?.codex
+    ...(discoveredOptionsByProvider?.codex?.length
       ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
       : getAppModelOptions("codex", settings.customCodexModels)),
-    ...(discoveredOptionsByProvider?.opencode
+    ...(discoveredOptionsByProvider?.droid?.length
+      ? mapCatalogModelOptionsToAppModelOptions("droid", discoveredOptionsByProvider.droid)
+      : getAppModelOptions("droid", settings.customDroidModels)),
+    ...(discoveredOptionsByProvider?.opencode?.length
       ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
       : getAppModelOptions("opencode", settings.customOpenCodeModels)),
   ];

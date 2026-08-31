@@ -264,6 +264,11 @@ export class CursorTextGeneration extends ServiceMap.Service<
   TextGenerationShape
 >()("synara/git/Services/TextGeneration/CursorTextGeneration") {}
 
+export class DroidTextGeneration extends ServiceMap.Service<
+  DroidTextGeneration,
+  TextGenerationShape
+>()("synara/git/Services/TextGeneration/DroidTextGeneration") {}
+
 /**
  * TextGeneration - Service tag for commit and PR text generation.
  */

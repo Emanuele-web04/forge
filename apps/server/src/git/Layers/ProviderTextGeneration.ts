@@ -12,6 +12,7 @@ import {
 import {
   CodexTextGeneration,
   CursorTextGeneration,
+  DroidTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -20,6 +21,7 @@ import {
 const makeProviderTextGeneration = Effect.gen(function* () {
   const codexTextGeneration = yield* CodexTextGeneration;
   const cursorTextGeneration = yield* CursorTextGeneration;
+  const droidTextGeneration = yield* DroidTextGeneration;
   const openCodeTextGeneration = yield* OpenCodeTextGeneration;
   const serverSettings = yield* ServerSettingsService;
 
@@ -37,6 +39,8 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     switch (provider) {
       case "cursor":
         return cursorTextGeneration;
+      case "droid":
+        return droidTextGeneration;
       case "opencode":
         return openCodeTextGeneration;
       case "codex":

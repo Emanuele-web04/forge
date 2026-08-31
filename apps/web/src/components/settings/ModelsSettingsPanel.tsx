@@ -23,6 +23,7 @@ import {
 } from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { PlusIcon, XIcon } from "~/lib/icons";
+import { isProviderKind } from "~/providerOrdering";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -98,8 +99,13 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const { customCodexModels, customOpenCodeModels, textGenerationModel, textGenerationProvider } =
-    settings;
+  const {
+    customCodexModels,
+    customDroidModels,
+    customOpenCodeModels,
+    textGenerationModel,
+    textGenerationProvider,
+  } = settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -123,19 +129,23 @@ export function ModelsSettingsPanel({
       getGitTextGenerationModelOptions(
         {
           customCodexModels,
+          customDroidModels,
           customOpenCodeModels,
           textGenerationModel,
           textGenerationProvider,
         },
         {
           codex: gitWritingCatalogOptionsByProvider.codex,
+          droid: gitWritingCatalogOptionsByProvider.droid,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
         },
       ),
     [
       customCodexModels,
+      customDroidModels,
       customOpenCodeModels,
       gitWritingCatalogOptionsByProvider.codex,
+      gitWritingCatalogOptionsByProvider.droid,
       gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
@@ -271,9 +281,9 @@ export function ModelsSettingsPanel({
               onValueChange={(value) => {
                 if (!value) return;
                 const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex) as ProviderKind;
+                const provider = value.slice(0, separatorIndex);
                 const model = value.slice(separatorIndex + 1);
-                if (!provider || !model) return;
+                if (!isProviderKind(provider) || !model) return;
                 updateSettings({
                   textGenerationProvider: provider,
                   textGenerationModel: model,

@@ -5,6 +5,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
+  DroidTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -95,15 +96,17 @@ function makeProviderTextGenerationTestLayer(
 ) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
+  const droid = createTextGenerationDouble("droid");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
+    Layer.provide(Layer.succeed(DroidTextGeneration, droid.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );
 
-  return { layer, codex, cursor, opencode };
+  return { layer, codex, cursor, droid, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
