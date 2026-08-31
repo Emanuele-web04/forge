@@ -713,6 +713,37 @@ describe("wsNativeApi", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("forwards outbound MCP lifecycle requests to their websocket server methods", async () => {
+    requestMock
+      .mockResolvedValueOnce({ connections: [] })
+      .mockResolvedValueOnce({
+        attemptId: "attempt-1",
+        authorizationUrl: "https://auth.example.test/authorize",
+      })
+      .mockResolvedValueOnce(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.server.listOutboundMcpConnections();
+    await api.server.beginOutboundMcpAuthorization({ presetId: "paraty" });
+    await api.server.disconnectOutboundMcpConnection({ connectionId: "paraty" });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      WS_METHODS.serverListOutboundMcpConnections,
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      WS_METHODS.serverBeginOutboundMcpAuthorization,
+      { presetId: "paraty" },
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      WS_METHODS.serverDisconnectOutboundMcpConnection,
+      { connectionId: "paraty" },
+    );
+  });
+
   it("fetches auth session state over HTTP", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

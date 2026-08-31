@@ -161,6 +161,10 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import {
+  OutboundMcpBeginAuthorizationInput,
+  OutboundMcpDisconnectInput,
+} from "./outboundMcp";
+import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
@@ -255,6 +259,9 @@ export const WS_METHODS = {
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
+  serverListOutboundMcpConnections: "server.listOutboundMcpConnections",
+  serverBeginOutboundMcpAuthorization: "server.beginOutboundMcpAuthorization",
+  serverDisconnectOutboundMcpConnection: "server.disconnectOutboundMcpConnection",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
@@ -470,6 +477,15 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
+  tagRequestBody(WS_METHODS.serverListOutboundMcpConnections, Schema.Struct({})),
+  tagRequestBody(
+    WS_METHODS.serverBeginOutboundMcpAuthorization,
+    OutboundMcpBeginAuthorizationInput,
+  ),
+  tagRequestBody(
+    WS_METHODS.serverDisconnectOutboundMcpConnection,
+    OutboundMcpDisconnectInput,
+  ),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
