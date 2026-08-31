@@ -375,9 +375,13 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  const persistedProjectOrderIndex = rememberedUiState.projectOrderIndexForCwd(workspaceRootKey);
+  const hasKnownLegacyExpansion =
+    rememberedUiState.projectOrderCount === 0 &&
+    (rememberedUiState.expandedProjectCount > 0 || rememberedUiState.hasLegacyExpandedCwds);
   const expanded =
     previous?.expanded ??
-    (rememberedUiState.expandedProjectCount > 0
+    (persistedProjectOrderIndex !== undefined || hasKnownLegacyExpansion
       ? rememberedUiState.isProjectExpanded(workspaceRootKey)
       : true);
 
@@ -416,7 +420,7 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
-  } satisfies Project;
+  };
 }
 
 export function normalizeSpace(

@@ -16,12 +16,12 @@ export interface RateLimitWindow {
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: ReadonlyArray<RateLimitWindow>;
-  usedPercent?: number;
-  utilization?: number;
-  resetsAt?: string;
-  windowDurationMins?: number;
-  status?: string;
+  limits?: ReadonlyArray<RateLimitWindow> | undefined;
+  usedPercent?: number | undefined;
+  utilization?: number | undefined;
+  resetsAt?: string | undefined;
+  windowDurationMins?: number | undefined;
+  status?: string | undefined;
 }
 
 export interface VisibleRateLimitRow {

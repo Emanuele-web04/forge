@@ -31,6 +31,26 @@ import {
   makeReadModelProject,
   threadsOf,
 } from "./storeTestFixtures";
+import { PERSISTED_STATE_KEY } from "./storePersistence";
+
+function makeFakeWindow(storage: Map<string, string>) {
+  const setItem = vi.fn((key: string, value: string) => {
+    storage.set(key, value);
+  });
+  return {
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem,
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      clear: () => {
+        storage.clear();
+      },
+    },
+    addEventListener: vi.fn(),
+  };
+}
 
 describe("store facade", () => {
   it("frees a batch of thread details in a single store write", () => {
@@ -472,23 +492,9 @@ describe("store facade", () => {
 
   it("keeps a cleared local project alias from reappearing during syncs", async () => {
     const storage = new Map<string, string>();
-    const fakeWindow = {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-        clear: () => {
-          storage.clear();
-        },
-      },
-      addEventListener: vi.fn(),
-    };
+    const fakeWindow = makeFakeWindow(storage);
     storage.set(
-      "synara:renderer-state:v8",
+      PERSISTED_STATE_KEY,
       JSON.stringify({
         projectNamesByCwd: {
           "/tmp/project": "synara",
@@ -537,22 +543,8 @@ describe("store facade", () => {
 
   it("persists project aliases immediately when the local alias changes", async () => {
     const storage = new Map<string, string>();
-    const setItem = vi.fn((key: string, value: string) => {
-      storage.set(key, value);
-    });
-    const fakeWindow = {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem,
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-        clear: () => {
-          storage.clear();
-        },
-      },
-      addEventListener: vi.fn(),
-    };
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
     vi.stubGlobal("window", fakeWindow);
     try {
       vi.resetModules();
@@ -574,11 +566,461 @@ describe("store facade", () => {
       freshStore.useStore.getState().renameProjectLocally(projectId, "synara");
 
       expect(setItem).toHaveBeenCalled();
-      expect(JSON.parse(storage.get("synara:renderer-state:v8") ?? "{}")).toMatchObject({
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}")).toMatchObject({
         projectNamesByCwd: {
           "/tmp/project": "synara",
         },
       });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves all-collapsed state across a full reload", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.persistAppStateNow();
+
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.expandedProjectCwds).toEqual([]);
+      expect(saved.projectOrderCwds).toEqual(["/tmp/project-1", "/tmp/project-2"]);
+
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      reloaded.useStore.getState().syncServerReadModel(readModel);
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: false },
+        { id: project2, expanded: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves mixed expansion state across a full reload", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const project3 = ProjectId.makeUnsafe("project-3");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+          makeReadModelProject({
+            id: project3,
+            title: "Project 3",
+            workspaceRoot: "/tmp/project-3",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().setProjectExpanded(project1, false);
+      fresh.useStore.getState().setProjectExpanded(project2, true);
+      fresh.useStore.getState().setProjectExpanded(project3, false);
+      fresh.persistAppStateNow();
+
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      reloaded.useStore.getState().syncServerReadModel(readModel);
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: false },
+        { id: project2, expanded: true },
+        { id: project3, expanded: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("expands every project on a fresh profile with no persisted state", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      expect(fresh.useStore.getState().projects.every((project) => project.expanded)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("expands every project when persisted JSON is corrupt", async () => {
+    const storage = new Map<string, string>();
+    storage.set(PERSISTED_STATE_KEY, '"{"');
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      expect(() => fresh.useStore.getState().syncServerReadModel(readModel)).not.toThrow();
+      expect(fresh.useStore.getState().projects.every((project) => project.expanded)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("expands a new project even when every persisted project is collapsed", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        projectOrderCwds: ["/tmp/project-1", "/tmp/project-2"],
+        expandedProjectCwds: [],
+      }),
+    );
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const project3 = ProjectId.makeUnsafe("project-3");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+          makeReadModelProject({
+            id: project3,
+            title: "Project 3",
+            workspaceRoot: "/tmp/project-3",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      const projects = fresh.useStore.getState().projects;
+      expect(projects.find((project) => project.id === project1)?.expanded).toBe(false);
+      expect(projects.find((project) => project.id === project2)?.expanded).toBe(false);
+      expect(projects.find((project) => project.id === project3)?.expanded).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves legacy payloads containing only expandedProjectCwds", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        expandedProjectCwds: ["/tmp/project-1"],
+      }),
+    );
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const project3 = ProjectId.makeUnsafe("project-3");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+          makeReadModelProject({
+            id: project3,
+            title: "Project 3",
+            workspaceRoot: "/tmp/project-3",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      const projects = fresh.useStore.getState().projects;
+      expect(projects.find((project) => project.id === project1)?.expanded).toBe(true);
+      expect(projects.find((project) => project.id === project2)?.expanded).toBe(false);
+      expect(projects.find((project) => project.id === project3)?.expanded).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("collapses every project when a legacy payload has an empty expandedProjectCwds list", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        expandedProjectCwds: [],
+      }),
+    );
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      const projects = fresh.useStore.getState().projects;
+      expect(projects.find((project) => project.id === project1)?.expanded).toBe(false);
+      expect(projects.find((project) => project.id === project2)?.expanded).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("removes a deleted project's cwd from persisted project lists", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.setState((state) => ({
+        ...state,
+        projects: [state.projects.find((project) => project.id === project1)!],
+      }));
+      fresh.persistAppStateNow();
+
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.projectOrderCwds).not.toContain("/tmp/project-2");
+      expect(saved.expandedProjectCwds).not.toContain("/tmp/project-2");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("removes a deleted project's local alias from persisted projectNamesByCwd", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
+        projects: [
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ],
+        threads: [],
+      };
+
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore.getState().renameProjectLocally(project1, "alpha");
+      fresh.useStore.getState().renameProjectLocally(project2, "beta");
+
+      fresh.useStore.setState((state) => ({
+        ...state,
+        projects: [state.projects.find((project) => project.id === project1)!],
+      }));
+      fresh.persistAppStateNow();
+
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.projectNamesByCwd).toEqual({ "/tmp/project-1": "alpha" });
+      expect(saved.projectNamesByCwd).not.toHaveProperty("/tmp/project-2");
+      expect(setItem).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not persist project UI before thread hydration", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    const setItem = fakeWindow.localStorage.setItem;
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const projectId = ProjectId.makeUnsafe("project-1");
+      fresh.useStore.setState((state) => ({
+        ...state,
+        projects: [makeProject({ id: projectId, cwd: "/tmp/project" })],
+      }));
+
+      fresh.persistAppStateNow();
+
+      expect(setItem).not.toHaveBeenCalled();
+      expect(storage.has(PERSISTED_STATE_KEY)).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
