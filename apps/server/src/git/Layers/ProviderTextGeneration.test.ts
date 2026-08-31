@@ -115,10 +115,11 @@ function createDroidStrictDouble(): TextGenerationShape {
 
 function makeProviderTextGenerationTestLayer(
   settingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
+  droidDouble: TextGenerationShape = createDroidStrictDouble(),
 ) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
-  const droid = createDroidStrictDouble();
+  const droid = droidDouble;
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
@@ -137,6 +138,7 @@ describe("ProviderTextGenerationLive", () => {
       providers: {
         codex: { enabled: false },
         cursor: { enabled: false },
+        droid: { enabled: false },
         opencode: { enabled: false },
       },
     });
@@ -309,7 +311,7 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: {
           provider: "cursor",
-          model: "composer-2",
+          model: "composer-2.5",
           options: {
             reasoningEffort: "high",
             fastMode: true,
@@ -386,5 +388,138 @@ describe("ProviderTextGenerationLive", () => {
     );
     expect(codex.evaluateAutomationCompletion).not.toHaveBeenCalled();
     expect(opencode.evaluateAutomationCompletion).not.toHaveBeenCalled();
+  });
+
+  it("routes explicit Droid model selections to the Droid implementation", async () => {
+    const droid = createTextGenerationDouble("droid").service;
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer({}, droid);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: { provider: "droid", model: "deepseek-v4-flash-0731" },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("droid summary");
+    expect(droid.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: { provider: "droid", model: "deepseek-v4-flash-0731" },
+      }),
+    );
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("routes bare Droid model slugs and aliases to the Droid implementation", async () => {
+    const droid = createTextGenerationDouble("droid").service;
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer({}, droid);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          model: "deepseek",
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("droid summary");
+    expect(droid.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "deepseek",
+      }),
+    );
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the configured fallback when Droid is disabled", async () => {
+    const droid = createTextGenerationDouble("droid").service;
+    const { layer, cursor } = makeProviderTextGenerationTestLayer(
+      {
+        providers: { droid: { enabled: false } },
+        textGenerationModelSelection: { provider: "cursor", model: "composer-2" },
+      },
+      droid,
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: { provider: "droid", model: "deepseek-v4-flash-0731" },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("cursor summary");
+    expect(cursor.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "composer-2",
+        modelSelection: { provider: "cursor", model: "composer-2" },
+      }),
+    );
+    expect(droid.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("fails with an unknown model selection", async () => {
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+          return yield* textGeneration.generateDiffSummary({
+            cwd: "/repo",
+            patch: "diff --git a/file.ts b/file.ts",
+            model: "not-a-known-model",
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "TextGenerationError",
+      detail: "Unknown model selection.",
+    });
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("uses the fallback model selection when the requested provider lacks dedicated Git text generation", async () => {
+    const { layer, cursor, codex, opencode } = makeProviderTextGenerationTestLayer({
+      textGenerationModelSelection: { provider: "cursor", model: "composer-2" },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: { provider: "antigravity", model: "Gemini 3.5 Flash" },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("cursor summary");
+    expect(cursor.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "composer-2",
+        modelSelection: { provider: "cursor", model: "composer-2" },
+      }),
+    );
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
   });
 });
