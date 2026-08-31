@@ -216,16 +216,6 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
   }),
-  kilo: defineProviderOptionConfig<"kilo">({
-    primaryOptionKey: "variant",
-    options: {
-      variant: providerOptionRule("string", [], "model-discovery"),
-      agent: providerOptionRule("string", [], "model-discovery", {
-        validation: { kind: "non-empty-string" },
-        allowsCustomValue: true,
-      }),
-    },
-  }),
   opencode: defineProviderOptionConfig<"opencode">({
     primaryOptionKey: "variant",
     options: {

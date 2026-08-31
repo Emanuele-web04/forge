@@ -197,11 +197,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 ) {
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
-  const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.kilo,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     EMPTY_FAVORITE_MODEL_SLUGS,
@@ -235,13 +230,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     hiddenProviderSet,
     protectedProviderSet,
   );
-  const kiloFavoriteModelSlugSet = new Set(kiloFavoriteModelSlugs);
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
-    kilo: kiloFavoriteModelSlugSet,
     opencode: openCodeFavoriteModelSlugSet,
     pi: piFavoriteModelSlugSet,
   };
@@ -261,11 +254,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     const setFavoriteModelSlugs =
       provider === "cursor"
         ? setCursorFavoriteModelSlugs
-        : provider === "kilo"
-          ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+        : provider === "pi"
+          ? setPiFavoriteModelSlugs
+          : setOpenCodeFavoriteModelSlugs;
     setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
   };
 
@@ -285,8 +276,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
-      (provider === "kilo" ||
-        provider === "opencode" ||
+      (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
         provider === "pi") &&

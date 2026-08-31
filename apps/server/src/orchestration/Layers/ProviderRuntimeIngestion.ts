@@ -62,6 +62,7 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
+import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -2294,6 +2295,7 @@ const make = Effect.gen(function* () {
               settledThread &&
               settledThread.deletedAt == null &&
               settledThread.archivedAt == null &&
+              !isExpiredSidechat(settledThread) &&
               settledThread.parentThreadId == null &&
               Boolean(activeThreadGoal(settledThread)?.trim()) &&
               settledThread.goalPausedAt == null

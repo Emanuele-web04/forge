@@ -14,7 +14,6 @@ import type {
   MessageId,
   PinnedMessage,
   ProjectId,
-  ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
   ThreadMarker,
@@ -41,6 +40,8 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
+import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
 import {
@@ -52,6 +53,10 @@ import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentStudioOutputsSection } from "./EnvironmentStudioOutputsSection";
+import {
+  EnvironmentSidechatsSection,
+  type EnvironmentSidechatPanelItem,
+} from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
@@ -96,8 +101,6 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
-  /** Active provider for the usage row (same chip the header used to show). */
-  activeProvider: ProviderKind;
   /**
    * Whether the active thread is a Studio chat. Studio chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
@@ -111,6 +114,8 @@ export interface EnvironmentPanelProps {
   diffOpen: boolean;
   /** Heartbeat automations whose target is the active thread. */
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
+  /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
+  sidechats: readonly EnvironmentSidechatPanelItem[] | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -216,12 +221,12 @@ export function EnvironmentPanel({
   keybindings,
   availableEditors,
   activeThreadId,
-  activeProvider,
   isStudioChat,
   studioFolderPath: studioFolderPathProp,
   showGitActions,
   diffOpen,
   threadAutomations,
+  sidechats,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
@@ -260,6 +265,7 @@ export function EnvironmentPanel({
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
@@ -370,12 +376,49 @@ export function EnvironmentPanel({
 
       <EnvironmentLocalServersSection enabled={open} />
 
+      {sidechats && activeThreadId ? (
+        <EnvironmentSidechatsSection
+          sidechats={sidechats}
+          onCreate={() => {
+            void waitForSidechatCreator(activeThreadId)
+              .then((createSidechat) => {
+                if (!createSidechat) {
+                  toastManager.add({
+                    type: "warning",
+                    title: "Side chat is unavailable",
+                    description: "Open a server-backed main thread before starting a side chat.",
+                  });
+                  return;
+                }
+                return createSidechat();
+              })
+              .catch((error) => {
+                toastManager.add({
+                  type: "error",
+                  title: "Could not start side chat",
+                  description:
+                    error instanceof Error
+                      ? error.message
+                      : "An error occurred while creating the side chat.",
+                });
+              });
+          }}
+          onOpen={(sidechatThreadId) => {
+            openRightDockPane(activeThreadId, {
+              kind: "sidechat",
+              threadId: sidechatThreadId,
+            });
+            onClose();
+          }}
+        />
+      ) : null}
+
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
         dangling rule. Visibility is gated on the per-section AppSettings flags.
       */}
-      {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
+      {settings.showEnvironmentUsage ? <EnvironmentUsageSection /> : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <EnvironmentLabeledSection label="Repository">

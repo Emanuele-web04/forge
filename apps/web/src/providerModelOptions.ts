@@ -20,7 +20,6 @@ import {
   type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
-  type KiloModelSelection,
   type ModelSelection,
   type OpenCodeModelOptions,
   type OpenCodeModelSelection,
@@ -83,7 +82,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "kilo" || input.provider === "opencode" || input.provider === "pi") {
+  if (input.provider === "opencode" || input.provider === "pi") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -131,7 +130,7 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/kilo/opencode/cursor/grok), and user-defined custom models always survive.
+ * (antigravity/opencode/cursor/grok), and user-defined custom models always survive.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
  */
@@ -206,7 +205,6 @@ export function mergeDynamicModelOptions(input: {
   );
   const missingStaticBuiltIns =
     (input.provider === "antigravity" ||
-      input.provider === "kilo" ||
       input.provider === "opencode" ||
       input.provider === "cursor" ||
       input.provider === "droid" ||
@@ -411,11 +409,6 @@ export function buildModelSelection(
   options?: OpenCodeModelOptions | null | undefined,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
-  provider: "kilo",
-  model: string,
-  options?: OpenCodeModelOptions | null | undefined,
-): KiloModelSelection;
-export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
@@ -491,14 +484,6 @@ export function buildModelSelection(
             provider,
             model,
             options: options as DroidModelOptions,
-          }
-        : { provider, model };
-    case "kilo":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
           }
         : { provider, model };
     case "opencode":

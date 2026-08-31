@@ -53,7 +53,7 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // Antigravity/Grok/Droid/Kilo/OpenCode have no native skill support.
+      // Antigravity/Grok/Droid/OpenCode have no native skill support.
       return true;
   }
 }

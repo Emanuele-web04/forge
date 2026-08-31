@@ -74,6 +74,7 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import {
   compactProviderRuntimeEventForIngress,
@@ -2718,10 +2719,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const stopAll: PiAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.keys()), (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+      settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({

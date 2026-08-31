@@ -182,7 +182,7 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
-  it.effect("accepts the advertised OpenCode/Kilo agent key without accepting arbitrary keys", () =>
+  it.effect("accepts the advertised OpenCode agent key without accepting arbitrary keys", () =>
     Effect.gen(function* () {
       const optionDiscovery = {
         listModels: () =>
@@ -221,15 +221,6 @@ describe("agent gateway target resolver", () => {
       assert.deepEqual(
         yield* resolveAgentGatewayTarget({ target: explicitAgent, discovery: optionDiscovery }),
         explicitAgent,
-      );
-      const kiloAgent = {
-        provider: "kilo" as const,
-        model: "openai/gpt-5",
-        options: { agent: "plan" },
-      };
-      assert.deepEqual(
-        yield* resolveAgentGatewayTarget({ target: kiloAgent, discovery: optionDiscovery }),
-        kiloAgent,
       );
       const result = yield* resolveAgentGatewayTarget({
         target: {
@@ -325,20 +316,6 @@ describe("agent gateway target resolver", () => {
           descriptor: makeVariantDescriptor("opencode-model"),
           optionKey: "agent",
           acceptedValue: "build",
-          rejectedValue: "",
-        },
-        {
-          provider: "kilo",
-          descriptor: makeVariantDescriptor("kilo-model"),
-          optionKey: "variant",
-          acceptedValue: "high",
-          rejectedValue: "invented",
-        },
-        {
-          provider: "kilo",
-          descriptor: makeVariantDescriptor("kilo-model"),
-          optionKey: "agent",
-          acceptedValue: "plan",
           rejectedValue: "",
         },
       ];

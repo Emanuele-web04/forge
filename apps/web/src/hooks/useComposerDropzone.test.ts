@@ -4,8 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
+
 import {
   isComposerDropzoneInternalDragTransition,
+  shouldBlockDisabledComposerDropzoneTransfer,
   shouldPreventDefaultForUnhandledFileDrop,
   shouldResetComposerDropzoneAfterUnhandledFileDrop,
   shouldHandleComposerDropzoneFiles,
@@ -61,5 +64,14 @@ describe("useComposerDropzone file capability helpers", () => {
     expect(isComposerDropzoneInternalDragTransition(currentTarget, child)).toBe(true);
     expect(isComposerDropzoneInternalDragTransition(currentTarget, outside)).toBe(false);
     expect(isComposerDropzoneInternalDragTransition(currentTarget, null)).toBe(false);
+  });
+
+  it("blocks attachment and reference drops while the dropzone is disabled", () => {
+    expect(shouldBlockDisabledComposerDropzoneTransfer(true, ["Files"])).toBe(true);
+    expect(shouldBlockDisabledComposerDropzoneTransfer(true, [CHAT_FILE_REFERENCE_DRAG_TYPE])).toBe(
+      true,
+    );
+    expect(shouldBlockDisabledComposerDropzoneTransfer(false, ["Files"])).toBe(false);
+    expect(shouldBlockDisabledComposerDropzoneTransfer(true, ["text/plain"])).toBe(false);
   });
 });

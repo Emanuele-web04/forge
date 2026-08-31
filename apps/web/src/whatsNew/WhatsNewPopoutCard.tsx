@@ -39,7 +39,9 @@ export function WhatsNewPopoutCard({
   className,
 }: WhatsNewPopoutCardProps) {
   const heroAlt = entry.heroImageAlt ?? `What's new in v${currentVersion}`;
-  const primaryFeatureTitle = entry.features[0]?.title;
+  const primaryFeature = entry.features[0];
+  const primaryFeatureTitle = primaryFeature?.title;
+  const primaryFeatureDescription = primaryFeature?.description;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -51,7 +53,7 @@ export function WhatsNewPopoutCard({
   return (
     <div
       className={cn(
-        "fixed bottom-3 left-3 z-50 w-56 max-w-[calc(100vw-1.5rem)] select-none",
+        "fixed bottom-3 left-3 z-50 w-[21rem] max-w-[calc(100vw-1.5rem)] select-none",
         "animate-[popout-in_200ms_ease-out]",
         className,
       )}
@@ -89,7 +91,7 @@ export function WhatsNewPopoutCard({
             onDismiss();
           }}
           className={cn(
-            "absolute end-1.5 top-1.5 z-10 inline-flex size-6 items-center justify-center rounded-full",
+            "absolute end-2.5 top-2.5 z-10 inline-flex size-7 items-center justify-center rounded-full",
             "text-muted-foreground/80 transition-colors",
             "hover:bg-[var(--sidebar-accent)] hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -101,7 +103,7 @@ export function WhatsNewPopoutCard({
         {/* Hero band: screenshot when the entry supplies one, otherwise a
             branded gradient + icon so every release still gets a polished
             visual. */}
-        <div className="relative h-24 w-full overflow-hidden">
+        <div className="relative h-36 w-full overflow-hidden">
           {entry.heroImage !== undefined ? (
             <img
               src={entry.heroImage}
@@ -115,22 +117,27 @@ export function WhatsNewPopoutCard({
               aria-hidden="true"
               className="flex h-full w-full items-center justify-center bg-[radial-gradient(120%_140%_at_10%_0%,color-mix(in_srgb,var(--color-primary)_38%,transparent)_0%,transparent_60%),radial-gradient(100%_120%_at_100%_100%,color-mix(in_srgb,var(--color-primary)_22%,transparent)_0%,transparent_70%)]"
             >
-              <SynaraLogo aria-hidden className="size-9 text-foreground" />
+              <SynaraLogo aria-hidden className="size-12 text-foreground" />
             </div>
           )}
           {/* Subtle bottom gradient so text below the band always reads. */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-popover/90"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-b from-transparent to-popover/90"
           />
         </div>
 
-        <div className="flex flex-col gap-0.5 px-3 pb-3 pt-2">
-          <p className="text-[11px] font-medium text-primary">New · v{currentVersion}</p>
-          <p className="truncate text-sm font-semibold text-foreground">
+        <div className="flex flex-col px-5 pb-5 pt-3">
+          <p className="text-xs font-medium text-primary">New · v{currentVersion}</p>
+          <p className="mt-1.5 line-clamp-2 text-base font-semibold leading-snug text-foreground">
             {primaryFeatureTitle ?? `What's new in v${currentVersion}`}
           </p>
-          <p className="text-xs text-muted-foreground">
+          {primaryFeatureDescription !== undefined && (
+            <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground/90">
+              {primaryFeatureDescription}
+            </p>
+          )}
+          <p className="mt-3 text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground">
             Find out what&rsquo;s new <span aria-hidden="true">→</span>
           </p>
         </div>

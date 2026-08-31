@@ -170,7 +170,6 @@ export const ProviderModelOptions = Schema.Struct({
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
-  kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
 });
@@ -865,13 +864,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
-  kilo: [
-    {
-      slug: "kilo/kilo-auto/free",
-      name: "Kilo Auto Free",
-      capabilities: EMPTY_MODEL_CAPABILITIES,
-    },
-  ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
   cursor: [
@@ -1120,7 +1112,6 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
-  kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
 
@@ -1260,7 +1251,6 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "4.6": "grok-4.6",
     "grok-4.6": "grok-4.6",
   },
-  kilo: {},
   opencode: {},
   pi: {},
   devin: {
@@ -1317,7 +1307,6 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",
-  kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",
 };

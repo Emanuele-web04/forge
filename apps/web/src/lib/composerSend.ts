@@ -229,7 +229,6 @@ export function resolvePromptEffortFromModelSelection(
         modelSelection.options?.reasoningEffort ??
         (modelSelection.options?.fastMode === true ? "fast" : null)
       );
-    case "kilo":
     case "opencode":
       return null;
   }

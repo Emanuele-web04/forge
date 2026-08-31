@@ -37,7 +37,6 @@ export const COMPOSER_PROVIDER_KINDS = [
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
 ] as const satisfies readonly ProviderKind[];
@@ -112,6 +111,9 @@ function deriveEffectiveComposerModelOptions(input: {
 export function normalizeProviderKind(value: unknown): ProviderKind | null {
   if (value === "gemini") {
     return "antigravity";
+  }
+  if (value === "kilo") {
+    return "opencode";
   }
   return isProviderKind(value) ? value : null;
 }
@@ -200,14 +202,6 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
           : {}),
       };
-    case "kilo":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "kilo" }>["options"] }
-          : {}),
-      };
     case "opencode":
       return {
         provider,
@@ -264,10 +258,6 @@ export function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
-      : null;
-  const kiloCandidate =
-    candidate?.kilo && typeof candidate.kilo === "object"
-      ? (candidate.kilo as Record<string, unknown>)
       : null;
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
@@ -369,15 +359,6 @@ export function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  const kiloVariant = trimStringOrUndefined(kiloCandidate?.variant);
-  const kiloAgent = trimStringOrUndefined(kiloCandidate?.agent);
-  const kilo =
-    kiloVariant !== undefined || kiloAgent !== undefined
-      ? {
-          ...(kiloVariant !== undefined ? { variant: kiloVariant } : {}),
-          ...(kiloAgent !== undefined ? { agent: kiloAgent } : {}),
-        }
-      : undefined;
   const piThinkingLevel: PiThinkingLevel | undefined =
     piCandidate?.thinkingLevel === "off" ||
     piCandidate?.thinkingLevel === "minimal" ||
@@ -416,7 +397,6 @@ export function normalizeProviderModelOptions(
     !antigravity &&
     !grok &&
     !droid &&
-    !kilo &&
     !opencode &&
     !pi
   ) {
@@ -430,7 +410,6 @@ export function normalizeProviderModelOptions(
     ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
-    ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
   };
@@ -498,17 +477,15 @@ export function normalizeModelSelection(
             ? normalizeGrokModelOptions(model, modelOptions?.grok)
             : provider === "droid"
               ? modelOptions?.droid
-              : provider === "kilo"
-                ? modelOptions?.kilo
-                : provider === "cursor"
-                  ? modelOptions?.cursor
-                  : provider === "opencode"
-                    ? modelOptions?.opencode
-                    : provider === "pi"
-                      ? modelOptions?.pi
-                      : provider === "devin"
-                        ? modelOptions?.devin
-                        : undefined;
+              : provider === "cursor"
+                ? modelOptions?.cursor
+                : provider === "opencode"
+                  ? modelOptions?.opencode
+                  : provider === "pi"
+                    ? modelOptions?.pi
+                    : provider === "devin"
+                      ? modelOptions?.devin
+                      : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

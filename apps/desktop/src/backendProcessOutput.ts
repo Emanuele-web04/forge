@@ -2,7 +2,8 @@
 // Purpose: Tee piped backend output into startup detectors and the configured log destination.
 
 export interface BackendOutputDetector {
-  push(chunk: Buffer): void;
+  push(chunk: Buffer, source: "stdout" | "stderr"): void;
+  end?(source: "stdout" | "stderr"): void;
 }
 
 export interface CaptureBackendProcessOutputInput {
@@ -28,6 +29,7 @@ export function captureBackendProcessOutput(
   const attachStream = (
     stream: NodeJS.ReadableStream | null | undefined,
     writeFallback: (chunk: Buffer) => void,
+    source: "stdout" | "stderr",
   ): Promise<void> => {
     if (!stream) return Promise.resolve();
 
@@ -39,7 +41,7 @@ export function captureBackendProcessOutput(
         writeFallback(buffer);
       }
       for (const detector of input.detectors) {
-        detector.push(buffer);
+        detector.push(buffer, source);
       }
     });
 
@@ -48,6 +50,9 @@ export function captureBackendProcessOutput(
       const resolveOnce = () => {
         if (resolved) return;
         resolved = true;
+        for (const detector of input.detectors) {
+          detector.end?.(source);
+        }
         resolve();
       };
       stream.once("end", resolveOnce);
@@ -58,8 +63,8 @@ export function captureBackendProcessOutput(
     });
   };
 
-  const stdoutDrained = attachStream(input.stdout, input.writeStdout);
-  const stderrDrained = attachStream(input.stderr, input.writeStderr);
+  const stdoutDrained = attachStream(input.stdout, input.writeStdout, "stdout");
+  const stderrDrained = attachStream(input.stderr, input.writeStderr, "stderr");
   return {
     drained: Promise.all([stdoutDrained, stderrDrained]).then(() => undefined),
   };

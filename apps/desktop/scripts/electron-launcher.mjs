@@ -17,9 +17,9 @@ import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/share
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const desktopFlavor = resolveSynaraDesktopFlavor({
-  isDevelopment,
+  // Packaged apps launch their bundled main directly; this launcher is source-only.
+  isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);

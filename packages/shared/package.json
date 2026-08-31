@@ -128,6 +128,10 @@
       "types": "./src/threadDetailEvents.ts",
       "import": "./src/threadDetailEvents.ts"
     },
+    "./sidechatExpiry": {
+      "types": "./src/sidechatExpiry.ts",
+      "import": "./src/sidechatExpiry.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"

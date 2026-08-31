@@ -1,20 +1,30 @@
 import { spawn } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
+import { spawnSourceDesktop } from "./source-desktop-launch.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(__dirname, "..");
 const electronBin = resolve(desktopDir, "node_modules/.bin/electron");
-const mainJs = resolve(desktopDir, "dist-electron/main.js");
+const smokeHome = mkdtempSync(join(tmpdir(), "synara-desktop-smoke-"));
 
 console.log("\nLaunching Electron smoke test...");
 
-const child = spawn(electronBin, [mainJs], {
+const child = spawnSourceDesktop({
+  desktopDirectory: desktopDir,
+  electronPath: electronBin,
+  spawnProcess: spawn,
   stdio: ["pipe", "pipe", "pipe"],
-  env: {
+  environment: {
     ...process.env,
-    VITE_DEV_SERVER_URL: "",
     ELECTRON_ENABLE_LOGGING: "1",
+    SYNARA_HOME: smokeHome,
+    [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: join(smokeHome, "electron-user-data"),
+    VITE_DEV_SERVER_URL: "",
   },
 });
 
@@ -29,6 +39,17 @@ child.stderr.on("data", (chunk) => {
 const timeout = setTimeout(() => {
   child.kill();
 }, 8_000);
+
+function finish(exitCode) {
+  rmSync(smokeHome, { recursive: true, force: true });
+  process.exit(exitCode);
+}
+
+child.on("error", (error) => {
+  clearTimeout(timeout);
+  console.error("Desktop smoke test failed to launch:", error);
+  finish(1);
+});
 
 child.on("exit", () => {
   clearTimeout(timeout);
@@ -49,9 +70,9 @@ child.on("exit", () => {
       console.error(` - ${failure}`);
     }
     console.error("\nFull output:\n" + output);
-    process.exit(1);
+    finish(1);
   }
 
   console.log("Desktop smoke test passed.");
-  process.exit(0);
+  finish(0);
 });

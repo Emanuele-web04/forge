@@ -1,5 +1,6 @@
 import {
   EXTERNAL_MCP_DEFAULT_WAIT_MS,
+  EXTERNAL_MCP_MAX_MESSAGE_CHARS,
   EXTERNAL_MCP_MAX_PROMPT_CHARS,
   EXTERNAL_MCP_MAX_WAIT_MS,
   ExternalMcpCreateTaskInput,
@@ -455,14 +456,41 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.",
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string" },
           cursor: { type: "string" },
           messageLimit: { type: "integer", minimum: 1, maximum: 100 },
-          maxMessageChars: { type: "integer", minimum: 50, maximum: 10_000 },
+          maxMessageChars: {
+            type: "integer",
+            minimum: 50,
+            maximum: EXTERNAL_MCP_MAX_MESSAGE_CHARS,
+            description: `Characters per message or single-message slice (default 1500, max ${EXTERNAL_MCP_MAX_MESSAGE_CHARS}). The response reports the effective value.`,
+          },
+          messageIndex: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Current transcript index of one message to read losslessly; messageId and messageVersion detect stale coordinates.",
+          },
+          messageOffsetChars: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
+          },
+          messageId: {
+            type: "string",
+            description:
+              "Message identity returned in each message summary; required with messageIndex.",
+          },
+          messageVersion: {
+            type: "string",
+            description:
+              "Opaque version returned in each message summary; required with messageIndex so slices stay bound to one snapshot.",
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
@@ -490,6 +518,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             cursor: input.cursor,
             messageLimit: input.messageLimit,
             maxMessageChars: input.maxMessageChars,
+            messageIndex: input.messageIndex,
+            messageOffsetChars: input.messageOffsetChars,
+            messageId: input.messageId,
+            messageVersion: input.messageVersion,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),

@@ -937,11 +937,13 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
 
   const selectableThreads = useMemo(
     () =>
-      threads.toSorted(
-        (left, right) =>
-          Date.parse(right.updatedAt ?? right.createdAt) -
-          Date.parse(left.updatedAt ?? left.createdAt),
-      ),
+      threads
+        .filter((thread) => !thread.sidechatSourceThreadId)
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.updatedAt ?? right.createdAt) -
+            Date.parse(left.updatedAt ?? left.createdAt),
+        ),
     [threads],
   );
   const splitThreadIds = new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []);

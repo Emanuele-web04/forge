@@ -166,6 +166,7 @@ const ClaimAutomationIterationInput = Schema.Struct({
   id: AutomationDefinition.fields.id,
   now: Schema.String,
   expectedDefinitionUpdatedAt: Schema.NullOr(Schema.String),
+  consumeIteration: Schema.Number,
 });
 
 function toDefinition(row: AutomationDefinitionDbRow) {
@@ -1465,10 +1466,11 @@ const makeAutomationRepository = Effect.gen(function* () {
   const incrementIterationIfRunnableRow = SqlSchema.findAll({
     Request: ClaimAutomationIterationInput,
     Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
-    execute: ({ id, now, expectedDefinitionUpdatedAt }) =>
+    execute: ({ id, now, expectedDefinitionUpdatedAt, consumeIteration }) =>
       sql`
         UPDATE automation_definitions
-        SET iteration_count = iteration_count + 1, updated_at = ${now}
+        SET iteration_count = iteration_count + CASE WHEN ${consumeIteration} = 1 THEN 1 ELSE 0 END,
+            updated_at = ${now}
         WHERE automation_id = ${id}
           AND archived_at IS NULL
           AND (max_iterations IS NULL OR iteration_count < max_iterations)
@@ -1753,11 +1755,12 @@ const makeAutomationRepository = Effect.gen(function* () {
           Effect.gen(function* () {
             const run = yield* createRun(input);
             const inserted = run.id === input.id;
-            if (inserted) {
+            if (inserted || scheduleAdvance !== undefined) {
               const updated = yield* incrementIterationIfRunnableRow({
                 id: input.automationId,
                 now: input.now,
                 expectedDefinitionUpdatedAt: scheduleAdvance?.expectedDefinitionUpdatedAt ?? null,
+                consumeIteration: inserted && scheduleAdvance?.consumeIteration !== false ? 1 : 0,
               });
               if (updated.length === 0) {
                 return yield* Effect.fail(new AutomationRunClaimRejected());

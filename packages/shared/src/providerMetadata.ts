@@ -92,16 +92,6 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     },
   },
   {
-    kind: "kilo",
-    displayName: PROVIDER_DISPLAY_NAMES.kilo,
-    available: true,
-    supportsNativeTurnSteering: false,
-    usage: {
-      signInCommand: "kilo",
-      learnMoreHref: "https://kilo.ai",
-    },
-  },
-  {
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,

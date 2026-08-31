@@ -343,8 +343,6 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Grok";
     case "droid":
       return "Droid";
-    case "kilo":
-      return "Kilo";
     case "opencode":
       return "OpenCode";
     case "pi":

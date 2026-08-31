@@ -5,6 +5,7 @@ import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
 import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const port = Number(process.env.ELECTRON_RENDERER_PORT ?? 5733);
 const devServerUrl = `http://localhost:${port}`;
@@ -34,8 +35,7 @@ await waitOn({
   resources: [`tcp:${port}`, ...requiredFiles.map((filePath) => `file:${filePath}`)],
 });
 
-const childEnv = { ...process.env };
-delete childEnv.ELECTRON_RUN_AS_NODE;
+const childEnv = createSourceDesktopEnvironment();
 
 let shuttingDown = false;
 let restartTimer = null;

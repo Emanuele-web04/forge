@@ -89,6 +89,14 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
+  const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
+    provider: ProviderGetComposerCapabilitiesInput["provider"],
+  ) {
+    return yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.providers[provider].enabled),
+      Effect.orElseSucceed(() => true),
+    );
+  });
 
   const getComposerCapabilities: ProviderDiscoveryServiceShape["getComposerCapabilities"] = (
     input,
@@ -99,6 +107,9 @@ const make = Effect.gen(function* () {
         schema: ProviderGetComposerCapabilitiesInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return disabledCapabilitiesForProvider(parsed.provider);
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       const capabilities = adapter.getComposerCapabilities
         ? yield* adapter.getComposerCapabilities()
@@ -119,6 +130,13 @@ const make = Effect.gen(function* () {
         schema: ProviderListSkillsInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return {
+          skills: [],
+          source: "disabled",
+          cached: false,
+        };
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       const nativeResult: ProviderListSkillsResult | null = adapter.listSkills
         ? yield* adapter
@@ -169,6 +187,13 @@ const make = Effect.gen(function* () {
         schema: ProviderListCommandsInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return {
+          commands: [],
+          source: "disabled",
+          cached: false,
+        };
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       if (!adapter.listCommands) {
         return {
@@ -187,6 +212,16 @@ const make = Effect.gen(function* () {
         schema: ProviderListPluginsInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return {
+          marketplaces: [],
+          marketplaceLoadErrors: [],
+          remoteSyncError: null,
+          featuredPluginIds: [],
+          source: "disabled",
+          cached: false,
+        };
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       if (!adapter.listPlugins) {
         return {
@@ -208,6 +243,12 @@ const make = Effect.gen(function* () {
         schema: ProviderReadPluginInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderDiscoveryService.readPlugin",
+          issue: `Provider '${parsed.provider}' is disabled in Synara settings.`,
+        });
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       if (!adapter.readPlugin) {
         return yield* new ProviderValidationError({
@@ -225,14 +266,7 @@ const make = Effect.gen(function* () {
         schema: ProviderListModelsInput,
         payload: input,
       });
-      // The enabled check is a short-circuit, not a precondition, and
-      // ServerSettingsError is outside this operation's error channel. An
-      // unreadable settings file falls back to discovering models, which is
-      // what this call did before the gate existed.
-      const settings = yield* serverSettings.getSettings.pipe(
-        Effect.catch(() => Effect.succeed(null)),
-      );
-      if (settings !== null && !settings.providers[parsed.provider].enabled) {
+      if (!(yield* providerIsEnabled(parsed.provider))) {
         return {
           models: [],
           source: "disabled",
@@ -261,6 +295,13 @@ const make = Effect.gen(function* () {
         schema: ProviderListAgentsInput,
         payload: input,
       });
+      if (!(yield* providerIsEnabled(parsed.provider))) {
+        return {
+          agents: [],
+          source: "disabled",
+          cached: false,
+        };
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       if (!adapter.listAgents) {
         return {

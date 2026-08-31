@@ -120,7 +120,6 @@ describe("discoverSkillsCatalog", () => {
       "windsurf-only",
       "Windsurf",
     );
-    await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
     await writeSkill(
       path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
       "opencode-only",
@@ -138,7 +137,6 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("grok-only")?.scope).toBe("grok");
     expect(byName.get("devin-only")?.scope).toBe("devin");
     expect(byName.get("windsurf-only")?.scope).toBe("devin");
-    expect(byName.get("kilo-only")?.scope).toBe("kilo");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
   });

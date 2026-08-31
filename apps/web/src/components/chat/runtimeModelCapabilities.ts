@@ -104,7 +104,6 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "antigravity" &&
       input.provider !== "grok" &&
       input.provider !== "droid" &&
-      input.provider !== "kilo" &&
       input.provider !== "opencode" &&
       input.provider !== "pi" &&
       input.provider !== "devin") ||
@@ -137,7 +136,7 @@ export function getRuntimeAwareModelCapabilities(input: {
     };
   });
 
-  if (input.provider === "kilo" || input.provider === "opencode") {
+  if (input.provider === "opencode") {
     return {
       ...staticCapabilities,
       ...(optionDescriptors ? { optionDescriptors } : {}),

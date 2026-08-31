@@ -9,10 +9,11 @@ import { AuthSessionId } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
+  VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { DateTime, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
@@ -27,7 +28,11 @@ import {
   authEffectRouteLayer,
   binaryUploadEffectRouteLayer,
 } from "./http";
-import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import {
+  ProviderAdapterRegistry,
+  type ProviderAdapterRegistryShape,
+} from "./provider/Services/ProviderAdapterRegistry";
+import { ServerSettingsService } from "./serverSettings";
 
 const currentSessionId = AuthSessionId.makeUnsafe("11111111-1111-4111-8111-111111111111");
 const otherSessionId = AuthSessionId.makeUnsafe("22222222-2222-4222-8222-222222222222");
@@ -110,6 +115,10 @@ async function withAuthEffectServer(
   routeLayer:
     | typeof authEffectRouteLayer
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
+  overrides?: {
+    readonly providerAdapterRegistry?: ProviderAdapterRegistryShape;
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
+  },
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -120,10 +129,14 @@ async function withAuthEffectServer(
           Layer.succeed(ServerConfig, config),
           Layer.succeed(ServerAuth, serverAuth),
           Layer.succeed(SessionCredentialService, makeSessionCredentialService()),
-          Layer.succeed(ProviderAdapterRegistry, {
-            getByProvider: () => Effect.die("voice adapter not used in this test"),
-            listProviders: () => Effect.succeed([]),
-          }),
+          Layer.succeed(
+            ProviderAdapterRegistry,
+            overrides?.providerAdapterRegistry ?? {
+              getByProvider: () => Effect.die("voice adapter not used in this test"),
+              listProviders: () => Effect.succeed([]),
+            },
+          ),
+          overrides?.serverSettingsLayer ?? ServerSettingsService.layerTest(),
           ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
@@ -342,6 +355,47 @@ describe("authEffectRouteLayer", () => {
 });
 
 describe("binaryUploadEffectRouteLayer", () => {
+  it("rejects voice uploads before transcription when the provider is disabled", async () => {
+    const transcribeVoice = vi.fn(() => Effect.succeed({ text: "unexpected" }));
+    await withAuthEffectServer(
+      { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape,
+      makeServerAuth({ count: 0 }),
+      async (serverOrigin) => {
+        const params = new URLSearchParams({
+          provider: "codex",
+          cwd: "/tmp/project",
+          mimeType: "audio/wav",
+          sampleRateHz: "16000",
+          durationMs: "250",
+        });
+        const response = await fetch(
+          `${serverOrigin}${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer bearer-token" },
+            body: Uint8Array.from([1]),
+          },
+        );
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({
+          error: "Codex is disabled in Settings > Providers.",
+        });
+        expect(transcribeVoice).not.toHaveBeenCalled();
+      },
+      binaryUploadEffectRouteLayer,
+      {
+        providerAdapterRegistry: {
+          getByProvider: () => Effect.succeed({ provider: "codex", transcribeVoice } as never),
+          listProviders: () => Effect.succeed(["codex"]),
+        },
+        serverSettingsLayer: ServerSettingsService.layerTest({
+          providers: { codex: { enabled: false } },
+        }),
+      },
+    );
+  });
+
   it("allows credentialed Canary attachment upload preflights", async () => {
     const config = {
       host: "127.0.0.1",

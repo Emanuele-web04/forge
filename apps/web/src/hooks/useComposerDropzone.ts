@@ -3,7 +3,7 @@
 // Layer: Web composer hook
 // Exports: useComposerDropzone
 
-import { useRef, type ClipboardEvent, type DragEvent } from "react";
+import { useEffect, useRef, type ClipboardEvent, type DragEvent } from "react";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
 import { isDroppedComposerDirectory, splitDroppedComposerFiles } from "~/lib/composerDropPaths";
@@ -39,6 +39,13 @@ export function shouldHandleComposerDropzoneFiles(
     return genericFiles !== "fallthrough";
   }
   return false;
+}
+
+export function shouldBlockDisabledComposerDropzoneTransfer(
+  disabled: boolean,
+  types: readonly string[],
+): boolean {
+  return disabled && (types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE) || types.includes("Files"));
 }
 
 export function shouldResetComposerDropzoneAfterUnhandledFileDrop(
@@ -107,6 +114,7 @@ function isComposerHandledDragForMode(
 }
 
 export function useComposerDropzone(input: {
+  readonly disabled?: boolean;
   readonly addImages: (files: readonly File[]) => void;
   readonly fileSupport:
     | {
@@ -132,6 +140,7 @@ export function useComposerDropzone(input: {
     fileSupport,
     appendReferenceText,
     appendPathMentions,
+    disabled = false,
     focusComposer,
     setIsDragOverComposer,
   } = input;
@@ -139,6 +148,7 @@ export function useComposerDropzone(input: {
   const dragDepthRef = input.dragDepthRef ?? internalDragDepthRef;
 
   const handleSplitFiles = (files: ComposerDropzoneFileSplit): boolean => {
+    if (disabled) return false;
     if (!shouldHandleComposerDropzoneFiles(files, fileSupport.genericFiles)) {
       return false;
     }
@@ -161,11 +171,20 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerPaste = (event: ClipboardEvent<HTMLElement>) => {
+    if (disabled) {
+      if (event.clipboardData.files.length > 0) event.preventDefault();
+      return;
+    }
     const handled = handleSplitFiles(splitComposerDropzoneFiles(event.clipboardData.files));
     if (handled) event.preventDefault();
   };
 
   const onComposerDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types)) {
+      event.preventDefault();
+      resetComposerDragState();
+      return;
+    }
     if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
     event.preventDefault();
     if (isComposerDropzoneInternalDragTransition(event.currentTarget, event.relatedTarget)) {
@@ -176,6 +195,12 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      resetComposerDragState();
+      return;
+    }
     if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
@@ -183,6 +208,11 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types)) {
+      event.preventDefault();
+      resetComposerDragState();
+      return;
+    }
     if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
     event.preventDefault();
     if (isComposerDropzoneInternalDragTransition(event.currentTarget, event.relatedTarget)) {
@@ -192,6 +222,11 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types)) {
+      event.preventDefault();
+      resetComposerDragState();
+      return;
+    }
     const referenceText = event.dataTransfer.getData(CHAT_FILE_REFERENCE_DRAG_TYPE);
     if (referenceText) {
       event.preventDefault();
@@ -231,6 +266,12 @@ export function useComposerDropzone(input: {
     handleSplitFiles(splitFiles);
     focusComposer?.();
   };
+
+  useEffect(() => {
+    if (!disabled) return;
+    writeDragDepth(dragDepthRef, 0);
+    setIsDragOverComposer(false);
+  }, [disabled, dragDepthRef, setIsDragOverComposer]);
 
   return {
     onComposerPaste,

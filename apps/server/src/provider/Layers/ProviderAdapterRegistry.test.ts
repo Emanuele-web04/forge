@@ -11,7 +11,6 @@ import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts"
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
-import { KiloAdapter, KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -125,23 +124,6 @@ const fakeOpenCodeAdapter: OpenCodeAdapterShape = {
   streamEvents: Stream.empty,
 };
 
-const fakeKiloAdapter: KiloAdapterShape = {
-  provider: "kilo",
-  capabilities: { sessionModelSwitch: "in-session" },
-  startSession: vi.fn(),
-  sendTurn: vi.fn(),
-  interruptTurn: vi.fn(),
-  respondToRequest: vi.fn(),
-  respondToUserInput: vi.fn(),
-  stopSession: vi.fn(),
-  listSessions: vi.fn(),
-  hasSession: vi.fn(),
-  readThread: vi.fn(),
-  rollbackThread: vi.fn(),
-  stopAll: vi.fn(),
-  streamEvents: Stream.empty,
-};
-
 const fakePiAdapter: PiAdapterShape = {
   provider: "pi",
   capabilities: { sessionModelSwitch: "in-session" },
@@ -205,7 +187,6 @@ const layer = it.layer(
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
-        Layer.succeed(KiloAdapter, fakeKiloAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
       ),
@@ -225,7 +206,6 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const antigravity = yield* registry.getByProvider("antigravity");
       const grok = yield* registry.getByProvider("grok");
       const droid = yield* registry.getByProvider("droid");
-      const kilo = yield* registry.getByProvider("kilo");
       const opencode = yield* registry.getByProvider("opencode");
       const pi = yield* registry.getByProvider("pi");
       assert.equal(codex, fakeCodexAdapter);
@@ -235,7 +215,6 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(antigravity, fakeAntigravityAdapter);
       assert.equal(grok, fakeGrokAdapter);
       assert.equal(droid, fakeDroidAdapter);
-      assert.equal(kilo, fakeKiloAdapter);
       assert.equal(opencode, fakeOpenCodeAdapter);
       assert.equal(pi, fakePiAdapter);
 
@@ -248,7 +227,6 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "antigravity",
         "grok",
         "droid",
-        "kilo",
         "opencode",
         "pi",
       ]);

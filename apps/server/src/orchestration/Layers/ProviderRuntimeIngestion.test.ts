@@ -6052,7 +6052,7 @@ describe("ProviderRuntimeIngestion", () => {
       status: "missing",
       files: [
         { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
-        { path: "src/next.ts", kind: "modified", additions: 1, deletions: 0 },
+        { path: "src/next.ts", kind: "added", additions: 1, deletions: 0 },
       ],
     });
   });

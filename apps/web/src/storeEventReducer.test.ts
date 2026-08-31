@@ -2133,6 +2133,73 @@ describe("store event reducer", () => {
     });
   });
 
+  it("projects side chat activity and expiry into the live pane and its parent list row", () => {
+    const threadId = ThreadId.makeUnsafe("thread-sidechat");
+    const sourceThreadId = ThreadId.makeUnsafe("thread-source");
+    const initialActivityAt = "2026-02-27T00:00:00.000Z";
+    const latestActivityAt = "2026-02-27T00:30:00.000Z";
+    const expiredAt = "2026-02-27T01:30:00.000Z";
+    const initialState = syncServerReadModel(
+      makeState(
+        makeThread({
+          id: threadId,
+          sidechatSourceThreadId: sourceThreadId,
+          sidechatLastActivityAt: initialActivityAt,
+          sidechatExpiredAt: null,
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          sidechatSourceThreadId: sourceThreadId,
+          sidechatLastActivityAt: initialActivityAt,
+          sidechatExpiredAt: null,
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.sidechat-activity-recorded", {
+          threadId,
+          lastActivityAt: latestActivityAt,
+        }),
+        makeDomainEvent("thread.sidechat-expired", {
+          threadId,
+          expectedLastActivityAt: latestActivityAt,
+          expiredAt,
+        }),
+        makeDomainEvent(
+          "thread.session-set",
+          {
+            threadId,
+            session: {
+              threadId,
+              status: "stopped",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-27T01:30:01.000Z",
+            },
+          },
+          { occurredAt: "2026-02-27T01:30:01.000Z" },
+        ),
+      ],
+      { updateSidebarSummary: true },
+    );
+
+    expect(threadsOf(next).find((thread) => thread.id === threadId)).toMatchObject({
+      sidechatLastActivityAt: latestActivityAt,
+      sidechatExpiredAt: expiredAt,
+    });
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      sidechatLastActivityAt: latestActivityAt,
+      sidechatExpiredAt: expiredAt,
+    });
+  });
+
   it("updates sidebar summaries during hot-path archive events after thread detail sync", () => {
     const shellState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),

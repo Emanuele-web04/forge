@@ -125,6 +125,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedComposerFocusToggle.command, "composer.focus.toggle");
 
+    const parsedChatFind = yield* decode(KeybindingRule, {
+      key: "mod+f",
+      command: "chat.find",
+    });
+    assert.strictEqual(parsedChatFind.command, "chat.find");
+
     const parsedNewChat = yield* decode(KeybindingRule, {
       key: "mod+alt+n",
       command: "chat.newChat",

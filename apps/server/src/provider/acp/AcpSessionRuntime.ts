@@ -22,6 +22,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as AcpErrors from "./AcpErrors.ts";
+import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
@@ -45,6 +46,8 @@ import {
 
 const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
+const ACP_LOAD_REPLAY_QUIET_MS = 350;
+const ACP_LOAD_REPLAY_HARD_TIMEOUT_MS = 30_000;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
 
 const ACP_MAX_PENDING_NOTIFICATIONS_TOTAL = 2_048;
@@ -328,6 +331,11 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly buildMcpServers?: (initializeResult: Acp.InitializeResponse) => Array<Acp.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
+  /** Test/provider policy overrides for session/load transcript replay suppression. */
+  readonly loadReplayPolicy?: {
+    readonly quietMs?: number;
+    readonly hardTimeoutMs?: number;
+  };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -420,13 +428,21 @@ export interface AcpSessionRuntimeShape {
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
   readonly supportsSessionRecovery: Effect.Effect<boolean, AcpErrors.AcpError>;
-  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
+  readonly getModeState: Effect.Effect<AcpSessionModeState | undefined, AcpErrors.AcpError>;
   /** @internal Exposed for tests: the current session epoch. */
   readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   /** @internal Exposed for tests: total buffered pending session/update notifications. */
   readonly getPendingSessionNotificationCount: () => Effect.Effect<number>;
-  readonly getConfigOptions: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>>;
-  readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
+  readonly getConfigOptions: Effect.Effect<
+    ReadonlyArray<Acp.SessionConfigOption>,
+    AcpErrors.AcpError
+  >;
+  readonly getAvailableCommands: Effect.Effect<
+    ReadonlyArray<Acp.AvailableCommand>,
+    AcpErrors.AcpError
+  >;
+  /** Waits for session/load replay suppression to settle or reach its hard cap. */
+  readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
   ) => Effect.Effect<Acp.PromptResponse, AcpErrors.AcpError>;
@@ -1062,6 +1078,31 @@ const makeAcpSessionRuntime = (
       Acp.CreateElicitationResponse
     >({ action: "decline" });
 
+    let loadReplayGate: AcpLoadReplayGate | undefined;
+    const awaitLoadReplayReady = Effect.suspend(() => {
+      const gate = loadReplayGate;
+      if (gate === undefined) {
+        return Effect.void;
+      }
+      return gate.attachConsumer.pipe(
+        Effect.andThen(gate.awaitReady),
+        Effect.flatMap((outcome) =>
+          outcome === "ready"
+            ? Effect.void
+            : Effect.fail(
+                new AcpErrors.AcpRequestError({
+                  code: -32603,
+                  errorMessage: "ACP runtime closed while waiting for session/load replay.",
+                }),
+              ),
+        ),
+      );
+    });
+    const getModeState = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(modeStateRef)));
+    const getConfigOptions = awaitLoadReplayReady.pipe(Effect.andThen(Ref.get(configOptionsRef)));
+    const getAvailableCommands = awaitLoadReplayReady.pipe(
+      Effect.andThen(Ref.get(availableCommandsRef)),
+    );
     // Counts processed, in-flight, or deliverable events after cleanup drops.
     // Plain mutable adjustments are fenced while session event offers are in
     // flight; see sessionUpdatesEnqueuedCount on the shape.
@@ -1339,6 +1380,9 @@ const makeAcpSessionRuntime = (
       );
 
     yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
+    // Registered after child teardown so LIFO scope closure releases any first
+    // prompt/fork waiter before waiting for the child process to exit.
+    yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
 
     const acp = yield* makeOfficialSdkClient(child, runtimeScope, options.protocolLogging);
 
@@ -1396,21 +1440,25 @@ const makeAcpSessionRuntime = (
         if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
 
         const offer = offerSessionEvent(sessionId, epoch);
-        return yield* processSessionUpdate({
-          getSessionEpoch,
-          offer,
-          sessionId,
-          epoch,
-          availableCommandsRef,
-          configOptionsRef,
-          modeStateRef,
-          toolCallsRef,
-          assistantSegmentRef,
-          runtimeInstanceId,
-          resolveConfigOptionUpdateWaiters,
-          skipTranscriptEvents: false,
-          params: notification,
-        });
+        const apply = (suppress: boolean) =>
+          processSessionUpdate({
+            getSessionEpoch,
+            offer,
+            sessionId,
+            epoch,
+            availableCommandsRef,
+            configOptionsRef,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            resolveConfigOptionUpdateWaiters,
+            skipTranscriptEvents: suppress,
+            params: notification,
+          });
+        return yield* loadReplayGate === undefined
+          ? apply(false)
+          : loadReplayGate.suppressUpdate.pipe(Effect.flatMap(apply));
       }),
     );
 
@@ -1548,7 +1596,8 @@ const makeAcpSessionRuntime = (
       configId: string,
       value: string | boolean,
     ): Effect.Effect<Acp.SetSessionConfigOptionResponse, AcpErrors.AcpError> =>
-      validateConfigOptionValue(configId, value).pipe(
+      awaitLoadReplayReady.pipe(
+        Effect.andThen(validateConfigOptionValue(configId, value)),
         Effect.flatMap(() => getStartedState),
         Effect.flatMap((started) =>
           Ref.get(configOptionsRef).pipe(
@@ -1843,6 +1892,28 @@ const makeAcpSessionRuntime = (
 
         const { sessionId, sessionSetupResult, sessionSetupMethod } = yield* setup;
 
+        // session/load may replay a large transcript before the consumer attaches;
+        // gate prompt/fork/config access and per-update suppression until the
+        // replay settles or reaches its hard cap.
+        if (sessionSetupMethod === "load") {
+          const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
+          const hardTimeoutMs =
+            options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
+          loadReplayGate = yield* makeAcpLoadReplayGate({
+            quietMs,
+            hardTimeoutMs,
+            onHardTimeout: ({ elapsedMs }) =>
+              Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
+                sessionId,
+                command: options.spawn.command,
+                elapsedMs,
+                quietMs,
+                hardTimeoutMs,
+              }),
+          });
+          yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
+        }
+
         // setSessionEpoch already installed the setup baseline and replayed pending
         // updates through the same reducer, so no separate post-setup mutation is
         // needed here.
@@ -1927,6 +1998,10 @@ const makeAcpSessionRuntime = (
             // Attaching a consumer opens the gate and drains any events that were
             // buffered while no consumer was attached. The stream begins with the
             // drained events and then pulls from the live queue.
+            const gate = loadReplayGate;
+            if (gate !== undefined) {
+              yield* gate.attachConsumer;
+            }
             yield* Ref.set(acceptingSessionUpdatesRef, true);
             yield* Ref.set(consumerAttachedRef, true);
             const pending = yield* Ref.getAndSet(pendingEventsRef, []);
@@ -1937,7 +2012,7 @@ const makeAcpSessionRuntime = (
           }),
         ),
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
-      getModeState: Ref.get(modeStateRef),
+      getModeState,
       getSessionEpoch,
       getPendingSessionNotificationCount: () =>
         Ref.get(pendingSessionStateRef).pipe(
@@ -1949,12 +2024,14 @@ const makeAcpSessionRuntime = (
             return total;
           }),
         ),
-      getConfigOptions: Ref.get(configOptionsRef),
-      getAvailableCommands: Ref.get(availableCommandsRef),
+      getConfigOptions,
+      getAvailableCommands,
+      awaitLoadReplayReady,
       prompt: (payload) =>
         getStartedState.pipe(
           Effect.flatMap((started) =>
-            Ref.get(sessionEpochRef).pipe(
+            awaitLoadReplayReady.pipe(
+              Effect.andThen(Ref.get(sessionEpochRef)),
               Effect.flatMap((epoch) => {
                 const offer = offerSessionEvent(started.sessionId, epoch);
                 const requestPayload = {
@@ -1993,12 +2070,12 @@ const makeAcpSessionRuntime = (
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
+        getModeState.pipe(
           Effect.flatMap((modeState) => {
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies Acp.SetSessionModeResponse);
             }
-            return Ref.get(configOptionsRef).pipe(
+            return getConfigOptions.pipe(
               Effect.map((options) =>
                 options.find(
                   (option) =>
@@ -2060,10 +2137,14 @@ const makeAcpSessionRuntime = (
               ...payload,
               sessionId: started.sessionId,
             } satisfies Acp.ForkSessionRequest;
-            return runLoggedRequest(
-              "session/fork",
-              requestPayload,
-              acp.agent.forkSession(requestPayload),
+            return awaitLoadReplayReady.pipe(
+              Effect.andThen(
+                runLoggedRequest(
+                  "session/fork",
+                  requestPayload,
+                  acp.agent.forkSession(requestPayload),
+                ),
+              ),
             );
           }),
         ),

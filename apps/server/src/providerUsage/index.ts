@@ -94,6 +94,7 @@ interface InFlightSnapshot {
 
 const snapshotCache = new Map<ProviderKind, CachedSnapshot>();
 const inFlightFetches = new Map<ProviderKind, InFlightSnapshot>();
+const snapshotCacheGenerations = new Map<ProviderKind, number>();
 
 const snapshotCacheTtlMs = (snapshot: ServerProviderUsageSnapshot): number =>
   snapshot.stale === true
@@ -121,6 +122,15 @@ async function resolveCredentialKey(
 export function __resetProviderUsageCacheForTests(): void {
   snapshotCache.clear();
   inFlightFetches.clear();
+  snapshotCacheGenerations.clear();
+}
+
+function invalidateProviderUsageSnapshots(providers: ReadonlyArray<ProviderKind>): void {
+  for (const provider of providers) {
+    snapshotCache.delete(provider);
+    inFlightFetches.delete(provider);
+    snapshotCacheGenerations.set(provider, (snapshotCacheGenerations.get(provider) ?? 0) + 1);
+  }
 }
 
 async function getProviderUsageSnapshot(
@@ -128,6 +138,7 @@ async function getProviderUsageSnapshot(
   ctx: ProviderUsageContext,
   forceRefresh: boolean,
 ): Promise<ServerProviderUsageSnapshot | null> {
+  const cacheGeneration = snapshotCacheGenerations.get(provider) ?? 0;
   const providerContext = buildProviderContext(provider, ctx);
   const credentialKey = await resolveCredentialKey(provider, providerContext);
   const pending = inFlightFetches.get(provider);
@@ -150,7 +161,12 @@ async function getProviderUsageSnapshot(
     const snapshot = await fetchProviderUsage(provider, providerContext);
     const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
-    if (enriched && credentialKey !== null && refreshedCredentialKey === credentialKey) {
+    if (
+      enriched &&
+      credentialKey !== null &&
+      refreshedCredentialKey === credentialKey &&
+      (snapshotCacheGenerations.get(provider) ?? 0) === cacheGeneration
+    ) {
       const current = snapshotCache.get(provider);
       const hasFreshHealthySnapshot =
         current?.credentialKey === credentialKey &&
@@ -200,13 +216,19 @@ async function enrichWithLocalUsage(
 /** Plain async batch fetch for supported providers. Never throws. */
 export async function collectProviderUsageSnapshots(
   ctx: ProviderUsageContext,
-  options: { forceRefresh?: boolean; provider?: ProviderKind } = {},
+  options: {
+    forceRefresh?: boolean;
+    provider?: ProviderKind;
+    providers?: ReadonlyArray<ProviderKind>;
+  } = {},
 ): Promise<ServerProviderUsageSnapshot[]> {
   const providers = options.provider
     ? ([options.provider] as ProviderKind[])
-    : PROVIDER_USAGE_PROVIDERS.filter(
-        (provider) => PROVIDER_USAGE_FETCHERS[provider] !== undefined,
-      );
+    : options.providers
+      ? [...options.providers]
+      : PROVIDER_USAGE_PROVIDERS.filter(
+          (provider) => PROVIDER_USAGE_FETCHERS[provider] !== undefined,
+        );
   const settled = await Promise.allSettled(
     providers.map((provider) =>
       getProviderUsageSnapshot(provider, ctx, options.forceRefresh === true),
@@ -222,6 +244,20 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
   const settings = yield* serverSettings.getSettings;
+  const supportedProviders = PROVIDER_USAGE_PROVIDERS.filter(
+    (provider) => PROVIDER_USAGE_FETCHERS[provider] !== undefined,
+  );
+  const enabledProviders = supportedProviders.filter(
+    (provider) => settings.providers[provider].enabled,
+  );
+  invalidateProviderUsageSnapshots(
+    supportedProviders.filter((provider) => !settings.providers[provider].enabled),
+  );
+
+  if (input.provider && !settings.providers[input.provider].enabled) {
+    return [];
+  }
+
   return yield* Effect.tryPromise({
     try: () =>
       collectProviderUsageSnapshots(
@@ -233,6 +269,7 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
         {
           forceRefresh: input.forceRefresh === true,
           ...(input.provider ? { provider: input.provider } : {}),
+          ...(!input.provider ? { providers: enabledProviders } : {}),
         },
       ),
     catch: () => [] as unknown as ServerListProviderUsageResult,

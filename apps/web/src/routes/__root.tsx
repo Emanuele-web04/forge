@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
+  type ServerSettingsView,
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
@@ -46,6 +47,7 @@ import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
+  invalidateProviderUsageQueries,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
   serverConfigQueryOptions,
@@ -129,7 +131,7 @@ import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
-import { useAppSettings } from "../appSettings";
+import { didProviderEnablementChange, useAppSettings } from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
@@ -1067,6 +1069,16 @@ function EventRouter() {
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
+  const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const sidechatThreadIdSet = useMemo(
+    () =>
+      new Set(
+        serverThreadIds.filter((threadId) =>
+          Boolean(sidebarThreadSummaryById[threadId]?.sidechatSourceThreadId),
+        ),
+      ),
+    [serverThreadIds, sidebarThreadSummaryById],
+  );
   // Stabilize the lease array by content: `serverThreads` re-emits on every
   // streaming update, and an identity-changing lease list would enqueue a no-op
   // subscription reconcile per render onto the serialized subscribe chain.
@@ -1074,6 +1086,7 @@ function EventRouter() {
     visibleThreadIds,
     retainedThreadIds,
     serverThreadIds: serverThreadIdSet,
+    retentionExcludedThreadIds: sidechatThreadIdSet,
   });
   const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
   const subscribedThreadIds = arraysShallowEqual(
@@ -2138,16 +2151,10 @@ function EventRouter() {
         // Model and agent discovery can depend on auth, availability, and installed versions,
         // but not on every provider-status timestamp replay.
         void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "kilo"],
-        });
-        void queryClient.invalidateQueries({
           queryKey: ["provider-discovery", "models", "opencode"],
         });
         void queryClient.invalidateQueries({
           queryKey: ["provider-discovery", "models", "cursor"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo"),
         });
         void queryClient.invalidateQueries({
           queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
@@ -2164,7 +2171,14 @@ function EventRouter() {
       { replayCurrent: true },
     );
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
+      const previousSettings = queryClient.getQueryData<ServerSettingsView>(
+        serverQueryKeys.settings(),
+      );
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
+      if (didProviderEnablementChange(previousSettings, payload.settings)) {
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+        void invalidateProviderUsageQueries(queryClient);
+      }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,
       });

@@ -17,7 +17,6 @@ import {
   DroidIcon,
   GrokIcon,
   type Icon,
-  KiloIcon,
   OpenAI,
   OpenCodeIcon,
   PiIcon,
@@ -72,7 +71,6 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   antigravity: AntigravityIcon,
   grok: GrokIcon,
   droid: DroidIcon,
-  kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
 };
@@ -81,7 +79,7 @@ export function providerIconToneClassName(
   provider: ProviderKind | null | undefined,
   tone: ProviderIconTone = "default",
 ): string {
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "text-muted-foreground/70";
   }
   if (provider === "codex") {

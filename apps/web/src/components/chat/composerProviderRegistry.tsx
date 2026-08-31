@@ -188,9 +188,8 @@ function getProviderStateFromCapabilities(
       normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
-    case "kilo":
     case "opencode": {
-      const providerOptions = provider === "kilo" ? modelOptions?.kilo : modelOptions?.opencode;
+      const providerOptions = modelOptions?.opencode;
       rawEffort = trimOrNull(providerOptions?.variant);
       const variantOptions = caps.variantOptions ?? [];
       const reasoningVariant =
@@ -273,7 +272,7 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-    provider === "kilo" || provider === "opencode"
+    provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
       : draftEffort &&
           !isPromptInjected &&
@@ -337,11 +336,6 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("droid", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("droid", input),
   },
-  kilo: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kilo", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("kilo", input),
-  },
   opencode: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
@@ -382,8 +376,7 @@ export function renderProviderTraitsMenuContent(input: {
       selection,
       input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
     ) &&
-    ((input.provider !== "kilo" && input.provider !== "opencode") ||
-      (input.runtimeAgents?.length ?? 0) === 0)
+    (input.provider !== "opencode" || (input.runtimeAgents?.length ?? 0) === 0)
   ) {
     return null;
   }
@@ -417,8 +410,7 @@ export function renderProviderTraitsPicker(input: {
       selection,
       input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
     ) &&
-    ((input.provider !== "kilo" && input.provider !== "opencode") ||
-      (input.runtimeAgents?.length ?? 0) === 0)
+    (input.provider !== "opencode" || (input.runtimeAgents?.length ?? 0) === 0)
   ) {
     return null;
   }

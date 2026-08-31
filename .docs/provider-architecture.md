@@ -4,7 +4,7 @@ Synara treats provider integrations as adapters behind server-owned orchestratio
 
 ## Implemented providers
 
-`ProviderAdapterRegistryLive` currently registers ten first-class provider kinds:
+`ProviderAdapterRegistryLive` currently registers nine first-class provider kinds:
 
 - `codex`
 - `claudeAgent`
@@ -13,7 +13,6 @@ Synara treats provider integrations as adapters behind server-owned orchestratio
 - `antigravity`
 - `grok`
 - `droid`
-- `kilo`
 - `opencode`
 - `pi`
 
@@ -67,10 +66,6 @@ Provider configuration is split across typed server settings, discovery/health s
 Capability and discovery data should be authoritative. UI surfaces should consume the shared provider metadata instead of hard-coding behavior from `ProviderKind` where a capability exists.
 
 ## Shared provider families
-
-### OpenCode-compatible providers
-
-OpenCode and Kilo share the OpenCode-compatible runtime/adapter family while remaining distinct provider kinds. Shared transport code belongs in that family; provider-specific defaults, health/configuration, model discovery, and presentation stay explicit.
 
 ### ACP providers
 
