@@ -4571,7 +4571,15 @@ export default function Sidebar() {
         continue;
       }
 
-      for (const entry of projectSidebarData.visibleEntries) {
+      const projectThreadFolders = getProjectThreadFolders(threadFolders, project.id);
+      const activeFolderIds = new Set(projectThreadFolders.map((folder) => folder.id));
+      const { visibleEntries } = groupThreadFolderEntries({
+        entries: projectSidebarData.visibleEntries,
+        activeFolderIds,
+        folderIdByThreadId,
+        collapsedFolderIds: collapsedThreadFolderIds,
+      });
+      for (const entry of visibleEntries) {
         addVisibleThreadId(entry.rowId);
       }
     }
@@ -4585,7 +4593,15 @@ export default function Sidebar() {
     }
 
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  }, [
+    collapsedThreadFolderIds,
+    folderIdByThreadId,
+    pinnedThreads,
+    studioChatThreadIds,
+    surfaceProjectSidebarDataById,
+    surfaceProjects,
+    threadFolders,
+  ]);
   const visibleSidebarThreadIds =
     activityViewEnabled && !isOnStudio ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
@@ -5463,6 +5479,7 @@ export default function Sidebar() {
         entries: visibleEntries,
         activeFolderIds,
         folderIdByThreadId,
+        collapsedFolderIds: collapsedThreadFolderIds,
       });
     const threadCountByFolderId = new Map<string, number>();
     for (const thread of projectThreads) {
