@@ -73,16 +73,47 @@ describe("ProviderTextGeneration", () => {
     expect(await Effect.runPromise(Effect.provide(program, layer))).toBe(1);
   });
 
-  it.each(["droid:deepseek-v4-flash-0731", "droid/deepseek-v4-flash-0731"] as const)(
-    "routes droid %s slugs to droid",
-    async (slug) => {
-      const { layer, droid } = makeTestLayer();
-      const program = Effect.gen(function* () {
-        const text = yield* TextGen.TextGeneration;
-        yield* text.generateCommitMessage(commitInput({ model: slug }));
-        return droid.mock.calls.length;
-      });
-      expect(await Effect.runPromise(Effect.provide(program, layer))).toBe(1);
-    },
-  );
+  it.each([
+    "droid:particle/deepseek-v4-flash-0731",
+    "droid/particle/deepseek-v4-flash-0731",
+  ] as const)("routes droid %s slugs to droid", async (slug) => {
+    const { layer, droid } = makeTestLayer();
+    const program = Effect.gen(function* () {
+      const text = yield* TextGen.TextGeneration;
+      yield* text.generateCommitMessage(commitInput({ model: slug }));
+      return droid.mock.calls;
+    });
+    const calls = await Effect.runPromise(Effect.provide(program, layer));
+    const forwarded = calls[0]?.[0];
+    expect(calls.length).toBe(1);
+    expect(forwarded?.model).toBe("particle/deepseek-v4-flash-0731");
+    expect(forwarded?.modelSelection).toEqual({
+      provider: "droid",
+      model: "particle/deepseek-v4-flash-0731",
+    });
+  });
+
+  it("passes explicit droid model selections through unchanged", async () => {
+    const { layer, droid } = makeTestLayer();
+    const explicitSelection = { provider: "droid", model: "x" } as const;
+    const program = Effect.gen(function* () {
+      const text = yield* TextGen.TextGeneration;
+      yield* text.generateCommitMessage(commitInput({ modelSelection: explicitSelection }));
+      return droid.mock.calls;
+    });
+    const calls = await Effect.runPromise(Effect.provide(program, layer));
+    const forwarded = calls[0]?.[0];
+    expect(calls.length).toBe(1);
+    expect(forwarded?.modelSelection).toEqual(explicitSelection);
+  });
+
+  it("routes codex model-only inputs to codex", async () => {
+    const { layer, droid } = makeTestLayer();
+    const program = Effect.gen(function* () {
+      const text = yield* TextGen.TextGeneration;
+      yield* text.generateCommitMessage(commitInput({ model: "gpt-5.5" }));
+      return droid.mock.calls.length;
+    });
+    expect(await Effect.runPromise(Effect.provide(program, layer))).toBe(0);
+  });
 });

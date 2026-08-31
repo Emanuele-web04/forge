@@ -1,4 +1,9 @@
-import { PROVIDER_DISPLAY_NAMES, type ModelSelection, type ProviderKind } from "@synara/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type DroidModelSelection,
+  type ModelSelection,
+  type ProviderKind,
+} from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
@@ -74,7 +79,17 @@ const makeProviderTextGeneration = Effect.gen(function* () {
           new TextGenerationError({ operation, detail: providerDisabledSettingsMessage(provider) }),
         );
       }
-      return { implementation: implementations[provider], fallbackModelSelection };
+      return {
+        implementation: implementations[provider],
+        fallbackModelSelection,
+        modelSelectionOverride:
+          provider === "droid" && input.modelSelection === undefined
+            ? ({
+                model: parseDroidModelSlug(input.model)?.model ?? provider,
+                provider,
+              } satisfies DroidModelSelection)
+            : undefined,
+      };
     });
 
   const call = <
@@ -89,7 +104,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     ) => Effect.Effect<Output, TextGenerationError>,
   ) =>
     resolveImplementation(operation, input).pipe(
-      Effect.flatMap(({ implementation, fallbackModelSelection }) =>
+      Effect.flatMap(({ implementation, fallbackModelSelection, modelSelectionOverride }) =>
         run(
           implementation,
           fallbackModelSelection
@@ -98,28 +113,39 @@ const makeProviderTextGeneration = Effect.gen(function* () {
                 model: fallbackModelSelection.model,
                 modelSelection: fallbackModelSelection,
               } as Input)
-            : input,
+            : modelSelectionOverride
+              ? ({
+                  ...input,
+                  model: modelSelectionOverride.model,
+                  modelSelection: modelSelectionOverride,
+                } as Input)
+              : input,
         ),
       ),
     );
 
-  const operations = [
-    "generateCommitMessage",
-    "generatePrContent",
-    "generateDiffSummary",
-    "generateBranchName",
-    "generateThreadTitle",
-    "generateThreadRecap",
-    "generateAutomationIntent",
-    "evaluateAutomationCompletion",
-  ] as const;
-
-  return Object.fromEntries(
-    operations.map((op) => [
-      op,
-      (input: unknown) => call(op, input as never, (impl, value) => (impl as any)[op](value)),
-    ]),
-  ) as unknown as TextGen.TextGenerationShape;
+  return {
+    generateCommitMessage: (input: TextGen.CommitMessageGenerationInput) =>
+      call("generateCommitMessage", input, (impl, value) => impl.generateCommitMessage(value)),
+    generatePrContent: (input: TextGen.PrContentGenerationInput) =>
+      call("generatePrContent", input, (impl, value) => impl.generatePrContent(value)),
+    generateDiffSummary: (input: TextGen.DiffSummaryGenerationInput) =>
+      call("generateDiffSummary", input, (impl, value) => impl.generateDiffSummary(value)),
+    generateBranchName: (input: TextGen.BranchNameGenerationInput) =>
+      call("generateBranchName", input, (impl, value) => impl.generateBranchName(value)),
+    generateThreadTitle: (input: TextGen.ThreadTitleGenerationInput) =>
+      call("generateThreadTitle", input, (impl, value) => impl.generateThreadTitle(value)),
+    generateThreadRecap: (input: TextGen.ThreadRecapGenerationInput) =>
+      call("generateThreadRecap", input, (impl, value) => impl.generateThreadRecap(value)),
+    generateAutomationIntent: (input: TextGen.AutomationIntentGenerationInput) =>
+      call("generateAutomationIntent", input, (impl, value) =>
+        impl.generateAutomationIntent(value),
+      ),
+    evaluateAutomationCompletion: (input: TextGen.AutomationCompletionEvaluationInput) =>
+      call("evaluateAutomationCompletion", input, (impl, value) =>
+        impl.evaluateAutomationCompletion(value),
+      ),
+  } satisfies TextGen.TextGenerationShape;
 });
 
 export const ProviderTextGenerationLive = Layer.effect(
