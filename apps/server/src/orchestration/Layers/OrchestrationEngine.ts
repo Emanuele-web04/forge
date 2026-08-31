@@ -540,6 +540,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.message.edit-and-resend":
       case "thread.message.assistant.complete":
       case "thread.approval.respond":
+      case "thread.user-input.respond":
+      case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
       default:
         return Effect.succeed(commandReadModel);

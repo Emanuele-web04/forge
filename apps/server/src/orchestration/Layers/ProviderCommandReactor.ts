@@ -2843,7 +2843,7 @@ const make = Effect.gen(function* () {
       }
 
       const thread = yield* resolveThread(event.payload.threadId);
-      if (!thread) {
+      if (!thread || isExpiredSidechat(thread)) {
         return;
       }
 

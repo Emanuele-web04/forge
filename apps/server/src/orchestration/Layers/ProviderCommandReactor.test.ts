@@ -2617,6 +2617,100 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
+  it("does not replay a persisted turn-start intent after its side chat expires", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const sourceThreadId = ThreadId.makeUnsafe("thread-1");
+    const sidechatId = ThreadId.makeUnsafe("thread-expired-turn-start-sidechat");
+    const messageId = asMessageId("message-expired-turn-start-sidechat");
+    const commandId = CommandId.makeUnsafe("cmd-persist-expired-turn-start-sidechat");
+    const messageEventId = asEventId("evt-message-expired-turn-start-sidechat");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-create-expired-turn-start-sidechat"),
+        threadId: sidechatId,
+        sourceThreadId,
+        sidechatSourceThreadId: sourceThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Expired turn start sidechat",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      }),
+    );
+    const sidechatBeforeExpiry = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads.find((thread) => thread.id === sidechatId);
+    await harness.persistWithoutLivePublication([
+      {
+        eventId: messageEventId,
+        aggregateKind: "thread",
+        aggregateId: sidechatId,
+        occurredAt: createdAt,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: sidechatId,
+          messageId,
+          role: "user",
+          text: "Do not replay after expiry",
+          dispatchMode: "queue",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt,
+          updatedAt: createdAt,
+        },
+      },
+      {
+        eventId: asEventId("evt-turn-start-expired-sidechat"),
+        aggregateKind: "thread",
+        aggregateId: sidechatId,
+        occurredAt: createdAt,
+        commandId,
+        causationEventId: messageEventId,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: sidechatId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        },
+      },
+    ]);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.sidechat.expire",
+        commandId: CommandId.makeUnsafe("cmd-expire-turn-start-sidechat"),
+        threadId: sidechatId,
+        expectedLastActivityAt:
+          sidechatBeforeExpiry?.sidechatLastActivityAt ??
+          sidechatBeforeExpiry?.createdAt ??
+          createdAt,
+        expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("ignores a stale continuation request after the goal is cleared", async () => {
     const harness = await createHarness();
 
