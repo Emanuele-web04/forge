@@ -16,14 +16,12 @@ export type SidebarSplitGroupPosition = "first" | "middle" | "last";
 
 export interface SidebarSplitGroupInfo {
   splitViewId: SplitViewId;
-  /** Card for colocated rows; linked keeps remote members in their own sidebar container. */
-  presentation: "card" | "linked";
   /** 1-based pane order among the members actually rendered in this list. */
   memberIndex: number;
   memberCount: number;
-  /** True on the first row of the first member; useful for group-level affordances. */
+  /** True on the first row of the first member; owns the group's layout glyph. */
   isLeader: boolean;
-  /** Where this row sits inside the group's row span, so the card can cap its ends. */
+  /** Where this row sits inside the group's row span, so the rail can cap its ends. */
   position: SidebarSplitGroupPosition;
 }
 
@@ -82,7 +80,6 @@ type GroupableRow = { thread: { id: ThreadId }; depth: number };
 export function applySidebarSplitGroups<T extends GroupableRow>(input: {
   rows: readonly T[];
   membershipByThreadId: ReadonlyMap<ThreadId, SidebarSplitGroupMembership>;
-  containerKeyByThreadId?: Readonly<Record<string, string | undefined>>;
 }): (T & { splitGroup: SidebarSplitGroupInfo | null })[] {
   const { membershipByThreadId, rows } = input;
   if (rows.length === 0 || membershipByThreadId.size === 0) {
@@ -111,27 +108,18 @@ export function applySidebarSplitGroups<T extends GroupableRow>(input: {
   });
 
   const groupedBlockIndexesByGroupId = new Map<SplitViewId, number[]>();
-  const linkedGroupIds = new Set<SplitViewId>();
   for (const [groupId, groupBlockIndexes] of blockIndexesByGroupId) {
     // A single visible member is not a group: the siblings are archived, filtered out, or live in
-    // another project's list, and a card around one row would only add noise.
+    // another project's list, and a rail spanning one row would only add noise.
     if (groupBlockIndexes.length < 2) continue;
-    const orderedBlockIndexes = groupBlockIndexes.toSorted((first, second) => {
-      const firstOrder = blocks[first]?.membership?.paneOrder ?? 0;
-      const secondOrder = blocks[second]?.membership?.paneOrder ?? 0;
-      return firstOrder - secondOrder;
-    });
-    groupedBlockIndexesByGroupId.set(groupId, orderedBlockIndexes);
-
-    const containerKeys = new Set(
-      orderedBlockIndexes.map((blockIndex) => {
-        const threadId = blocks[blockIndex]?.rows[0]?.thread.id;
-        return threadId ? (input.containerKeyByThreadId?.[threadId] ?? null) : null;
+    groupedBlockIndexesByGroupId.set(
+      groupId,
+      groupBlockIndexes.toSorted((first, second) => {
+        const firstOrder = blocks[first]?.membership?.paneOrder ?? 0;
+        const secondOrder = blocks[second]?.membership?.paneOrder ?? 0;
+        return firstOrder - secondOrder;
       }),
     );
-    if (containerKeys.size > 1) {
-      linkedGroupIds.add(groupId);
-    }
   }
 
   const groupedRows: (T & { splitGroup: SidebarSplitGroupInfo | null })[] = [];
@@ -148,36 +136,6 @@ export function applySidebarSplitGroups<T extends GroupableRow>(input: {
     const groupBlockIndexes = groupId ? groupedBlockIndexesByGroupId.get(groupId) : undefined;
     if (!groupId || !groupBlockIndexes) {
       pushUngroupedBlock(block);
-      return;
-    }
-    if (linkedGroupIds.has(groupId)) {
-      const memberIndex = groupBlockIndexes.indexOf(index);
-      if (memberIndex === -1) {
-        pushUngroupedBlock(block);
-        return;
-      }
-      block.rows.forEach((row, rowIndex) => {
-        const position: SidebarSplitGroupPosition =
-          memberIndex === 0
-            ? "first"
-            : memberIndex === groupBlockIndexes.length - 1
-              ? "last"
-              : "middle";
-        groupedRows.push({
-          ...row,
-          splitGroup:
-            rowIndex === 0
-              ? {
-                  splitViewId: groupId,
-                  presentation: "linked",
-                  memberIndex: memberIndex + 1,
-                  memberCount: groupBlockIndexes.length,
-                  isLeader: memberIndex === 0,
-                  position,
-                }
-              : null,
-        });
-      });
       return;
     }
     if (emittedGroupIds.has(groupId)) {
@@ -203,7 +161,6 @@ export function applySidebarSplitGroups<T extends GroupableRow>(input: {
           ...row,
           splitGroup: {
             splitViewId: groupId,
-            presentation: "card",
             memberIndex: memberIndex + 1,
             memberCount: memberBlocks.length,
             isLeader: groupRowIndex === 0,
@@ -239,7 +196,7 @@ export function clampPreviewLimitToSplitGroupBoundary(input: {
 }
 
 // Keeps range-selection order (shift-click) aligned with the grouped order the user sees. Ids that
-// have no row — filtered subagents or rows past the preview cut — keep their original relative order
+// have no row — collapsed subagents, rows past the preview cut — keep their original relative order
 // after the visible ones.
 export function reorderThreadIdsByRowOrder(input: {
   threadIds: readonly ThreadId[];

@@ -26,6 +26,7 @@ describe("Sidebar module", () => {
     const module = await import("./Sidebar");
     const chips = module.resolveThreadRowMetaChips({
       thread: {
+        parentThreadId: "parent" as never,
         creationSource: "synara_mcp",
         sourceThreadId: "source" as never,
         forkSourceThreadId: null,
@@ -56,6 +57,7 @@ describe("Sidebar module", () => {
     const module = await import("./Sidebar");
     const chips = module.resolveThreadRowMetaChips({
       thread: {
+        parentThreadId: "parent" as never,
         creationSource: "provider_native",
         sourceThreadId: "parent" as never,
         forkSourceThreadId: null,
@@ -74,11 +76,9 @@ describe("Sidebar module", () => {
     vi.stubGlobal("self", globalThis);
     const module = await import("./Sidebar");
 
-    expect(
-      module.shouldShowTemporaryThreadIcon({
-        isTemporaryThread: true,
-        sidechatSourceThreadId: null,
-      }),
-    ).toBe(true);
+    expect(module.shouldShowTemporaryThreadIcon({
+      isTemporaryThread: true,
+      sidechatSourceThreadId: null,
+    })).toBe(true);
   }, 15_000);
 });

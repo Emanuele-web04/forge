@@ -86,7 +86,8 @@ function fallbackSubagentLabel(value: string | null): string | null {
 
 function isOpaqueSubagentIdentifier(value: string | null): boolean {
   return (
-    value !== null && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    value !== null &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
   );
 }
 

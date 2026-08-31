@@ -1489,34 +1489,7 @@ describe("getRenderedThreadsForSidebarProject", () => {
 });
 
 describe("buildProjectThreadTree", () => {
-  it("nests Synara-created threads below their source thread", () => {
-    const rows = buildProjectThreadTree({
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-created"),
-          creationSource: "synara_mcp",
-          sourceThreadId: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-sibling"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-    });
-
-    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
-      [ThreadId.makeUnsafe("thread-parent"), 0],
-      [ThreadId.makeUnsafe("thread-created"), 1],
-      [ThreadId.makeUnsafe("thread-sibling"), 0],
-    ]);
-  });
-
-  it("keeps child threads visible directly below their parent", () => {
+  it("keeps inactive child threads out of the sidebar", () => {
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({
@@ -1531,9 +1504,11 @@ describe("buildProjectThreadTree", () => {
       ],
     });
 
-    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
-      [ThreadId.makeUnsafe("thread-parent"), 0],
-      [ThreadId.makeUnsafe("thread-child"), 1],
+    expect(rows).toEqual([
+      expect.objectContaining({
+        thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-parent") }),
+        depth: 0,
+      }),
     ]);
   });
 
@@ -1568,7 +1543,7 @@ describe("buildProjectThreadTree", () => {
     ]);
   });
 
-  it("keeps nested descendants visible without requiring an active child", () => {
+  it("reveals the active child thread and its ancestors", () => {
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({
@@ -1586,6 +1561,7 @@ describe("buildProjectThreadTree", () => {
           createdAt: "2026-03-09T10:01:00.000Z",
         }),
       ],
+      forceVisibleThreadId: ThreadId.makeUnsafe("thread-grandchild"),
     });
 
     expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
@@ -1659,50 +1635,6 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
       ThreadId.makeUnsafe("thread-third-root"),
-    ]);
-  });
-
-  it("does not pull a remote linked split member into the active row preview", () => {
-    const splitViewId = "split-remote";
-    const linkedSplitGroup = {
-      splitViewId,
-      presentation: "linked" as const,
-      memberIndex: 1,
-      memberCount: 2,
-      isLeader: true,
-      position: "first" as const,
-    };
-    const entries = [
-      {
-        rowId: ThreadId.makeUnsafe("thread-preview"),
-        rootRowId: ThreadId.makeUnsafe("thread-preview"),
-      },
-      {
-        rowId: ThreadId.makeUnsafe("thread-remote-peer"),
-        rootRowId: ThreadId.makeUnsafe("thread-remote-peer"),
-        splitGroup: linkedSplitGroup,
-      },
-      {
-        rowId: ThreadId.makeUnsafe("thread-active"),
-        rootRowId: ThreadId.makeUnsafe("thread-active"),
-        splitGroup: {
-          ...linkedSplitGroup,
-          memberIndex: 2,
-          isLeader: false,
-          position: "last" as const,
-        },
-      },
-    ];
-
-    const result = getVisibleSidebarEntriesForPreview({
-      entries,
-      activeEntryId: ThreadId.makeUnsafe("thread-active"),
-      previewLimit: 1,
-    });
-
-    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
-      ThreadId.makeUnsafe("thread-preview"),
-      ThreadId.makeUnsafe("thread-active"),
     ]);
   });
 });
@@ -2151,55 +2083,6 @@ describe("deriveSidebarProjectData", () => {
       expect.objectContaining({ kind: "thread", rowId: sourceThread.id }),
       expect.objectContaining({ kind: "thread", rowId: droppedThread.id }),
       expect.objectContaining({ kind: "thread", rowId: standaloneThread.id }),
-    ]);
-  });
-
-  it("keeps cross-folder split members in their original project order", () => {
-    const project = makeProject();
-    const folderThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-folder"),
-      title: "Folder member",
-    });
-    const betweenThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-between"),
-      title: "Between",
-    });
-    const rootThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-root"),
-      title: "Root member",
-    });
-    const splitViewId = "split-cross-folder";
-
-    const data = deriveSidebarProjectData({
-      projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
-        folderThread,
-        betweenThread,
-        rootThread,
-      ]),
-      pinnedThreadIds: [],
-      splitGroupMembershipByThreadId: new Map([
-        [folderThread.id, { splitViewId, paneOrder: 0 }],
-        [rootThread.id, { splitViewId, paneOrder: 1 }],
-      ]),
-      folderIdByThreadId: { [folderThread.id]: "folder-a" },
-      threadListExtraPagesByProjectCwd: new Map(),
-      normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: undefined,
-      previewLimit: 5,
-      previewPageSize: 5,
-    });
-
-    const entries = data.get(project.id)?.visibleEntries ?? [];
-    expect(entries.map((entry) => entry.rowId)).toEqual([
-      folderThread.id,
-      betweenThread.id,
-      rootThread.id,
-    ]);
-    expect(entries.map((entry) => entry.splitGroup?.presentation ?? null)).toEqual([
-      "linked",
-      null,
-      "linked",
     ]);
   });
 
