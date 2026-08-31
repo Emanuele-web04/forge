@@ -237,12 +237,15 @@ export const GitListBranchesInput = Schema.Struct({
 export type GitListBranchesInput = typeof GitListBranchesInput.Type;
 
 export const DEFAULT_GIT_RECENT_COMMIT_LIMIT = 20;
+// The compare-with picker shows at most a handful of rows; a hard ceiling keeps
+// an untrusted client from asking `git log` for an unbounded history.
+export const MAX_GIT_RECENT_COMMIT_LIMIT = 50;
 
 export const GitListRecentCommitsInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  limit: Schema.optional(PositiveInt).pipe(
-    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_RECENT_COMMIT_LIMIT)),
-  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_GIT_RECENT_COMMIT_LIMIT)),
+  ).pipe(Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_RECENT_COMMIT_LIMIT))),
 });
 export type GitListRecentCommitsInput = typeof GitListRecentCommitsInput.Type;
 

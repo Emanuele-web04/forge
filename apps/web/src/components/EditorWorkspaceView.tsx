@@ -62,6 +62,7 @@ import {
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { WorkspaceFileDiffEditorPane } from "./chat/WorkspaceFileDiffEditorPane";
 import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChrome";
+import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
 import { WorkspaceFileEditorPane } from "./chat/WorkspaceFileEditorPane";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
@@ -398,6 +399,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const [editDirty, setEditDirty] = useState(false);
   const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
   const inEditMode = centerMode === "fileEdit" || centerMode === "diffEdit";
+  // The in-editor exits below confirm before navigating; once confirmed they
+  // must not trip the route-level dirty guard a second time (state updates are
+  // async, so the guard's subscription would still see the stale dirty flag).
+  const bypassRouteBlockRef = useRef(false);
   const guardLeavingEdit = (run: () => void) => {
     if (inEditMode && editDirty) {
       setPendingLeaveEdit({ run });
@@ -748,9 +753,17 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           const pending = pendingLeaveEdit;
           setPendingLeaveEdit(null);
           setEditDirty(false);
-          pending?.run();
+          if (pending) {
+            bypassRouteBlockRef.current = true;
+            try {
+              pending.run();
+            } finally {
+              bypassRouteBlockRef.current = false;
+            }
+          }
         }}
       />
+      {inEditMode && editDirty ? <EditorDirtyRouteGuard enabled /> : null}
     </div>
   );
 }

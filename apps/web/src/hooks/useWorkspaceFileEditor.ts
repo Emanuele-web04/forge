@@ -176,9 +176,15 @@ export function useWorkspaceFileEditor(
     if (editorKey === null) {
       return;
     }
+    // The reload does not block input: if the user typed while the fetch was
+    // in flight, applying it now would silently erase those edits.
+    const valueAtReloadStart = stateRef.current.value;
     void queryClient
       .fetchQuery({ ...queryOptions, staleTime: 0 })
       .then(async (result) => {
+        if (stateRef.current.value !== valueAtReloadStart) {
+          return;
+        }
         dispatch({
           type: "reloaded",
           key: editorKey,

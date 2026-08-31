@@ -74,7 +74,10 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
       onKeyDownCapture={saveKeyDownHandler}
     >
       <CodeEditBoundary fallback={CODE_EDITOR_LOADING_FALLBACK}>
+        {/* diffStyle is effectively mount-time config on FileDiff, so a layout
+            switch must remount the instance (same treatment as the diff panel). */}
         <FileDiff
+          key={props.renderSideBySide ? "split" : "unified"}
           fileDiff={fileDiff}
           options={options}
           edit={!(props.readOnly ?? false)}

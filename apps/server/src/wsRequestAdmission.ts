@@ -44,6 +44,7 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.gitReadWorkingTreeDiff,
   WS_METHODS.gitBlameLine,
   WS_METHODS.gitReadFileAtRev,
+  WS_METHODS.gitListRecentCommits,
   WS_METHODS.gitWorkingTreeDiffStats,
   WS_METHODS.gitSummarizeDiff,
   WS_METHODS.gitPullRequestSnapshot,
