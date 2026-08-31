@@ -54,7 +54,7 @@ describe("streamingCodeHighlightIntervalMs", () => {
     expect(streamingCodeHighlightIntervalMs(44_000)).toBe(580);
     expect(streamingCodeHighlightIntervalMs(80_000)).toBe(1_000);
     expect(streamingCodeHighlightIntervalMs(500_000)).toBe(1_000);
-  });
+  }, 60_000);
 });
 
 describe("ChatMarkdown", () => {

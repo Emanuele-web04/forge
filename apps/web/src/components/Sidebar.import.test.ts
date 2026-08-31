@@ -18,5 +18,5 @@ describe("Sidebar module", () => {
 
     expect(module.default).toBeTypeOf("function");
     // Full-suite runs transform many web files concurrently; this import can cross Vitest's 5s default.
-  }, 15_000);
+  }, 60_000);
 });
