@@ -6787,6 +6787,7 @@ export default function Sidebar() {
                     }}
                     onProjectContextMenu={handleProjectContextMenu}
                     prByThreadId={prByThreadId}
+                    threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
                     onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                     renderThreadHoverCard={(thread, anchorId) =>
                       renderThreadHoverCardPopup(
