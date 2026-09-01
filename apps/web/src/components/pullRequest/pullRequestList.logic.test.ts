@@ -20,6 +20,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
   const entry: PullRequestListEntry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
+    provider: "github",
     repository: "acme/widgets",
     number: 1,
     title: "Untitled",
@@ -152,6 +153,12 @@ describe("pull request list identity", () => {
     expect(pullRequestListEntryKey(first)).toBe(pullRequestListEntryKey(second));
   });
 
+  it("separates row identity for different providers sharing a repository and number", () => {
+    const github = makeEntry({ provider: "github" });
+    const bitbucket = makeEntry({ provider: "bitbucket" });
+    expect(pullRequestListEntryKey(github)).not.toBe(pullRequestListEntryKey(bitbucket));
+  });
+
   it("counts one review request once across shared-project rows", () => {
     const first = makeEntry({ viewerReviewRequested: true });
     const duplicate = makeEntry({
@@ -160,6 +167,12 @@ describe("pull request list identity", () => {
     });
     const other = makeEntry({ number: 2, viewerReviewRequested: true });
     expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
+  });
+
+  it("counts review requests from different providers independently", () => {
+    const github = makeEntry({ provider: "github", viewerReviewRequested: true });
+    const bitbucket = makeEntry({ provider: "bitbucket", viewerReviewRequested: true });
+    expect(countUniqueViewerReviewRequests([github, bitbucket])).toBe(2);
   });
 });
 
@@ -184,12 +197,14 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, true)).toEqual([
       {
         projectId: "project-1",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: false,
       },
       {
         projectId: "project-2",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: false,
@@ -202,6 +217,7 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, false)).toEqual([
       {
         projectId: entry.projectId,
+        provider: "github",
         repository: entry.repository,
         number: entry.number,
         isPinned: false,
@@ -227,12 +243,14 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, true)).toEqual([
       {
         projectId: "project-1",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: true,
       },
       {
         projectId: "project-2",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: true,
@@ -266,6 +284,18 @@ describe("filterPullRequestEntriesByInvolvement", () => {
   it("returns no authored entries when the viewer login is unknown", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  });
+
+  it("keeps unknown viewer involvement out of reviewing and authored filters", () => {
+    const entry = makeEntry({
+      author: makeActor("viewer"),
+      viewerReviewRequested: true,
+      viewerInvolvement: "unknown",
+    });
+
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "all")).toEqual([entry]);
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "reviewing")).toEqual([]);
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "authored")).toEqual([]);
   });
 });
 

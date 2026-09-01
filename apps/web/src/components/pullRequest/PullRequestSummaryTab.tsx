@@ -110,6 +110,7 @@ function DisclosureSection({
 }
 
 export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
+  const checks = detail.checks ?? [];
   return (
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
@@ -169,8 +170,8 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
           </MetaRow>
           {/* Tone tinting intentionally omitted: the summary reads as plain metadata
               here, matching the muted meta rows around it. */}
-          <MetaRow icon={<PullRequestChecksRing checks={detail.checks} />} label="Checks">
-            {summarizePullRequestChecks(detail.checks).label}
+          <MetaRow icon={<PullRequestChecksRing checks={checks} />} label="Checks">
+            {detail.checks === null ? "Unavailable" : summarizePullRequestChecks(checks).label}
           </MetaRow>
         </div>
       </section>
@@ -182,14 +183,18 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
           cwd={detail.workspaceRoot}
         />
       </DisclosureSection>
-      <DisclosureSection label="Checks" count={detail.checks.length}>
+      <DisclosureSection label="Checks" count={detail.checks === null ? undefined : checks.length}>
         <div className="space-y-1">
-          {detail.checks.length === 0 ? (
+          {detail.checks === null ? (
+            <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
+              Checks are unavailable from this provider.
+            </p>
+          ) : checks.length === 0 ? (
             <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
               No checks reported.
             </p>
           ) : (
-            withStableCheckKeys(detail.checks).map(({ key, check }) => (
+            withStableCheckKeys(checks).map(({ key, check }) => (
               <button
                 key={key}
                 type="button"

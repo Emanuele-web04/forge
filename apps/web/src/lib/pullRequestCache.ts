@@ -2,16 +2,19 @@ import type {
   ProjectId,
   PullRequestDetailInput,
   PullRequestProjectContext,
+  PullRequestProvider,
   PullRequestSetPinnedInput,
   PullRequestState,
   PullRequestsListResult,
 } from "@synara/contracts";
 import {
   coalescePullRequestListEntries,
+  normalizePullRequestProvider,
   pullRequestListEntryHasProject,
   pullRequestListProjectContexts,
   pullRequestListProjectPin,
-  pullRequestListRepositoryIdentity,
+  pullRequestProjectIdentityKey as sharedPullRequestProjectIdentityKey,
+  pullRequestRemoteIdentityKey as sharedPullRequestRemoteIdentityKey,
   updatePullRequestListEntryProjectPin,
 } from "@synara/shared/githubRepository";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
@@ -21,6 +24,7 @@ import { PULL_REQUEST_STATES } from "./pullRequestQueryOptions";
 export type PullRequestListCacheEntry = {
   projectId: ProjectId;
   projectTitle?: string;
+  provider?: PullRequestProvider;
   repository: string;
   number: number;
   isPinned: boolean;
@@ -54,28 +58,47 @@ export type PullRequestListQueryScope = {
   projectId: ProjectId | null;
 };
 
+type PullRequestRemoteIdentityInput = {
+  provider?: PullRequestProvider | undefined;
+  repository: string;
+  number: number;
+};
+
+type PullRequestProjectIdentityInput = PullRequestRemoteIdentityInput & {
+  projectId: ProjectId;
+};
+
 export function pullRequestIdentityKey(
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
 ): string {
-  return JSON.stringify([input.projectId, input.repository.toLowerCase(), input.number]);
+  return sharedPullRequestProjectIdentityKey({
+    projectId: input.projectId,
+    provider: normalizePullRequestProvider(input.provider),
+    repository: input.repository,
+    number: input.number,
+  });
 }
 
 export function pullRequestRemoteIdentityKey(
-  input: Pick<PullRequestDetailInput, "repository" | "number">,
+  input: PullRequestRemoteIdentityInput,
 ): string {
-  return pullRequestListRepositoryIdentity(input);
+  return sharedPullRequestRemoteIdentityKey({
+    provider: normalizePullRequestProvider(input.provider),
+    repository: input.repository,
+    number: input.number,
+  });
 }
 
 function matchesPullRequestRemoteIdentity(
-  entry: Pick<PullRequestListCacheEntry, "repository" | "number">,
-  input: Pick<PullRequestDetailInput, "repository" | "number">,
+  entry: PullRequestRemoteIdentityInput,
+  input: PullRequestRemoteIdentityInput,
 ): boolean {
   return pullRequestRemoteIdentityKey(entry) === pullRequestRemoteIdentityKey(input);
 }
 
 function matchesPullRequestPinIdentity(
   entry: PullRequestListCacheEntry,
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
 ): boolean {
   return (
     matchesPullRequestRemoteIdentity(entry, input) &&
@@ -119,7 +142,7 @@ function scopeKey(scope: PullRequestListQueryScope): string {
 
 export function listScopesContainingPullRequest(
   queryClient: QueryClient,
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
 ): PullRequestListQueryScope[] {
   const scopes = new Map<string, PullRequestListQueryScope>();
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
@@ -136,14 +159,17 @@ export function listScopesContainingPullRequest(
  * This reaches the relevant state/involvement siblings without invalidating unrelated projects. */
 export function listScopesContainingPullRequestRepository(
   queryClient: QueryClient,
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
 ): PullRequestListQueryScope[] {
   const scopes = new Map<string, PullRequestListQueryScope>();
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
     const coversRepository = data?.entries.some(
-      (entry) => entry.repository.toLowerCase() === input.repository.toLowerCase(),
+      (entry) =>
+        normalizePullRequestProvider(entry.provider) ===
+          normalizePullRequestProvider(input.provider) &&
+        entry.repository.toLowerCase() === input.repository.toLowerCase(),
     );
     if (!coversRepository) continue;
     const scope = pullRequestListQueryScope(queryKey);
@@ -203,7 +229,7 @@ export function invalidateOtherPullRequestListQueries(
 
 export function optimisticallyPatchPullRequestActionFieldsInListCaches(
   queryClient: QueryClient,
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
   entryPatch: PullRequestActionListPatch,
 ): ActionListCacheRollback[] {
   const rollbackByQuery: ActionListCacheRollback[] = [];
@@ -236,7 +262,7 @@ export function optimisticallyPatchPullRequestActionFieldsInListCaches(
 
 export function rollbackPullRequestActionFieldsInListCaches(input: {
   queryClient: QueryClient;
-  identity: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">;
+  identity: PullRequestProjectIdentityInput;
   optimisticPatch: PullRequestActionListPatch;
   rollbackByQuery: ReadonlyArray<ActionListCacheRollback>;
 }) {
@@ -272,7 +298,7 @@ export function rollbackPullRequestActionFieldsInListCaches(input: {
 
 export function patchPullRequestPinInListCaches(
   queryClient: QueryClient,
-  input: Pick<PullRequestSetPinnedInput, "projectId" | "repository" | "number">,
+  input: PullRequestProjectIdentityInput,
   isPinned: boolean,
 ) {
   for (const [queryKey] of queryClient.getQueriesData<PullRequestListCache>({
@@ -326,7 +352,7 @@ export function optimisticallyPatchPullRequestPinInListCaches(
 export function patchOwnedPullRequestPinInCache(input: {
   queryClient: QueryClient;
   queryKey: QueryKey;
-  identity: Pick<PullRequestSetPinnedInput, "projectId" | "repository" | "number">;
+  identity: PullRequestProjectIdentityInput;
   expectedIsPinned: boolean;
   nextIsPinned: boolean;
 }) {
@@ -365,6 +391,7 @@ export function preserveProtectedPinValues(
         protectedIdentities.has(
           pullRequestIdentityKey({
             projectId: context.projectId,
+            provider: entry.provider,
             repository: entry.repository,
             number: entry.number,
           }),
@@ -382,6 +409,7 @@ export function preserveProtectedPinValues(
           protectedIdentities.has(
             pullRequestIdentityKey({
               projectId: context.projectId,
+              provider: entry.provider,
               repository: entry.repository,
               number: entry.number,
             }),
@@ -412,6 +440,7 @@ export function preserveProtectedPinValues(
           pullRequestListProjectContexts(currentEntry).reduce((next, context) => {
             const identityKey = pullRequestIdentityKey({
               projectId: context.projectId,
+              provider: entry.provider,
               repository: entry.repository,
               number: entry.number,
             });

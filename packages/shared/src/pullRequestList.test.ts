@@ -11,6 +11,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
   const entry: PullRequestListEntry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
+    provider: "github",
     repository: "acme/widgets",
     number: 1,
     title: "PR 1",
@@ -45,10 +46,29 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
 }
 
 describe("pull request list coalescing", () => {
-  it("uses repository and number as the remote identity", () => {
+  it("uses provider, repository, and number as the remote identity", () => {
     expect(pullRequestListRepositoryIdentity(makeEntry({ repository: " Acme/Widgets " }))).toBe(
-      "acme/widgets#1",
+      "github\u0000acme/widgets\u00001",
     );
+    expect(pullRequestListRepositoryIdentity(makeEntry({ provider: "bitbucket" }))).toBe(
+      "bitbucket\u0000acme/widgets\u00001",
+    );
+  });
+
+  it("does not collapse GitHub and Bitbucket rows sharing owner, repository, and number", () => {
+    const github = makeEntry({
+      provider: "github",
+      projectTitle: "GitHub",
+      url: "https://github.com/acme/widgets/pull/1",
+    });
+    const bitbucket = makeEntry({
+      provider: "bitbucket",
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      projectTitle: "Bitbucket",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/1",
+    });
+
+    expect(coalescePullRequestListEntries([github, bitbucket])).toEqual([github, bitbucket]);
   });
 
   it("collapses shared-worktree rows and prefers the head-branch worktree", () => {

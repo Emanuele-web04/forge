@@ -3,7 +3,7 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
-import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import type { ProjectId, PullRequestProvider, ThreadId, TurnId } from "@synara/contracts";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
@@ -37,6 +37,7 @@ export interface RightDockPane {
   // file panes preview one workspace-relative file.
   filePath: string | null;
   pullRequestProjectId: ProjectId | null;
+  pullRequestProvider: PullRequestProvider;
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
   pullRequestInitialTab: PullRequestInitialTab | null;
@@ -74,6 +75,10 @@ export function isRightDockPaneKind(value: unknown): value is RightDockPaneKind 
   return typeof value === "string" && RIGHT_DOCK_PANE_KIND_SET.has(value);
 }
 
+function isPullRequestProvider(value: unknown): value is PullRequestProvider {
+  return value === "github" || value === "bitbucket";
+}
+
 // Persisted dock state predates the current pane-kind union, so a stale entry
 // (e.g. a kind that was renamed or removed) can crash the dock during render.
 // Drop any pane we no longer understand and keep the active tab pointing at a
@@ -97,6 +102,9 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
       typeof candidate.pullRequestProjectId === "string"
         ? (candidate.pullRequestProjectId as ProjectId)
         : null,
+    pullRequestProvider: isPullRequestProvider(candidate.pullRequestProvider)
+      ? candidate.pullRequestProvider
+      : "github",
     pullRequestRepository:
       typeof candidate.pullRequestRepository === "string" ? candidate.pullRequestRepository : null,
     pullRequestNumber:
@@ -166,6 +174,7 @@ export interface OpenPaneInput {
   diffFilePath?: string | null;
   filePath?: string | null;
   pullRequestProjectId?: ProjectId | null;
+  pullRequestProvider?: PullRequestProvider | null;
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
   pullRequestInitialTab?: PullRequestInitialTab | null;
@@ -180,6 +189,7 @@ function createPane(input: OpenPaneInput): RightDockPane {
     diffFilePath: input.diffFilePath ?? null,
     filePath: input.filePath ?? null,
     pullRequestProjectId: input.pullRequestProjectId ?? null,
+    pullRequestProvider: input.pullRequestProvider ?? "github",
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
     pullRequestInitialTab: input.pullRequestInitialTab ?? null,
@@ -202,12 +212,14 @@ function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> 
   if (
     input.kind === "pullRequest" &&
     (input.pullRequestProjectId !== undefined ||
+      input.pullRequestProvider !== undefined ||
       input.pullRequestRepository !== undefined ||
       input.pullRequestNumber !== undefined ||
       input.pullRequestInitialTab !== undefined)
   ) {
     return {
       pullRequestProjectId: input.pullRequestProjectId ?? null,
+      pullRequestProvider: input.pullRequestProvider ?? "github",
       pullRequestRepository: input.pullRequestRepository ?? null,
       pullRequestNumber: input.pullRequestNumber ?? null,
       pullRequestInitialTab: input.pullRequestInitialTab ?? null,
@@ -338,6 +350,7 @@ export function updatePaneInState(
       | "filePath"
       | "threadId"
       | "pullRequestProjectId"
+      | "pullRequestProvider"
       | "pullRequestRepository"
       | "pullRequestNumber"
       | "pullRequestInitialTab"
@@ -356,6 +369,7 @@ export function updatePaneInState(
       nextPane.filePath !== pane.filePath ||
       nextPane.threadId !== pane.threadId ||
       nextPane.pullRequestProjectId !== pane.pullRequestProjectId ||
+      nextPane.pullRequestProvider !== pane.pullRequestProvider ||
       nextPane.pullRequestRepository !== pane.pullRequestRepository ||
       nextPane.pullRequestNumber !== pane.pullRequestNumber ||
       nextPane.pullRequestInitialTab !== pane.pullRequestInitialTab

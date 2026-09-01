@@ -21,7 +21,7 @@ import { pullRequestMarkdownPreview } from "./pullRequestMarkdown.logic";
 /** Canonical identity for one detail surface — used as the React key so switching the
  *  selected pull request remounts the panel (resetting its tab and diff state). */
 export function pullRequestDetailInputKey(input: PullRequestDetailInput): string {
-  return `${input.projectId}:${input.repository}#${input.number}`;
+  return `${input.projectId}:${input.provider}:${input.repository}#${input.number}`;
 }
 
 /** Tab chip label shared by the route overlay chip and the right-dock pane tab. */
@@ -43,6 +43,7 @@ export function pullRequestDetailInputFromPane(pane: RightDockPane): PullRequest
   }
   return {
     projectId: pane.pullRequestProjectId,
+    provider: pane.pullRequestProvider ?? "github",
     repository: pane.pullRequestRepository,
     number: pane.pullRequestNumber,
   };

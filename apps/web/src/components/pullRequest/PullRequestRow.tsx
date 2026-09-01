@@ -94,6 +94,7 @@ export const PullRequestRow = function PullRequestRow({
         type="button"
         data-pull-request-row
         data-project-id={entry.projectId}
+        data-provider={entry.provider}
         data-repository={entry.repository}
         data-pull-request-number={entry.number}
         aria-current={selected ? "true" : undefined}
@@ -103,7 +104,7 @@ export const PullRequestRow = function PullRequestRow({
         <PullRequestStateGlyph
           state={entry.state}
           isDraft={entry.isDraft}
-          mergeability={entry.mergeability}
+          mergeability={entry.mergeability ?? undefined}
           size="md"
         />
         <span className="min-w-0">

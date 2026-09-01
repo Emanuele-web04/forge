@@ -149,7 +149,13 @@ export function PullRequestDetailPanel({
   const { handleNewThread } = useHandleNewThread();
   // Panel state keyed to the PR it belongs to: switching PRs (or landing tab)
   // derives straight back to the defaults with no state-resetting effect.
-  const panelKey = `${input.projectId}\u0000${input.repository}\u0000${input.number}\u0000${initialTab}`;
+  const panelKey = [
+    input.projectId,
+    input.provider,
+    input.repository,
+    input.number,
+    initialTab,
+  ].join("\u0000");
   const [panelState, setPanelState] = useState<{
     key: string;
     tab: DetailTab;
@@ -277,7 +283,7 @@ export function PullRequestDetailPanel({
         headBranch: detail.headBranch,
         baseBranch: detail.baseBranch,
         comments: detail.comments,
-        checks: detail.checks,
+        checks: detail.checks ?? [],
         commentsTruncated: detail.commentsTruncated,
         commentsIncomplete: detail.commentsIncomplete,
       }),

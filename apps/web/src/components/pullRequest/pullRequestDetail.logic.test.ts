@@ -55,13 +55,14 @@ function makeTimelineSource() {
 }
 
 describe("pullRequestDetailInputKey", () => {
-  it("builds a stable projectId:repository#number identity", () => {
+  it("builds a stable projectId:provider:repository#number identity", () => {
     const input: PullRequestDetailInput = {
       projectId: "project-1" as PullRequestDetailInput["projectId"],
+      provider: "bitbucket",
       repository: "acme/widgets",
       number: 350,
     };
-    expect(pullRequestDetailInputKey(input)).toBe("project-1:acme/widgets#350");
+    expect(pullRequestDetailInputKey(input)).toBe("project-1:bitbucket:acme/widgets#350");
   });
 });
 
@@ -141,6 +142,7 @@ describe("pullRequestDetailInputFromPane", () => {
     diffFilePath: null,
     filePath: null,
     pullRequestProjectId: "project-1" as RightDockPane["pullRequestProjectId"],
+    pullRequestProvider: "bitbucket",
     pullRequestRepository: "acme/widgets",
     pullRequestNumber: 350,
     pullRequestInitialTab: null,
@@ -149,6 +151,7 @@ describe("pullRequestDetailInputFromPane", () => {
   it("builds the detail input from a fully-populated pull request pane", () => {
     expect(pullRequestDetailInputFromPane(basePane)).toEqual({
       projectId: "project-1",
+      provider: "bitbucket",
       repository: "acme/widgets",
       number: 350,
     });

@@ -75,6 +75,8 @@ export function indexProjectRepositoryInventories<TRepository extends Repository
           {
             projectId: project.id,
             projectTitle: project.title,
+            provider: null,
+            repository: null,
             message: error instanceof Error ? error.message : "Repository lookup failed.",
           },
         ]
@@ -145,6 +147,8 @@ export function cleanupUnconfiguredPullRequestPins(input: {
                 ? {
                     projectId: project.id,
                     projectTitle: project.title,
+                    provider: null,
+                    repository: null,
                     message: `Stale pull request pin cleanup failed: ${error.message}`,
                   }
                 : null,

@@ -17,10 +17,10 @@ import {
 } from "../persistence/Services/ProjectPullRequestPins";
 import {
   buildPullRequestListEntry,
-  isViewerReviewRequested,
   projectPullRequestIdentityKey,
   pullRequestMatchesInvolvement,
   repositoryPullRequestIdentityKey,
+  resolvePullRequestViewerInvolvement,
   selectRecoverablePullRequestPins,
 } from "../pullRequests.logic";
 
@@ -76,10 +76,12 @@ export function recoverPinnedPullRequests(input: {
 }) {
   return Effect.gen(function* () {
     const errors = new Map<string, PullRequestListError>();
-    const addError = (project: OrchestrationProject, message: string) => {
-      errors.set(`${project.id}\u0000${message}`, {
+    const addError = (project: OrchestrationProject, repository: string, message: string) => {
+      errors.set(`${project.id}\u0000github\u0000${repository}\u0000${message}`, {
         projectId: project.id,
         projectTitle: project.title,
+        provider: "github",
+        repository,
         message,
       });
     };
@@ -91,7 +93,14 @@ export function recoverPinnedPullRequests(input: {
       input.recoveryContexts.map((context) => [context.repository.toLowerCase(), context]),
     );
     const presentKeys = new Set(
-      input.batchEntries.map((entry) => projectPullRequestIdentityKey(entry)),
+      input.batchEntries.map((entry) =>
+        projectPullRequestIdentityKey({
+          projectId: entry.projectId,
+          provider: entry.provider,
+          repository: entry.repository,
+          number: entry.number,
+        }),
+      ),
     );
     const allMissingPins = selectRecoverablePullRequestPins({
       pins: input.pins,
@@ -111,6 +120,7 @@ export function recoverPinnedPullRequests(input: {
       const recovery = recoveryByRepository.get(row.repositoryKey.trim().toLowerCase());
       if (!recovery) continue;
       const lookupKey = repositoryPullRequestIdentityKey({
+        provider: "github",
         repository: recovery.repository,
         number: row.number,
       });
@@ -125,6 +135,7 @@ export function recoverPinnedPullRequests(input: {
       if (project) {
         addError(
           project,
+          row.repositoryKey,
           `Pinned pull request recovery was limited to ${PULL_REQUEST_PIN_RECOVERY_LIMIT} items. ` +
             "Open this project directly to recover the remaining pins.",
         );
@@ -188,6 +199,7 @@ export function recoverPinnedPullRequests(input: {
         if (project) {
           addError(
             project,
+            repositoryKey,
             result.error
               ? `Review-requested pin recovery failed for ${repositoryKey}: ${result.error.message}`
               : `Review-requested pin recovery for ${repositoryKey} reached GitHub's ` +
@@ -204,6 +216,7 @@ export function recoverPinnedPullRequests(input: {
       const project = input.projectById.get(row.projectId);
       if (!recovery || !project) continue;
       const lookupKey = repositoryPullRequestIdentityKey({
+        provider: "github",
         repository: recovery.repository,
         number: row.number,
       });
@@ -246,6 +259,7 @@ export function recoverPinnedPullRequests(input: {
       return (
         recoveredByLookup.get(
           repositoryPullRequestIdentityKey({
+            provider: "github",
             repository: recovery.repository,
             number: row.number,
           }),
@@ -266,7 +280,11 @@ export function recoverPinnedPullRequests(input: {
             Effect.catch((error) => {
               const project = input.projectById.get(row.projectId);
               if (project) {
-                addError(project, `Missing pull request pin cleanup failed: ${error.message}`);
+                addError(
+                  project,
+                  row.repositoryKey,
+                  `Missing pull request pin cleanup failed: ${error.message}`,
+                );
               }
               return Effect.void;
             }),
@@ -281,6 +299,7 @@ export function recoverPinnedPullRequests(input: {
       if (!recovery || !project) return [];
       const lookup = recoveredByLookup.get(
         repositoryPullRequestIdentityKey({
+          provider: "github",
           repository: recovery.repository,
           number: row.number,
         }),
@@ -288,6 +307,7 @@ export function recoverPinnedPullRequests(input: {
       if (lookup?.error) {
         addError(
           project,
+          repositoryKey,
           `Pinned pull request #${row.number} could not be recovered: ${lookup.error.message}`,
         );
         return [];
@@ -303,17 +323,19 @@ export function recoverPinnedPullRequests(input: {
       ) {
         return [];
       }
+      const viewerInvolvement = resolvePullRequestViewerInvolvement(
+        item.author,
+        item.reviewRequestLogins,
+        input.viewer,
+        matchedReviewingQuery,
+      );
       return [
         buildPullRequestListEntry({
           project,
           repository: recovery.repository,
           pullRequest: item,
-          viewerReviewRequested: isViewerReviewRequested(
-            item.author,
-            item.reviewRequestLogins,
-            input.viewer,
-            matchedReviewingQuery,
-          ),
+          viewerReviewRequested: viewerInvolvement === "review-requested",
+          viewerInvolvement,
           isPinned: true,
         }),
       ];

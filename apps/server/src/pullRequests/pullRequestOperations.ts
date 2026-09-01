@@ -1,4 +1,9 @@
-import type { OrchestrationProject, PullRequestDetail } from "@synara/contracts";
+import type {
+  OrchestrationProject,
+  PullRequestDetail,
+  PullRequestProvider,
+} from "@synara/contracts";
+import { LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { Effect } from "effect";
 
@@ -29,11 +34,17 @@ export function makePullRequestOperations(dependencies: {
   ) => Effect.Effect<PullRequestDetail["mergeCapabilities"], unknown>;
   withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   finalizeMutationCaches: (
+    provider: PullRequestProvider,
     repository: string,
     number: number,
     options: { readonly invalidateReviewMatches: boolean },
   ) => Effect.Effect<void, never>;
 }): PullRequestOperations {
+  const requireGitHubProvider = (provider: PullRequestProvider | undefined) =>
+    (provider ?? "github") === "github"
+      ? Effect.void
+      : Effect.fail(new Error("Bitbucket pull requests are not available yet."));
+
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
@@ -104,6 +115,8 @@ export function makePullRequestOperations(dependencies: {
         projectId: project.id,
         projectTitle: project.title,
         workspaceRoot: project.workspaceRoot,
+        provider: "github",
+        capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
         repository,
         ...detail,
         comments,
@@ -116,12 +129,15 @@ export function makePullRequestOperations(dependencies: {
     });
 
   const detail: PullRequestServiceShape["detail"] = (input) =>
-    dependencies
-      .findProject(input.projectId)
-      .pipe(Effect.flatMap((project) => loadDetail(project, input.repository, input.number)));
+    Effect.gen(function* () {
+      yield* requireGitHubProvider(input.provider);
+      const project = yield* dependencies.findProject(input.projectId);
+      return yield* loadDetail(project, input.repository, input.number);
+    });
 
   const diff: PullRequestServiceShape["diff"] = (input) =>
     Effect.gen(function* () {
+      yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       return yield* dependencies.withGitHubRead(
@@ -135,6 +151,7 @@ export function makePullRequestOperations(dependencies: {
 
   const action: PullRequestServiceShape["action"] = (input) =>
     Effect.gen(function* () {
+      yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       if (input.action === "merge") {
@@ -166,13 +183,14 @@ export function makePullRequestOperations(dependencies: {
         })
         .pipe(
           Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, {
+            dependencies.finalizeMutationCaches("github", repository, input.number, {
               invalidateReviewMatches: true,
             }),
           ),
         );
       return {
         projectId: project.id,
+        provider: "github",
         repository,
         number: input.number,
         workspaceRoot: project.workspaceRoot,
@@ -182,6 +200,7 @@ export function makePullRequestOperations(dependencies: {
 
   const comment: PullRequestServiceShape["comment"] = (input) =>
     Effect.gen(function* () {
+      yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       yield* dependencies.github
@@ -193,13 +212,14 @@ export function makePullRequestOperations(dependencies: {
         })
         .pipe(
           Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, {
+            dependencies.finalizeMutationCaches("github", repository, input.number, {
               invalidateReviewMatches: false,
             }),
           ),
         );
       return {
         projectId: project.id,
+        provider: "github",
         repository,
         number: input.number,
         workspaceRoot: project.workspaceRoot,
@@ -209,6 +229,7 @@ export function makePullRequestOperations(dependencies: {
 
   const setPinned: PullRequestServiceShape["setPinned"] = (input) =>
     Effect.gen(function* () {
+      yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
       // Clearing an orphaned pin intentionally requires only a valid canonical repository key.
       const repository = yield* input.isPinned
@@ -222,6 +243,7 @@ export function makePullRequestOperations(dependencies: {
       });
       return {
         projectId: project.id,
+        provider: "github",
         repository,
         number: input.number,
         isPinned: input.isPinned,

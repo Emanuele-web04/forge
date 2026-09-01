@@ -26,12 +26,12 @@ import {
 import {
   buildPullRequestListEntry,
   isValidGitHubRepositoryNameWithOwner,
-  isViewerReviewRequested,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
   pullRequestListCacheKey,
   pullRequestListForceRefreshCacheKeys,
   repositoryPullRequestIdentityKey,
+  resolvePullRequestViewerInvolvement,
   shouldLoadReviewingCompanion,
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
@@ -104,10 +104,13 @@ export function isDefinitivePullRequestNotFound(error: GitHubCliError): boolean 
 
 export function pullRequestCacheKeyBelongsToRepository(
   cacheKey: string,
+  provider: "github" | "bitbucket",
   repository: string,
   separator: ":" | "\u0000" = ":",
 ): boolean {
-  return cacheKey.startsWith(`${repository.trim().toLowerCase()}${separator}`);
+  return cacheKey.startsWith(
+    `${provider}${separator}${repository.trim().toLowerCase()}${separator}`,
+  );
 }
 
 // Boolean rather than a type predicate: it is called on values already typed
@@ -155,6 +158,7 @@ export const makePullRequestService = (
     >({ maxEntries: PULL_REQUEST_MERGE_CAPABILITIES_CACHE_MAX_ENTRIES, ttlMs: 5 * 60_000 });
 
     const pullRequestMutationCacheFinalizer = (
+      provider: "github" | "bitbucket",
       repository: string,
       number: number,
       options: { readonly invalidateReviewMatches: boolean },
@@ -163,16 +167,18 @@ export const makePullRequestService = (
         Effect.all(
           [
             listCache.invalidateWhere((key) =>
-              pullRequestCacheKeyBelongsToRepository(key, repository),
+              pullRequestCacheKeyBelongsToRepository(key, provider, repository),
             ),
             ...(options.invalidateReviewMatches
               ? [
                   reviewMatchCache.invalidateWhere((key) =>
-                    pullRequestCacheKeyBelongsToRepository(key, repository),
+                    pullRequestCacheKeyBelongsToRepository(key, provider, repository),
                   ),
                 ]
               : []),
-            itemCache.invalidate(repositoryPullRequestIdentityKey({ repository, number })),
+            itemCache.invalidate(
+              repositoryPullRequestIdentityKey({ provider, repository, number }),
+            ),
           ],
           { concurrency: 3, discard: true },
         ),
@@ -194,7 +200,7 @@ export const makePullRequestService = (
       involvement: PullRequestInvolvement,
       viewer: string,
     ) => {
-      const cacheKey = pullRequestListCacheKey(repository, state, involvement, viewer);
+      const cacheKey = pullRequestListCacheKey("github", repository, state, involvement, viewer);
       const limit = 50;
       return listCache.get(
         cacheKey,
@@ -219,7 +225,7 @@ export const makePullRequestService = (
     };
 
     const loadPullRequestListItem = (cwd: string, repository: string, number: number) => {
-      const key = repositoryPullRequestIdentityKey({ repository, number });
+      const key = repositoryPullRequestIdentityKey({ provider: "github", repository, number });
       return itemCache.get(
         key,
         withGitHubRead(
@@ -240,7 +246,7 @@ export const makePullRequestService = (
       repository: string,
       viewer: string,
     ) => {
-      const key = pullRequestListCacheKey(repository, "open", "reviewing", viewer);
+      const key = pullRequestListCacheKey("github", repository, "open", "reviewing", viewer);
       return reviewMatchCache.get(
         key,
         withGitHubRead(
@@ -347,6 +353,7 @@ export const makePullRequestService = (
           pinnedRows.map((row) =>
             projectPullRequestIdentityKey({
               projectId: row.projectId,
+              provider: "github",
               repository: row.repositoryKey,
               number: row.number,
             }),
@@ -367,7 +374,13 @@ export const makePullRequestService = (
         });
         const errors: PullRequestListError[] = [...inventoryErrors, ...cleanupErrors];
         if (uniqueRepositories.size === 0) {
-          return { viewer: null, entries: [], errors, repositoryBatches: [] };
+          return {
+            viewer: null,
+            entries: [],
+            errors,
+            repositoryBatches: [],
+            providerRequirements: [],
+          };
         }
 
         const viewer = yield* loadViewer();
@@ -377,6 +390,7 @@ export const makePullRequestService = (
             ({ repository }) =>
               Effect.forEach(
                 pullRequestListForceRefreshCacheKeys({
+                  provider: "github",
                   repository: repository.nameWithOwner,
                   state: input.state,
                   viewer,
@@ -420,25 +434,32 @@ export const makePullRequestService = (
               return {
                 entries: repositoryProjects.flatMap((project) =>
                   result.entries.map(
-                    (pullRequest): PullRequestListEntry =>
-                      buildPullRequestListEntry({
+                    (pullRequest): PullRequestListEntry => {
+                      const matchedReviewingQuery =
+                        involvement === "reviewing" ||
+                        reviewingNumbers.has(pullRequest.number);
+                      const viewerInvolvement = resolvePullRequestViewerInvolvement(
+                        pullRequest.author,
+                        pullRequest.reviewRequestLogins,
+                        viewer,
+                        matchedReviewingQuery,
+                      );
+                      return buildPullRequestListEntry({
                         project,
                         repository: repository.nameWithOwner,
                         pullRequest,
-                        viewerReviewRequested: isViewerReviewRequested(
-                          pullRequest.author,
-                          pullRequest.reviewRequestLogins,
-                          viewer,
-                          involvement === "reviewing" || reviewingNumbers.has(pullRequest.number),
-                        ),
+                        viewerReviewRequested: viewerInvolvement === "review-requested",
+                        viewerInvolvement,
                         isPinned: pinnedKeys.has(
                           projectPullRequestIdentityKey({
                             projectId: project.id,
+                            provider: "github",
                             repository: repository.nameWithOwner,
                             number: pullRequest.number,
                           }),
                         ),
-                      }),
+                      });
+                    },
                   ),
                 ),
                 // The list cap belongs to the remote repository. Reporting one batch per local
@@ -446,6 +467,7 @@ export const makePullRequestService = (
                 repositoryBatches: repositoryProjects.slice(0, 1).map((project) => ({
                   projectId: project.id,
                   projectTitle: project.title,
+                  provider: "github" as const,
                   repository: repository.nameWithOwner,
                   truncated: result.truncated,
                 })),
@@ -469,6 +491,8 @@ export const makePullRequestService = (
                       errors: repositoryProjects.map((project) => ({
                         projectId: project.id,
                         projectTitle: project.title,
+                        provider: "github" as const,
+                        repository: repository.nameWithOwner,
                         message: error.message,
                       })),
                       recovery: null,
@@ -492,7 +516,7 @@ export const makePullRequestService = (
           isGlobalError: isGlobalGitHubCliError,
           invalidateReviewMatches: (repository, viewerLogin) =>
             reviewMatchCache.invalidate(
-              pullRequestListCacheKey(repository, "open", "reviewing", viewerLogin),
+              pullRequestListCacheKey("github", repository, "open", "reviewing", viewerLogin),
             ),
           loadReviewMatches: loadReviewRequestedPullRequestNumbers,
           invalidateItem: (key) => itemCache.invalidate(key),
@@ -508,6 +532,7 @@ export const makePullRequestService = (
           entries: orderPullRequestListEntries(visibleEntries),
           errors: [...errors, ...batches.flatMap((batch) => batch.errors), ...recovery.errors],
           repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
+          providerRequirements: [],
         };
       });
 

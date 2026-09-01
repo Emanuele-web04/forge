@@ -1,42 +1,58 @@
 import type {
+  PullRequestProvider,
   PullRequestActor,
   PullRequestInvolvement,
   PullRequestListEntry,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestState,
+  PullRequestViewerInvolvement,
 } from "@synara/contracts";
+import { LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES } from "@synara/contracts";
+import {
+  pullRequestProjectIdentityKey as sharedPullRequestProjectIdentityKey,
+  pullRequestRemoteIdentityKey as sharedPullRequestRemoteIdentityKey,
+} from "@synara/shared/githubRepository";
 
 import type { GitHubPullRequestListItem } from "./git/Services/GitHubCli.ts";
 export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
 
 export function pullRequestListCacheKey(
+  provider: PullRequestProvider,
   repository: string,
   state: PullRequestState,
   involvement: PullRequestInvolvement,
   viewer: string,
 ): string {
-  return `${repository.trim().toLowerCase()}:${state}:${involvement}:${viewer.trim().toLowerCase()}`;
+  return `${provider}:${repository.trim().toLowerCase()}:${state}:${involvement}:${viewer.trim().toLowerCase()}`;
 }
 
 /** A force refresh invalidates every sibling involvement cache for the same repository/state.
  * The caller still decides which involvement queries are actually needed for the response. */
 export function pullRequestListForceRefreshCacheKeys(input: {
+  provider: PullRequestProvider;
   repository: string;
   state: PullRequestState;
   viewer: string;
 }): string[] {
   return (["all", "authored", "reviewing"] as const).map((involvement) =>
-    pullRequestListCacheKey(input.repository, input.state, involvement, input.viewer),
+    pullRequestListCacheKey(
+      input.provider,
+      input.repository,
+      input.state,
+      involvement,
+      input.viewer,
+    ),
   );
 }
 
 /** Repository-wide PR identity used to coalesce the same remote lookup across local projects. */
 export function repositoryPullRequestIdentityKey(input: {
+  provider: PullRequestProvider;
   repository: string;
   number: number;
 }): string {
-  return `${input.repository.trim().toLowerCase()}\u0000${input.number}`;
+  return sharedPullRequestRemoteIdentityKey(input);
 }
 
 /** Stable project-local identity for a pull request. Repository casing is not significant on
@@ -44,10 +60,11 @@ export function repositoryPullRequestIdentityKey(input: {
  * the same repository can prioritize the same PR independently. */
 export function projectPullRequestIdentityKey(input: {
   projectId: string;
+  provider: PullRequestProvider;
   repository: string;
   number: number;
 }): string {
-  return `${input.projectId}\u0000${input.repository.trim().toLowerCase()}\u0000${input.number}`;
+  return sharedPullRequestProjectIdentityKey(input);
 }
 
 /** Select only pins whose own project/repository batch was cut off by the list cap. This keeps
@@ -61,17 +78,25 @@ export function selectRecoverablePullRequestPins<
   presentKeys: ReadonlySet<string>;
   repositoryKeysByProject: ReadonlyMap<P, ReadonlySet<string>>;
   batches: ReadonlyArray<{
+    provider?: PullRequestProvider;
     repository: string;
     truncated: boolean;
     projectIds: ReadonlyArray<P>;
   }>;
 }): T[] {
   const batches = new Map(
-    input.batches.map((batch) => [batch.repository.trim().toLowerCase(), batch] as const),
+    input.batches.map(
+      (batch) =>
+        [
+          `${batch.provider ?? "github"}\u0000${batch.repository.trim().toLowerCase()}`,
+          batch,
+        ] as const,
+    ),
   );
   return input.pins.filter((pin) => {
     const repository = pin.repositoryKey.trim().toLowerCase();
-    const batch = batches.get(repository);
+    const provider: PullRequestProvider = "github";
+    const batch = batches.get(`${provider}\u0000${repository}`);
     return (
       batch?.truncated === true &&
       batch.projectIds.includes(pin.projectId) &&
@@ -79,6 +104,7 @@ export function selectRecoverablePullRequestPins<
       !input.presentKeys.has(
         projectPullRequestIdentityKey({
           projectId: pin.projectId,
+          provider,
           repository,
           number: pin.number,
         }),
@@ -94,12 +120,15 @@ export function buildPullRequestListEntry(input: {
   repository: string;
   pullRequest: GitHubPullRequestListItem;
   viewerReviewRequested: boolean;
+  viewerInvolvement?: PullRequestViewerInvolvement;
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
   return {
     projectId: input.project.id,
     projectTitle: input.project.title,
+    provider: "github",
+    capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
     repository: input.repository,
     number: pullRequest.number,
     title: pullRequest.title,
@@ -115,6 +144,8 @@ export function buildPullRequestListEntry(input: {
     updatedAt: pullRequest.updatedAt,
     reviewDecision: pullRequest.reviewDecision,
     viewerReviewRequested: input.viewerReviewRequested,
+    viewerInvolvement:
+      input.viewerInvolvement ?? (input.viewerReviewRequested ? "review-requested" : "none"),
     isPinned: input.isPinned,
     projectContexts: [
       {
@@ -155,20 +186,43 @@ export function isViewerReviewRequested(
   );
 }
 
+export function resolvePullRequestViewerInvolvement(
+  author: PullRequestActor | null,
+  reviewRequestLogins: ReadonlyArray<string>,
+  viewer: string,
+  matchedReviewingQuery = false,
+): PullRequestViewerInvolvement {
+  const normalizedViewer = viewer.trim().toLowerCase();
+  if (author?.login.trim().toLowerCase() === normalizedViewer) {
+    return "author";
+  }
+  return isViewerReviewRequested(author, reviewRequestLogins, viewer, matchedReviewingQuery)
+    ? "review-requested"
+    : "none";
+}
+
 /** Whether one exact PR belongs in an involvement-filtered result. `matchedReviewingQuery` carries
  * GitHub's authoritative search result when it is available, including team review requests that
  * cannot be inferred from the individual PR's user-only review-request logins. */
 export function pullRequestMatchesInvolvement(
-  pullRequest: Pick<GitHubPullRequestListItem, "author" | "reviewRequestLogins">,
+  pullRequest: {
+    readonly author?: PullRequestActor | null;
+    readonly reviewRequestLogins?: ReadonlyArray<string>;
+    readonly viewerInvolvement?: PullRequestViewerInvolvement;
+  },
   involvement: PullRequestInvolvement,
   viewer: string,
   matchedReviewingQuery = false,
 ): boolean {
   if (involvement === "all") return true;
+  if (pullRequest.viewerInvolvement === "unknown") return false;
+  if (pullRequest.viewerInvolvement === "author") return involvement === "authored";
+  if (pullRequest.viewerInvolvement === "review-requested") return involvement === "reviewing";
+  if (pullRequest.viewerInvolvement === "none") return false;
   if (involvement === "reviewing") {
     return isViewerReviewRequested(
-      pullRequest.author,
-      pullRequest.reviewRequestLogins,
+      pullRequest.author ?? null,
+      pullRequest.reviewRequestLogins ?? [],
       viewer,
       matchedReviewingQuery,
     );
