@@ -54,6 +54,11 @@ export interface ProcessChildrenSnapshotObserver {
   dispose(): void;
 }
 
+export interface TeardownProcessChildrenSnapshotObserver
+  extends ProcessChildrenSnapshotObserver {
+  captureWithin(timeoutMs: number): Promise<ProcessChildrenMap | null>;
+}
+
 interface PendingSnapshot {
   childrenByParentPid: ProcessChildrenMap;
   outputBytes: number;
@@ -357,12 +362,55 @@ export function createWindowsProcessSnapshotObserver(
 /** Keeps teardown recovery inside its short proof windows without spawning fallback probes. */
 export function createWindowsTeardownProcessSnapshotObserver(
   options: WindowsTeardownProcessSnapshotObserverOptions = {},
-): ProcessChildrenSnapshotObserver {
-  return createWindowsProcessSnapshotObserver({
+): TeardownProcessChildrenSnapshotObserver {
+  const now = options.now ?? Date.now;
+  const observer = createWindowsProcessSnapshotObserver({
     ...options,
     retryBackoffBaseMs: TEARDOWN_RETRY_BACKOFF_BASE_MS,
     retryBackoffMaxMs: TEARDOWN_RETRY_BACKOFF_MAX_MS,
   });
+
+  const captureUntil = (deadline: number): Promise<ProcessChildrenMap | null> => {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        settled = true;
+        resolve(null);
+      }, remainingMs);
+      observer.capture().then(
+        (snapshot) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve(snapshot);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve(null);
+        },
+      );
+    });
+  };
+
+  return {
+    ...observer,
+    captureWithin: async (timeoutMs) => {
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return null;
+      const deadline = now() + timeoutMs;
+      const firstSnapshot = await captureUntil(deadline);
+      if (firstSnapshot !== null) return firstSnapshot;
+
+      const retryDelayMs = observer.retryDelayMs();
+      const remainingMs = deadline - now();
+      if (retryDelayMs <= 0 || retryDelayMs >= remainingMs) return null;
+      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+      return captureUntil(deadline);
+    },
+  };
 }
 
 /** One-shot fallback for callers that do not own a shared observer. */

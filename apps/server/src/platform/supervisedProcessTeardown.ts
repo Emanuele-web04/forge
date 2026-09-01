@@ -20,6 +20,7 @@ const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_INSPECT_INTERVAL_MS = 250;
+const DEFAULT_WINDOWS_INITIAL_CAPTURE_MS = 3_000;
 
 export interface SupervisedProcessTeardownInput {
   readonly rootPid: number;
@@ -159,21 +160,33 @@ export async function teardownProviderProcessTree(
       : async (rootPid: number) =>
           captureProcessTree(rootPid, {
             platform,
-            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
+            ...(windowsObserver
+              ? {
+                  captureWindowsChildren: () =>
+                    windowsObserver.captureWithin(DEFAULT_WINDOWS_INITIAL_CAPTURE_MS),
+                }
+              : {}),
           }));
-  const inspectTree =
-    dependencies.inspectProcessTree ??
-    (dependencies.processTreeKiller
-      ? async (tree: CapturedProcessTree) =>
-          processTreeKiller.inspect?.(tree) ?? {
-            verified: false,
-            survivors: [...tree.descendants],
-          }
-      : async (tree: CapturedProcessTree) =>
-          inspectProcessTree(tree, {
-            platform,
-            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
-          }));
+  const inspectTree = async (
+    tree: CapturedProcessTree,
+    timeoutMs: number,
+  ): Promise<CapturedProcessTreeInspection> => {
+    if (dependencies.inspectProcessTree) return dependencies.inspectProcessTree(tree);
+    if (dependencies.processTreeKiller) {
+      return (
+        processTreeKiller.inspect?.(tree) ?? {
+          verified: false,
+          survivors: [...tree.descendants],
+        }
+      );
+    }
+    return inspectProcessTree(tree, {
+      platform,
+      ...(windowsObserver
+        ? { captureWindowsChildren: () => windowsObserver.captureWithin(timeoutMs) }
+        : {}),
+    });
+  };
   const now = dependencies.now ?? Date.now;
   const sleep =
     dependencies.sleep ??
@@ -208,9 +221,11 @@ export async function teardownProviderProcessTree(
       });
     };
 
-    const inspectDescendants = async (): Promise<ReadonlyArray<CapturedProcess> | null> => {
+    const inspectDescendants = async (
+      timeoutMs: number,
+    ): Promise<ReadonlyArray<CapturedProcess> | null> => {
       if (tree.captureComplete === false) return null;
-      const inspection = await inspectTree(tree);
+      const inspection = await inspectTree(tree, timeoutMs);
       return inspection.verified ? inspection.survivors : null;
     };
 
@@ -220,23 +235,26 @@ export async function teardownProviderProcessTree(
         input.inspectIntervalMs,
         DEFAULT_INSPECT_INTERVAL_MS,
       );
-      let remainingDescendants: ReadonlyArray<CapturedProcess> | null = null;
+      let remainingDescendants: ReadonlyArray<CapturedProcess> | null =
+        tree.captureComplete === false ? null : tree.descendants;
       let lastInspectedAt: number | null = null;
       do {
         await Promise.resolve();
+        let remainingMs = deadline - now();
+        if (remainingMs <= 0) break;
         const sinceLastInspect = lastInspectedAt === null ? null : now() - lastInspectedAt;
         if (rootExited && (sinceLastInspect === null || sinceLastInspect >= inspectIntervalMs)) {
           lastInspectedAt = now();
-          remainingDescendants = await inspectDescendants();
+          remainingDescendants = await inspectDescendants(remainingMs);
           if (remainingDescendants !== null && remainingDescendants.length === 0) {
             return { proven: true as const, remainingDescendants };
           }
         }
-        const remainingMs = deadline - now();
+        remainingMs = deadline - now();
         if (remainingMs <= 0) break;
         await sleep(Math.min(positiveDuration(input.pollMs, DEFAULT_POLL_MS), remainingMs));
       } while (now() <= deadline);
-      return { proven: false as const, remainingDescendants: await inspectDescendants() };
+      return { proven: false as const, remainingDescendants };
     };
 
     signal("SIGTERM", true);
@@ -251,7 +269,10 @@ export async function teardownProviderProcessTree(
       // When the Windows root is already gone, taskkill /T can no longer own
       // traversal. Re-snapshot through CIM immediately before escalation and
       // pass only descendants whose PID, command, and creation identity match.
-      const forceInspection = await inspectTree(tree);
+      const forceInspection = await inspectTree(
+        tree,
+        positiveDuration(input.forceExitMs, DEFAULT_FORCE_EXIT_MS),
+      );
       if (forceInspection.verified) {
         forceTree = {
           descendants: forceInspection.survivors,

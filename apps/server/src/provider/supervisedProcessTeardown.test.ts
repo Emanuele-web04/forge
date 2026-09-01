@@ -248,9 +248,9 @@ describe("teardownProviderProcessTree", () => {
   });
 
   it("does not scan descendants before the root proves exit", async () => {
-    // Each inspection is a synchronous `ps`. Descendant identity cannot end the
-    // wait until the root has exited, so polling it beforehand only blocks the
-    // event loop. Only the two give-up scans that build the failure detail remain.
+    // Descendant identity cannot end the wait until the root has exited, so
+    // scanning beforehand only blocks the event loop. Failure details can use
+    // the already captured descendants without another process-table read.
     const tree: CapturedProcessTree = {
       descendants: [{ pid: 602, command: "stuck-provider" }],
       captureComplete: true,
@@ -278,7 +278,7 @@ describe("teardownProviderProcessTree", () => {
       },
     ).catch((error: unknown) => error);
 
-    expect(inspectCalls).toBe(2);
+    expect(inspectCalls).toBe(0);
     expect(failure).toMatchObject({ remainingDescendantPids: [602] });
   });
 
