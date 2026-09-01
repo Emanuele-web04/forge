@@ -45,6 +45,7 @@ import {
   validateOutboundMcpOAuthDiscoveryState,
 } from "../oauthMetadataPolicy.ts";
 import type { OutboundMcpPreset, OutboundMcpPresetRegistry } from "../presets/index.ts";
+import { OutboundMcpDecodeError, OutboundMcpInputError } from "../consumerBinding.ts";
 
 export class McpConnectionOAuthError extends Schema.TaggedErrorClass<McpConnectionOAuthError>()(
   "McpConnectionOAuthError",
@@ -591,6 +592,8 @@ export function makeMcpConnectionService(
   >();
   const pendingStateByConnectionId = new Map<string, string>();
   const authorizationLocks = new Map<string, Semaphore.Semaphore>();
+  const consumerValidationLocks = new Map<string, Semaphore.Semaphore>();
+  const validatedConsumers = new Set<string>();
   const fenceEpochByConnectionId = new Map<string, number>();
   const locallyFencedConnectionIds = new Set<string>();
   const disconnectRequestedConnectionIds = new Set<string>();
@@ -616,6 +619,9 @@ export function makeMcpConnectionService(
       const epoch = (fenceEpochByConnectionId.get(connectionId) ?? 0) + 1;
       fenceEpochByConnectionId.set(connectionId, epoch);
       locallyFencedConnectionIds.add(connectionId);
+      for (const key of validatedConsumers) {
+        if (key.startsWith(`${connectionId}\u0000`)) validatedConsumers.delete(key);
+      }
       yield* options.toolClient.invalidate(connectionId);
       return epoch;
     });
@@ -636,6 +642,18 @@ export function makeMcpConnectionService(
     if (lock === undefined) {
       lock = Semaphore.makeUnsafe(1);
       authorizationLocks.set(connectionId, lock);
+    }
+    return lock;
+  };
+
+  const consumerValidationKey = (connectionId: string, consumerId: string): string =>
+    `${connectionId}\u0000${consumerId}`;
+
+  const consumerValidationLockFor = (key: string): Semaphore.Semaphore => {
+    let lock = consumerValidationLocks.get(key);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      consumerValidationLocks.set(key, lock);
     }
     return lock;
   };
@@ -971,6 +989,7 @@ export function makeMcpConnectionService(
           return failure.result;
         }
         fingerprints.push(validation.fingerprint);
+        validatedConsumers.add(consumerValidationKey(preset.id, binding.id));
       }
 
       if (superseded()) {
@@ -1083,6 +1102,12 @@ export function makeMcpConnectionService(
       return Effect.fail(serviceError("reconnect-required"));
     }
     const handleInvocationError = (error: unknown) => {
+      if (error instanceof OutboundMcpDecodeError) {
+        return Effect.fail(serviceError("invalid-response"));
+      }
+      if (error instanceof OutboundMcpInputError) {
+        return Effect.fail(serviceError("invalid-input"));
+      }
       if (error instanceof McpToolClientError && error.category === "authentication") {
         return invalidateCredentials(error.connectionId ?? "").pipe(
           Effect.flatMap(() => Effect.fail(serviceError("reconnect-required"))),
@@ -1102,8 +1127,7 @@ export function makeMcpConnectionService(
           yield* options.toolClient.invalidate(connectionId);
           yield* setStatus({
             connectionId,
-            status:
-              category === "incompatible-tools" ? "incompatible" : "temporarily-unavailable",
+            status: category === "incompatible-tools" ? "incompatible" : "temporarily-unavailable",
             errorCategory: category === "incompatible-tools" ? category : "network",
           });
           return yield* Effect.fail(serviceError(category));
@@ -1115,6 +1139,18 @@ export function makeMcpConnectionService(
       options.toolClient
         .call(binding, descriptor.tool, args, signal)
         .pipe(Effect.catch(handleInvocationError));
+    const validationKey = consumerValidationKey(preset.id, binding.id);
+    const validateBeforeFirstCall = consumerValidationLockFor(validationKey).withPermits(1)(
+      Effect.suspend(() =>
+        validatedConsumers.has(validationKey)
+          ? Effect.void
+          : options.toolClient.validate(binding).pipe(
+              Effect.tap(() => Effect.sync(() => validatedConsumers.add(validationKey))),
+              Effect.catch(handleInvocationError),
+              Effect.asVoid,
+            ),
+      ),
+    );
     return ensureMetadata(preset).pipe(
       Effect.flatMap((record) =>
         Effect.suspend(() =>
@@ -1122,7 +1158,7 @@ export function makeMcpConnectionService(
           disconnectRequestedConnectionIds.has(preset.id) ||
           record.status !== "connected"
             ? Effect.fail(serviceError("reconnect-required"))
-            : call(),
+            : validateBeforeFirstCall.pipe(Effect.flatMap(call)),
         ),
       ),
     );

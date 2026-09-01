@@ -3,7 +3,11 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
-import { OutboundMcpInputError, type McpConsumerBinding } from "../consumerBinding.ts";
+import {
+  OutboundMcpDecodeError,
+  OutboundMcpInputError,
+  type McpConsumerBinding,
+} from "../consumerBinding.ts";
 import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
 import {
   OutboundMcpCredentialsError,
@@ -159,6 +163,7 @@ function makeFakeToolClient(): McpToolClientShape & {
   readonly liveConnections: Set<string>;
   validateFailure: McpToolClientError | null;
   callFailure: McpToolClientError | null;
+  validateAttempts: number;
   callAttempts: number;
 } {
   const liveConnections = new Set<string>();
@@ -166,13 +171,16 @@ function makeFakeToolClient(): McpToolClientShape & {
     readonly liveConnections: Set<string>;
     validateFailure: McpToolClientError | null;
     callFailure: McpToolClientError | null;
+    validateAttempts: number;
     callAttempts: number;
   } = {
     liveConnections,
     validateFailure: null,
     callFailure: null,
+    validateAttempts: 0,
     callAttempts: 0,
     validate: (binding) => {
+      client.validateAttempts += 1;
       if (client.validateFailure !== null) return Effect.fail(client.validateFailure);
       liveConnections.add("paraty");
       return Effect.succeed(`catalog-${binding.id}`);
@@ -491,9 +499,7 @@ describe("McpConnectionService", () => {
             await provider.saveClientInformation?.({ client_id: "new-registered-client" });
             await provider.saveCodeVerifier("new-verifier");
             await provider.redirectToAuthorization(
-              new URL(
-                `https://new-auth.example.test/authorize?state=${await provider.state?.()}`,
-              ),
+              new URL(`https://new-auth.example.test/authorize?state=${await provider.state?.()}`),
             );
             return "REDIRECT";
           },
@@ -754,14 +760,10 @@ describe("McpConnectionService", () => {
         };
       },
     });
-    const begin = Effect.runPromise(
-      fixture.service.beginAuthorization({ presetId: "paraty" }),
-    );
+    const begin = Effect.runPromise(fixture.service.beginAuthorization({ presetId: "paraty" }));
     await waitUntil(() => expect(beginStarted).toBe(true));
 
-    const disconnection = Effect.runPromise(
-      fixture.service.disconnect({ connectionId: "paraty" }),
-    );
+    const disconnection = Effect.runPromise(fixture.service.disconnect({ connectionId: "paraty" }));
     releaseBegin();
 
     await expect(begin).rejects.toMatchObject({ category: "reconnect-required" });
@@ -982,6 +984,26 @@ describe("McpConnectionService", () => {
     });
   });
 
+  it("revalidates a pre-existing connected record before its first consumer invocation", async () => {
+    const fixture = makeFixture({ bindings: [readBinding] });
+    fixture.repository.records.set("paraty", connectedRecord());
+    fixture.toolClient.validateFailure = new McpToolClientError({
+      category: "missing-required-tool",
+      consumerId: readBinding.id,
+      connectionId: "paraty",
+    });
+
+    await expect(
+      Effect.runPromise(fixture.service.invoke(readBinding.id, "read", { id: 1 })),
+    ).rejects.toMatchObject({ category: "incompatible-tools" });
+    expect(fixture.toolClient.validateAttempts).toBe(1);
+    expect(fixture.toolClient.callAttempts).toBe(0);
+    expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
+      status: "incompatible",
+      errorCategory: "incompatible-tools",
+    });
+  });
+
   it("maps a transient completion failure to temporarily-unavailable", async () => {
     const fixture = makeFixture({
       oauth: (credentials) =>
@@ -1043,6 +1065,36 @@ describe("McpConnectionService", () => {
     expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
       status: "temporarily-unavailable",
       errorCategory: "network",
+    });
+  });
+
+  it("reports consumer decode failures as invalid-response without degrading the connection", async () => {
+    const invalidResponseBinding: McpConsumerBinding<"read"> = {
+      ...readBinding,
+      id: "invalid-response-consumer",
+      operations: {
+        read: {
+          ...readBinding.operations.read,
+          decode: () =>
+            Effect.fail(
+              new OutboundMcpDecodeError({
+                consumerId: "invalid-response-consumer",
+                operation: "read",
+                category: "invalid-response",
+              }),
+            ),
+        },
+      },
+    };
+    const fixture = makeFixture({ bindings: [invalidResponseBinding] });
+    fixture.repository.records.set("paraty", connectedRecord());
+
+    await expect(
+      Effect.runPromise(fixture.service.invoke(invalidResponseBinding.id, "read", { id: 1 })),
+    ).rejects.toMatchObject({ category: "invalid-response" });
+    expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
+      status: "connected",
+      errorCategory: null,
     });
   });
 

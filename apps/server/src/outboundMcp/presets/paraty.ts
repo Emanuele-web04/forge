@@ -1,4 +1,5 @@
 import type { OutboundMcpPreset } from "./index.ts";
+import { paratyBitbucketPullRequestBinding } from "../../pullRequests/providers/paratyBitbucketBinding.ts";
 
 export const PARATY_MCP_PRESET: OutboundMcpPreset = {
   id: "paraty",
@@ -11,5 +12,5 @@ export const PARATY_MCP_PRESET: OutboundMcpPreset = {
     response_types: ["code"],
     token_endpoint_auth_method: "none",
   },
-  consumers: [],
+  consumers: [paratyBitbucketPullRequestBinding],
 };

@@ -93,6 +93,12 @@ export type PullRequestProviderErrorReason =
   | "not-installed"
   | "not-authenticated"
   | "not-found"
+  | "not-connected"
+  | "authorizing"
+  | "reconnect-required"
+  | "incompatible"
+  | "temporarily-unavailable"
+  | "invalid-response"
   | "other";
 
 export class PullRequestProviderError extends Data.TaggedError("PullRequestProviderError")<{
