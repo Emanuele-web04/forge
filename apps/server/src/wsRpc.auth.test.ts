@@ -1,4 +1,4 @@
-import { WS_METHODS } from "@synara/contracts";
+import { WS_METHODS, WsRpcError } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vitest";
@@ -10,12 +10,98 @@ import {
   withOutboundMcpCallbackCapability,
 } from "./outboundMcp/callbackEndpoint";
 import type { McpConnectionServiceShape } from "./outboundMcp/Services/McpConnectionService";
+import { CurrentWsSessionRole } from "./wsConnectionSessions";
 import {
   authenticateRpcWebSocketUpgrade,
   authorizeDeviceFrameWebSocketUpgrade,
   canManageExternalMcp,
   makeOutboundMcpLifecycleRpcHandlers,
 } from "./wsRpc";
+
+const requireTestMcpOwner = Effect.gen(function* () {
+  if ((yield* CurrentWsSessionRole) !== "owner") {
+    return yield* Effect.fail(
+      new WsRpcError({ message: "Owner authorization is required for this operation." }),
+    );
+  }
+});
+
+function observedMcpManagementService() {
+  const state = {
+    calls: [] as string[],
+    authorizing: false,
+    credentialsPresent: true,
+  };
+  const service = {
+    list: () =>
+      Effect.sync(() => {
+        state.calls.push("list");
+        return [];
+      }),
+    beginAuthorization: () =>
+      Effect.sync(() => {
+        state.calls.push("begin");
+        state.authorizing = true;
+        return {
+          attemptId: "attempt-owner-gate",
+          authorizationUrl: "https://auth.example.test/authorize",
+        };
+      }),
+    disconnect: () =>
+      Effect.sync(() => {
+        state.calls.push("disconnect");
+        state.credentialsPresent = false;
+      }),
+    completeAuthorization: () => Effect.die("not used"),
+    invoke: () => Effect.die("not used"),
+    subscribe: () => Effect.die("not used"),
+  } as never;
+  return { service, state };
+}
+
+it.effect("denies all outbound MCP lifecycle management to the default client role", () =>
+  Effect.gen(function* () {
+    const observed = observedMcpManagementService();
+    const handlers = makeOutboundMcpLifecycleRpcHandlers(observed.service, requireTestMcpOwner);
+
+    const errors = yield* Effect.all([
+      handlers[WS_METHODS.serverListOutboundMcpConnections]({}).pipe(Effect.flip),
+      handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({ presetId: "paraty" }).pipe(
+        Effect.flip,
+      ),
+      handlers[WS_METHODS.serverDisconnectOutboundMcpConnection]({ connectionId: "paraty" }).pipe(
+        Effect.flip,
+      ),
+    ]);
+
+    assert.deepStrictEqual(
+      errors.map((error) => error.message),
+      Array.from({ length: 3 }, () => "Owner authorization is required for this operation."),
+    );
+    assert.deepStrictEqual(observed.state.calls, []);
+    assert.isFalse(observed.state.authorizing);
+    assert.isTrue(observed.state.credentialsPresent);
+  }),
+);
+
+it.effect("allows an owner role to use all outbound MCP lifecycle management", () =>
+  Effect.gen(function* () {
+    const observed = observedMcpManagementService();
+    const handlers = makeOutboundMcpLifecycleRpcHandlers(observed.service, requireTestMcpOwner);
+
+    yield* Effect.gen(function* () {
+      yield* handlers[WS_METHODS.serverListOutboundMcpConnections]({});
+      yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({ presetId: "paraty" });
+      yield* handlers[WS_METHODS.serverDisconnectOutboundMcpConnection]({
+        connectionId: "paraty",
+      });
+    }).pipe(Effect.provideService(CurrentWsSessionRole, "owner"));
+
+    assert.deepStrictEqual(observed.state.calls, ["list", "begin", "disconnect"]);
+    assert.isTrue(observed.state.authorizing);
+    assert.isFalse(observed.state.credentialsPresent);
+  }),
+);
 
 function deniedOutboundMcpBegin(config: {
   readonly host: string;
@@ -45,6 +131,7 @@ function deniedOutboundMcpBegin(config: {
     } as never;
     const handlers = makeOutboundMcpLifecycleRpcHandlers(
       withOutboundMcpCallbackCapability(baseService, endpoint),
+      Effect.void,
     );
 
     const error = yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({
@@ -162,7 +249,7 @@ it.effect("registers contract-shaped outbound MCP lifecycle handlers", () =>
       invoke: () => Effect.die("not exposed over WS"),
       subscribe: () => Effect.die("not exposed over WS"),
     } satisfies McpConnectionServiceShape;
-    const handlers = makeOutboundMcpLifecycleRpcHandlers(service);
+    const handlers = makeOutboundMcpLifecycleRpcHandlers(service, Effect.void);
 
     const list = yield* handlers[WS_METHODS.serverListOutboundMcpConnections]({});
     const begin = yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({

@@ -11,34 +11,23 @@ import {
 import type { OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OutboundMcpConnection, OutboundMcpConnectionStatus } from "@synara/contracts";
-import { Effect, Layer, Schema } from "effect";
-
-import { ServerConfig } from "../../config.ts";
+import { Effect, Schema } from "effect";
 import {
-  McpConnectionService,
   McpConnectionServiceError,
   type McpAuthorizationCompletion,
   type McpConnectionEvent,
   type McpConnectionServiceShape,
 } from "../Services/McpConnectionService.ts";
+import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
 import {
-  McpToolClient,
-  McpToolClientError,
-  type McpToolClientShape,
-} from "../Services/McpToolClient.ts";
-import {
-  OutboundMcpCredentials,
   type OutboundMcpCredentialRecord,
   type OutboundMcpCredentialsShape,
 } from "../Services/OutboundMcpCredentials.ts";
 import {
-  OutboundMcpRepository,
   type OutboundMcpConnectionRecord,
   type OutboundMcpRepositoryShape,
 } from "../Services/OutboundMcpRepository.ts";
 import {
-  MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
-  makeAuthorizationAttemptRegistry,
   type AuthorizationAttempt,
   type AuthorizationAttemptRegistry,
 } from "../authorizationAttempts.ts";
@@ -49,11 +38,7 @@ import {
   validateOutboundMcpUrl,
 } from "../networkPolicy.ts";
 import { makeOAuthClientProvider } from "../oauthProvider.ts";
-import {
-  OUTBOUND_MCP_PRESETS,
-  type OutboundMcpPreset,
-  type OutboundMcpPresetRegistry,
-} from "../presets/index.ts";
+import type { OutboundMcpPreset, OutboundMcpPresetRegistry } from "../presets/index.ts";
 
 export class McpConnectionOAuthError extends Schema.TaggedErrorClass<McpConnectionOAuthError>()(
   "McpConnectionOAuthError",
@@ -894,26 +879,3 @@ export function makeMcpConnectionService(
     subscribe,
   };
 }
-
-const makeMcpConnectionServiceLive = Effect.gen(function* () {
-  const repository = yield* OutboundMcpRepository;
-  const credentials = yield* OutboundMcpCredentials;
-  const toolClient = yield* McpToolClient;
-  const config = yield* ServerConfig;
-  return makeMcpConnectionService({
-    repository,
-    credentials,
-    toolClient,
-    oauth: makeSdkMcpConnectionOAuthLifecycle(),
-    attempts: makeAuthorizationAttemptRegistry({
-      ttlMs: MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
-    }),
-    presets: OUTBOUND_MCP_PRESETS,
-    callbackUrl: new URL("/api/mcp/outbound/oauth/callback", `http://127.0.0.1:${config.port}`),
-  });
-});
-
-export const McpConnectionServiceLive = Layer.effect(
-  McpConnectionService,
-  makeMcpConnectionServiceLive,
-);

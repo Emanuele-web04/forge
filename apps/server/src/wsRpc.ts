@@ -311,20 +311,31 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
-export function makeOutboundMcpLifecycleRpcHandlers(outboundMcp: McpConnectionServiceShape) {
+export function makeOutboundMcpLifecycleRpcHandlers<AuthorizationError, AuthorizationRequirements>(
+  outboundMcp: McpConnectionServiceShape,
+  authorizeManagement: Effect.Effect<void, AuthorizationError, AuthorizationRequirements>,
+) {
   const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
     effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+  const managedEffect = <A, E, R>(
+    operation: () => Effect.Effect<A, E, R>,
+    fallbackMessage: string,
+  ) =>
+    rpcEffect(authorizeManagement.pipe(Effect.andThen(Effect.suspend(operation))), fallbackMessage);
   return {
     [WS_METHODS.serverListOutboundMcpConnections]: () =>
-      rpcEffect(
-        outboundMcp.list().pipe(Effect.map((connections) => ({ connections }))),
+      managedEffect(
+        () => outboundMcp.list().pipe(Effect.map((connections) => ({ connections }))),
         "Failed to load outbound MCP connections",
       ),
     [WS_METHODS.serverBeginOutboundMcpAuthorization]: (input: { readonly presetId: string }) =>
-      rpcEffect(outboundMcp.beginAuthorization(input), "Failed to start MCP authorization"),
+      managedEffect(
+        () => outboundMcp.beginAuthorization(input),
+        "Failed to start MCP authorization",
+      ),
     [WS_METHODS.serverDisconnectOutboundMcpConnection]: (input: {
       readonly connectionId: string;
-    }) => rpcEffect(outboundMcp.disconnect(input), "Failed to disconnect MCP service"),
+    }) => managedEffect(() => outboundMcp.disconnect(input), "Failed to disconnect MCP service"),
   } as const;
 }
 
@@ -869,7 +880,7 @@ const makeWsRpcHandlersLayer = () =>
             ),
           );
 
-      const requireOwner = Effect.gen(function* () {
+      const requireLocalMcpOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
           return yield* Effect.fail(
             new WsRpcError({ message: "Owner authorization is required for this operation." }),
@@ -1759,17 +1770,17 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
             "Failed to list external MCP integrations",
           ),
         [WS_METHODS.serverCreateExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
             "Failed to create external MCP integration",
           ),
         [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(
+            requireLocalMcpOwner.pipe(
               Effect.andThen(externalMcp.revokeIntegration(input.integrationId)),
               Effect.map((revoked) => ({ revoked })),
             ),
@@ -1777,10 +1788,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverRefreshExternalMcpPairing]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
-        ...makeOutboundMcpLifecycleRpcHandlers(outboundMcp),
+        ...makeOutboundMcpLifecycleRpcHandlers(outboundMcp, requireLocalMcpOwner),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
