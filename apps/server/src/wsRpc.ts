@@ -1536,8 +1536,11 @@ const makeWsRpcHandlersLayer = () =>
             }
             return yield* pullRequests.workItemsAuthStatus({ cwd: resolvedCwd });
           }).pipe(
+            // Repository resolution fails outside a git work tree (and on
+            // transient git errors). Either way the attach affordance cannot
+            // search a repository, so hide the item; the next probe retries.
             Effect.catch(() =>
-              Effect.succeed({ status: "ready" as const, hint: null }),
+              Effect.succeed({ status: "no-repository" as const, hint: null }),
             ),
           ),
         [WS_METHODS.gitListBranches]: (input) =>

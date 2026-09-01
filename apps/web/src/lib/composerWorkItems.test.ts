@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { appendBrowserAnnotationsToPrompt, extractTrailingBrowserAnnotations, type BrowserAnnotationDraft } from "./browserAnnotations";
+import { appendPastedTextsToPrompt, extractTrailingPastedTexts } from "./composerPastedText";
 import {
+  appendWorkItemsToPrompt,
   buildAttachedWorkItemsBlock,
   extractTrailingWorkItems,
   type WorkItemDraft,
@@ -19,6 +22,48 @@ const makeItem = (kind: WorkItemDraft["kind"], number: number): WorkItemDraft =>
 });
 
 describe("composerWorkItems", () => {
+  it("serializes exactly one work items block after pasted text and before browser annotations", () => {
+    // Composed in the same nesting order as the live and queued send paths.
+    const annotation: BrowserAnnotationDraft = {
+      id: "annotation-1",
+      ordinal: 1,
+      tabId: "tab-1",
+      source: { url: "https://example.test/page", pageTitle: "Page" },
+      selector: "#save",
+      tagName: "button",
+      role: "button",
+      name: "Save",
+      text: "Save",
+      fingerprint: "button|save",
+      comment: "Check this",
+      capturedAt: "2024-01-03T00:00:00.000Z",
+    };
+    const composed = appendBrowserAnnotationsToPrompt(
+      appendWorkItemsToPrompt(appendPastedTextsToPrompt("Fix this", [{ text: "pasted body" }]), [
+        makeItem("issue", 3),
+      ]),
+      [annotation],
+      "msg-1" as never,
+    );
+
+    expect(composed.match(/<attached_work_items>/g)).toHaveLength(1);
+    const pastedIndex = composed.indexOf("<pasted_text>");
+    const workItemsIndex = composed.indexOf("<attached_work_items>");
+    const annotationsIndex = composed.indexOf("<browser_annotations>");
+    expect(pastedIndex).toBeGreaterThan(-1);
+    expect(workItemsIndex).toBeGreaterThan(pastedIndex);
+    expect(annotationsIndex).toBeGreaterThan(workItemsIndex);
+
+    // Display-time extraction unwinds the same order back out.
+    const extractedAnnotations = extractTrailingBrowserAnnotations(composed, "msg-1" as never);
+    const extractedWorkItems = extractTrailingWorkItems(extractedAnnotations.promptText);
+    const extractedPasted = extractTrailingPastedTexts(extractedWorkItems.promptText);
+    expect(extractedPasted.promptText).toBe("Fix this");
+    expect(extractedWorkItems.workItems).toHaveLength(1);
+    expect(extractedWorkItems.workItems[0]).toMatchObject({ kind: "issue", number: 3 });
+    expect(extractedPasted.pastedTexts).toHaveLength(1);
+  });
+
   it("serializes and extracts work items round-trip", () => {
     const items = [makeItem("issue", 1), makeItem("pull-request", 2)];
     const prompt = buildAttachedWorkItemsBlock(items);
