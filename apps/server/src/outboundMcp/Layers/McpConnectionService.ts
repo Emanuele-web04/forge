@@ -310,15 +310,32 @@ export function makeSdkMcpConnectionOAuthLifecycle(
     Effect.tryPromise({
       try: async () => {
         const stored = (await Effect.runPromise(input.credentials.read(input.preset.id))) ?? {};
-        const initial = withoutTokens(stored);
-        if (stored.tokens !== undefined) {
-          await Effect.runPromise(input.credentials.write(input.preset.id, initial));
-        }
         const discoveredServerInfo = await discoveryFor(input.preset, discoveryDependencies);
         const serverInfo = validateOutboundMcpOAuthDiscoveryState({
           pinnedAuthorizationServerUrl: discoveredServerInfo.authorizationServerUrl,
           state: discoveredServerInfo,
         });
+        const hasStoredOAuthState =
+          stored.clientInformation !== undefined ||
+          stored.tokens !== undefined ||
+          stored.authorizationServerUrl !== undefined;
+        let storedAuthorityMatches = false;
+        if (stored.authorizationServerUrl !== undefined) {
+          try {
+            storedAuthorityMatches =
+              validateOutboundMcpAuthorizationServerUrl(stored.authorizationServerUrl) ===
+              validateOutboundMcpAuthorizationServerUrl(serverInfo.authorizationServerUrl);
+          } catch {
+            storedAuthorityMatches = false;
+          }
+        }
+        const resetStoredOAuthState = hasStoredOAuthState && !storedAuthorityMatches;
+        const initial = resetStoredOAuthState ? {} : withoutTokens(stored);
+        if (resetStoredOAuthState) {
+          await Effect.runPromise(input.credentials.delete(input.preset.id));
+        } else if (stored.tokens !== undefined) {
+          await Effect.runPromise(input.credentials.write(input.preset.id, initial));
+        }
         if (!clientSupportsAuthorization(input.preset, initial, serverInfo)) {
           throw new McpConnectionOAuthError({ category: "incompatible-client" });
         }
@@ -570,11 +587,13 @@ export function makeMcpConnectionService(
   const listeners = new Set<(event: McpConnectionEvent) => void>();
   const pendingByState = new Map<
     string,
-    { readonly attemptId: string; readonly connectionId: string }
+    { readonly attemptId: string; readonly connectionId: string; readonly fenceEpoch: number }
   >();
   const pendingStateByConnectionId = new Map<string, string>();
   const authorizationLocks = new Map<string, Semaphore.Semaphore>();
+  const fenceEpochByConnectionId = new Map<string, number>();
   const locallyFencedConnectionIds = new Set<string>();
+  const disconnectRequestedConnectionIds = new Set<string>();
   const now = options.now ?? (() => new Date().toISOString());
 
   const publish = (event: McpConnectionEvent): void => {
@@ -593,9 +612,24 @@ export function makeMcpConnectionService(
   };
 
   const fenceConnection = (connectionId: string) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
+      const epoch = (fenceEpochByConnectionId.get(connectionId) ?? 0) + 1;
+      fenceEpochByConnectionId.set(connectionId, epoch);
       locallyFencedConnectionIds.add(connectionId);
-    }).pipe(Effect.andThen(options.toolClient.invalidate(connectionId)));
+      yield* options.toolClient.invalidate(connectionId);
+      return epoch;
+    });
+
+  const clearConnectionFence = (connectionId: string, expectedEpoch: number): boolean => {
+    if (
+      disconnectRequestedConnectionIds.has(connectionId) ||
+      fenceEpochByConnectionId.get(connectionId) !== expectedEpoch
+    ) {
+      return false;
+    }
+    locallyFencedConnectionIds.delete(connectionId);
+    return true;
+  };
 
   const authorizationLockFor = (connectionId: string): Semaphore.Semaphore => {
     let lock = authorizationLocks.get(connectionId);
@@ -616,7 +650,10 @@ export function makeMcpConnectionService(
           current.presetId !== preset.id ||
           current.displayName !== preset.displayName;
         if (!metadataChanged) return current;
-        if (endpointChanged) yield* fenceConnection(preset.id);
+        if (endpointChanged) {
+          yield* fenceConnection(preset.id);
+          yield* options.credentials.delete(preset.id);
+        }
         const record: OutboundMcpConnectionRecord = {
           ...current,
           presetId: preset.id,
@@ -710,15 +747,27 @@ export function makeMcpConnectionService(
     Effect.gen(function* () {
       yield* expirePendingAuthorizations;
       return yield* Effect.forEach(options.presets.all(), (preset) =>
-        ensureMetadata(preset).pipe(Effect.map((stored) => publicConnection(preset, stored))),
+        ensureMetadata(preset).pipe(
+          Effect.map((stored) => {
+            const connection = publicConnection(preset, stored);
+            return disconnectRequestedConnectionIds.has(preset.id)
+              ? {
+                  ...connection,
+                  status: "reconnect-required" as const,
+                  errorCategory: "credential-cleanup",
+                }
+              : connection;
+          }),
+        ),
       ).pipe(Effect.mapError(() => serviceError("persistence")));
     });
 
   const beginAuthorizationLocked = (preset: OutboundMcpPreset) =>
     Effect.gen(function* () {
+      disconnectRequestedConnectionIds.delete(preset.id);
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
-      yield* fenceConnection(preset.id);
+      const fenceEpoch = yield* fenceConnection(preset.id);
       const attempt = options.attempts.create(preset.id, options.callbackUrl);
       const authorizationUrl = yield* options.oauth
         .begin({ preset, attempt, credentials: options.credentials })
@@ -739,14 +788,33 @@ export function makeMcpConnectionService(
             }),
           ),
         );
+      const superseded = () =>
+        disconnectRequestedConnectionIds.has(preset.id) ||
+        fenceEpochByConnectionId.get(preset.id) !== fenceEpoch;
+      const failSuperseded = () =>
+        Effect.gen(function* () {
+          options.attempts.cancel(attempt.id);
+          yield* options.credentials
+            .clearAttemptSecrets(preset.id)
+            .pipe(Effect.catch(() => Effect.void));
+          yield* setStatus({
+            connectionId: preset.id,
+            status: "reconnect-required",
+            errorCategory: "credential-cleanup",
+          }).pipe(Effect.catch(() => Effect.void));
+          return yield* Effect.fail(serviceError("reconnect-required"));
+        });
+      if (superseded()) return yield* failSuperseded();
       yield* setStatus({
         connectionId: preset.id,
         status: "authorizing",
         errorCategory: null,
       }).pipe(Effect.tapError(() => Effect.sync(() => options.attempts.cancel(attempt.id))));
+      if (superseded()) return yield* failSuperseded();
       pendingByState.set(attempt.state, {
         attemptId: attempt.id,
         connectionId: preset.id,
+        fenceEpoch,
       });
       pendingStateByConnectionId.set(preset.id, attempt.state);
       return { attemptId: attempt.id, authorizationUrl: authorizationUrl.href };
@@ -762,9 +830,24 @@ export function makeMcpConnectionService(
 
   const completeAuthorizationLocked = (
     input: Parameters<McpConnectionServiceShape["completeAuthorization"]>[0],
-    observedPending: { readonly attemptId: string; readonly connectionId: string },
+    observedPending: {
+      readonly attemptId: string;
+      readonly connectionId: string;
+      readonly fenceEpoch: number;
+    },
   ) =>
     Effect.gen(function* () {
+      const superseded = () =>
+        disconnectRequestedConnectionIds.has(observedPending.connectionId) ||
+        fenceEpochByConnectionId.get(observedPending.connectionId) !== observedPending.fenceEpoch;
+      const reconnectAfterSupersession = () =>
+        setStatus({
+          connectionId: observedPending.connectionId,
+          status: "reconnect-required",
+          errorCategory: "credential-cleanup",
+          catalogFingerprint: null,
+          lastValidatedAt: null,
+        }).pipe(Effect.catch(() => Effect.void));
       const pending = pendingByState.get(input.state);
       if (
         pending === undefined ||
@@ -845,6 +928,10 @@ export function makeMcpConnectionService(
         });
         return failure.result;
       }
+      if (superseded()) {
+        yield* reconnectAfterSupersession();
+        return { ok: false, category: "reconnect-required" } as const;
+      }
 
       yield* setStatus({
         connectionId: preset.id,
@@ -853,6 +940,10 @@ export function makeMcpConnectionService(
         catalogFingerprint: null,
         lastValidatedAt: null,
       });
+      if (superseded()) {
+        yield* reconnectAfterSupersession();
+        return { ok: false, category: "reconnect-required" } as const;
+      }
       const fingerprints: string[] = [];
       for (const binding of preset.consumers) {
         const validation = yield* options.toolClient.validate(binding).pipe(
@@ -861,6 +952,10 @@ export function makeMcpConnectionService(
             onSuccess: (fingerprint) => ({ ok: true as const, fingerprint }),
           }),
         );
+        if (superseded()) {
+          yield* reconnectAfterSupersession();
+          return { ok: false, category: "reconnect-required" } as const;
+        }
         if (!validation.ok) {
           const failure = validationFailure(validation.error);
           if (failure.invalidated) {
@@ -878,6 +973,10 @@ export function makeMcpConnectionService(
         fingerprints.push(validation.fingerprint);
       }
 
+      if (superseded()) {
+        yield* reconnectAfterSupersession();
+        return { ok: false, category: "reconnect-required" } as const;
+      }
       const validatedAt = now();
       yield* setStatus({
         connectionId: preset.id,
@@ -886,7 +985,10 @@ export function makeMcpConnectionService(
         catalogFingerprint: fingerprints[0] ?? null,
         lastValidatedAt: validatedAt,
       });
-      locallyFencedConnectionIds.delete(preset.id);
+      if (!clearConnectionFence(preset.id, observedPending.fenceEpoch)) {
+        yield* reconnectAfterSupersession();
+        return { ok: false, category: "reconnect-required" } as const;
+      }
       publish({ connectionId: preset.id, type: "connected" });
       return { ok: true } as const;
     });
@@ -909,7 +1011,6 @@ export function makeMcpConnectionService(
     Effect.gen(function* () {
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
-      yield* fenceConnection(preset.id);
       yield* setStatus({
         connectionId: preset.id,
         status: "reconnect-required",
@@ -944,14 +1045,23 @@ export function makeMcpConnectionService(
         catalogFingerprint: null,
         lastValidatedAt: null,
       });
+      disconnectRequestedConnectionIds.delete(preset.id);
       publish({ connectionId: preset.id, type: "disconnected" });
     });
 
   const disconnect: McpConnectionServiceShape["disconnect"] = (input) =>
     Effect.gen(function* () {
       const preset = yield* presetOrFail(input.connectionId);
+      disconnectRequestedConnectionIds.add(preset.id);
       cancelPendingAuthorization(preset.id);
       yield* fenceConnection(preset.id);
+      yield* setStatus({
+        connectionId: preset.id,
+        status: "reconnect-required",
+        errorCategory: "credential-cleanup",
+        catalogFingerprint: null,
+        lastValidatedAt: null,
+      }).pipe(Effect.catch(() => Effect.void));
       yield* authorizationLockFor(preset.id).withPermits(1)(disconnectLocked(preset));
     });
 
@@ -966,7 +1076,10 @@ export function makeMcpConnectionService(
     const { binding, preset } = registered;
     const descriptor = binding.operations[operation];
     if (descriptor === undefined) return Effect.fail(serviceError("invalid-operation"));
-    if (locallyFencedConnectionIds.has(preset.id)) {
+    if (
+      locallyFencedConnectionIds.has(preset.id) ||
+      disconnectRequestedConnectionIds.has(preset.id)
+    ) {
       return Effect.fail(serviceError("reconnect-required"));
     }
     const handleInvocationError = (error: unknown) => {
@@ -1004,9 +1117,13 @@ export function makeMcpConnectionService(
         .pipe(Effect.catch(handleInvocationError));
     return ensureMetadata(preset).pipe(
       Effect.flatMap((record) =>
-        locallyFencedConnectionIds.has(preset.id) || record.status !== "connected"
-          ? Effect.fail(serviceError("reconnect-required"))
-          : call(),
+        Effect.suspend(() =>
+          locallyFencedConnectionIds.has(preset.id) ||
+          disconnectRequestedConnectionIds.has(preset.id) ||
+          record.status !== "connected"
+            ? Effect.fail(serviceError("reconnect-required"))
+            : call(),
+        ),
       ),
     );
   };

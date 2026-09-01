@@ -471,6 +471,66 @@ describe("McpConnectionService", () => {
     expect(fixture.repository.records.get("paraty")?.status).toBe("authorizing");
   });
 
+  it("removes an old OAuth client registration before endpoint and authority rotation", async () => {
+    let observedClientInformation: unknown = "authorize-not-called";
+    const fixture = makeFixture({
+      oauth: () =>
+        makeSdkMcpConnectionOAuthLifecycle({
+          discoverServerInfo: async () => ({
+            authorizationServerUrl: "https://new-auth.example.test/",
+            authorizationServerMetadata: {
+              issuer: "https://new-auth.example.test/",
+              authorization_endpoint: "https://new-auth.example.test/authorize",
+              token_endpoint: "https://new-auth.example.test/token",
+              registration_endpoint: "https://new-auth.example.test/register",
+              response_types_supported: ["code"],
+            },
+          }),
+          authorize: async (provider) => {
+            observedClientInformation = await provider.clientInformation();
+            await provider.saveClientInformation?.({ client_id: "new-registered-client" });
+            await provider.saveCodeVerifier("new-verifier");
+            await provider.redirectToAuthorization(
+              new URL(
+                `https://new-auth.example.test/authorize?state=${await provider.state?.()}`,
+              ),
+            );
+            return "REDIRECT";
+          },
+        }),
+    });
+    fixture.repository.records.set(
+      "paraty",
+      connectedRecord({ endpoint: "https://old-mcp.example.test/mcp" }),
+    );
+    fixture.credentials.records.set("paraty", {
+      clientInformation: {
+        client_id: "synthetic-old-confidential-client",
+        client_secret: "synthetic-old-confidential-secret",
+      },
+      tokens: {
+        access_token: "synthetic-old-access-token",
+        refresh_token: "synthetic-old-refresh-token",
+        token_type: "Bearer",
+      },
+      authorizationServerUrl: "https://old-auth.example.test/",
+    });
+
+    const result = await Effect.runPromise(
+      fixture.service.beginAuthorization({ presetId: "paraty" }),
+    );
+
+    expect(observedClientInformation).toBeUndefined();
+    expect(result.authorizationUrl).toContain("https://new-auth.example.test/authorize");
+    expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toEqual({
+      clientInformation: { client_id: "new-registered-client" },
+      authorizationServerUrl: "https://new-auth.example.test/",
+    });
+    expect(JSON.stringify({ result, observedClientInformation })).not.toMatch(
+      /synthetic-old-confidential-client|synthetic-old-confidential-secret/,
+    );
+  });
+
   it("does not start OAuth when rotated endpoint metadata cannot be persisted", async () => {
     let oauthBegins = 0;
     const fixture = makeFixture({
@@ -672,6 +732,44 @@ describe("McpConnectionService", () => {
     expect(tracked.active.size).toBe(0);
   });
 
+  it("does not return an authorization URL after disconnect supersedes a blocked begin", async () => {
+    const tracked = makeTrackedAttempts();
+    let beginStarted = false;
+    let releaseBegin!: () => void;
+    const beginGate = new Promise<void>((resolve) => {
+      releaseBegin = resolve;
+    });
+    const fixture = makeFixture({
+      attempts: tracked.registry,
+      oauth: (credentials) => {
+        const base = makeFakeOAuth(credentials);
+        return {
+          ...base,
+          begin: ({ attempt }) =>
+            Effect.promise(async () => {
+              beginStarted = true;
+              await beginGate;
+              return new URL(`https://auth.example.test/authorize?state=${attempt.state}`);
+            }),
+        };
+      },
+    });
+    const begin = Effect.runPromise(
+      fixture.service.beginAuthorization({ presetId: "paraty" }),
+    );
+    await waitUntil(() => expect(beginStarted).toBe(true));
+
+    const disconnection = Effect.runPromise(
+      fixture.service.disconnect({ connectionId: "paraty" }),
+    );
+    releaseBegin();
+
+    await expect(begin).rejects.toMatchObject({ category: "reconnect-required" });
+    await expect(disconnection).resolves.toBeUndefined();
+    expect(tracked.active.size).toBe(0);
+    expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("disconnected");
+  });
+
   it("does not let a new authorization interleave with callback completion", async () => {
     const tracked = makeTrackedAttempts();
     let beginCalls = 0;
@@ -788,11 +886,17 @@ describe("McpConnectionService", () => {
   it("does not let disconnect interleave with callback completion", async () => {
     let finishStarted = false;
     let releaseFinish!: () => void;
+    let releaseRevocation!: () => void;
     let revocations = 0;
+    let revocationStarted = false;
     const finishGate = new Promise<void>((resolve) => {
       releaseFinish = resolve;
     });
+    const revocationGate = new Promise<void>((resolve) => {
+      releaseRevocation = resolve;
+    });
     const fixture = makeFixture({
+      bindings: [readBinding],
       oauth: (credentials) => {
         const base = makeFakeOAuth(credentials);
         return {
@@ -804,12 +908,26 @@ describe("McpConnectionService", () => {
               await Effect.runPromise(base.finish(input));
             }),
           revoke: () =>
-            Effect.sync(() => {
+            Effect.promise(async () => {
               revocations += 1;
+              revocationStarted = true;
+              await revocationGate;
             }),
         };
       },
     });
+    const events: string[] = [];
+    const connectedWindow: { invocation: Promise<unknown> | null } = { invocation: null };
+    await Effect.runPromise(
+      fixture.service.subscribe((event) => {
+        events.push(event.type);
+        if (event.type === "connected") {
+          connectedWindow.invocation = Effect.runPromise(
+            fixture.service.invoke(readBinding.id, "read", { id: 1 }),
+          );
+        }
+      }),
+    );
     const first = await authorize(fixture);
     const completion = Effect.runPromise(
       fixture.service.completeAuthorization({ state: first.state, code: "first-code" }),
@@ -822,12 +940,25 @@ describe("McpConnectionService", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(revocations).toBe(0);
       expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
+      expect((await Effect.runPromise(fixture.service.list()))[0]?.status).not.toBe("connected");
     } finally {
       releaseFinish();
     }
-    await expect(completion).resolves.toEqual({ ok: true });
-    await expect(disconnection).resolves.toBeUndefined();
+    await expect(completion).resolves.toEqual({ ok: false, category: "reconnect-required" });
+    await waitUntil(() => expect(revocationStarted).toBe(true));
 
+    await expect(
+      Effect.runPromise(fixture.service.invoke(readBinding.id, "read", { id: 1 })),
+    ).rejects.toMatchObject({ category: "reconnect-required" });
+    if (connectedWindow.invocation !== null) {
+      await connectedWindow.invocation.catch(() => undefined);
+    }
+    expect(fixture.toolClient.callAttempts).toBe(0);
+    expect(events).not.toContain("connected");
+    expect((await Effect.runPromise(fixture.service.list()))[0]?.status).not.toBe("connected");
+
+    releaseRevocation();
+    await expect(disconnection).resolves.toBeUndefined();
     expect(revocations).toBe(1);
     expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toBeNull();
     expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("disconnected");
@@ -1320,6 +1451,64 @@ describe("SDK OAuth lifecycle", () => {
       Effect.runPromise(oauth.revoke({ preset: PARATY_MCP_PRESET, credentials })),
     ).rejects.toMatchObject({ category: "revocation-failed" });
     expect(requests).toBe(0);
+  });
+
+  it("resets a stored OAuth client when the same resource discovers a new authority", async () => {
+    const credentials = makeMemoryCredentials();
+    await Effect.runPromise(
+      credentials.write("paraty", {
+        clientInformation: {
+          client_id: "synthetic-old-confidential-client",
+          client_secret: "synthetic-old-confidential-secret",
+        },
+        tokens: {
+          access_token: "synthetic-old-access-token",
+          refresh_token: "synthetic-old-refresh-token",
+          token_type: "Bearer",
+        },
+        authorizationServerUrl: "https://old-auth.example.test/",
+      }),
+    );
+    let observedClientInformation: unknown = "authorize-not-called";
+    const oauth = makeSdkMcpConnectionOAuthLifecycle({
+      discoverServerInfo: async () => ({
+        authorizationServerUrl: "https://new-auth.example.test/",
+        authorizationServerMetadata: {
+          issuer: "https://new-auth.example.test/",
+          authorization_endpoint: "https://new-auth.example.test/authorize",
+          token_endpoint: "https://new-auth.example.test/token",
+          registration_endpoint: "https://new-auth.example.test/register",
+          response_types_supported: ["code"],
+        },
+      }),
+      authorize: async (provider) => {
+        observedClientInformation = await provider.clientInformation();
+        await provider.saveClientInformation?.({ client_id: "new-registered-client" });
+        await provider.saveCodeVerifier("new-verifier");
+        await provider.redirectToAuthorization(
+          new URL(`https://new-auth.example.test/authorize?state=${await provider.state?.()}`),
+        );
+        return "REDIRECT";
+      },
+    });
+    const attempt = makeAuthorizationAttemptRegistry({ ttlMs: 60_000 }).create(
+      "paraty",
+      CALLBACK_URL,
+    );
+
+    const result = await Effect.runPromise(
+      oauth.begin({ preset: PARATY_MCP_PRESET, attempt, credentials }),
+    );
+
+    expect(observedClientInformation).toBeUndefined();
+    expect(result.href).toContain("https://new-auth.example.test/authorize");
+    expect(await Effect.runPromise(credentials.read("paraty"))).toEqual({
+      clientInformation: { client_id: "new-registered-client" },
+      authorizationServerUrl: "https://new-auth.example.test/",
+    });
+    expect(JSON.stringify({ result: result.href, observedClientInformation })).not.toMatch(
+      /synthetic-old-confidential-client|synthetic-old-confidential-secret/,
+    );
   });
 
   it("reports incompatible before authorization when discovery advertises no DCR and no public client exists", async () => {
