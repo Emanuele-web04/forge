@@ -8,6 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../config.ts";
 import {
+  makeOutboundMcpCallbackEndpoint,
+  OutboundMcpCallbackEndpoint,
+} from "./callbackEndpoint.ts";
+import {
   McpConnectionService,
   type McpCompleteAuthorizationInput,
 } from "./Services/McpConnectionService.ts";
@@ -22,11 +26,13 @@ async function withOutboundMcpCallbackServer(
   run: (input: {
     readonly origin: string;
     readonly completed: ReadonlyArray<McpCompleteAuthorizationInput>;
+    readonly callbackUrl: URL | null;
   }) => Promise<void>,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   const completed: McpCompleteAuthorizationInput[] = [];
   const availableStates = new Set(["s1", "cancel-state"]);
+  const callbackEndpoint = makeOutboundMcpCallbackEndpoint();
   let nodeServer: http.Server | null = null;
   const connectionService = {
     list: () => Effect.succeed([]),
@@ -67,11 +73,19 @@ async function withOutboundMcpCallbackServer(
             },
             { port: 0, host: "127.0.0.1" },
           );
+          yield* callbackEndpoint.configure({
+            config: {
+              host: input.host ?? "127.0.0.1",
+              publicUrl: input.publicUrl,
+            },
+            serverAddress: nodeServer?.address() ?? null,
+          });
           yield* server.serve(yield* HttpRouter.toHttpEffect(outboundMcpRouteLayer));
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(McpConnectionService, connectionService),
+              Layer.succeed(OutboundMcpCallbackEndpoint, callbackEndpoint),
               Layer.succeed(ServerConfig, {
                 host: input.host ?? "127.0.0.1",
                 publicUrl: input.publicUrl,
@@ -86,29 +100,96 @@ async function withOutboundMcpCallbackServer(
 
     const address = (nodeServer as http.Server | null)?.address();
     if (!address || typeof address !== "object") throw new Error("Missing test server address");
-    await run({ origin: `http://127.0.0.1:${address.port}`, completed });
+    await run({
+      origin: `http://127.0.0.1:${address.port}`,
+      completed,
+      callbackUrl: await Effect.runPromise(callbackEndpoint.currentUrl),
+    });
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }
 
 describe("outboundMcpRouteLayer", () => {
+  it("derives the redirect URI from the resolved IPv4 listener port and clears it", async () => {
+    const endpoint = makeOutboundMcpCallbackEndpoint();
+    const stableCallbackUrl = endpoint.callbackUrl;
+    await Effect.runPromise(
+      endpoint.configure({
+        config: { host: "127.0.0.1", publicUrl: undefined },
+        serverAddress: { address: "127.0.0.1", family: "IPv4", port: 49152 },
+      }),
+    );
+
+    await expect(Effect.runPromise(endpoint.currentUrl)).resolves.toEqual(
+      new URL("http://127.0.0.1:49152/api/mcp/outbound/oauth/callback"),
+    );
+    expect(endpoint.callbackUrl.href).toBe(
+      "http://127.0.0.1:49152/api/mcp/outbound/oauth/callback",
+    );
+    expect(endpoint.callbackUrl).toBe(stableCallbackUrl);
+
+    await Effect.runPromise(endpoint.clear);
+    await expect(Effect.runPromise(endpoint.currentUrl)).resolves.toBeNull();
+  });
+
+  it("formats an actual IPv6 loopback listener as a bracketed redirect URI", async () => {
+    const endpoint = makeOutboundMcpCallbackEndpoint();
+    await Effect.runPromise(
+      endpoint.configure({
+        config: { host: "::1", publicUrl: undefined },
+        serverAddress: { address: "::1", family: "IPv6", port: 58090 },
+      }),
+    );
+
+    await expect(Effect.runPromise(endpoint.currentUrl)).resolves.toEqual(
+      new URL("http://[::1]:58090/api/mcp/outbound/oauth/callback"),
+    );
+  });
+
+  it("keeps the capability disabled for non-loopback and public configurations", async () => {
+    for (const input of [
+      {
+        config: { host: "0.0.0.0", publicUrl: undefined },
+        address: "127.0.0.1",
+      },
+      {
+        config: { host: "127.0.0.1", publicUrl: new URL("https://synara.example.test") },
+        address: "127.0.0.1",
+      },
+      {
+        config: { host: "127.0.0.1", publicUrl: undefined },
+        address: "0.0.0.0",
+      },
+    ]) {
+      const endpoint = makeOutboundMcpCallbackEndpoint();
+      await Effect.runPromise(
+        endpoint.configure({
+          config: input.config,
+          serverAddress: { address: input.address, family: "IPv4", port: 58090 },
+        }),
+      );
+      await expect(Effect.runPromise(endpoint.currentUrl)).resolves.toBeNull();
+    }
+  });
+
   it("completes a loopback callback once without reflecting OAuth values", async () => {
-    await withOutboundMcpCallbackServer({}, async ({ origin, completed }) => {
-      const callbackUrl = `${origin}${OUTBOUND_MCP_OAUTH_CALLBACK_PATH}?code=c1&state=s1`;
-      const response = await fetch(callbackUrl, {
+    await withOutboundMcpCallbackServer({}, async ({ origin, completed, callbackUrl }) => {
+      const requestUrl = `${origin}${OUTBOUND_MCP_OAUTH_CALLBACK_PATH}?code=c1&state=s1`;
+      const response = await fetch(requestUrl, {
         headers: { Host: "attacker.example.test" },
       });
       const body = await response.text();
 
       expect(response.status).toBe(200);
+      expect(callbackUrl?.href).toBe(new URL(OUTBOUND_MCP_OAUTH_CALLBACK_PATH, origin).href);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(body).not.toContain("c1");
       expect(body).not.toContain("s1");
       expect(body).not.toContain("attacker.example.test");
       expect(completed).toEqual([{ code: "c1", state: "s1" }]);
 
-      const replay = await fetch(callbackUrl);
+      const replay = await fetch(requestUrl);
       expect(replay.status).toBe(400);
       expect(await replay.text()).not.toContain("c1");
     });

@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { AgentGatewayLive } from "./agentGateway/Layers/AgentGateway";
 import { AgentGatewayOperationRepositoryLive } from "./agentGateway/Layers/AgentGatewayOperationRepository";
@@ -56,10 +56,27 @@ import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { ProviderAccountServiceLive } from "./providerAccounts";
-import { McpConnectionServiceLive } from "./outboundMcp/Layers/McpConnectionService";
+import {
+  makeMcpConnectionService,
+  makeSdkMcpConnectionOAuthLifecycle,
+} from "./outboundMcp/Layers/McpConnectionService";
 import { McpToolClientLive } from "./outboundMcp/Layers/McpToolClient";
 import { OutboundMcpCredentialsLive } from "./outboundMcp/Layers/OutboundMcpCredentials";
 import { OutboundMcpRepositoryLive } from "./outboundMcp/Layers/OutboundMcpRepository";
+import { McpToolClient } from "./outboundMcp/Services/McpToolClient";
+import { OutboundMcpCredentials } from "./outboundMcp/Services/OutboundMcpCredentials";
+import { OutboundMcpRepository } from "./outboundMcp/Services/OutboundMcpRepository";
+import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
+import {
+  MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
+  makeAuthorizationAttemptRegistry,
+} from "./outboundMcp/authorizationAttempts";
+import { OUTBOUND_MCP_PRESETS } from "./outboundMcp/presets";
+import {
+  bindOutboundMcpCallbackEndpoint,
+  OutboundMcpCallbackEndpoint,
+  OutboundMcpCallbackEndpointLive,
+} from "./outboundMcp/callbackEndpoint";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -215,9 +232,34 @@ export function makeServerRuntimeServicesLayer(
   const outboundMcpToolClientLayer = McpToolClientLive.pipe(
     Layer.provideMerge(outboundMcpStorageLayer),
   );
-  const outboundMcpLayer = McpConnectionServiceLive.pipe(
+  const outboundMcpConnectionLayer = Layer.effect(
+    McpConnectionService,
+    Effect.gen(function* () {
+      const repository = yield* OutboundMcpRepository;
+      const credentials = yield* OutboundMcpCredentials;
+      const toolClient = yield* McpToolClient;
+      const callbackEndpoint = yield* OutboundMcpCallbackEndpoint;
+      return bindOutboundMcpCallbackEndpoint(
+        (callbackUrl) =>
+          makeMcpConnectionService({
+            repository,
+            credentials,
+            toolClient,
+            oauth: makeSdkMcpConnectionOAuthLifecycle(),
+            attempts: makeAuthorizationAttemptRegistry({
+              ttlMs: MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
+            }),
+            presets: OUTBOUND_MCP_PRESETS,
+            callbackUrl,
+          }),
+        callbackEndpoint,
+      );
+    }),
+  );
+  const outboundMcpLayer = outboundMcpConnectionLayer.pipe(
     Layer.provideMerge(outboundMcpStorageLayer),
     Layer.provideMerge(outboundMcpToolClientLayer),
+    Layer.provideMerge(OutboundMcpCallbackEndpointLive),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),

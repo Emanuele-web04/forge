@@ -4,6 +4,11 @@ import { Effect } from "effect";
 import { vi } from "vitest";
 
 import { AuthError } from "./auth/Services/ServerAuth";
+import {
+  bindOutboundMcpCallbackEndpoint,
+  makeOutboundMcpCallbackEndpoint,
+  withOutboundMcpCallbackCapability,
+} from "./outboundMcp/callbackEndpoint";
 import type { McpConnectionServiceShape } from "./outboundMcp/Services/McpConnectionService";
 import {
   authenticateRpcWebSocketUpgrade,
@@ -11,6 +16,121 @@ import {
   canManageExternalMcp,
   makeOutboundMcpLifecycleRpcHandlers,
 } from "./wsRpc";
+
+function deniedOutboundMcpBegin(config: {
+  readonly host: string;
+  readonly publicUrl: URL | undefined;
+}) {
+  return Effect.gen(function* () {
+    const delegatedBegins: string[] = [];
+    const endpoint = makeOutboundMcpCallbackEndpoint();
+    yield* endpoint.configure({
+      config,
+      serverAddress: { address: "127.0.0.1", family: "IPv4", port: 58090 },
+    });
+    const baseService = {
+      list: () => Effect.succeed([]),
+      beginAuthorization: (input: { readonly presetId: string }) =>
+        Effect.sync(() => {
+          delegatedBegins.push(input.presetId);
+          return {
+            attemptId: "must-not-be-created",
+            authorizationUrl: "https://auth.example.test/authorize",
+          };
+        }),
+      disconnect: () => Effect.void,
+      completeAuthorization: () => Effect.die("not used"),
+      invoke: () => Effect.die("not used"),
+      subscribe: () => Effect.die("not used"),
+    } as never;
+    const handlers = makeOutboundMcpLifecycleRpcHandlers(
+      withOutboundMcpCallbackCapability(baseService, endpoint),
+    );
+
+    const error = yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({
+      presetId: "paraty",
+    }).pipe(Effect.flip);
+
+    assert.deepStrictEqual(delegatedBegins, []);
+    assert.match(error.message, /callback-unavailable/);
+    assert.notMatch(JSON.stringify(error), /0\.0\.0\.0|synara\.example\.test|58090/);
+  });
+}
+
+it.effect("denies outbound MCP authorization before attempt creation on a non-loopback bind", () =>
+  deniedOutboundMcpBegin({ host: "0.0.0.0", publicUrl: undefined }),
+);
+
+it.effect("denies outbound MCP authorization before attempt creation with a public URL", () =>
+  deniedOutboundMcpBegin({
+    host: "127.0.0.1",
+    publicUrl: new URL("https://synara.example.test"),
+  }),
+);
+
+it.effect("denies outbound MCP authorization until the listener endpoint is ready", () =>
+  Effect.gen(function* () {
+    let delegated = false;
+    const endpoint = makeOutboundMcpCallbackEndpoint();
+    const service = withOutboundMcpCallbackCapability(
+      {
+        list: () => Effect.succeed([]),
+        beginAuthorization: () =>
+          Effect.sync(() => {
+            delegated = true;
+            return {
+              attemptId: "must-not-be-created",
+              authorizationUrl: "https://auth.example.test/authorize",
+            };
+          }),
+        disconnect: () => Effect.void,
+        completeAuthorization: () => Effect.die("not used"),
+        invoke: () => Effect.die("not used"),
+        subscribe: () => Effect.die("not used"),
+      } as never,
+      endpoint,
+    );
+
+    const error = yield* service.beginAuthorization({ presetId: "paraty" }).pipe(Effect.flip);
+
+    assert.isFalse(delegated);
+    assert.equal(error.category, "callback-unavailable");
+  }),
+);
+
+it.effect("uses the listener endpoint resolved after connection-service construction", () =>
+  Effect.gen(function* () {
+    const endpoint = makeOutboundMcpCallbackEndpoint();
+    let observedRedirectUrl: string | null = null;
+    const service = bindOutboundMcpCallbackEndpoint(
+      (callbackUrl) =>
+        ({
+          list: () => Effect.succeed([]),
+          beginAuthorization: () =>
+            Effect.sync(() => {
+              observedRedirectUrl = callbackUrl.href;
+              return {
+                attemptId: "attempt-dynamic-port",
+                authorizationUrl: "https://auth.example.test/authorize",
+              };
+            }),
+          disconnect: () => Effect.void,
+          completeAuthorization: () => Effect.die("not used"),
+          invoke: () => Effect.die("not used"),
+          subscribe: () => Effect.die("not used"),
+        }) as never,
+      endpoint,
+    );
+
+    yield* endpoint.configure({
+      config: { host: "127.0.0.1", publicUrl: undefined },
+      serverAddress: { address: "127.0.0.1", family: "IPv4", port: 49152 },
+    });
+    yield* service.beginAuthorization({ presetId: "paraty" });
+
+    assert.equal(observedRedirectUrl, "http://127.0.0.1:49152/api/mcp/outbound/oauth/callback");
+  }),
+);
 
 it.effect("registers contract-shaped outbound MCP lifecycle handlers", () =>
   Effect.gen(function* () {

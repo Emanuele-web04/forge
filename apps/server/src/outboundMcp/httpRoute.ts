@@ -1,14 +1,16 @@
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import { ServerConfig } from "../config.ts";
-import { isLoopbackHost } from "../startupAccess.ts";
+import {
+  OUTBOUND_MCP_OAUTH_CALLBACK_PATH,
+  OutboundMcpCallbackEndpoint,
+} from "./callbackEndpoint.ts";
 import {
   McpConnectionService,
   type McpCompleteAuthorizationInput,
 } from "./Services/McpConnectionService.ts";
 
-export const OUTBOUND_MCP_OAUTH_CALLBACK_PATH = "/api/mcp/outbound/oauth/callback";
+export { OUTBOUND_MCP_OAUTH_CALLBACK_PATH } from "./callbackEndpoint.ts";
 
 const RESPONSE_HEADERS = {
   "Cache-Control": "no-store",
@@ -60,10 +62,8 @@ const oauthCallback = HttpRouter.add(
   "GET",
   OUTBOUND_MCP_OAUTH_CALLBACK_PATH,
   Effect.gen(function* () {
-    const config = yield* ServerConfig;
-    if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
-      return disabledResponse();
-    }
+    const callbackEndpoint = yield* OutboundMcpCallbackEndpoint;
+    if ((yield* callbackEndpoint.currentUrl) === null) return disabledResponse();
 
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);

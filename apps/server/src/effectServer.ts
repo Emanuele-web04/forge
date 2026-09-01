@@ -51,6 +51,7 @@ import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { outboundMcpRouteLayer } from "./outboundMcp/httpRoute";
+import { OutboundMcpCallbackEndpoint } from "./outboundMcp/callbackEndpoint";
 import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
 
 export interface ServerShape {
@@ -62,6 +63,7 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | OutboundMcpCallbackEndpoint
     | McpConnectionService
     | FileSystem.FileSystem
     | Path.Path
@@ -140,6 +142,7 @@ export const createEffectServer = Effect.fn(function* (
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const outboundMcpCallbackEndpoint = yield* OutboundMcpCallbackEndpoint;
   const readiness = yield* makeServerReadiness;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
@@ -180,6 +183,12 @@ export const createEffectServer = Effect.fn(function* (
     .pipe(
       Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerServe", cause })),
     );
+
+  yield* outboundMcpCallbackEndpoint.configure({
+    config,
+    serverAddress: (nodeServer as http.Server | null)?.address() ?? null,
+  });
+  yield* Effect.addFinalizer(() => outboundMcpCallbackEndpoint.clear);
 
   const listeningPort = resolveListeningPort(
     (nodeServer as http.Server | null)?.address() ?? null,
