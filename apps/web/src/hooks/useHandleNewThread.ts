@@ -70,6 +70,12 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    if (!useStore.getState().threadsHydrated) {
+      return Promise.resolve(null);
+    }
+
     const entryPoint = options?.entryPoint ?? "chat";
     if (entryPoint === "chat") {
       const draftStore = useComposerDraftStore.getState();
