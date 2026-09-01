@@ -55,6 +55,10 @@ function repositoryName(repository: RemoteRepositoryRef): string {
   return repository.displayName;
 }
 
+function viewerLogin(viewer: string | null): string {
+  return viewer ?? "";
+}
+
 function listCacheKeyBelongsToRepository(cacheKey: string, repository: string): boolean {
   return cacheKey.startsWith(`github:${repository.trim().toLowerCase()}:`);
 }
@@ -182,14 +186,14 @@ export const makeGitHubPullRequestProvider = (
       readonly repository: RemoteRepositoryRef;
       readonly state: "open" | "closed" | "merged";
       readonly involvement: "all" | "authored" | "reviewing";
-      readonly viewer: string;
+      readonly viewer: string | null;
     }) => {
       const key = pullRequestListCacheKey(
         "github",
         repositoryName(input.repository),
         input.state,
         input.involvement,
-        input.viewer,
+        viewerLogin(input.viewer),
       );
       return listCache.get(
         key,
@@ -200,7 +204,7 @@ export const makeGitHubPullRequestProvider = (
               repository: repositoryName(input.repository),
               state: input.state,
               involvement: input.involvement,
-              viewer: input.viewer,
+              viewer: viewerLogin(input.viewer),
               limit: PULL_REQUEST_LIST_LIMIT + 1,
             }),
             input.repository,
@@ -223,7 +227,7 @@ export const makeGitHubPullRequestProvider = (
               provider: "github",
               repository: repositoryName(input.repository),
               state: input.state,
-              viewer: input.viewer,
+              viewer: viewerLogin(input.viewer),
             }),
             (key) => listCache.invalidate(key),
             { concurrency: "unbounded", discard: true },
@@ -248,7 +252,7 @@ export const makeGitHubPullRequestProvider = (
             toProviderSummary({
               repository: input.repository,
               item: entry,
-              viewer: input.viewer,
+              viewer: viewerLogin(input.viewer),
               matchedReviewingQuery:
                 input.involvement === "reviewing" || reviewingNumbers.has(entry.number),
             }),
@@ -294,7 +298,7 @@ export const makeGitHubPullRequestProvider = (
           summary: toProviderSummary({
             repository: input.repository,
             item: result.item,
-            viewer: input.viewer,
+            viewer: viewerLogin(input.viewer),
             matchedReviewingQuery: input.matchedReviewingQuery,
           }),
         } satisfies ProviderExactSummaryResult;
@@ -307,7 +311,7 @@ export const makeGitHubPullRequestProvider = (
           repositoryName(input.repository),
           "open",
           "reviewing",
-          input.viewer,
+          viewerLogin(input.viewer),
         );
         if (input.forceRefresh) yield* reviewMatchCache.invalidate(key);
         return yield* reviewMatchCache.get(
@@ -317,7 +321,7 @@ export const makeGitHubPullRequestProvider = (
               dependencies.github.listReviewRequestedPullRequestNumbers({
                 cwd: input.cwd,
                 repository: repositoryName(input.repository),
-                viewer: input.viewer,
+                viewer: viewerLogin(input.viewer),
                 limit: PULL_REQUEST_REVIEW_MATCH_LIMIT,
               }),
               input.repository,

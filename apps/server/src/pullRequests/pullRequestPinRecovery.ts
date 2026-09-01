@@ -37,6 +37,7 @@ export type PullRequestPinRecoveryContext = {
   readonly cwd: string;
   readonly repository: RemoteRepositoryRef;
   readonly adapter: PullRequestProviderShape;
+  readonly viewer: string | null;
   readonly projects: ReadonlyArray<OrchestrationProject>;
   readonly truncated: boolean;
   readonly reviewingNumbers: ReadonlySet<number>;
@@ -52,7 +53,6 @@ function recoveryKey(provider: "github" | "bitbucket", repository: string): stri
 export function recoverPinnedPullRequests(input: {
   state: PullRequestState;
   involvement: PullRequestInvolvement;
-  viewer: string;
   forceRefresh: boolean;
   pins: ReadonlyArray<ProjectPullRequestPin>;
   pinStore: ProjectPullRequestPinsShape;
@@ -168,7 +168,7 @@ export function recoverPinnedPullRequests(input: {
           return reviewRequests({
             cwd: recovery.cwd,
             repository: recovery.repository,
-            viewer: input.viewer,
+            viewer: recovery.viewer,
             forceRefresh: input.forceRefresh,
           }).pipe(
             Effect.map((matches) => [key, { ...matches, error: null }] as const),
@@ -202,9 +202,9 @@ export function recoverPinnedPullRequests(input: {
             recovery.repository,
             result.error
               ? `Review-requested pin recovery failed for ${recovery.repository.displayName}: ${result.error.message}`
-              : `Review-requested pin recovery for ${recovery.repository.displayName} reached GitHub's ` +
-                  `${PULL_REQUEST_REVIEW_MATCH_LIMIT.toLocaleString("en-US")}-item limit ` +
-                  "and may be incomplete.",
+              : `Review-requested pin recovery for ${recovery.repository.displayName} reached ` +
+                  "the provider search limit of " +
+                  `${PULL_REQUEST_REVIEW_MATCH_LIMIT.toLocaleString("en-US")} items and may be incomplete.`,
           );
         }
       }
@@ -250,7 +250,7 @@ export function recoverPinnedPullRequests(input: {
               cwd: lookup.cwd,
               repository: lookup.context.repository,
               number: lookup.number,
-              viewer: input.viewer,
+              viewer: lookup.context.viewer,
               matchedReviewingQuery: lookup.matchedReviewingQuery,
               forceRefresh: input.forceRefresh,
             })
@@ -332,7 +332,7 @@ export function recoverPinnedPullRequests(input: {
       const summary = lookup.result.summary;
       if (
         summary.state !== input.state ||
-        !pullRequestMatchesInvolvement(summary, input.involvement, input.viewer)
+        !pullRequestMatchesInvolvement(summary, input.involvement, recovery.viewer ?? "")
       ) {
         return [];
       }

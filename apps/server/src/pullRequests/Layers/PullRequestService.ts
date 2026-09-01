@@ -7,7 +7,10 @@ import {
   type PullRequestsListResult,
 } from "@synara/contracts";
 import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
-import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
+import {
+  isValidRemoteRepositoryNameWithOwner,
+  type RemoteRepositoryRef,
+} from "@synara/shared/remoteRepository";
 import { Effect, Layer, Scope } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore";
@@ -18,7 +21,6 @@ import {
 } from "../../persistence/Services/ProjectPullRequestPins";
 import {
   buildPullRequestListEntry,
-  isValidGitHubRepositoryNameWithOwner,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
 } from "../../pullRequests.logic";
@@ -106,7 +108,7 @@ export const makePullRequestService = (
 
     const validatePullRequestRepository = (provider: PullRequestProvider, repository: string) => {
       const normalized = repository.trim();
-      return isValidGitHubRepositoryNameWithOwner(normalized)
+      return isValidRemoteRepositoryNameWithOwner(normalized)
         ? Effect.succeed(normalized)
         : Effect.fail(new Error(`Invalid ${provider} repository identity.`));
     };
@@ -171,7 +173,7 @@ export const makePullRequestService = (
             ? adapter
                 .viewer({ cwd: project.workspaceRoot, forceRefresh })
                 .pipe(Effect.map((viewer) => [adapter, viewer] as const))
-            : Effect.succeed([adapter, ""] as const),
+            : Effect.succeed([adapter, null] as const),
         { concurrency: "unbounded" },
       ).pipe(Effect.map((viewers) => new Map(viewers)));
     };
@@ -245,12 +247,10 @@ export const makePullRequestService = (
         }
 
         const viewers = yield* loadProviderViewers(providerRepositories, forceRefresh);
-        const githubViewers = new Set(
-          providerRepositories.flatMap(({ adapter }) =>
-            adapter.provider === "github" ? [viewers.get(adapter) ?? ""] : [],
-          ),
+        const githubRepository = providerRepositories.find(
+          ({ adapter }) => adapter.provider === "github",
         );
-        const viewer = [...githubViewers][0] ?? null;
+        const viewer = githubRepository ? (viewers.get(githubRepository.adapter) ?? null) : null;
 
         const batches = yield* Effect.forEach(
           providerRepositories,
@@ -261,7 +261,7 @@ export const makePullRequestService = (
                 repository,
                 state: input.state,
                 involvement,
-                viewer: viewers.get(adapter) ?? "",
+                viewer: viewers.get(adapter) ?? null,
                 forceRefresh,
               })
               .pipe(
@@ -295,6 +295,7 @@ export const makePullRequestService = (
                     cwd: repositoryProjects[0]!.workspaceRoot,
                     repository,
                     adapter,
+                    viewer: viewers.get(adapter) ?? null,
                     projects: repositoryProjects,
                     truncated: result.truncated,
                     reviewingNumbers: result.reviewingNumbers,
@@ -324,7 +325,6 @@ export const makePullRequestService = (
         const recovery = yield* recoverPinnedPullRequests({
           state: input.state,
           involvement,
-          viewer: viewer ?? "",
           forceRefresh,
           pins: pinnedRows,
           pinStore: dependencies.pins,
@@ -364,31 +364,25 @@ export const makePullRequestService = (
         const inventoryIncomplete = resolved.some(
           (item) => item.error !== null || !item.inventory.authoritative,
         );
-        const githubRepositories = [...uniqueRepositories.values()].filter(
-          ({ repository }) => repository.provider === "github",
+        const providerRepositories = yield* selectInventoryProviders([
+          ...uniqueRepositories.values(),
+        ]);
+        const countProviders = providerRepositories.filter(
+          ({ adapter }) => adapter.reviewRequestCount !== undefined,
         );
-        if (githubRepositories.length === 0) {
+        if (countProviders.length === 0) {
           return { count: 0, incomplete: inventoryIncomplete };
         }
 
-        const selected = yield* Effect.forEach(
-          githubRepositories,
-          (entry) =>
-            providerRegistry
-              .select(entry.repository)
-              .pipe(Effect.map((adapter) => ({ ...entry, adapter }))),
-          { concurrency: "unbounded" },
-        );
-        const viewers = yield* loadProviderViewers(selected, false);
+        const viewers = yield* loadProviderViewers(countProviders, false);
         const repositoryCounts = yield* Effect.forEach(
-          selected,
+          countProviders,
           ({ adapter, projects: repositoryProjects, repository }) => {
-            const count = adapter.reviewRequestCount;
-            if (!count) return Effect.succeed({ count: 0, incomplete: true });
+            const count = adapter.reviewRequestCount!;
             return count({
               cwd: repositoryProjects[0]!.workspaceRoot,
               repository,
-              viewer: viewers.get(adapter) ?? "",
+              viewer: viewers.get(adapter) ?? null,
               forceRefresh: false,
             }).pipe(
               Effect.catch((error) =>

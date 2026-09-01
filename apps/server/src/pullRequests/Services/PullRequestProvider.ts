@@ -33,7 +33,7 @@ export type ProviderListInput = {
   readonly repository: RemoteRepositoryRef;
   readonly state: PullRequestState;
   readonly involvement: PullRequestInvolvement;
-  readonly viewer: string;
+  readonly viewer: string | null;
   readonly forceRefresh: boolean;
 };
 
@@ -48,7 +48,7 @@ export type ProviderExactSummaryInput = {
   readonly cwd: string;
   readonly repository: RemoteRepositoryRef;
   readonly number: number;
-  readonly viewer: string;
+  readonly viewer: string | null;
   readonly matchedReviewingQuery: boolean;
   readonly forceRefresh: boolean;
 };
@@ -60,7 +60,7 @@ export type ProviderExactSummaryResult =
 export type ProviderReviewRequestsInput = {
   readonly cwd: string;
   readonly repository: RemoteRepositoryRef;
-  readonly viewer: string;
+  readonly viewer: string | null;
   readonly forceRefresh: boolean;
 };
 

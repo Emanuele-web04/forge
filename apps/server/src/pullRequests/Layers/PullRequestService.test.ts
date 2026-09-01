@@ -1,4 +1,4 @@
-import { ProjectId } from "@synara/contracts";
+import { LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES, ProjectId } from "@synara/contracts";
 import type { OrchestrationProject } from "@synara/contracts";
 import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Deferred, Effect, Fiber } from "effect";
@@ -12,7 +12,11 @@ import type {
 } from "../../git/Services/GitHubCli";
 import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../../persistence/Services/ProjectPullRequestPins";
-import type { PullRequestProviderShape } from "../Services/PullRequestProvider";
+import {
+  PullRequestProviderError,
+  type ProviderPullRequestSummary,
+  type PullRequestProviderShape,
+} from "../Services/PullRequestProvider";
 import { makeGitHubPullRequestProvider } from "../providers/GitHubPullRequestProvider";
 import {
   PULL_REQUEST_PIN_RECOVERY_LIMIT,
@@ -31,6 +35,99 @@ const bitbucketRepository: RemoteRepositoryRef = {
   identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker",
   displayName: "paraty/payment-seeker",
 };
+
+const githubRepository: RemoteRepositoryRef = {
+  provider: "github",
+  host: "github.com",
+  owner: "acme",
+  slug: "shared",
+  webUrl: "https://github.com/acme/shared",
+  identityKey: "github:github.com:acme/shared",
+  displayName: "acme/shared",
+};
+
+const enterpriseRepository: RemoteRepositoryRef = {
+  provider: "bitbucket",
+  host: "stash.paraty.test",
+  owner: "paraty",
+  slug: "legacy",
+  webUrl: "https://stash.paraty.test/paraty/legacy",
+  identityKey: "bitbucket:stash.paraty.test:paraty/legacy",
+  displayName: "paraty/legacy",
+};
+
+const bitbucketReadOnlyCapabilities = {
+  detail: true,
+  diff: true,
+  comments: true,
+  checks: false,
+  comment: false,
+  resolveComment: false,
+  stateMutation: false,
+  merge: false,
+} as const;
+
+function providerSummary(
+  repository: RemoteRepositoryRef,
+  number: number,
+): ProviderPullRequestSummary {
+  const common = {
+    repository: repository.displayName,
+    number,
+    title: `PR ${number}`,
+    url: `${repository.webUrl}/pull-requests/${number}`,
+    author: { login: `${repository.provider}-viewer`, name: null, avatarUrl: null, url: null },
+    headBranch: `feature-${number}`,
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    createdAt: now,
+    updatedAt: now,
+    reviewDecision: null,
+    viewerInvolvement: "review-requested" as const,
+    labels: [],
+    stack: null,
+  };
+  return repository.provider === "github"
+    ? {
+        ...common,
+        provider: "github",
+        capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
+        additions: 1,
+        deletions: 0,
+        mergeability: "unknown",
+      }
+    : {
+        ...common,
+        provider: "bitbucket",
+        capabilities: bitbucketReadOnlyCapabilities,
+        additions: null,
+        deletions: null,
+        mergeability: null,
+      };
+}
+
+function syntheticProvider(
+  repository: RemoteRepositoryRef,
+  overrides: Partial<PullRequestProviderShape> = {},
+): PullRequestProviderShape {
+  return {
+    provider: repository.provider,
+    host: repository.host,
+    supports: (candidate) => candidate.identityKey === repository.identityKey,
+    list: () =>
+      Effect.succeed({
+        entries: [],
+        truncated: false,
+        reviewingNumbers: new Set(),
+        reviewingTruncated: false,
+      }),
+    exactSummary: () => Effect.succeed({ _tag: "not-found" }),
+    detail: () => Effect.die("detail is not used"),
+    diff: () => Effect.die("diff is not used"),
+    ...overrides,
+  };
+}
 
 function makeProject(id: string, title: string, workspaceRoot: string): OrchestrationProject {
   return {
@@ -206,6 +303,91 @@ describe("PullRequestService", () => {
     });
   });
 
+  it("uses each repository provider's viewer during pin recovery", async () => {
+    const project = makeProject("project-provider-viewers", "Provider viewers", "/tmp/viewers");
+    const observed = new Map<string, string | null>();
+    const makeProvider = (
+      repository: RemoteRepositoryRef,
+      viewer: string | null,
+    ): PullRequestProviderShape => ({
+      provider: repository.provider,
+      host: repository.host,
+      supports: (candidate) => candidate.identityKey === repository.identityKey,
+      ...(viewer === null ? {} : { viewer: () => Effect.succeed(viewer) }),
+      list: () =>
+        Effect.succeed({
+          entries: [],
+          truncated: true,
+          reviewingNumbers: new Set(),
+          reviewingTruncated: true,
+        }),
+      reviewRequests: (input) =>
+        Effect.sync(() => {
+          observed.set(`${repository.host}:review`, input.viewer);
+          return { numbers: new Set([99]), incomplete: false };
+        }),
+      exactSummary: (input) =>
+        Effect.sync(() => {
+          observed.set(`${repository.host}:exact`, input.viewer);
+          return { _tag: "found" as const, summary: providerSummary(repository, input.number) };
+        }),
+      detail: () => Effect.die("detail is not used"),
+      diff: () => Effect.die("diff is not used"),
+    });
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([
+                [project.id, [githubRepository, bitbucketRepository, enterpriseRepository]],
+              ]),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins([
+                { projectId: project.id, repositoryKey: "acme/shared", number: 99 },
+                {
+                  projectId: project.id,
+                  provider: "bitbucket",
+                  repositoryKey: "paraty/payment-seeker",
+                  number: 99,
+                },
+                {
+                  projectId: project.id,
+                  provider: "bitbucket",
+                  repositoryKey: "paraty/legacy",
+                  number: 99,
+                },
+              ]),
+            }),
+            providers: [
+              makeProvider(githubRepository, "github-viewer"),
+              makeProvider(bitbucketRepository, "bitbucket-viewer"),
+              makeProvider(enterpriseRepository, null),
+            ],
+          });
+          return yield* service.list({ state: "open", involvement: "reviewing" });
+        }),
+      ),
+    );
+
+    expect(Object.fromEntries(observed)).toEqual({
+      "github.com:review": "github-viewer",
+      "bitbucket.org:review": "bitbucket-viewer",
+      "stash.paraty.test:review": null,
+      "github.com:exact": "github-viewer",
+      "bitbucket.org:exact": "bitbucket-viewer",
+      "stash.paraty.test:exact": null,
+    });
+    expect(result.entries.map((entry) => entry.provider).toSorted()).toEqual([
+      "bitbucket",
+      "bitbucket",
+      "github",
+    ]);
+  });
+
   it("returns one repository-level row for projects sharing a repository", async () => {
     const projectA = makeProject("project-list-a", "List A", "/tmp/list-a");
     const projectB = makeProject("project-list-b", "feature-1", "/tmp/list-b");
@@ -297,6 +479,77 @@ describe("PullRequestService", () => {
     expect(result).toEqual({ count: 2, incomplete: false });
     expect(countReads).toBe(1);
     expect(richListReads).toBe(0);
+  });
+
+  it("counts every registered provider that supports review counts and skips unsupported ones", async () => {
+    const project = makeProject("project-count-providers", "Provider counts", "/tmp/counts");
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([
+                [project.id, [githubRepository, bitbucketRepository, enterpriseRepository]],
+              ]),
+              github: createGitHubCliWithFakeGh().service,
+            }),
+            providers: [
+              syntheticProvider(githubRepository, {
+                viewer: () => Effect.succeed("github-viewer"),
+                reviewRequestCount: () => Effect.succeed({ count: 2, incomplete: false }),
+              }),
+              syntheticProvider(bitbucketRepository, {
+                viewer: () => Effect.succeed("bitbucket-viewer"),
+                reviewRequestCount: () => Effect.succeed({ count: 3, incomplete: false }),
+              }),
+              syntheticProvider(enterpriseRepository),
+            ],
+          });
+          return yield* service.reviewRequestCount({ projectId: null });
+        }),
+      ),
+    );
+
+    expect(result).toEqual({ count: 5, incomplete: false });
+  });
+
+  it("marks review counts incomplete when a registered repository count fails", async () => {
+    const project = makeProject("project-count-failure", "Count failure", "/tmp/count-failure");
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([[project.id, [bitbucketRepository]]]),
+              github: createGitHubCliWithFakeGh().service,
+            }),
+            providers: [
+              syntheticProvider(bitbucketRepository, {
+                reviewRequestCount: () =>
+                  Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "bitbucket",
+                      host: "bitbucket.org",
+                      operation: "reviewRequestCount",
+                      repository: "paraty/payment-seeker",
+                      scope: "repository",
+                      reason: "other",
+                      message: "Bitbucket count unavailable",
+                    }),
+                  ),
+              }),
+            ],
+          });
+          return yield* service.reviewRequestCount({ projectId: null });
+        }),
+      ),
+    );
+
+    expect(result).toEqual({ count: 0, incomplete: true });
   });
 
   it("marks the review count incomplete when repository discovery is non-authoritative", async () => {
@@ -617,6 +870,38 @@ describe("PullRequestService", () => {
     ]);
   });
 
+  it("rejects traversal in a provider-neutral repository identity before pin persistence", async () => {
+    const project = makeProject("project-pin-traversal", "Pin traversal", "/tmp/pin-traversal");
+    const writes: unknown[] = [];
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins([], (input) => writes.push(input)),
+            }),
+          );
+          return yield* Effect.flip(
+            service.setPinned({
+              projectId: project.id,
+              provider: "bitbucket",
+              repository: "paraty/../payment-seeker",
+              number: 17,
+              isPinned: false,
+            }),
+          );
+        }),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("Invalid bitbucket repository identity.");
+    expect(writes).toEqual([]);
+  });
+
   it("uses raw list cardinality to recover a pin after a malformed capped item", async () => {
     const project = makeProject("project-malformed-cap", "Malformed cap", "/tmp/malformed-cap");
     const rawEntries: unknown[] = Array.from({ length: 50 }, (_, index) => ({
@@ -908,7 +1193,7 @@ describe("PullRequestService", () => {
     expect(pinWrites).toEqual([]);
   });
 
-  it("surfaces review-match recovery as incomplete at GitHub's search ceiling", async () => {
+  it("surfaces review-match recovery as incomplete at the provider search ceiling", async () => {
     const project = makeProject("project-review-ceiling", "Review ceiling", "/tmp/review-cap");
     const base = createGitHubCliWithFakeGh().service;
     const github: GitHubCliShape = {
@@ -940,7 +1225,10 @@ describe("PullRequestService", () => {
       ),
     );
 
-    expect(result.errors.some((error) => error.message.includes("1,000-item limit"))).toBe(true);
+    expect(result.errors.map((error) => error.message)).toContain(
+      "Review-requested pin recovery for acme/shared reached the provider search limit of " +
+        "1,000 items and may be incomplete.",
+    );
   });
 
   it("invalidates list caches for the mutated repository only", async () => {

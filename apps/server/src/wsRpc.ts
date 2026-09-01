@@ -160,6 +160,7 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import { PullRequestProviderError } from "./pullRequests/Services/PullRequestProvider";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
   GitHubProjectProvisioningError,
@@ -309,6 +310,22 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
     message: cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
     cause,
   });
+}
+
+export function toPullRequestsRpcError(cause: unknown, fallbackMessage: string) {
+  const githubUnavailable =
+    (cause instanceof GitHubCliError &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated")) ||
+    (cause instanceof PullRequestProviderError &&
+      cause.provider === "github" &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated"));
+  if (githubUnavailable) {
+    return new PullRequestsUnavailableError({
+      reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
+      message: cause instanceof GitHubCliError ? cause.detail : cause.message,
+    });
+  }
+  return toWsRpcError(cause, fallbackMessage);
 }
 
 export function makeOutboundMcpLifecycleRpcHandlers<AuthorizationError, AuthorizationRequirements>(
@@ -516,20 +533,6 @@ const makeWsRpcHandlersLayer = () =>
             yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
           }
         });
-
-      const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
-        error instanceof GitHubCliError &&
-        (error.reason === "not-installed" || error.reason === "not-authenticated");
-
-      const toPullRequestsRpcError = (cause: unknown, fallbackMessage: string) => {
-        if (isGlobalGitHubCliError(cause)) {
-          return new PullRequestsUnavailableError({
-            reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
-            message: cause.detail,
-          });
-        }
-        return toWsRpcError(cause, fallbackMessage);
-      };
 
       const pullRequestsEffect = <A, E, R>(
         effect: Effect.Effect<A, E, R>,
