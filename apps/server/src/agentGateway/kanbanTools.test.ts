@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ProjectId,
-  ThreadId,
-  TurnId,
-  type OrchestrationThreadShell,
-} from "@synara/contracts";
+import { ProjectId, ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -158,8 +153,7 @@ function makeSnapshot(
   projects: ReadonlyArray<ProjectShellRow>,
 ): ProjectionSnapshotQueryShape {
   return {
-    getShellSnapshot: () =>
-      Effect.succeed({ projects: [...projects], threads: [...threads] }),
+    getShellSnapshot: () => Effect.succeed({ projects: [...projects], threads: [...threads] }),
   } as unknown as ProjectionSnapshotQueryShape;
 }
 
@@ -184,9 +178,7 @@ function makeTools(input: {
     now: () => NOW_MS,
     helpers: {
       requireThreadShell: (threadId) => {
-        const found = input.threads.find(
-          (thread) => String(thread.id) === threadId,
-        );
+        const found = input.threads.find((thread) => String(thread.id) === threadId);
         if (found) return Effect.succeed(found);
         if (threadId === "thread-caller" || threadId === "thread-other") {
           return Effect.succeed(makeThreadShell(threadId));
@@ -197,21 +189,15 @@ function makeTools(input: {
         (() => Effect.void)) as never,
       runCreateThreads: ((args: unknown) => {
         created.push(args);
-        return input.runCreateThreads
-          ? input.runCreateThreads(args)
-          : Effect.succeed(mcpOk({}));
+        return input.runCreateThreads ? input.runCreateThreads(args) : Effect.succeed(mcpOk({}));
       }) as never,
       startTurn: ((args: unknown) => {
         started.push(args as never);
-        return input.startTurn
-          ? input.startTurn(args)
-          : Effect.succeed({ sequence: 42 });
+        return input.startTurn ? input.startTurn(args) : Effect.succeed({ sequence: 42 });
       }) as never,
       interruptTurn: ((args: unknown) => {
         interrupted.push(args as never);
-        return input.interruptTurn
-          ? input.interruptTurn(args)
-          : Effect.succeed({ sequence: 7 });
+        return input.interruptTurn ? input.interruptTurn(args) : Effect.succeed({ sequence: 7 });
       }) as never,
     },
   });
@@ -228,11 +214,8 @@ const toolById = (tools: ReadonlyArray<ToolEntry>, name: string): ToolEntry => {
   return tool;
 };
 
-const runHandler = (
-  tool: ToolEntry,
-  args: Record<string, unknown>,
-  ctx = context,
-) => Effect.runPromise(tool.handler(args, ctx));
+const runHandler = (tool: ToolEntry, args: Record<string, unknown>, ctx = context) =>
+  Effect.runPromise(tool.handler(args, ctx));
 
 /** Loose view of every kanban payload shape; per-test field reads stay self-documenting. */
 type JsonPayload = Record<string, any>;
@@ -249,9 +232,7 @@ const jsonText = (result: McpToolCallResult): JsonPayload => {
   }
   return {
     isError: false,
-    ...(JSON.parse(
-      content?.type === "text" ? content.text : "{}",
-    ) as JsonPayload),
+    ...(JSON.parse(content?.type === "text" ? content.text : "{}") as JsonPayload),
   };
 };
 
@@ -269,10 +250,7 @@ type BoardPayload = {
 };
 
 /** Run the board read and index every project's cards by column key. */
-async function boardByColumn(
-  tools: ReadonlyArray<ToolEntry>,
-  args: Record<string, unknown> = {},
-) {
+async function boardByColumn(tools: ReadonlyArray<ToolEntry>, args: Record<string, unknown> = {}) {
   const payload = jsonText(
     await runHandler(toolById(tools, "synara_read_kanban_board"), args),
   ) as BoardPayload & {
@@ -284,10 +262,7 @@ async function boardByColumn(
     payload,
     columnsOf: (index = 0) =>
       Object.fromEntries(
-        payload.projects[index]!.columns.map((column) => [
-          column.key,
-          column.cards,
-        ]),
+        payload.projects[index]!.columns.map((column) => [column.key, column.cards]),
       ),
   };
 }
@@ -306,12 +281,7 @@ describe("synara_read_kanban_board", () => {
       ],
       projects: [
         makeProjectShell(),
-        makeProjectShell(
-          "chat-container",
-          "Chats",
-          WORKSPACE_PATHS.chatWorkspaceRoot,
-          "chat",
-        ),
+        makeProjectShell("chat-container", "Chats", WORKSPACE_PATHS.chatWorkspaceRoot, "chat"),
       ],
     });
 
@@ -323,18 +293,13 @@ describe("synara_read_kanban_board", () => {
       ["draft", "inProgress", "awaitingYou", "done"].map((key) =>
         (byColumn[key] ?? []).map((card) => card.threadId),
       ),
-    ).toEqual([
-      ["thread-draft"],
-      ["thread-running"],
-      ["thread-waiting"],
-      ["thread-done"],
-    ]);
+    ).toEqual([["thread-draft"], ["thread-running"], ["thread-waiting"], ["thread-done"]]);
     const waitingCard = byColumn.awaitingYou![0]!;
     expect(waitingCard.attention).toContain("awaiting-approval");
     // The chat container's thread must not surface on the ordinary-project board.
-    expect(
-      Object.values(byColumn).flatMap((cards) => cards.map((c) => c.threadId)),
-    ).not.toContain("thread-chat");
+    expect(Object.values(byColumn).flatMap((cards) => cards.map((c) => c.threadId))).not.toContain(
+      "thread-chat",
+    );
   });
 
   it("rejects a board read for a project other than the caller's and hides archived threads", async () => {
@@ -365,9 +330,7 @@ describe("synara_read_kanban_board", () => {
 
     const full = await boardByColumn(tools, { projectId: "project-a" });
     const cardIds = full.payload.projects.flatMap((project) =>
-      project.columns.flatMap((column) =>
-        column.cards.map((card) => card.threadId),
-      ),
+      project.columns.flatMap((column) => column.cards.map((card) => card.threadId)),
     );
     expect(cardIds).toContain("thread-live");
     expect(cardIds).not.toContain("thread-archived");
@@ -375,14 +338,8 @@ describe("synara_read_kanban_board", () => {
 
   it("filters to one project and exposes card metadata", async () => {
     const { tools } = makeTools({
-      threads: [
-        makeRunningShell("thread-a"),
-        makeThreadShell("thread-b", "project-b"),
-      ],
-      projects: [
-        makeProjectShell(),
-        makeProjectShell("project-b", "Project B"),
-      ],
+      threads: [makeRunningShell("thread-a"), makeThreadShell("thread-b", "project-b")],
+      projects: [makeProjectShell(), makeProjectShell("project-b", "Project B")],
     });
 
     const { payload, columnsOf } = await boardByColumn(tools, {
@@ -400,9 +357,7 @@ describe("synara_read_kanban_board", () => {
   });
 
   it("caps the board at MAX_CARDS_PER_BOARD and reports truncated with a fallback hint", async () => {
-    const threads = Array.from({ length: 501 }, (_, index) =>
-      makeThreadShell(`thread-${index}`),
-    );
+    const threads = Array.from({ length: 501 }, (_, index) => makeThreadShell(`thread-${index}`));
     const { tools } = makeTools({ threads });
 
     const { payload } = await boardByColumn(tools);
@@ -410,11 +365,7 @@ describe("synara_read_kanban_board", () => {
     expect(payload.truncatedReason).toContain("synara_read_kanban_card");
     const totalCards = payload.projects.reduce(
       (sum, project) =>
-        sum +
-        project.columns.reduce(
-          (columnSum, column) => columnSum + column.cards.length,
-          0,
-        ),
+        sum + project.columns.reduce((columnSum, column) => columnSum + column.cards.length, 0),
       0,
     );
     expect(totalCards).toBe(500);
@@ -423,9 +374,7 @@ describe("synara_read_kanban_board", () => {
   it("omits projects past the board cap instead of emitting empty ghost columns", async () => {
     const { tools } = makeTools({
       threads: [
-        ...Array.from({ length: 501 }, (_, index) =>
-          makeThreadShell(`thread-a-${index}`),
-        ),
+        ...Array.from({ length: 501 }, (_, index) => makeThreadShell(`thread-a-${index}`)),
         makeThreadShell("thread-b-0", "project-b"),
       ],
       projects: [makeProjectShell(), makeProjectShell("project-b", "B")],
@@ -433,9 +382,7 @@ describe("synara_read_kanban_board", () => {
 
     const { payload } = await boardByColumn(tools);
     expect(payload.truncated).toBe(true);
-    expect(payload.projects.map((project) => project.projectId)).toEqual([
-      "project-a",
-    ]);
+    expect(payload.projects.map((project) => project.projectId)).toEqual(["project-a"]);
   });
 
   it("does not report truncated under the cap", async () => {
@@ -489,26 +436,23 @@ describe("synara_read_kanban_card", () => {
       errorPart: "archived",
       archived: true as const,
     },
-  ])(
-    "rejects a $label thread with an error result",
-    async ({ threadId, errorPart, archived }) => {
-      const { tools } = makeTools({
-        threads: [
-          makeThreadShell("thread-archived", "project-a", {
-            archivedAt: NOW_ISO,
-          }),
-        ].filter(() => archived),
-      });
-
-      const result = jsonText(
-        await runHandler(toolById(tools, "synara_read_kanban_card"), {
-          threadId,
+  ])("rejects a $label thread with an error result", async ({ threadId, errorPart, archived }) => {
+    const { tools } = makeTools({
+      threads: [
+        makeThreadShell("thread-archived", "project-a", {
+          archivedAt: NOW_ISO,
         }),
-      );
-      expect(result.isError).toBe(true);
-      expect(result.__errorText).toContain(errorPart);
-    },
-  );
+      ].filter(() => archived),
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_read_kanban_card"), {
+        threadId,
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain(errorPart);
+  });
 });
 
 describe("synara_create_kanban_task", () => {
@@ -562,20 +506,16 @@ describe("synara_create_kanban_task", () => {
       runCreateThreads: () => createOk(["thread-created"]),
     });
 
-    const result = await runHandler(
-      toolById(tools, "synara_create_kanban_task"),
-      {
-        title: "Fix bug",
-        description: "Investigate the flaky test first.",
-        projectId: "project-a",
-        requestId: "req-2",
-      },
-    );
+    const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      description: "Investigate the flaky test first.",
+      projectId: "project-a",
+      requestId: "req-2",
+    });
     expect(result.isError).toBeFalsy();
     expect(created).toHaveLength(1);
-    const spec = (
-      created[0] as { threads: Array<{ prompt: string; projectId: string }> }
-    ).threads[0]!;
+    const spec = (created[0] as { threads: Array<{ prompt: string; projectId: string }> })
+      .threads[0]!;
     expect(spec.prompt).toBe("Investigate the flaky test first.");
     expect(spec.projectId).toBe("project-a");
   });
@@ -590,17 +530,12 @@ describe("synara_create_kanban_task", () => {
         }),
     });
 
-    const result = await runHandler(
-      toolById(tools, "synara_create_kanban_task"),
-      {
-        title: "Fix bug",
-        requestId: "req-3",
-      },
-    );
+    const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      requestId: "req-3",
+    });
     expect(result.isError).toBe(true);
-    expect(
-      (jsonText(result) as { __errorText?: string }).__errorText,
-    ).toContain("creation failed");
+    expect((jsonText(result) as { __errorText?: string }).__errorText).toContain("creation failed");
   });
 
   it("rejects concurrent writes past the per-caller in-flight cap", async () => {
@@ -625,9 +560,9 @@ describe("synara_create_kanban_task", () => {
     await Promise.resolve();
     const overCap = await runHandler(tool, { ...args, requestId: "req-e" });
     expect(overCap.isError).toBe(true);
-    expect(
-      (jsonText(overCap) as { __errorText?: string }).__errorText,
-    ).toContain("Too many concurrent kanban write calls");
+    expect((jsonText(overCap) as { __errorText?: string }).__errorText).toContain(
+      "Too many concurrent kanban write calls",
+    );
 
     // Release the held calls so they settle and the process can exit.
     release();
@@ -638,17 +573,13 @@ describe("synara_create_kanban_task", () => {
     const sagaContent = [{ type: "text" as const, text: "{not json" }];
     const { tools } = makeTools({
       threads: [],
-      runCreateThreads: () =>
-        Effect.succeed({ isError: false, content: sagaContent }),
+      runCreateThreads: () => Effect.succeed({ isError: false, content: sagaContent }),
     });
 
-    const result = await runHandler(
-      toolById(tools, "synara_create_kanban_task"),
-      {
-        title: "Fix bug",
-        requestId: "req-malformed-json",
-      },
-    );
+    const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      requestId: "req-malformed-json",
+    });
     expect(result.isError).toBe(false);
     expect(result.content).toEqual(sagaContent);
   });
@@ -685,17 +616,13 @@ describe("synara_create_kanban_task", () => {
       const sagaContent = [{ type: "text" as const, text: sagaText }];
       const { tools } = makeTools({
         threads: [],
-        runCreateThreads: () =>
-          Effect.succeed({ isError: false, content: sagaContent }),
+        runCreateThreads: () => Effect.succeed({ isError: false, content: sagaContent }),
       });
 
-      const result = await runHandler(
-        toolById(tools, "synara_create_kanban_task"),
-        {
-          title: "Fix bug",
-          requestId: "req-wrong-shape",
-        },
-      );
+      const result = await runHandler(toolById(tools, "synara_create_kanban_task"), {
+        title: "Fix bug",
+        requestId: "req-wrong-shape",
+      });
       expect(result.isError).toBe(false);
       expect(result.content).toEqual(sagaContent);
     },
@@ -786,30 +713,20 @@ describe("synara_move_kanban_card", () => {
       failStartTurn: true as const,
       expected: "start exploded",
     },
-  ])(
-    "rejects $label",
-    async ({ threadId, target, message, failStartTurn, expected }) => {
-      const { tools, started } = makeTools({
-        threads:
-          threadId === "thread-done"
-            ? [makeSessionShell("thread-done")]
-            : [makeThreadShell("thread-draft")],
-        ...(failStartTurn
-          ? { startTurn: () => Effect.fail(new Error("start exploded")) }
-          : {}),
-      });
+  ])("rejects $label", async ({ threadId, target, message, failStartTurn, expected }) => {
+    const { tools, started } = makeTools({
+      threads:
+        threadId === "thread-done"
+          ? [makeSessionShell("thread-done")]
+          : [makeThreadShell("thread-draft")],
+      ...(failStartTurn ? { startTurn: () => Effect.fail(new Error("start exploded")) } : {}),
+    });
 
-      const result = await move(
-        tools,
-        threadId,
-        target,
-        message ? { message } : {},
-      );
-      expect(result.isError).toBe(true);
-      expect(result.__errorText).toContain(expected);
-      if (!failStartTurn) expect(started).toHaveLength(0);
-    },
-  );
+    const result = await move(tools, threadId, target, message ? { message } : {});
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain(expected);
+    if (!failStartTurn) expect(started).toHaveLength(0);
+  });
 
   it("rejects moving an awaiting-you card to done", async () => {
     const { tools, interrupted } = makeTools({
@@ -822,9 +739,7 @@ describe("synara_move_kanban_card", () => {
 
     const result = await move(tools, "thread-waiting", "done");
     expect(result.isError).toBe(true);
-    expect(result.__errorText).toContain(
-      "Awaiting-you cards cannot be force-moved",
-    );
+    expect(result.__errorText).toContain("Awaiting-you cards cannot be force-moved");
     expect(interrupted).toHaveLength(0);
   });
 
@@ -870,24 +785,21 @@ describe("synara_move_kanban_card", () => {
   it.each([
     { target: "inProgress", extraArgs: { message: "hi" } },
     { target: "done", extraArgs: {} },
-  ] as const)(
-    "rejects an archived thread for target $target",
-    async ({ target, extraArgs }) => {
-      const { tools, started, interrupted } = makeTools({
-        threads: [
-          makeThreadShell("thread-archived", "project-a", {
-            archivedAt: NOW_ISO,
-          }),
-        ],
-      });
+  ] as const)("rejects an archived thread for target $target", async ({ target, extraArgs }) => {
+    const { tools, started, interrupted } = makeTools({
+      threads: [
+        makeThreadShell("thread-archived", "project-a", {
+          archivedAt: NOW_ISO,
+        }),
+      ],
+    });
 
-      const result = await move(tools, "thread-archived", target, extraArgs);
-      expect(result.isError).toBe(true);
-      expect(result.__errorText).toContain("archived");
-      expect(started).toHaveLength(0);
-      expect(interrupted).toHaveLength(0);
-    },
-  );
+    const result = await move(tools, "thread-archived", target, extraArgs);
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("archived");
+    expect(started).toHaveLength(0);
+    expect(interrupted).toHaveLength(0);
+  });
 
   it("returns an error result when the interrupt dispatch fails", async () => {
     const { tools } = makeTools({

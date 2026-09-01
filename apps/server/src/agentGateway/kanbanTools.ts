@@ -20,11 +20,7 @@ import {
 } from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { GatewayCreationContext } from "./creationCoordinator.ts";
-import {
-  mcpToolResultError,
-  mcpToolResultJson,
-  type McpToolCallResult,
-} from "./protocol.ts";
+import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
 import {
   buildModelSelection,
   decodeCreateThreadsInput,
@@ -32,11 +28,7 @@ import {
   readStringArg,
   ToolInputError,
 } from "./toolInput.ts";
-import {
-  READ_ONLY_TOOL_ANNOTATIONS,
-  type ToolEntry,
-  type ToolContext,
-} from "./toolRuntime.ts";
+import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry, type ToolContext } from "./toolRuntime.ts";
 import { summarizeThreadShell } from "./threadSummary.ts";
 
 /**
@@ -161,9 +153,7 @@ export interface KanbanToolsInput {
   readonly now?: () => number;
 }
 
-export function makeAgentGatewayKanbanTools(
-  input: KanbanToolsInput,
-): ReadonlyArray<ToolEntry> {
+export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyArray<ToolEntry> {
   const { snapshotQuery, workspacePaths, helpers } = input;
   const now = input.now ?? (() => Date.now());
   const {
@@ -187,25 +177,15 @@ export function makeAgentGatewayKanbanTools(
    */
   function withKanbanToolAudit(
     toolName: string,
-    run: (
-      args: Record<string, unknown>,
-      context: ToolContext,
-    ) => Effect.Effect<McpToolCallResult>,
-  ): (
-    args: Record<string, unknown>,
-    context: ToolContext,
-  ) => Effect.Effect<McpToolCallResult> {
+    run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
+  ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
     return (args, context) =>
       run(args, context).pipe(
         Effect.tap((result) => {
           const textContent = result.content[0];
           const payload = textContent?.type === "text" ? textContent.text : "";
           const truncated = payload.includes('"truncated":true');
-          const outcome = result.isError
-            ? "error"
-            : truncated
-              ? "truncated"
-              : "ok";
+          const outcome = result.isError ? "error" : truncated ? "truncated" : "ok";
           return Effect.logInfo("agent_gateway.kanban_tool", {
             tool: toolName,
             callerSessionKey: context.callerSessionKey,
@@ -223,14 +203,8 @@ export function makeAgentGatewayKanbanTools(
    * more provider work.
    */
   function withKanbanWriteConcurrencyGuard(
-    run: (
-      args: Record<string, unknown>,
-      context: ToolContext,
-    ) => Effect.Effect<McpToolCallResult>,
-  ): (
-    args: Record<string, unknown>,
-    context: ToolContext,
-  ) => Effect.Effect<McpToolCallResult> {
+    run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
+  ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
     return (args, context) =>
       Effect.gen(function* () {
         const sessionKey = context.callerSessionKey;
@@ -276,17 +250,12 @@ export function makeAgentGatewayKanbanTools(
     },
     handler: withKanbanToolAudit("synara_read_kanban_board", (args, context) =>
       Effect.gen(function* () {
-        const callerShell = yield* requireThreadShell(
-          context.callerThreadId,
-        ).pipe(
+        const callerShell = yield* requireThreadShell(context.callerThreadId).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
         );
         const requestedProjectId = readStringArg(args, "projectId");
         const callerProjectId = String(callerShell.projectId);
-        if (
-          requestedProjectId !== undefined &&
-          requestedProjectId !== callerProjectId
-        ) {
+        if (requestedProjectId !== undefined && requestedProjectId !== callerProjectId) {
           return yield* Effect.fail(
             new ToolInputError(
               `Cannot read board for project "${requestedProjectId}"; use the caller's project "${callerProjectId}".`,
@@ -296,9 +265,7 @@ export function makeAgentGatewayKanbanTools(
         const projectId = requestedProjectId ?? callerProjectId;
         const snapshot = yield* snapshotQuery
           .getShellSnapshot()
-          .pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         const at = now();
         let emittedCardCount = 0;
         let truncated = false;
@@ -334,11 +301,7 @@ export function makeAgentGatewayKanbanTools(
             done: [],
           };
           for (const thread of snapshot.threads) {
-            if (
-              thread.projectId !== project.id ||
-              (thread.archivedAt ?? null) !== null
-            )
-              continue;
+            if (thread.projectId !== project.id || (thread.archivedAt ?? null) !== null) continue;
             if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
               truncated = true;
               break;
@@ -351,16 +314,12 @@ export function makeAgentGatewayKanbanTools(
           // drop the would-be empty row instead of reporting ghost columns.
           if (truncated && emittedCardCount === cardsBeforeProject) break;
           for (const bucket of Object.values(columnBuckets)) {
-            bucket.sort((a, b) =>
-              a.summary.updatedAt < b.summary.updatedAt ? 1 : -1,
-            );
+            bucket.sort((a, b) => (a.summary.updatedAt < b.summary.updatedAt ? 1 : -1));
           }
           projects.push({
             projectId: project.id,
             name: project.title,
-            columns: (
-              ["draft", "inProgress", "awaitingYou", "done"] as const
-            ).map((key) => ({
+            columns: (["draft", "inProgress", "awaitingYou", "done"] as const).map((key) => ({
               key,
               label: KANBAN_COLUMN_V2_LABELS[key],
               cards: columnBuckets[key],
@@ -378,11 +337,7 @@ export function makeAgentGatewayKanbanTools(
               }
             : {}),
         });
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.succeed(mcpToolResultError(errorText(error))),
-        ),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
     ),
   };
 
@@ -411,9 +366,7 @@ export function makeAgentGatewayKanbanTools(
     handler: withKanbanToolAudit("synara_read_kanban_card", (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        const callerShell = yield* requireThreadShell(
-          context.callerThreadId,
-        ).pipe(
+        const callerShell = yield* requireThreadShell(context.callerThreadId).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
         );
         const thread = yield* requireThreadShell(threadId).pipe(
@@ -428,9 +381,7 @@ export function makeAgentGatewayKanbanTools(
         }
         if ((thread.archivedAt ?? null) !== null) {
           return yield* Effect.fail(
-            new ToolInputError(
-              `Thread "${threadId}" is archived and has no board card.`,
-            ),
+            new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
           );
         }
         const card = deriveCard(thread, now(), context.callerThreadId);
@@ -439,11 +390,7 @@ export function makeAgentGatewayKanbanTools(
           asOf: new Date(now()).toISOString(),
           callerThreadId: context.callerThreadId,
         });
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.succeed(mcpToolResultError(errorText(error))),
-        ),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
     ),
   };
 
@@ -460,8 +407,7 @@ export function makeAgentGatewayKanbanTools(
           title: { type: "string", description: "Task title." },
           description: {
             type: "string",
-            description:
-              "Optional task description; used as the first-turn prompt.",
+            description: "Optional task description; used as the first-turn prompt.",
           },
           projectId: {
             type: "string",
@@ -505,10 +451,7 @@ export function makeAgentGatewayKanbanTools(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
             );
             // Provider sessions may only create tasks in their own project.
-            if (
-              projectId !== undefined &&
-              projectId !== String(callerShell.projectId)
-            ) {
+            if (projectId !== undefined && projectId !== String(callerShell.projectId)) {
               return yield* Effect.fail(
                 new ToolInputError(
                   `Cannot create a task in project "${projectId}"; use the caller's own project "${callerShell.projectId}".`,
@@ -544,36 +487,23 @@ export function makeAgentGatewayKanbanTools(
               } catch {
                 return null;
               }
-              if (
-                typeof parsed !== "object" ||
-                parsed === null ||
-                Array.isArray(parsed)
-              ) {
+              if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
                 return null;
               }
               const record = parsed as Record<string, unknown>;
-              if (
-                record.operationId !== undefined &&
-                typeof record.operationId !== "string"
-              ) {
+              if (record.operationId !== undefined && typeof record.operationId !== "string") {
                 return null;
               }
-              const threads = Array.isArray(record.threads)
-                ? record.threads
-                : undefined;
+              const threads = Array.isArray(record.threads) ? record.threads : undefined;
               if (record.threads !== undefined && threads === undefined) {
                 return null;
               }
-              const threadIds = Array.isArray(record.threadIds)
-                ? record.threadIds
-                : undefined;
+              const threadIds = Array.isArray(record.threadIds) ? record.threadIds : undefined;
               if (record.threadIds !== undefined && threadIds === undefined) {
                 return null;
               }
               const firstThread =
-                threads !== undefined && threads.length > 0
-                  ? threads[0]
-                  : undefined;
+                threads !== undefined && threads.length > 0 ? threads[0] : undefined;
               if (
                 firstThread !== undefined &&
                 (typeof firstThread !== "object" ||
@@ -586,26 +516,16 @@ export function makeAgentGatewayKanbanTools(
                 typeof firstThread === "object" && firstThread !== null
                   ? (firstThread as Record<string, unknown>).threadId
                   : undefined;
-              if (
-                fromThreadsThreadId !== undefined &&
-                typeof fromThreadsThreadId !== "string"
-              ) {
+              if (fromThreadsThreadId !== undefined && typeof fromThreadsThreadId !== "string") {
                 return null;
               }
-              if (
-                Array.isArray(threadIds) &&
-                threadIds.some((id) => typeof id !== "string")
-              ) {
+              if (Array.isArray(threadIds) && threadIds.some((id) => typeof id !== "string")) {
                 return null;
               }
-              const fromThreadIds = Array.isArray(threadIds)
-                ? threadIds[0]
-                : undefined;
+              const fromThreadIds = Array.isArray(threadIds) ? threadIds[0] : undefined;
               return {
                 operationId:
-                  typeof record.operationId === "string"
-                    ? record.operationId
-                    : undefined,
+                  typeof record.operationId === "string" ? record.operationId : undefined,
                 createdThreadId:
                   typeof fromThreadsThreadId === "string"
                     ? fromThreadsThreadId
@@ -621,17 +541,11 @@ export function makeAgentGatewayKanbanTools(
             // turn an already-successful creation into a tool error.
             const createdThreadId = batch?.createdThreadId;
             if (!createdThreadId) return result;
-            const threadShell = yield* requireThreadShell(createdThreadId).pipe(
-              Effect.option,
-            );
+            const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
             const createdCard = Option.isSome(threadShell)
               ? (() => {
                   const thread = threadShell.value;
-                  const cardView = deriveCard(
-                    thread,
-                    now(),
-                    context.callerThreadId,
-                  );
+                  const cardView = deriveCard(thread, now(), context.callerThreadId);
                   return {
                     threadId: thread.id,
                     title: thread.title,
@@ -657,11 +571,7 @@ export function makeAgentGatewayKanbanTools(
                 attention: createdCard.attention,
               },
             });
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.succeed(mcpToolResultError(errorText(error))),
-            ),
-          ),
+          }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
         ),
       ),
     ),
@@ -710,15 +620,11 @@ export function makeAgentGatewayKanbanTools(
             const target = readStringArg(args, "target", { required: true })!;
             if (target !== "inProgress" && target !== "done") {
               return yield* Effect.fail(
-                new ToolInputError(
-                  `Argument "target" must be "inProgress" or "done".`,
-                ),
+                new ToolInputError(`Argument "target" must be "inProgress" or "done".`),
               );
             }
             const message = readStringArg(args, "message") ?? null;
-            const caller = yield* requireThreadShell(
-              context.callerThreadId,
-            ).pipe(
+            const caller = yield* requireThreadShell(context.callerThreadId).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
             );
             const card = yield* requireThreadShell(threadId).pipe(
@@ -734,9 +640,7 @@ export function makeAgentGatewayKanbanTools(
             yield* assertCallerMayDriveThread(caller, card);
             if ((card.archivedAt ?? null) !== null) {
               return yield* Effect.fail(
-                new ToolInputError(
-                  `Thread "${threadId}" is archived and has no board card.`,
-                ),
+                new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
               );
             }
             const at = now();
@@ -748,10 +652,7 @@ export function makeAgentGatewayKanbanTools(
               attention: cardView.attention,
             });
             if (target === "inProgress") {
-              if (
-                currentColumn === "inProgress" ||
-                currentColumn === "awaitingYou"
-              ) {
+              if (currentColumn === "inProgress" || currentColumn === "awaitingYou") {
                 // No new dispatch; attention flags show a targeting caller why an
                 // awaiting-you card stayed put.
                 return mcpToolResultJson({
@@ -762,8 +663,7 @@ export function makeAgentGatewayKanbanTools(
                   card: cardPayload(currentColumn),
                 });
               }
-              const requiredMessage =
-                message ?? (card.latestTurn ? null : "Continue this task.");
+              const requiredMessage = message ?? (card.latestTurn ? null : "Continue this task.");
               if (!requiredMessage) {
                 return yield* Effect.fail(
                   new ToolInputError(
@@ -777,11 +677,7 @@ export function makeAgentGatewayKanbanTools(
                 dispatchMode: "queue",
                 runtimeMode: card.runtimeMode,
                 interactionMode: card.interactionMode,
-              }).pipe(
-                Effect.mapError(
-                  (error) => new ToolInputError(errorText(error)),
-                ),
-              );
+              }).pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
               return mcpToolResultJson({
                 threadId,
                 target,
@@ -797,8 +693,7 @@ export function makeAgentGatewayKanbanTools(
                 ),
               );
             }
-            const alreadyDone =
-              !threadHasInFlightTurn(card) || currentColumn !== "inProgress";
+            const alreadyDone = !threadHasInFlightTurn(card) || currentColumn !== "inProgress";
             if (alreadyDone) {
               return mcpToolResultJson({
                 threadId,
@@ -817,11 +712,7 @@ export function makeAgentGatewayKanbanTools(
               eventSequence: dispatched.sequence,
               card: cardPayload(currentColumn),
             });
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.succeed(mcpToolResultError(errorText(error))),
-            ),
-          ),
+          }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
         ),
       ),
     ),
