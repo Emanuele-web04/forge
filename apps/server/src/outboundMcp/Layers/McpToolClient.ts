@@ -17,13 +17,19 @@ import * as Semaphore from "effect/Semaphore";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import type { OutboundMcpCredentialRecord } from "../Services/OutboundMcpCredentials.ts";
-import { OutboundMcpCredentials } from "../Services/OutboundMcpCredentials.ts";
+import {
+  OutboundMcpCredentials,
+  type OutboundMcpCredentialsShape,
+} from "../Services/OutboundMcpCredentials.ts";
 import {
   McpToolClient,
   McpToolClientError,
   type McpToolClientShape,
 } from "../Services/McpToolClient.ts";
-import { OutboundMcpRepository } from "../Services/OutboundMcpRepository.ts";
+import {
+  OutboundMcpRepository,
+  type OutboundMcpRepositoryShape,
+} from "../Services/OutboundMcpRepository.ts";
 import type { McpConsumerBinding, McpConsumerOperation } from "../consumerBinding.ts";
 import {
   OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
@@ -498,11 +504,15 @@ async function createLiveSession(
   connection: LiveResolvedConnection,
   signal: AbortSignal,
   hooks: McpToolSessionHooks,
-  credentials: OutboundMcpCredentials["Service"],
+  credentials: OutboundMcpCredentialsShape,
+  fetchFn?: FetchLike,
 ): Promise<McpToolSession> {
   let authInvalidated = false;
   const boundedFetch = makeSingleFlightRefreshFetch(
-    makeBoundedMcpFetch({ resourceUrl: connection.endpoint }),
+    makeBoundedMcpFetch({
+      resourceUrl: connection.endpoint,
+      ...(fetchFn === undefined ? {} : { fetch: fetchFn }),
+    }),
   );
   const requestFetch = makeMcpSdkRequestFetchContext(boundedFetch);
   const authProvider = establishedOAuthProvider({
@@ -597,19 +607,22 @@ async function createLiveSession(
   };
 }
 
-const makeMcpToolClientLive = Effect.gen(function* () {
-  const repository = yield* OutboundMcpRepository;
-  const credentials = yield* OutboundMcpCredentials;
-
-  const client = makeMcpToolClient<LiveResolvedConnection>({
+export function makeLiveMcpToolClient(options: {
+  readonly repository: OutboundMcpRepositoryShape;
+  readonly credentials: OutboundMcpCredentialsShape;
+  readonly fetch?: FetchLike;
+}): McpToolClientShape {
+  return makeMcpToolClient<LiveResolvedConnection>({
     resolveConnection: async (binding) => {
-      const records = await Effect.runPromise(repository.list());
+      const records = await Effect.runPromise(options.repository.list());
       const matching = records.filter((record) => binding.presetIds.has(record.presetId));
       if (matching.length !== 1) {
         throw clientError({ category: "connection-selection", consumerId: binding.id });
       }
       const record = matching[0]!;
-      const credentialRecord = await Effect.runPromise(credentials.read(record.connectionId));
+      const credentialRecord = await Effect.runPromise(
+        options.credentials.read(record.connectionId),
+      );
       if (
         credentialRecord?.tokens === undefined ||
         credentialRecord.clientInformation === undefined
@@ -628,8 +641,14 @@ const makeMcpToolClientLive = Effect.gen(function* () {
       };
     },
     createSession: (connection, signal, hooks) =>
-      createLiveSession(connection, signal, hooks, credentials),
+      createLiveSession(connection, signal, hooks, options.credentials, options.fetch),
   });
+}
+
+const makeMcpToolClientLive = Effect.gen(function* () {
+  const repository = yield* OutboundMcpRepository;
+  const credentials = yield* OutboundMcpCredentials;
+  const client = makeLiveMcpToolClient({ repository, credentials });
   yield* Effect.addFinalizer(() => client.closeAll());
   return client;
 });
