@@ -247,10 +247,10 @@ export async function teardownProviderProcessTree(
 
     let forceTree = tree;
     let forceDescendantsVerified = false;
-    if (platform === "win32" && tree.captureComplete !== false) {
-      // Windows PID reuse cannot be checked with the POSIX command lookup used
-      // by the synchronous compatibility killer. Re-snapshot through CIM now,
-      // immediately before escalation, and pass only identity-matched survivors.
+    if (platform === "win32" && rootExited && tree.captureComplete !== false) {
+      // When the Windows root is already gone, taskkill /T can no longer own
+      // traversal. Re-snapshot through CIM immediately before escalation and
+      // pass only descendants whose PID, command, and creation identity match.
       const forceInspection = await inspectTree(tree);
       if (forceInspection.verified) {
         forceTree = {
@@ -258,7 +258,7 @@ export async function teardownProviderProcessTree(
           captureComplete: true,
         };
         forceDescendantsVerified = true;
-      } else if (rootExited) {
+      } else {
         // The root PID may already have been reused and descendant identities
         // are unknown. Do not target stale numeric PIDs; the proof step below
         // will fail closed with ProviderProcessExitUnprovenError.
