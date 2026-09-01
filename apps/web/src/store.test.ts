@@ -7,6 +7,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,6 +20,7 @@ import {
   setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerReadModel,
+  syncServerShellSnapshot,
   useStore,
 } from "./store";
 import type { AppState } from "./storeState";
@@ -456,6 +458,98 @@ describe("store facade", () => {
     const restored = syncServerReadModel(withoutProject2, snapshotWithProject2Restored);
 
     expect(restored.projects.find((project) => project.id === project2)?.expanded).toBe(true);
+  });
+
+  it("keeps the latest local expansion through read-model and shell reconnects", () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const project = makeReadModelProject({
+      id: projectId,
+      workspaceRoot: "/tmp/project-1",
+    });
+    const readModel = makeProjectsReadModel([project]);
+    const hydrated = syncServerReadModel(
+      { ...useStore.getState(), projects: [], shellSnapshotSequence: 0 },
+      readModel,
+    );
+    const locallyCollapsed = setAllProjectsExpanded(hydrated, false);
+
+    const afterReadModel = syncServerReadModel(locallyCollapsed, {
+      ...readModel,
+      snapshotSequence: 2,
+    });
+    const shellSnapshot: OrchestrationShellSnapshot = {
+      snapshotSequence: 3,
+      updatedAt: readModel.updatedAt,
+      spaces: [],
+      projects: [project],
+      threads: [],
+    };
+    const afterShell = syncServerShellSnapshot(afterReadModel, shellSnapshot);
+
+    expect(afterReadModel.projects[0]?.expanded).toBe(false);
+    expect(afterShell.projects[0]?.expanded).toBe(false);
+  });
+
+  it("treats a changed project cwd as a new expanded identity", () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const collapsed = {
+      ...useStore.getState(),
+      projects: [
+        makeProject({
+          id: projectId,
+          cwd: "/tmp/project-old",
+          expanded: false,
+        }),
+      ],
+      shellSnapshotSequence: 1,
+      threadsHydrated: true,
+    };
+    const renamed = syncServerReadModel(
+      collapsed,
+      makeProjectsReadModel([
+        makeReadModelProject({
+          id: projectId,
+          workspaceRoot: "/tmp/project-new",
+        }),
+      ]),
+    );
+
+    expect(renamed.projects[0]).toMatchObject({
+      cwd: "/tmp/project-new",
+      expanded: true,
+    });
+  });
+
+  it("persists the latest expansion and reordered project list", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      fresh.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({ id: project1, workspaceRoot: "/tmp/project-1" }),
+          makeReadModelProject({ id: project2, workspaceRoot: "/tmp/project-2" }),
+        ]),
+      );
+
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.useStore.getState().toggleProject(project1);
+      fresh.useStore.getState().toggleProject(project1);
+      fresh.useStore.getState().toggleProject(project2);
+      fresh.useStore.getState().reorderProjects(project2, project1);
+      fresh.persistAppStateNow();
+
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}")).toMatchObject({
+        expandedProjectCwds: ["/tmp/project-2"],
+        projectOrderCwds: ["/tmp/project-2", "/tmp/project-1"],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("preserves a local project alias across read model syncs", () => {

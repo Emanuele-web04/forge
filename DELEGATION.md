@@ -3,9 +3,9 @@ Units: 4
 
 | # | Unit | Files (mine) | Worker (subagent) | Acceptance | Status |
 |---|---|---|---|---|---|
-| 1 | Reconcile Plan 04 production scope | `apps/web/src/storePersistence.ts`, `apps/web/src/storeNormalization.ts`, `apps/web/src/store.ts`, `apps/web/src/storeProjection.ts` | inherited implementation, parent verifies | Exact v8 boundary; hydrated-only writes; local toggles win; invalid cwd entries do not revive; no rate-limit, animation, or transcript work | pending |
-| 2 | Reconcile focused persistence tests | `apps/web/src/storePersistence.test.ts`, `apps/web/src/store.test.ts`, `apps/web/src/storeTestFixtures.ts` | inherited implementation, parent verifies | Binary matrix covers restart, reconnect/hydration, rename/reorder, missing/deleted, corrupt/legacy, multi-change, stale-write race | pending |
-| 3 | Live isolated verification | `/tmp/pr861-live/**` | parent | Real WebSocket instance proves restart/reconnect persistence with no sidebar flicker or route/selection regression | pending |
+| 1 | Reconcile Plan 04 production scope | `apps/web/src/storePersistence.ts`, `apps/web/src/storeNormalization.ts`, `apps/web/src/store.ts`, `apps/web/src/storeProjection.ts` | inherited implementation, parent verified | Exact v8 boundary; hydrated-only writes; local toggles win; invalid cwd entries do not revive; no rate-limit, animation, or transcript work | verified |
+| 2 | Reconcile focused persistence tests | `apps/web/src/storePersistence.test.ts`, `apps/web/src/store.test.ts`, `apps/web/src/storeTestFixtures.ts` | inherited implementation, parent verified | Binary matrix covers restart, reconnect/hydration, rename/reorder, missing/deleted, corrupt/legacy, multi-change, stale-write race | verified |
+| 3 | Live isolated verification | `/tmp/pr861-live/**` | parent | Real WebSocket instance proves restart/reconnect persistence with no sidebar flicker or route/selection regression | verified |
 | 4 | Independent review and merge readiness | read-only full diff; GitHub PR 861 | fresh reviewer, parent fixes/verifies | Correctness, races, corruption, scope, performance, maintainability pass; tested SHA pushed normally; GitHub CLEAN/MERGEABLE and green | pending |
 
 ## Acceptance matrix
@@ -37,3 +37,9 @@ Units: 4
 - Independent workstreams. Production/test reconciliation precedes live verification; final review runs after runtime proof.
 - Shared mutable state. One writer owns the existing worktree. Reviewers are read-only.
 - Smallest safe decomposition. Keep one writer because persistence and normalization share one state invariant; split verification by unit.
+
+## Verification evidence
+
+- Unit 1. `git diff upstream/main...HEAD`; zero diff for `rateLimits.ts`, `Sidebar.tsx`, `disclosureMotion.ts`, and transcript files.
+- Unit 2. `cd apps/web && bun run test src/storePersistence.test.ts src/store.test.ts src/storeNormalization.test.ts src/storeProjection.test.ts` passed 123 tests.
+- Unit 3. `/tmp/pr861-live/restart-result.json`, `reconnect-result.json`, `collapsed-hydration-timeline.json`, and screenshots prove restart, reconnect, stable route, no console errors, and no expanded-frame flicker.

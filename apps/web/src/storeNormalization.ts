@@ -1899,8 +1899,12 @@ export function mapProjects(
 
   const mappedProjects = incoming
     .map((project) => {
+      const previousWithSameId = previousById.get(project.id);
       const existing =
-        previousById.get(project.id) ?? previousByCwd.get(projectCwdKey(project.workspaceRoot));
+        previousWithSameId &&
+        projectCwdKey(previousWithSameId.cwd) === projectCwdKey(project.workspaceRoot)
+          ? previousWithSameId
+          : previousByCwd.get(projectCwdKey(project.workspaceRoot));
       return normalizeProject(project, existing);
     })
     .map((project, incomingIndex) => {
