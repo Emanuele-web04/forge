@@ -50,6 +50,8 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { outboundMcpRouteLayer } from "./outboundMcp/httpRoute";
+import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -60,6 +62,7 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | McpConnectionService
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
@@ -169,6 +172,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    outboundMcpRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

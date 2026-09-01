@@ -1,13 +1,73 @@
+import { WS_METHODS } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vitest";
 
 import { AuthError } from "./auth/Services/ServerAuth";
+import type { McpConnectionServiceShape } from "./outboundMcp/Services/McpConnectionService";
 import {
   authenticateRpcWebSocketUpgrade,
   authorizeDeviceFrameWebSocketUpgrade,
   canManageExternalMcp,
+  makeOutboundMcpLifecycleRpcHandlers,
 } from "./wsRpc";
+
+it.effect("registers contract-shaped outbound MCP lifecycle handlers", () =>
+  Effect.gen(function* () {
+    const connection = {
+      id: "paraty",
+      presetId: "paraty",
+      displayName: "Paraty MCP",
+      endpoint: "https://mcp.example.test/mcp",
+      status: "disconnected",
+      lastValidatedAt: null,
+      errorCategory: null,
+    } as const;
+    const calls: string[] = [];
+    const service = {
+      list: () => Effect.sync(() => (calls.push("list"), [connection])),
+      beginAuthorization: (input) =>
+        Effect.sync(() => {
+          calls.push(`begin:${input.presetId}`);
+          return {
+            attemptId: "attempt-1",
+            authorizationUrl: "https://auth.example.test/authorize",
+          };
+        }),
+      disconnect: (input) =>
+        Effect.sync(() => {
+          calls.push(`disconnect:${input.connectionId}`);
+        }),
+      completeAuthorization: () => Effect.die("not exposed over WS"),
+      invoke: () => Effect.die("not exposed over WS"),
+      subscribe: () => Effect.die("not exposed over WS"),
+    } satisfies McpConnectionServiceShape;
+    const handlers = makeOutboundMcpLifecycleRpcHandlers(service);
+
+    const list = yield* handlers[WS_METHODS.serverListOutboundMcpConnections]({});
+    const begin = yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({
+      presetId: "paraty",
+    });
+    yield* handlers[WS_METHODS.serverDisconnectOutboundMcpConnection]({
+      connectionId: "paraty",
+    });
+
+    assert.deepStrictEqual(list, { connections: [connection] });
+    assert.deepStrictEqual(begin, {
+      attemptId: "attempt-1",
+      authorizationUrl: "https://auth.example.test/authorize",
+    });
+    assert.deepStrictEqual(calls, ["list", "begin:paraty", "disconnect:paraty"]);
+    assert.deepStrictEqual(
+      Object.keys(handlers).toSorted(),
+      [
+        WS_METHODS.serverBeginOutboundMcpAuthorization,
+        WS_METHODS.serverDisconnectOutboundMcpConnection,
+        WS_METHODS.serverListOutboundMcpConnections,
+      ].toSorted(),
+    );
+  }),
+);
 
 it("reserves external MCP management for owner sessions", () => {
   assert.isTrue(canManageExternalMcp("owner"));

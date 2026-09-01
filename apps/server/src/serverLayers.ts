@@ -56,6 +56,10 @@ import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { ProviderAccountServiceLive } from "./providerAccounts";
+import { McpConnectionServiceLive } from "./outboundMcp/Layers/McpConnectionService";
+import { McpToolClientLive } from "./outboundMcp/Layers/McpToolClient";
+import { OutboundMcpCredentialsLive } from "./outboundMcp/Layers/OutboundMcpCredentials";
+import { OutboundMcpRepositoryLive } from "./outboundMcp/Layers/OutboundMcpRepository";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -202,6 +206,19 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
   );
+  // One layer value is shared by the HTTP callback and admitted WS handlers,
+  // keeping OAuth attempts and live transport caches in the same service.
+  const outboundMcpStorageLayer = Layer.merge(
+    OutboundMcpRepositoryLive,
+    OutboundMcpCredentialsLive,
+  );
+  const outboundMcpToolClientLayer = McpToolClientLive.pipe(
+    Layer.provideMerge(outboundMcpStorageLayer),
+  );
+  const outboundMcpLayer = McpConnectionServiceLive.pipe(
+    Layer.provideMerge(outboundMcpStorageLayer),
+    Layer.provideMerge(outboundMcpToolClientLayer),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -238,6 +255,7 @@ export function makeServerRuntimeServicesLayer(
     ExternalMcpRepositoryLive,
     externalMcpServiceLayer,
     externalMcpGatewayLayer,
+    outboundMcpLayer,
     providerHealthLayer,
     providerAccountLayer,
     ProjectPullRequestPinsLive,

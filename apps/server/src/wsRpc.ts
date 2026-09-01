@@ -110,6 +110,10 @@ import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import {
+  McpConnectionService,
+  type McpConnectionServiceShape,
+} from "./outboundMcp/Services/McpConnectionService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -307,6 +311,23 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
+export function makeOutboundMcpLifecycleRpcHandlers(outboundMcp: McpConnectionServiceShape) {
+  const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
+    effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+  return {
+    [WS_METHODS.serverListOutboundMcpConnections]: () =>
+      rpcEffect(
+        outboundMcp.list().pipe(Effect.map((connections) => ({ connections }))),
+        "Failed to load outbound MCP connections",
+      ),
+    [WS_METHODS.serverBeginOutboundMcpAuthorization]: (input: { readonly presetId: string }) =>
+      rpcEffect(outboundMcp.beginAuthorization(input), "Failed to start MCP authorization"),
+    [WS_METHODS.serverDisconnectOutboundMcpConnection]: (input: {
+      readonly connectionId: string;
+    }) => rpcEffect(outboundMcp.disconnect(input), "Failed to disconnect MCP service"),
+  } as const;
+}
+
 // Process-wide so a subscriber's restart chain survives its own reconnects
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
@@ -346,6 +367,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const outboundMcp = yield* McpConnectionService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1758,6 +1780,7 @@ const makeWsRpcHandlersLayer = () =>
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
+        ...makeOutboundMcpLifecycleRpcHandlers(outboundMcp),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
