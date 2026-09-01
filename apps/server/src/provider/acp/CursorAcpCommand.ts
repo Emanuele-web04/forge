@@ -51,6 +51,9 @@ interface CursorCommandPathParts {
   readonly stem: string;
 }
 
+const POWERSHELL_EXECUTABLE = "powershell.exe";
+const WINDOWS_CURSOR_SIBLING_EXTENSIONS = [".exe", ".cmd", ".bat", ".ps1"] as const;
+
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const trimmed = command.trim();
   const forwardSlash = trimmed.lastIndexOf("/");
@@ -157,15 +160,41 @@ function resolveCursorSiblingCommand(
   binary: string,
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
-  const preferred = parts.extension ? [`${binary}${parts.extension}`] : [];
-  const names = executableNameCandidates(binary, options.platform, options.env, true);
-  for (const name of [...new Set([...preferred, ...names])]) {
+  for (const name of cursorSiblingNameCandidates(parts, binary, options)) {
     const siblingAgent = `${parts.directory}${name}`;
     if (options.pathExists(siblingAgent)) {
       return { command: siblingAgent, args: [] };
     }
   }
   return undefined;
+}
+
+function cursorSiblingNameCandidates(
+  parts: CursorCommandPathParts,
+  binary: string,
+  options: ResolvedCursorAgentCommandOptions,
+): ReadonlyArray<string> {
+  if (shouldProbeWindowsCursorSiblings(parts, options)) {
+    return WINDOWS_CURSOR_SIBLING_EXTENSIONS.map((extension) => `${binary}${extension}`);
+  }
+
+  const preferred = parts.extension ? [`${binary}${parts.extension}`] : [];
+  const names = executableNameCandidates(binary, options.platform, options.env, true);
+  return [...new Set([...preferred, ...names])];
+}
+
+function shouldProbeWindowsCursorSiblings(
+  parts: CursorCommandPathParts,
+  options: ResolvedCursorAgentCommandOptions,
+): boolean {
+  const extension = parts.extension.toLowerCase();
+  return (
+    options.platform === "win32" ||
+    parts.directory.includes("\\") ||
+    WINDOWS_CURSOR_SIBLING_EXTENSIONS.includes(
+      extension as (typeof WINDOWS_CURSOR_SIBLING_EXTENSIONS)[number],
+    )
+  );
 }
 
 function findCommandOnPath(
@@ -181,6 +210,16 @@ function findCommandOnPath(
     }
   }
   return undefined;
+}
+
+function wrapPowerShellCommand(command: string, args: ReadonlyArray<string>): CursorAgentCommand {
+  if (!/\.ps1$/iu.test(command)) {
+    return { command, args: [...args] };
+  }
+  return {
+    command: POWERSHELL_EXECUTABLE,
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
+  };
 }
 
 // Resolves persisted/default Cursor binary settings into the executable Synara should spawn.
@@ -208,7 +247,7 @@ export function buildCursorAgentCommand(
   const resolvedCommand = editorLauncher
     ? { command: editorLauncher.command, args: [...editorLauncher.args, ...args] }
     : { command, args: [...args] };
-  return resolvedCommand;
+  return wrapPowerShellCommand(resolvedCommand.command, resolvedCommand.args);
 }
 
 // Cursor auth/status probes must stay headless so provider refreshes never open login browsers.
