@@ -119,7 +119,7 @@ jobs:
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
   quality:
-    name: Quality Gate
+    name: Format, Lint, Typecheck, Test, Browser Test, Build
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [static, unit, browser, build]
