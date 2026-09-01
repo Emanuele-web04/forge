@@ -84,11 +84,8 @@ describe("parseRemoteRepositoryUrl", () => {
     null,
     undefined,
     "",
-    "https://user:token@bitbucket.org/paraty/payment-seeker.git",
-    "https://user:token@github.com/openai/codex.git",
     "https://bitbucket.org:443/paraty/payment-seeker.git",
     "ssh://git@github.com:22/openai/codex.git",
-    "https://bitbucket.org/paraty/payment-seeker.git?token=secret",
     "https://github.com/openai/codex.git#readme",
     "https://bitbucket.org.evil/paraty/payment-seeker.git",
     "git@github.com.evil:openai/codex.git",
@@ -108,6 +105,68 @@ describe("parseRemoteRepositoryUrl", () => {
     "https://github.com/openai/codex/issues",
     "git@github.com:openai/codex.git/extra",
   ])("rejects unsupported or unsafe remote %s", (remote) => {
+    expect(parseRemoteRepositoryUrl(remote)).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "Bitbucket HTTPS userinfo",
+      remote: "https://user:token@bitbucket.org/paraty/payment-seeker.git",
+    },
+    {
+      label: "GitHub HTTPS userinfo",
+      remote: "https://user:token@github.com/openai/codex.git",
+    },
+    {
+      label: "sensitive query data",
+      remote: "https://bitbucket.org/paraty/payment-seeker.git?token=secret",
+    },
+  ])("rejects $label", ({ remote }) => {
+    expect(parseRemoteRepositoryUrl(remote)).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "GitHub Cyrillic-i homograph host",
+      remote: "https://gіthub.com/openai/codex.git",
+    },
+    {
+      label: "Bitbucket Cyrillic-i homograph host",
+      remote: "https://bіtbucket.org/paraty/payment-seeker.git",
+    },
+    {
+      label: "GitHub fullwidth-dot separator",
+      remote: "https://github．com/openai/codex.git",
+    },
+    {
+      label: "Bitbucket ideographic-dot separator",
+      remote: "https://bitbucket。org/paraty/payment-seeker.git",
+    },
+    {
+      label: "GitHub fullwidth-slash separator",
+      remote: "https://github.com／openai/codex.git",
+    },
+    {
+      label: "Bitbucket division-slash separator",
+      remote: "https://bitbucket.org/paraty∕payment-seeker.git",
+    },
+    {
+      label: "GitHub IDNA homograph host",
+      remote: "https://xn--gthub-n2e.com/openai/codex.git",
+    },
+    {
+      label: "Bitbucket IDNA homograph host",
+      remote: "https://xn--btbucket-thh.org/paraty/payment-seeker.git",
+    },
+    {
+      label: "GitHub punycode suffix host",
+      remote: "https://github.xn--com-9o0a/openai/codex.git",
+    },
+    {
+      label: "Bitbucket punycode suffix host",
+      remote: "https://bitbucket.xn--org-9o0a/paraty/payment-seeker.git",
+    },
+  ])("rejects $label", ({ remote }) => {
     expect(parseRemoteRepositoryUrl(remote)).toBeNull();
   });
 });
