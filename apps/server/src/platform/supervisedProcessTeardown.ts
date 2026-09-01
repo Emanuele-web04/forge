@@ -50,6 +50,7 @@ export interface SupervisedProcessTeardownResult {
 }
 
 export interface SupervisedProcessTeardownDependencies {
+  readonly platform: NodeJS.Platform;
   readonly processTreeKiller: ProcessTreeKiller;
   readonly captureProcessTree: (rootPid: number) => Promise<CapturedProcessTree>;
   readonly inspectProcessTree: (
@@ -142,9 +143,10 @@ export async function teardownProviderProcessTree(
     );
   }
 
+  const platform = dependencies.platform ?? process.platform;
   const processTreeKiller = dependencies.processTreeKiller ?? defaultProcessTreeKiller;
   const windowsObserver =
-    process.platform === "win32" &&
+    platform === "win32" &&
     dependencies.captureProcessTree === undefined &&
     dependencies.inspectProcessTree === undefined &&
     dependencies.processTreeKiller === undefined
@@ -156,6 +158,7 @@ export async function teardownProviderProcessTree(
       ? async (rootPid: number) => processTreeKiller.capture(rootPid)
       : async (rootPid: number) =>
           captureProcessTree(rootPid, {
+            platform,
             ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
           }));
   const inspectTree =
@@ -168,6 +171,7 @@ export async function teardownProviderProcessTree(
           }
       : async (tree: CapturedProcessTree) =>
           inspectProcessTree(tree, {
+            platform,
             ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
           }));
   const now = dependencies.now ?? Date.now;
@@ -188,11 +192,17 @@ export async function teardownProviderProcessTree(
       },
     );
 
-    const signal = (killSignal: TerminalKillSignal, includeRootTree: boolean): void => {
+    const signal = (
+      killSignal: TerminalKillSignal,
+      includeRootTree: boolean,
+      signalTree: CapturedProcessTree = tree,
+      verifiedDescendants = false,
+    ): void => {
       processTreeKiller.signal({
         rootPid: input.rootPid,
         signal: killSignal,
-        tree,
+        tree: signalTree,
+        verifiedDescendants,
         includeRootTree,
         onError: (error) => signalErrors.push(error),
       });
@@ -235,9 +245,30 @@ export async function teardownProviderProcessTree(
     );
     if (graceful.proven) return { escalated: false, signalErrors };
 
+    let forceTree = tree;
+    let forceDescendantsVerified = false;
+    if (platform === "win32" && tree.captureComplete !== false) {
+      // Windows PID reuse cannot be checked with the POSIX command lookup used
+      // by the synchronous compatibility killer. Re-snapshot through CIM now,
+      // immediately before escalation, and pass only identity-matched survivors.
+      const forceInspection = await inspectTree(tree);
+      if (forceInspection.verified) {
+        forceTree = {
+          descendants: forceInspection.survivors,
+          captureComplete: true,
+        };
+        forceDescendantsVerified = true;
+      } else if (rootExited) {
+        // The root PID may already have been reused and descendant identities
+        // are unknown. Do not target stale numeric PIDs; the proof step below
+        // will fail closed with ProviderProcessExitUnprovenError.
+        forceTree = { descendants: [], captureComplete: false };
+      }
+    }
+
     // Once the root has exited, never signal its numeric PID again: it may have
-    // been reused. Force only the captured descendants whose identities still match.
-    signal("SIGKILL", !rootExited);
+    // been reused. Force only descendants verified immediately before escalation.
+    signal("SIGKILL", !rootExited, forceTree, forceDescendantsVerified);
     const forced = await waitForExitProof(
       positiveDuration(input.forceExitMs, DEFAULT_FORCE_EXIT_MS),
     );
