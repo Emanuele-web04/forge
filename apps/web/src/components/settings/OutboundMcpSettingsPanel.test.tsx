@@ -92,7 +92,7 @@ describe("OutboundMcpSettingsPanel", () => {
   it("disables service controls while authorization is in progress", () => {
     const markup = renderPanel([connection({ status: "authorizing" })]);
 
-    expect(hasDisabledAttribute(buttonTag(markup, "Connect Paraty MCP"))).toBe(true);
+    expect(hasDisabledAttribute(buttonTag(markup, "Authorizing Paraty MCP"))).toBe(true);
     expect(markup).toContain("Finish authorization in the browser.");
   });
 
@@ -151,7 +151,7 @@ describe("outbound MCP React Query helpers", () => {
     ).toBe(false);
   });
 
-  it("opens the authorization URL from the click handler path and safely invalidates after shell failure", async () => {
+  it("uses the desktop shell path and safely invalidates after shell failure", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -175,7 +175,7 @@ describe("outbound MCP React Query helpers", () => {
 
     expect(beginOutboundMcpAuthorization).toHaveBeenCalledWith({ presetId: "paraty" });
     expect(openExternal).toHaveBeenCalledWith("https://auth.paraty.example/authorize");
-    expect(result).toEqual({ opened: false });
+    expect(result).toEqual({ status: "failed" });
     expect(queryClient.getQueryState(outboundMcpQueryKeys.connections())?.isInvalidated).toBe(true);
   });
 

@@ -5,7 +5,7 @@
 
 import type { OutboundMcpConnection, OutboundMcpConnectionStatus } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   AlertDialog,
@@ -120,7 +120,7 @@ function connectionIssueCopy(
 }
 
 function connectionAction(status: OutboundMcpConnectionStatus): ConnectionAction | null {
-  if (status === "disconnected" || status === "authorizing") {
+  if (status === "disconnected") {
     return { kind: "connect", label: "Connect" };
   }
   if (status === "reconnect-required") return { kind: "connect", label: "Reconnect" };
@@ -177,7 +177,13 @@ function OutboundMcpConnectionCard({
     connection.status === "temporarily-unavailable";
 
   const status = (
-    <div className="space-y-1">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      aria-label={`${connection.displayName} connection status`}
+      className="space-y-1"
+    >
       <div className="flex items-center gap-1.5">
         <OutboundMcpConnectionStatusDot status={connection.status} />
         <span>{connectionStatusLabel(connection.status)}</span>
@@ -206,12 +212,28 @@ function OutboundMcpConnectionCard({
             <Button
               size="xs"
               variant={connection.status === "temporarily-unavailable" ? "outline" : "default"}
-              disabled={disabled || authorizing}
+              disabled={disabled}
               aria-label={`${action.label} ${connection.displayName}`}
               onClick={() => onAuthorize(connection.presetId)}
             >
-              {authorizing ? "Authorizing..." : action.label}
+              {action.label}
             </Button>
+          ) : null}
+          {authorizing ? (
+            <>
+              <Button size="xs" disabled aria-label={`Authorizing ${connection.displayName}`}>
+                Authorizing {connection.displayName}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={disabled}
+                aria-label={`Retry ${connection.displayName}`}
+                onClick={() => onAuthorize(connection.presetId)}
+              >
+                Retry
+              </Button>
+            </>
           ) : null}
           {canDisconnect ? (
             <Button
@@ -238,6 +260,7 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
   const [pendingDisconnect, setPendingDisconnect] = useState<OutboundMcpConnectionView | null>(
     null,
   );
+  const loadingInitialConnections = connectionsQuery.data == null && connectionsQuery.isFetching;
 
   const paratyConnection = useMemo(() => {
     const listedConnection = paratyConnectionFromList(connectionsQuery.data?.connections);
@@ -252,6 +275,10 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
     } satisfies OutboundMcpConnectionView;
   }, [connectionsQuery.data?.connections]);
 
+  useEffect(() => {
+    if (!active) setPendingDisconnect(null);
+  }, [active]);
+
   const disconnectConfirmation = pendingDisconnect
     ? buildOutboundMcpDisconnectConfirmation(pendingDisconnect.displayName)
     : null;
@@ -265,17 +292,23 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
     setAuthorizingPresetId(presetId);
     try {
       const result = await openOutboundMcpAuthorizationFromUserGesture({ presetId, queryClient });
-      if (result.opened) {
+      if (result.status === "opened") {
         toastManager.add({
           type: "success",
           title: "Authorization opened",
           description: "Finish the Paraty MCP authorization in the browser.",
         });
+      } else if (result.status === "blocked") {
+        toastManager.add({
+          type: "warning",
+          title: "Authorization window was blocked",
+          description: "Allow popups for Synara, then click Connect Paraty MCP again.",
+        });
       } else {
         toastManager.add({
           type: "warning",
           title: "Authorization was not opened",
-          description: "Start the connection again when you are ready to authorize Paraty MCP.",
+          description: "Retry starts a new Paraty MCP authorization attempt.",
         });
       }
     } catch {
@@ -299,7 +332,8 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
       toastManager.add({
         type: "success",
         title: "Service disconnected",
-        description: "Credentials and cached service state were removed. Projects and pins remain.",
+        description:
+          "Credentials and cached service state were removed. Projects and pull request pins remain.",
       });
     } catch {
       toastManager.add({
@@ -317,6 +351,18 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
           <SettingsEmptyState layout="status" tone="destructive">
             Synara could not load service connections. Retry from Settings after the local server is
             reachable.
+          </SettingsEmptyState>
+        ) : loadingInitialConnections ? (
+          <SettingsEmptyState layout="status">
+            <div
+              role="status"
+              aria-busy="true"
+              aria-live="polite"
+              aria-atomic="true"
+              aria-label="Loading Paraty MCP connection"
+            >
+              Loading Paraty MCP connection…
+            </div>
           </SettingsEmptyState>
         ) : (
           <OutboundMcpConnectionCard
@@ -338,7 +384,7 @@ export function OutboundMcpSettingsPanel({ active }: { readonly active: boolean 
       </SettingsSectionShell>
 
       <AlertDialog
-        open={pendingDisconnect !== null}
+        open={active && pendingDisconnect !== null}
         onOpenChange={(open) => {
           if (!open) setPendingDisconnect(null);
         }}
