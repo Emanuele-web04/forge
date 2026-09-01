@@ -72,8 +72,8 @@ const SECRET_PATTERNS = [
   /(?<![A-Za-z0-9])ASIA[0-9A-Z]{16}/gu,
   /xoxb-[A-Za-z0-9-]{10,}/gu,
   /AIza[A-Za-z0-9_-]{35}/gu,
-  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{2,}(?:={1,2})?(?=[\s'"`,;)\]}.,]|$)/gu,
-  /bearer\s+[A-Za-z0-9._~+/=-]{16,}(?=[\s'"`,;)\]}.,]|$)/giu,
+  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+={0,2}(?![A-Za-z0-9_=-])/gu,
+  /bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}(?![A-Za-z0-9_=-])/giu,
   /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
 ] as const;
 

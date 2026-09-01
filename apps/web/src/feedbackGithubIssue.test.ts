@@ -103,6 +103,8 @@ describe("redactObviousSecrets", () => {
       "My token is ghp_0123456789abcdefghijklmnop and my aws key is AKIA0123456789ABCDEF. " +
       "I also have github_pat_0123456789_abcdefghijklmnopqrstuvwxyz and a bearer abcdef1234567890abcdef. " +
       "My sk-key is sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX and normal word sk-loop is fine. " +
+      "A css token sk-background-color is not a secret. " +
+      "A padded bearer: bearer dGhpcyBpcyBhIHRlc3Q= and a JWT with padding eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c=. " +
       "My AWS session is ASIA0123456789ABCDEF and Slack is xoxb-0123456789-0123456789-0123456789. " +
       "My Google key is AIzaSyDdI0hCZtE6vySjMm-WEfCxqVyuZ8gQEhY. " +
       "My JWT is eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c. " +
@@ -124,7 +126,10 @@ describe("redactObviousSecrets", () => {
     expect(redacted).not.toContain("MIIEpQIBAAKCAQEA");
     expect(redacted).toContain("[REDACTED]");
     expect(redacted).toContain("normal word sk-loop is fine");
-    expect(redactedCount).toBe(10);
+    expect(redacted).toContain("A css token sk-background-color is not a secret");
+    expect(redacted).not.toContain("dGhpcyBpcyBhIHRlc3Q=");
+    expect(redacted).not.toContain("SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c=");
+    expect(redactedCount).toBe(12);
   });
 
   it("redacts other GitHub OAuth and app token families", () => {
