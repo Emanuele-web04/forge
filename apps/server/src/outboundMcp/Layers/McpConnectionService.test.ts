@@ -167,6 +167,8 @@ function makeFakeToolClient(): McpToolClientShape & {
   callAttempts: number;
   callSignal: AbortSignal | null;
   blockCalls: boolean;
+  validationSignal: AbortSignal | null;
+  blockValidation: boolean;
 } {
   const liveConnections = new Set<string>();
   const client: McpToolClientShape & {
@@ -177,6 +179,8 @@ function makeFakeToolClient(): McpToolClientShape & {
     callAttempts: number;
     callSignal: AbortSignal | null;
     blockCalls: boolean;
+    validationSignal: AbortSignal | null;
+    blockValidation: boolean;
   } = {
     liveConnections,
     validateFailure: null,
@@ -185,8 +189,12 @@ function makeFakeToolClient(): McpToolClientShape & {
     callAttempts: 0,
     callSignal: null,
     blockCalls: false,
-    validate: (binding) => {
+    validationSignal: null,
+    blockValidation: false,
+    validate: (binding, signal) => {
       client.validateAttempts += 1;
+      client.validationSignal = signal ?? null;
+      if (client.blockValidation) return Effect.never;
       if (client.validateFailure !== null) return Effect.fail(client.validateFailure);
       liveConnections.add("paraty");
       return Effect.succeed(`catalog-${binding.id}`);
@@ -1045,6 +1053,20 @@ describe("McpConnectionService", () => {
     expect(fixture.toolClient.callSignal?.aborted).toBe(true);
   });
 
+  it("passes the internally-owned signal through catalog validation and aborts it on interruption", async () => {
+    const fixture = makeFixture({ bindings: [readBinding] });
+    fixture.repository.records.set("paraty", connectedRecord());
+    fixture.toolClient.blockValidation = true;
+    const fiber = Effect.runFork(fixture.service.invoke(readBinding.id, "read", { id: 1 }));
+    await waitUntil(() => expect(fixture.toolClient.validationSignal).not.toBeNull());
+    expect(fixture.toolClient.validationSignal?.aborted).toBe(false);
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(fixture.toolClient.validationSignal?.aborted).toBe(true);
+    expect(fixture.toolClient.callAttempts).toBe(0);
+  });
+
   it("does not abort a caller-owned signal when an invocation Effect is interrupted", async () => {
     const fixture = makeFixture({ bindings: [readBinding] });
     fixture.repository.records.set("paraty", connectedRecord());
@@ -1054,6 +1076,7 @@ describe("McpConnectionService", () => {
       fixture.service.invoke(readBinding.id, "read", { id: 1 }, controller.signal),
     );
     await waitUntil(() => expect(fixture.toolClient.callSignal).toBe(controller.signal));
+    expect(fixture.toolClient.validationSignal).toBe(controller.signal);
 
     await Effect.runPromise(Fiber.interrupt(fiber));
 

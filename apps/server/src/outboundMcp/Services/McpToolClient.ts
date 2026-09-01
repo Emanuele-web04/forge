@@ -32,6 +32,7 @@ export type McpToolClientFailure =
 export interface McpToolClientShape {
   readonly validate: <Operation extends string>(
     binding: McpConsumerBinding<Operation>,
+    signal?: AbortSignal,
   ) => Effect.Effect<string, McpToolClientFailure>;
   readonly call: <Operation extends string>(
     binding: McpConsumerBinding<Operation>,

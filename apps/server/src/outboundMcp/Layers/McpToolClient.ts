@@ -279,7 +279,10 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
           : clientError({ category: "connection", consumerId: binding.id }),
     });
 
-  const validate: McpToolClientShape["validate"] = (binding) =>
+  const validate: McpToolClientShape["validate"] = (
+    binding,
+    signal = new AbortController().signal,
+  ) =>
     Effect.gen(function* () {
       yield* Effect.try({
         try: () => validateBinding(binding),
@@ -289,7 +292,6 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
             : clientError({ category: "invalid-binding", consumerId: binding.id }),
       });
       const connection = yield* resolve(binding);
-      const signal = new AbortController().signal;
       const session = yield* Effect.tryPromise({
         try: () => getSession(connection, signal),
         catch: (error) =>

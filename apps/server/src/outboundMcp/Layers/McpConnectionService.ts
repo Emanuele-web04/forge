@@ -1147,7 +1147,7 @@ export function makeMcpConnectionService(
       Effect.suspend(() =>
         validatedConsumers.has(validationKey)
           ? Effect.void
-          : options.toolClient.validate(binding).pipe(
+          : options.toolClient.validate(binding, invocationSignal).pipe(
               Effect.tap(() => Effect.sync(() => validatedConsumers.add(validationKey))),
               Effect.catch(handleInvocationError),
               Effect.asVoid,
