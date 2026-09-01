@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,6 +11,7 @@ import {
   type OAuthClientProvider,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Effect, Layer } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -25,6 +27,7 @@ import { OutboundMcpRepository } from "../Services/OutboundMcpRepository.ts";
 import type { McpConsumerBinding, McpConsumerOperation } from "../consumerBinding.ts";
 import {
   OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+  isOAuthRefreshRequest,
   makeBoundedMcpFetch,
   makeSingleFlightRefreshFetch,
   validateOutboundMcpUrl,
@@ -461,6 +464,36 @@ function isUnrecoverableAuthError(error: unknown): boolean {
   );
 }
 
+export type McpSdkRequestFetchContext = {
+  readonly fetch: FetchLike;
+  readonly run: <A>(signal: AbortSignal, request: () => Promise<A>) => Promise<A>;
+};
+
+/**
+ * The SDK does not pass RequestOptions.signal to Streamable HTTP fetches. Carry
+ * it through async request context instead, while preserving the transport's
+ * shared controller and keeping coalesced refreshes independent of one caller.
+ */
+export function makeMcpSdkRequestFetchContext(fetchFn: FetchLike): McpSdkRequestFetchContext {
+  const signalContext = new AsyncLocalStorage<AbortSignal>();
+
+  return {
+    fetch: (url, init) => {
+      const requestSignal = signalContext.getStore();
+      if (requestSignal === undefined || isOAuthRefreshRequest(init)) {
+        return fetchFn(url, init);
+      }
+      const transportSignal = init?.signal;
+      const signal =
+        transportSignal === undefined || transportSignal === null
+          ? requestSignal
+          : AbortSignal.any([transportSignal, requestSignal]);
+      return fetchFn(url, { ...init, signal });
+    },
+    run: (requestSignal, request) => signalContext.run(requestSignal, request),
+  };
+}
+
 async function createLiveSession(
   connection: LiveResolvedConnection,
   signal: AbortSignal,
@@ -471,6 +504,7 @@ async function createLiveSession(
   const boundedFetch = makeSingleFlightRefreshFetch(
     makeBoundedMcpFetch({ resourceUrl: connection.endpoint }),
   );
+  const requestFetch = makeMcpSdkRequestFetchContext(boundedFetch);
   const authProvider = establishedOAuthProvider({
     connection,
     credentials,
@@ -481,7 +515,7 @@ async function createLiveSession(
   });
   const transport = new StreamableHTTPClientTransport(connection.endpoint, {
     authProvider,
-    fetch: boundedFetch,
+    fetch: requestFetch.fetch,
     reconnectionOptions: {
       initialReconnectionDelay: 500,
       maxReconnectionDelay: 5_000,
@@ -493,11 +527,13 @@ async function createLiveSession(
   client.onclose = hooks.onDisconnect;
 
   try {
-    await client.connect(transport, {
-      signal,
-      timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-      maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-    });
+    await requestFetch.run(signal, () =>
+      client.connect(transport, {
+        signal,
+        timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+        maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+      }),
+    );
   } catch (error) {
     await client.close().catch(() => undefined);
     if (authInvalidated) throw new McpSessionAuthInvalidatedError();
@@ -515,11 +551,13 @@ async function createLiveSession(
       for (let page = 0; page < OUTBOUND_MCP_MAX_CATALOG_PAGES; page += 1) {
         let result;
         try {
-          result = await client.listTools(cursor === undefined ? undefined : { cursor }, {
-            signal: requestSignal,
-            timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-            maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-          });
+          result = await requestFetch.run(requestSignal, () =>
+            client.listTools(cursor === undefined ? undefined : { cursor }, {
+              signal: requestSignal,
+              timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+              maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+            }),
+          );
         } catch (error) {
           if (authInvalidated) throw new McpSessionAuthInvalidatedError();
           if (isUnrecoverableAuthError(error)) {
@@ -539,11 +577,13 @@ async function createLiveSession(
     },
     callTool: async (tool, args, requestSignal) => {
       try {
-        return await client.callTool({ name: tool, arguments: { ...args } }, undefined, {
-          signal: requestSignal,
-          timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-          maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
-        });
+        return await requestFetch.run(requestSignal, () =>
+          client.callTool({ name: tool, arguments: { ...args } }, undefined, {
+            signal: requestSignal,
+            timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+            maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+          }),
+        );
       } catch (error) {
         if (authInvalidated) throw new McpSessionAuthInvalidatedError();
         if (isUnrecoverableAuthError(error)) {

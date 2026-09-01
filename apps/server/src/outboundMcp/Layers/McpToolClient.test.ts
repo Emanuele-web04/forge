@@ -1,8 +1,15 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { OutboundMcpDecodeError, type McpConsumerBinding } from "../consumerBinding.ts";
-import { makeMcpToolClient, type McpToolSession } from "./McpToolClient.ts";
+import { makeSingleFlightRefreshFetch } from "../networkPolicy.ts";
+import {
+  makeMcpSdkRequestFetchContext,
+  makeMcpToolClient,
+  type McpToolSession,
+} from "./McpToolClient.ts";
 
 type FixtureOperation = "read" | "optional";
 
@@ -63,6 +70,138 @@ async function eventually(assertion: () => void, attempts = 100): Promise<void> 
 }
 
 describe("McpToolClient", () => {
+  it("aborts only the caller's live SDK HTTP request through the custom fetch boundary", async () => {
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let firstHttpSignal: AbortSignal | undefined;
+    let secondHttpSignal: AbortSignal | undefined;
+    let firstHttpAborted = false;
+    let toolRequests = 0;
+    const transportFetch = async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        return new Response(null, { status: 405 });
+      }
+      const message = JSON.parse(String(init?.body)) as {
+        readonly id?: string | number;
+        readonly method?: string;
+        readonly params?: { readonly arguments?: { readonly call?: string } };
+      };
+      if (message.method === "initialize") {
+        return Response.json({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "fixture", version: "1.0.0" },
+          },
+        });
+      }
+      if (message.method !== "tools/call") return new Response(null, { status: 202 });
+
+      toolRequests += 1;
+      if (message.params?.arguments?.call === "first") {
+        firstHttpSignal = init?.signal ?? undefined;
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              firstHttpAborted = true;
+              reject(init.signal?.reason);
+            },
+            { once: true },
+          );
+        });
+      }
+
+      secondHttpSignal = init?.signal ?? undefined;
+      return Response.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { content: [{ type: "text", text: "second completed" }] },
+      });
+    };
+    const requestFetch = makeMcpSdkRequestFetchContext(transportFetch);
+    const transport = new StreamableHTTPClientTransport(new URL("https://mcp.example.test/mcp"), {
+      fetch: requestFetch.fetch,
+    });
+    const sdkClient = new Client(
+      { name: "request-signal-test", version: "1.0.0" },
+      { capabilities: {} },
+    );
+
+    try {
+      await sdkClient.connect(transport);
+      const first = requestFetch.run(firstController.signal, () =>
+        sdkClient.callTool({ name: "fixture_read", arguments: { call: "first" } }, undefined, {
+          signal: firstController.signal,
+        }),
+      );
+      const second = requestFetch.run(secondController.signal, () =>
+        sdkClient.callTool({ name: "fixture_read", arguments: { call: "second" } }, undefined, {
+          signal: secondController.signal,
+        }),
+      );
+      await eventually(() => expect(toolRequests).toBe(2));
+
+      firstController.abort(new DOMException("first caller stopped", "AbortError"));
+
+      await expect(first).rejects.toThrow("AbortError");
+      await expect(second).resolves.toMatchObject({
+        content: [{ type: "text", text: "second completed" }],
+      });
+      expect(firstHttpAborted).toBe(true);
+      expect(firstHttpSignal?.aborted).toBe(true);
+      expect(secondHttpSignal?.aborted).toBe(false);
+    } finally {
+      await sdkClient.close();
+    }
+  });
+
+  it("keeps a coalesced OAuth refresh independent of either caller signal", async () => {
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let refreshSignal: AbortSignal | undefined;
+    let refreshRequests = 0;
+    const sharedRefreshFetch = makeSingleFlightRefreshFetch(async (_url, init) => {
+      refreshRequests += 1;
+      refreshSignal = init?.signal ?? undefined;
+      await refreshGate;
+      return Response.json({ access_token: "rotated", token_type: "Bearer" });
+    });
+    const requestFetch = makeMcpSdkRequestFetchContext(sharedRefreshFetch);
+    const refreshInit: RequestInit = {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-token",
+      }),
+    };
+
+    const first = requestFetch.run(firstController.signal, () =>
+      requestFetch.fetch("https://auth.example.test/token", refreshInit),
+    );
+    const second = requestFetch.run(secondController.signal, () =>
+      requestFetch.fetch("https://auth.example.test/token", refreshInit),
+    );
+    await eventually(() => expect(refreshRequests).toBe(1));
+    firstController.abort(new DOMException("first caller stopped", "AbortError"));
+
+    expect(refreshSignal?.aborted).not.toBe(true);
+    releaseRefresh();
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    await expect(firstResponse.json()).resolves.toMatchObject({ access_token: "rotated" });
+    await expect(secondResponse.json()).resolves.toMatchObject({ access_token: "rotated" });
+    expect(refreshRequests).toBe(1);
+  });
+
   it("rejects a tool outside the consumer operations before connecting", async () => {
     let connectionAttempts = 0;
     const client = makeMcpToolClient({

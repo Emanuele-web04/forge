@@ -33,6 +33,18 @@ function policyError(category: string, url: URL): OutboundMcpNetworkPolicyError 
   });
 }
 
+function invalidUrlError(): OutboundMcpNetworkPolicyError {
+  return new OutboundMcpNetworkPolicyError({ category: "invalid-url" });
+}
+
+function parseOutboundMcpUrl(input: string | URL): URL {
+  try {
+    return new URL(input);
+  } catch {
+    throw invalidUrlError();
+  }
+}
+
 export function validateOutboundMcpUrl(url: URL, _purpose: OutboundMcpUrlPurpose): URL {
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") {
     throw policyError("invalid-url", url);
@@ -56,15 +68,22 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
 }
 
+type RequestLifecycle = {
+  readonly signal: AbortSignal;
+  readonly abortError: (url: URL) => unknown;
+  readonly finish: () => void;
+};
+
 async function fetchWithTimeout(
   fetchFn: FetchLike,
   url: URL,
   init: RequestInit,
   timeoutMs: number,
-): Promise<Response> {
+): Promise<{ readonly response: Response; readonly lifecycle: RequestLifecycle }> {
   const callerSignal = init.signal;
   const controller = new AbortController();
   let timedOut = false;
+  let finished = false;
   const forwardCallerAbort = () => controller.abort(abortReason(callerSignal!));
 
   if (callerSignal?.aborted) {
@@ -74,20 +93,36 @@ async function fetchWithTimeout(
   }
 
   const timeout = setTimeout(() => {
+    if (controller.signal.aborted) return;
     timedOut = true;
     controller.abort(new DOMException("Outbound MCP request timed out.", "TimeoutError"));
   }, timeoutMs);
 
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", forwardCallerAbort);
+  };
+  const lifecycle: RequestLifecycle = {
+    signal: controller.signal,
+    abortError: (currentUrl) => {
+      if (timedOut) return policyError("timeout", currentUrl);
+      if (callerSignal?.aborted) return abortReason(callerSignal);
+      return policyError("network", currentUrl);
+    },
+    finish,
+  };
+
   try {
-    return await fetchFn(url, { ...init, redirect: "manual", signal: controller.signal });
+    const response = await fetchFn(url, { ...init, redirect: "manual", signal: controller.signal });
+    return { response, lifecycle };
   } catch (error) {
+    finish();
     if (timedOut) throw policyError("timeout", url);
     if (callerSignal?.aborted) throw abortReason(callerSignal);
     if (error instanceof OutboundMcpNetworkPolicyError) throw error;
     throw policyError("network", url);
-  } finally {
-    clearTimeout(timeout);
-    callerSignal?.removeEventListener("abort", forwardCallerAbort);
   }
 }
 
@@ -100,6 +135,11 @@ function stripBodyHeaders(headers: Headers): void {
 
 function cancelBody(body: ReadableStream<Uint8Array> | null): void {
   if (body !== null) void body.cancel().catch(() => undefined);
+}
+
+function discardResponse(response: Response, lifecycle: RequestLifecycle): void {
+  cancelBody(response.body);
+  lifecycle.finish();
 }
 
 function redirectedInit(init: RequestInit, status: number, from: URL, to: URL): RequestInit {
@@ -127,40 +167,80 @@ async function boundedResponse(
   response: Response,
   url: URL,
   maxResponseBytes: number,
+  lifecycle: RequestLifecycle,
 ): Promise<Response> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     const parsedLength = Number(contentLength);
     if (Number.isFinite(parsedLength) && parsedLength > maxResponseBytes) {
-      cancelBody(response.body);
+      discardResponse(response, lifecycle);
       throw policyError("response-too-large", url);
     }
   }
-  if (response.body === null) return response;
+  if (response.body === null) {
+    lifecycle.finish();
+    return response;
+  }
 
-  const reader = response.body.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch {
+    lifecycle.finish();
+    throw policyError("body", url);
+  }
   let received = 0;
+  let settled = false;
+  let onAbort: (() => void) | undefined;
+  const finish = () => {
+    if (onAbort !== undefined) lifecycle.signal.removeEventListener("abort", onAbort);
+    lifecycle.finish();
+  };
   const boundedBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      onAbort = () => {
+        if (settled) return;
+        settled = true;
+        void reader.cancel(lifecycle.signal.reason).catch(() => undefined);
+        controller.error(lifecycle.abortError(url));
+        finish();
+      };
+      if (lifecycle.signal.aborted) onAbort();
+      else lifecycle.signal.addEventListener("abort", onAbort, { once: true });
+    },
     async pull(controller) {
       try {
         const next = await reader.read();
+        if (settled) return;
         if (next.done) {
+          settled = true;
           controller.close();
+          finish();
           return;
         }
         received += next.value.byteLength;
         if (received > maxResponseBytes) {
+          settled = true;
           void reader.cancel().catch(() => undefined);
           controller.error(policyError("response-too-large", url));
+          finish();
           return;
         }
         controller.enqueue(next.value);
-      } catch (error) {
-        controller.error(error);
+      } catch {
+        if (settled) return;
+        settled = true;
+        controller.error(
+          lifecycle.signal.aborted ? lifecycle.abortError(url) : policyError("body", url),
+        );
+        finish();
       }
     },
-    async cancel(reason) {
-      await reader.cancel(reason).catch(() => undefined);
+    cancel(reason) {
+      if (settled) return;
+      settled = true;
+      void reader.cancel(reason).catch(() => undefined);
+      finish();
     },
   });
 
@@ -190,7 +270,7 @@ export function makeBoundedMcpFetch(policy: OutboundMcpNetworkPolicy): FetchLike
   }
 
   return async (input, requestInit = {}) => {
-    let currentUrl = new URL(input);
+    let currentUrl = parseOutboundMcpUrl(input);
     let currentInit: RequestInit = { ...requestInit };
     const deadline = Date.now() + timeoutMs;
 
@@ -207,22 +287,22 @@ export function makeBoundedMcpFetch(policy: OutboundMcpNetworkPolicy): FetchLike
       const remainingTimeoutMs = deadline - Date.now();
       if (remainingTimeoutMs <= 0) throw policyError("timeout", currentUrl);
 
-      const response = await fetchWithTimeout(
+      const { response, lifecycle } = await fetchWithTimeout(
         fetchFn,
         currentUrl,
         { ...currentInit, headers: requestHeaders },
         remainingTimeoutMs,
       );
       if (!REDIRECT_STATUSES.has(response.status)) {
-        return boundedResponse(response, currentUrl, maxResponseBytes);
+        return boundedResponse(response, currentUrl, maxResponseBytes, lifecycle);
       }
 
       const location = response.headers.get("location");
       if (location === null) {
-        return boundedResponse(response, currentUrl, maxResponseBytes);
+        return boundedResponse(response, currentUrl, maxResponseBytes, lifecycle);
       }
       if (redirects >= maxRedirects) {
-        cancelBody(response.body);
+        discardResponse(response, lifecycle);
         throw policyError("too-many-redirects", currentUrl);
       }
 
@@ -230,14 +310,14 @@ export function makeBoundedMcpFetch(policy: OutboundMcpNetworkPolicy): FetchLike
       try {
         target = new URL(location, currentUrl);
       } catch {
-        cancelBody(response.body);
+        discardResponse(response, lifecycle);
         throw policyError("invalid-url", currentUrl);
       }
+      discardResponse(response, lifecycle);
       const targetPurpose: OutboundMcpUrlPurpose =
         target.origin === resourceOrigin ? "resource" : "authorization";
       validateOutboundMcpUrl(target, targetPurpose);
       currentInit = redirectedInit(currentInit, response.status, currentUrl, target);
-      cancelBody(response.body);
       currentUrl = target;
     }
   };
@@ -250,7 +330,7 @@ type BufferedResponse = {
   readonly headers: ReadonlyArray<readonly [string, string]>;
 };
 
-function isRefreshRequest(init: RequestInit | undefined): boolean {
+export function isOAuthRefreshRequest(init: RequestInit | undefined): boolean {
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;
   const body = init?.body;
   if (body instanceof URLSearchParams) return body.get("grant_type") === "refresh_token";
@@ -286,7 +366,7 @@ export function makeSingleFlightRefreshFetch(fetchFn: FetchLike): FetchLike {
   let refreshFlight: Promise<BufferedResponse> | null = null;
 
   return async (url, init) => {
-    if (!isRefreshRequest(init)) return fetchFn(url, init);
+    if (!isOAuthRefreshRequest(init)) return fetchFn(url, init);
 
     let flight = refreshFlight;
     if (flight === null) {

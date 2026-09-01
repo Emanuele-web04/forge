@@ -36,6 +36,22 @@ describe("validateOutboundMcpUrl", () => {
 });
 
 describe("makeBoundedMcpFetch", () => {
+  it("normalizes an invalid initial URL without retaining its sensitive input", async () => {
+    const sensitiveInput = "not a url?code=synthetic-authorization-code";
+    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL });
+
+    let caught: unknown;
+    try {
+      await boundedFetch(sensitiveInput);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ category: "invalid-url" });
+    expect(caught).toBeInstanceOf(OutboundMcpNetworkPolicyError);
+    expect(JSON.stringify(caught)).not.toContain("synthetic-authorization-code");
+  });
+
   it("allows authorization discovery on another validated HTTPS origin", async () => {
     const baseFetch = vi.fn(async () => Response.json({ issuer: "ok" }));
     const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
@@ -201,6 +217,35 @@ describe("makeBoundedMcpFetch", () => {
     await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({ category: "timeout" });
   });
 
+  it("keeps the total timeout active while consuming a body received after prompt headers", async () => {
+    let bodyCancelled = false;
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      timeoutMs: 10,
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull: async () => await new Promise<void>(() => undefined),
+              cancel: () => {
+                bodyCancelled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        ),
+    });
+
+    const response = await boundedFetch(RESOURCE_URL);
+    const outcome = await Promise.race([
+      response.text().catch((error: unknown) => error),
+      new Promise<"still-pending">((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+    ]);
+
+    expect(outcome).toMatchObject({ category: "timeout" });
+    expect(bodyCancelled).toBe(true);
+  });
+
   it("applies one timeout budget across the complete redirect chain", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -248,6 +293,69 @@ describe("makeBoundedMcpFetch", () => {
 
     await expect(request).rejects.toBe(abortReason);
     expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("keeps caller abort active after headers and cancels the upstream body", async () => {
+    const controller = new AbortController();
+    const callerReason = new DOMException("caller stopped after headers", "AbortError");
+    let bodyCancelled = false;
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull: async () => await new Promise<void>(() => undefined),
+              cancel: () => {
+                bodyCancelled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        ),
+    });
+
+    const response = await boundedFetch(RESOURCE_URL, { signal: controller.signal });
+    const bodyRead = response.text().catch((error: unknown) => error);
+    controller.abort(callerReason);
+    const outcome = await Promise.race([
+      bodyRead,
+      new Promise<"still-pending">((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+    ]);
+
+    expect(outcome).toBe(callerReason);
+    expect(bodyCancelled).toBe(true);
+  });
+
+  it("normalizes body stream failures without retaining their sensitive cause", async () => {
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(
+                new Error("upstream failed at ?code=synthetic-body-authorization-code"),
+              );
+            },
+          }),
+        ),
+    });
+
+    const response = await boundedFetch(RESOURCE_URL);
+    let caught: unknown;
+    try {
+      await response.text();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      category: "body",
+      origin: "https://mcp.example.test",
+    });
+    expect(caught).toBeInstanceOf(OutboundMcpNetworkPolicyError);
+    expect(JSON.stringify(caught)).not.toContain("synthetic-body-authorization-code");
   });
 
   it("redacts an underlying network failure to its validated origin", async () => {
