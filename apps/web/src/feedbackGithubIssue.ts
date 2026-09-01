@@ -119,9 +119,9 @@ Follow these steps in order, asking one focused question at a time and waiting f
 
 5. Confirmation gate (hard rule). Show me the final title and the COMPLETE markdown body. No summaries, no elisions. Then ask exactly:
    "${BUG_REPORT_CONFIRMATION_QUESTION}"
-   Do not run any command that creates an issue until my next message is an explicit yes ("file it" or "yes, file it"). If I request edits, apply them and repeat this step with the full updated body.
+   Do not run any command that creates an issue until my next message is an explicit yes ("file it" or "yes, file it"). Run the create command exactly once per explicit confirmation; if it fails, report the error and stop. If I request edits, apply them and repeat this step with the full updated body.
 6. Filing path (only after my explicit confirmation):
-   - Run gh auth status to confirm you are authenticated.
+   - Run gh auth status to confirm you are authenticated. If it reports a failure or gh is missing, switch to the fallback path in step 7 instead of filing.
    - Create a temp file with mktemp, write the title and body with printf (not echo), chmod 600 it, then run
        gh issue create -R ${SYNARA_UPSTREAM_REPO} --title "$(cat "$title_file")" --body-file "$body_file"
      and rm the temp files. Do not pass --label. Print the returned issue URL.

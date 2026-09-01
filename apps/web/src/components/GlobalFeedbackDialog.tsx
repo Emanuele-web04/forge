@@ -51,7 +51,13 @@ export function GlobalFeedbackDialog() {
   };
 
   const onDraftGithubIssue = async (details: string) => {
-    const projectId = activeProjectId ?? ordinaryProjects[0]?.id ?? null;
+    // The active container can be Home or Studio even when ordinary projects exist;
+    // the draft must land in a real user project, so prefer an ordinary one.
+    const activeProjectIsOrdinary =
+      activeProject != null &&
+      isOrdinarySpaceProject(activeProject, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot });
+    const projectId =
+      (activeProjectIsOrdinary ? activeProjectId : undefined) ?? ordinaryProjects[0]?.id ?? null;
     if (!projectId) {
       throw new Error("No project available.");
     }

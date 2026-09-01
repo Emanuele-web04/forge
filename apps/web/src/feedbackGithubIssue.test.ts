@@ -102,7 +102,7 @@ describe("redactObviousSecrets", () => {
     const text =
       "My token is ghp_0123456789abcdefghijklmnop and my aws key is AKIA0123456789ABCDEF. " +
       "I also have github_pat_0123456789_abcdefghijklmnopqrstuvwxyz and a bearer abcdef1234567890abcdef. " +
-      "My sk-key is sk-0123456789ABCDEFG and normal word sk-loop is fine. " +
+      "My sk-key is sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX and normal word sk-loop is fine. " +
       "My AWS session is ASIA0123456789ABCDEF and Slack is xoxb-0123456789-0123456789-0123456789. " +
       "My Google key is AIzaSyDdI0hCZtE6vySjMm-WEfCxqVyuZ8gQEhY. " +
       "My JWT is eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c. " +
@@ -114,7 +114,7 @@ describe("redactObviousSecrets", () => {
     expect(redacted).not.toContain("AKIA0123456789ABCDEF");
     expect(redacted).not.toContain("github_pat_0123456789_abcdefghijklmnopqrstuvwxyz");
     expect(redacted).not.toContain("abcdef1234567890abcdef");
-    expect(redacted).not.toContain("sk-0123456789ABCDEFG");
+    expect(redacted).not.toContain("sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX");
     expect(redacted).not.toContain("ASIA0123456789ABCDEF");
     expect(redacted).not.toContain("xoxb-0123456789-0123456789-0123456789");
     expect(redacted).not.toContain("AIzaSyDdI0hCZtE6vySjMm-WEfCxqVyuZ8gQEhY");

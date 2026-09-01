@@ -67,13 +67,13 @@ const SECRET_PATTERNS = [
   /ghr_[A-Za-z0-9]{20,}/gu,
   /(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}/gu,
   /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/gu,
-  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/gu,
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}/gu,
   /(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}/gu,
   /(?<![A-Za-z0-9])ASIA[0-9A-Z]{16}/gu,
   /xoxb-[A-Za-z0-9-]{10,}/gu,
   /AIza[A-Za-z0-9_-]{35}/gu,
-  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{2,}\b/gu,
-  /bearer\s+[A-Za-z0-9._~+/=-]{16,}\b/giu,
+  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{2,}(?:={1,2})?(?=[\s'"`,;)\]}.,]|$)/gu,
+  /bearer\s+[A-Za-z0-9._~+/=-]{16,}(?=[\s'"`,;)\]}.,]|$)/giu,
   /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
 ] as const;
 
