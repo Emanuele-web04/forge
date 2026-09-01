@@ -1128,6 +1128,7 @@ function EventRouter() {
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
+    let hasAppliedBootstrapShellSnapshot = false;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
@@ -1457,6 +1458,7 @@ function EventRouter() {
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
+      hasAppliedBootstrapShellSnapshot = true;
       const promotedDraftThreadIds = collectSubscribedDraftsInShell(snapshot.threads);
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
@@ -1466,22 +1468,13 @@ function EventRouter() {
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
     };
 
-    // The live shell stream normally delivers the bootstrap snapshot. Only fall
-    // back to the query while `shouldApplyBootstrapShellSnapshot` could still
-    // accept its result (store not hydrated, or hydrated with an empty
-    // dimension): every extra request recomputes and ships the whole sidebar
-    // (about 1 MB per 600 threads) and queues behind the thread-detail
-    // snapshot on the server's single SQLite connection, so a redundant fetch
-    // directly delays the first paint.
-    const needsBootstrapShellSnapshot = () => {
-      const currentState = useStore.getState();
-      return (
-        !currentState.threadsHydrated ||
-        currentState.spaces.length === 0 ||
-        currentState.projects.length === 0 ||
-        (currentState.threadIds?.length ?? 0) === 0
-      );
-    };
+    // The live shell stream normally delivers the bootstrap snapshot. Only
+    // fall back until either the stream or a query has applied one. Collection
+    // emptiness is valid user state, so it cannot indicate whether bootstrap
+    // succeeded. Every extra request recomputes and ships the whole sidebar
+    // (about 1 MB per 600 threads) and queues behind the thread-detail snapshot
+    // on the server's single SQLite connection.
+    const needsBootstrapShellSnapshot = () => !hasAppliedBootstrapShellSnapshot;
 
     const loadBootstrapShellSnapshotIfMissing = async () => {
       if (disposed || !needsBootstrapShellSnapshot()) return;
@@ -1866,6 +1859,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
+        hasAppliedBootstrapShellSnapshot = true;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
         syncServerShellSnapshot(item.snapshot);

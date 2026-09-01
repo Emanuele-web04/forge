@@ -3156,16 +3156,11 @@ const make = Effect.gen(function* () {
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
       Effect.andThen(processRuntimeEvent(event, sequence)),
-      Effect.as(true),
+      Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
-          : Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
-              eventId: event.eventId,
-              eventType: event.type,
-              threadId: event.threadId,
-              cause: Cause.pretty(cause),
-            }).pipe(Effect.as(false)),
+          : Effect.succeed({ replayed: false, cause } as const),
       ),
     );
 
@@ -3174,15 +3169,13 @@ const make = Effect.gen(function* () {
   // deduplicate durable effects while the caches are rebuilt in event order.
   const rebuildAcceptedOpenTurnState = Effect.gen(function* () {
     let sequence = 0;
-    // Replay failures are, in practice, deterministic (stored rejection,
-    // decode failure, receipt identity collision), so the rest of that turn
-    // fails the same way while each attempt costs a full command pipeline
-    // pass plus a stack-trace warning on the pre-listen boot path. Skip the
-    // remainder of the turn and log its failure once; the caches it would
-    // have rebuilt are process-local and bounded, so a rare transient failure
-    // only loses that turn's cache warm-up, never durable state.
+    // Log only the first failure for each turn, but keep replaying later rows.
+    // A command rejection or identity collision is scoped to that event's
+    // command ids, while a transient persistence failure may succeed on the
+    // next event. Skipping the rest of the turn would also skip buffered text
+    // that exists only in these process-local caches until completion.
     const failedTurns = new Set<string>();
-    let skippedEvents = 0;
+    let failedEvents = 0;
     while (true) {
       const page = yield* runtimeEvents.readAcceptedOpenTurnEvents({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -3196,23 +3189,27 @@ const make = Effect.gen(function* () {
         // always carries a turn id.
         const turnId = toTurnId(entry.event.turnId);
         const turnKey = turnId ? providerTurnKey(entry.event.threadId, turnId) : null;
-        if (turnKey !== null && failedTurns.has(turnKey)) {
-          skippedEvents += 1;
-          continue;
-        }
-        const replayed = yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
-        if (!replayed && turnKey !== null) failedTurns.add(turnKey);
+        const replay = yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
+        if (replay.replayed) continue;
+
+        failedEvents += 1;
+        const failureKey = turnKey ?? `event:${entry.event.eventId}`;
+        if (failedTurns.has(failureKey)) continue;
+        failedTurns.add(failureKey);
+        yield* Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
+          eventId: entry.event.eventId,
+          eventType: entry.event.type,
+          threadId: entry.event.threadId,
+          cause: Cause.pretty(replay.cause),
+        });
       }
       if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) break;
     }
     if (failedTurns.size > 0) {
-      yield* Effect.logWarning(
-        "provider runtime ingestion skipped open-turn replay after failure",
-        {
-          failedTurns: failedTurns.size,
-          skippedEvents,
-        },
-      );
+      yield* Effect.logWarning("provider runtime ingestion encountered open-turn replay failures", {
+        failedTurns: failedTurns.size,
+        failedEvents,
+      });
     }
   });
   const startupRuntimeReplayComplete = yield* Deferred.make<void>();

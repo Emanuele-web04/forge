@@ -85,6 +85,7 @@ const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
+let getShellSnapshotRequestCount = 0;
 let getThreadDetailSnapshotRequestCount = 0;
 let delayNextThreadDetailSnapshotResponse = false;
 let pendingThreadDetailSnapshotResponse: {
@@ -196,6 +197,7 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -502,6 +504,7 @@ describe("EventRouter scoped orchestration sync", () => {
     subscribeThreadRequests = [];
     replayEvents = [];
     replayRequestCursors = [];
+    getShellSnapshotRequestCount = 0;
     getThreadDetailSnapshotRequestCount = 0;
     delayNextThreadDetailSnapshotResponse = false;
     pendingThreadDetailSnapshotResponse = null;
@@ -517,6 +520,18 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       expect(subscribeShellRequestCount).toBe(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not query a fallback after a streamed shell snapshot with no spaces", async () => {
+    const mounted = await mountApp();
+
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      expect(useStore.getState().spaces).toEqual([]);
+      expect(getShellSnapshotRequestCount).toBe(0);
     } finally {
       await mounted.cleanup();
     }
