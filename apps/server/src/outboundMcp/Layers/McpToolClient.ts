@@ -279,11 +279,10 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
           : clientError({ category: "connection", consumerId: binding.id }),
     });
 
-  const validate: McpToolClientShape["validate"] = (
-    binding,
-    signal = new AbortController().signal,
-  ) =>
-    Effect.gen(function* () {
+  const validate: McpToolClientShape["validate"] = (binding, signal) => {
+    const ownedController = signal === undefined ? new AbortController() : null;
+    const validationSignal = signal ?? ownedController!.signal;
+    const validation = Effect.gen(function* () {
       yield* Effect.try({
         try: () => validateBinding(binding),
         catch: (error) =>
@@ -293,7 +292,7 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
       });
       const connection = yield* resolve(binding);
       const session = yield* Effect.tryPromise({
-        try: () => getSession(connection, signal),
+        try: () => getSession(connection, validationSignal),
         catch: (error) =>
           clientError({
             category:
@@ -303,7 +302,7 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
           }),
       });
       const tools = yield* Effect.tryPromise({
-        try: () => session.listTools(signal),
+        try: () => session.listTools(validationSignal),
         catch: (error) =>
           clientError({
             category:
@@ -338,6 +337,10 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
       }
       return catalogFingerprint(tools);
     });
+    return ownedController === null
+      ? validation
+      : validation.pipe(Effect.onInterrupt(() => Effect.sync(() => ownedController.abort())));
+  };
 
   const call: McpToolClientShape["call"] = (binding, tool, args, signal) => {
     const operation = operationForTool(binding, tool);

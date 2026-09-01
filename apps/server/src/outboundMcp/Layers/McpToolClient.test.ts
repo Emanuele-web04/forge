@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -648,6 +648,52 @@ describe("McpToolClient", () => {
     await expect(Effect.runPromise(client.validate(fixtureBinding))).resolves.toMatch(
       /^[a-f0-9]{64}$/,
     );
+  });
+
+  it("aborts an internally-owned validation signal when the validate Effect is interrupted", async () => {
+    let observedSignal: AbortSignal | null = null;
+    const client = makeMcpToolClient({
+      resolveConnection: async () => fixtureConnection,
+      createSession: async () =>
+        immediateSession({
+          listTools: async (signal) => {
+            observedSignal = signal;
+            return await new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+          },
+        }),
+    });
+    const fiber = Effect.runFork(client.validate(fixtureBinding));
+    await eventually(() => expect(observedSignal).not.toBeNull());
+    expect(observedSignal?.aborted).toBe(false);
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("does not abort an external validation signal when the validate Effect is interrupted", async () => {
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | null = null;
+    const client = makeMcpToolClient({
+      resolveConnection: async () => fixtureConnection,
+      createSession: async () =>
+        immediateSession({
+          listTools: async (signal) => {
+            observedSignal = signal;
+            return await new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+          },
+        }),
+    });
+    const fiber = Effect.runFork(client.validate(fixtureBinding, controller.signal));
+    await eventually(() => expect(observedSignal).toBe(controller.signal));
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("fails validation when a required tool is missing", async () => {
