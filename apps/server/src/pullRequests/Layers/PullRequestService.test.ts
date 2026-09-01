@@ -12,10 +12,12 @@ import type {
 } from "../../git/Services/GitHubCli";
 import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../../persistence/Services/ProjectPullRequestPins";
+import type { PullRequestProviderShape } from "../Services/PullRequestProvider";
+import { makeGitHubPullRequestProvider } from "../providers/GitHubPullRequestProvider";
 import {
   PULL_REQUEST_PIN_RECOVERY_LIMIT,
   isDefinitivePullRequestNotFound,
-  makePullRequestService,
+  makePullRequestService as makeRegisteredPullRequestService,
 } from "./PullRequestService";
 
 const now = "2026-07-15T00:00:00.000Z";
@@ -138,7 +140,72 @@ function makeDependencies(input: {
   };
 }
 
+function makePullRequestService(
+  input: ReturnType<typeof makeDependencies> & {
+    readonly providers?: ReadonlyArray<PullRequestProviderShape>;
+  },
+) {
+  return Effect.gen(function* () {
+    const providers = input.providers ?? [
+      yield* makeGitHubPullRequestProvider({ homeDir: input.homeDir, github: input.github }),
+    ];
+    return yield* makeRegisteredPullRequestService({
+      providers,
+      pins: input.pins,
+      listProjects: input.listProjects,
+      resolveRepositories: input.resolveRepositories,
+    });
+  });
+}
+
 describe("PullRequestService", () => {
+  it("routes remote list reads through the registered provider adapter", async () => {
+    const sourceProject = makeProject("project-provider-route", "Provider route", "/tmp/route");
+    const base = createGitHubCliWithFakeGh().service;
+    let adapterReads = 0;
+    const adapterGithub: GitHubCliShape = {
+      ...base,
+      listRepositoryPullRequests: () =>
+        Effect.sync(() => {
+          adapterReads += 1;
+          return makeBatch([makeItem(7)]);
+        }),
+    };
+    const legacyGithub: GitHubCliShape = {
+      ...base,
+      getViewerLogin: () => Effect.die("legacy GitHub dependency must not be used"),
+      listRepositoryPullRequests: () => Effect.die("legacy GitHub dependency must not be used"),
+    };
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const provider = yield* makeGitHubPullRequestProvider({
+            homeDir: "/tmp",
+            github: adapterGithub,
+          });
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [sourceProject],
+              repositories: new Map([[sourceProject.id, "acme/shared"]]),
+              github: legacyGithub,
+            }),
+            providers: [provider],
+          });
+          return yield* service.list({ state: "open", involvement: "authored" });
+        }),
+      ),
+    );
+
+    expect(adapterReads).toBe(1);
+    expect(result.entries[0]).toMatchObject({
+      projectId: sourceProject.id,
+      provider: "github",
+      repository: "acme/shared",
+      number: 7,
+    });
+  });
+
   it("returns one repository-level row for projects sharing a repository", async () => {
     const projectA = makeProject("project-list-a", "List A", "/tmp/list-a");
     const projectB = makeProject("project-list-b", "feature-1", "/tmp/list-b");

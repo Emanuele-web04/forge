@@ -1,11 +1,13 @@
 import { ProjectId, type OrchestrationProject } from "@synara/contracts";
-import { Deferred, Effect, Fiber } from "effect";
+import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import { GitHubCliError } from "../git/Errors";
-import type { GitHubCliShape, GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
-import { createGitHubCliWithFakeGh } from "../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
+import {
+  makePullRequestProviderRegistry,
+  type PullRequestProviderShape,
+} from "./Services/PullRequestProvider";
 import { makePullRequestOperations } from "./pullRequestOperations";
 
 const now = "2026-07-15T00:00:00.000Z";
@@ -23,80 +25,59 @@ const project: OrchestrationProject = {
   deletedAt: null,
 };
 
-const detail: GitHubPullRequestDetailData = {
-  number: 42,
-  title: "Parallel detail",
-  body: "",
-  url: "https://github.com/acme/widgets/pull/42",
-  author: null,
-  state: "open",
-  isDraft: false,
-  mergeable: null,
-  mergeability: "unknown",
-  mergeStateStatus: null,
-  reviewDecision: null,
-  additions: 0,
-  deletions: 0,
-  changedFiles: 0,
-  headBranch: "feature",
-  baseBranch: "main",
-  createdAt: now,
-  updatedAt: now,
-  mergedAt: null,
-  closedAt: null,
-  maintainerCanModify: true,
-  reviewers: [],
-  labels: [],
-  checks: [],
-  comments: [],
-  commits: [],
+const bitbucketRepository: RemoteRepositoryRef = {
+  provider: "bitbucket",
+  host: "bitbucket.org",
+  owner: "paraty",
+  slug: "payment-seeker",
+  webUrl: "https://bitbucket.org/paraty/payment-seeker",
+  identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker",
+  displayName: "paraty/payment-seeker",
 };
 
-function makeTestOperations(github: GitHubCliShape) {
-  const pins: ProjectPullRequestPinsShape = {
-    listByProjectIds: () => Effect.succeed([]),
-    setPinned: () => Effect.void,
+function githubProvider(action = vi.fn()): PullRequestProviderShape {
+  return {
+    provider: "github",
+    host: "github.com",
+    supports: (repository) => repository.provider === "github" && repository.host === "github.com",
+    list: () =>
+      Effect.succeed({
+        entries: [],
+        truncated: false,
+        reviewingNumbers: new Set(),
+        reviewingTruncated: false,
+      }),
+    exactSummary: () => Effect.succeed({ _tag: "not-found" }),
+    detail: () => Effect.die("detail should not be called"),
+    diff: () => Effect.die("diff should not be called"),
+    action,
   };
+}
+
+function makeOperations(input: {
+  readonly pins: ProjectPullRequestPinsShape;
+  readonly resolveProjectRepository: () => Effect.Effect<RemoteRepositoryRef>;
+  readonly providers?: ReadonlyArray<PullRequestProviderShape>;
+}) {
   return makePullRequestOperations({
-    github,
-    pins,
+    providers: makePullRequestProviderRegistry(input.providers ?? [githubProvider()]),
+    pins: input.pins,
     findProject: () => Effect.succeed(project),
     validateRepository: (_provider, repository) => Effect.succeed(repository),
-    validateProjectRepository: (_project, _provider, repository) => Effect.succeed(repository),
-    loadMergeCapabilities: () =>
-      Effect.succeed({
-        merge: true,
-        squash: true,
-        rebase: true,
-        deleteBranchOnMerge: false,
-      }),
-    withGitHubRead: (effect) => effect,
-    finalizeMutationCaches: () => Effect.void,
+    resolveProjectRepository: input.resolveProjectRepository,
   });
 }
 
 describe("makePullRequestOperations", () => {
   it("forwards the explicit provider to pin persistence", async () => {
     const writes: unknown[] = [];
-    const base = createGitHubCliWithFakeGh().service;
-    const operations = makePullRequestOperations({
-      github: base,
+    const operations = makeOperations({
       pins: {
         listByProjectIds: () => Effect.succeed([]),
         setPinned: (input) => Effect.sync(() => void writes.push(input)),
       },
-      findProject: () => Effect.succeed(project),
-      validateRepository: (_provider, repository) => Effect.succeed(repository),
-      validateProjectRepository: (_project, _provider, repository) => Effect.succeed(repository),
-      loadMergeCapabilities: () =>
-        Effect.succeed({
-          merge: true,
-          squash: true,
-          rebase: true,
-          deleteBranchOnMerge: false,
-        }),
-      withGitHubRead: (effect) => effect,
-      finalizeMutationCaches: () => Effect.void,
+      resolveProjectRepository: () =>
+        Effect.succeed({ ...bitbucketRepository, displayName: "Acme/Widgets" }),
     });
 
     await Effect.runPromise(
@@ -120,113 +101,64 @@ describe("makePullRequestOperations", () => {
     ]);
   });
 
-  it("starts detail, merge-capability, and review-comment reads together", async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const detailStarted = yield* Deferred.make<void>();
-          const capabilitiesStarted = yield* Deferred.make<void>();
-          const commentsStarted = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          const waitForRelease = <A>(started: Deferred.Deferred<void>, value: A) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined);
-              yield* Deferred.await(release);
-              return value;
-            });
-          const base = createGitHubCliWithFakeGh().service;
-          const pins: ProjectPullRequestPinsShape = {
-            listByProjectIds: () => Effect.succeed([]),
-            setPinned: () => Effect.void,
-          };
-          const operations = makePullRequestOperations({
-            github: {
-              ...base,
-              getPullRequestDetail: () => waitForRelease(detailStarted, detail),
-              getPullRequestReviewComments: () =>
-                waitForRelease(commentsStarted, { comments: [], truncated: false }),
-            },
-            pins,
-            findProject: () => Effect.succeed(project),
-            validateRepository: (_provider, repository) => Effect.succeed(repository),
-            validateProjectRepository: (_project, _provider, repository) =>
-              Effect.succeed(repository),
-            loadMergeCapabilities: () =>
-              waitForRelease(capabilitiesStarted, {
-                merge: true,
-                squash: true,
-                rebase: true,
-                deleteBranchOnMerge: false,
-              }),
-            withGitHubRead: (effect) => effect,
-            finalizeMutationCaches: () => Effect.void,
-          });
-
-          const fiber = yield* operations
-            .detail({ projectId: project.id, repository: "acme/widgets", number: 42 })
-            .pipe(Effect.forkChild);
-          yield* Effect.all([Deferred.await(detailStarted), Deferred.await(capabilitiesStarted)], {
-            concurrency: 2,
-          });
-          yield* Effect.yieldNow;
-
-          expect(yield* Deferred.isDone(commentsStarted)).toBe(true);
-          yield* Deferred.succeed(release, undefined);
-          expect((yield* Fiber.join(fiber)).number).toBe(42);
-        }),
-      ),
-    );
-  });
-
-  it("keeps pull request detail available when stack metadata cannot be loaded", async () => {
-    const base = createGitHubCliWithFakeGh().service;
-    const operations = makeTestOperations({
-      ...base,
-      getPullRequestDetail: () => Effect.succeed(detail),
-      getPullRequestStack: () =>
-        Effect.fail(
-          new GitHubCliError({
-            operation: "getPullRequestStack",
-            detail: "Stack GraphQL is unavailable.",
-          }),
-        ),
-    });
-
-    const result = await Effect.runPromise(
-      operations.detail({ projectId: project.id, repository: "acme/widgets", number: 42 }),
-    );
-
-    expect(result.stack).toBeNull();
-    expect(result.stackMetadataIncomplete).toBe(true);
-    expect(result.number).toBe(42);
-  });
-
-  it("does not merge when stack metadata cannot be verified", async () => {
-    const base = createGitHubCliWithFakeGh().service;
-    const runPullRequestAction = vi.fn(base.runPullRequestAction);
-    const operations = makeTestOperations({
-      ...base,
-      getPullRequestStack: () =>
-        Effect.fail(
-          new GitHubCliError({
-            operation: "getPullRequestStack",
-            detail: "Stack GraphQL is unavailable.",
-          }),
-        ),
-      runPullRequestAction,
+  it("rejects an unregistered Bitbucket mutation before any GitHub or pin effect", async () => {
+    const action = vi.fn(() => Effect.die("GitHub action must not be called"));
+    const pinWrites: unknown[] = [];
+    const operations = makeOperations({
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: (input) => Effect.sync(() => void pinWrites.push(input)),
+      },
+      resolveProjectRepository: () => Effect.succeed(bitbucketRepository),
+      providers: [githubProvider(action)],
     });
 
     const exit = await Effect.runPromiseExit(
       operations.action({
         projectId: project.id,
-        repository: "acme/widgets",
+        provider: "bitbucket",
+        repository: bitbucketRepository.displayName,
         number: 42,
-        action: "merge",
-        mergeMethod: "squash",
+        action: "close",
       }),
     );
 
     expect(exit._tag).toBe("Failure");
-    expect(runPullRequestAction).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+    expect(pinWrites).toEqual([]);
+  });
+
+  it("fails an unsupported provider mutation as a normal operation error", async () => {
+    const readOnlyBitbucket: PullRequestProviderShape = {
+      ...githubProvider(),
+      provider: "bitbucket",
+      host: "bitbucket.org",
+      supports: (repository) =>
+        repository.provider === "bitbucket" && repository.host === "bitbucket.org",
+      action: undefined,
+    };
+    const operations = makeOperations({
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      resolveProjectRepository: () => Effect.succeed(bitbucketRepository),
+      providers: [readOnlyBitbucket],
+    });
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        operations.action({
+          projectId: project.id,
+          provider: "bitbucket",
+          repository: bitbucketRepository.displayName,
+          number: 42,
+          action: "close",
+        }),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("bitbucket pull requests do not support action.");
   });
 });

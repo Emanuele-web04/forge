@@ -8,13 +8,12 @@ import type {
   PullRequestState,
   PullRequestViewerInvolvement,
 } from "@synara/contracts";
-import { LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES } from "@synara/contracts";
 import {
   pullRequestProjectIdentityKey as sharedPullRequestProjectIdentityKey,
   pullRequestRemoteIdentityKey as sharedPullRequestRemoteIdentityKey,
 } from "@synara/shared/githubRepository";
 
-import type { GitHubPullRequestListItem } from "./git/Services/GitHubCli.ts";
+import type { ProviderPullRequestSummary } from "./pullRequests/Services/PullRequestProvider.ts";
 import { pullRequestPinRepositoryKey } from "./pullRequests/projectRepositoryInventory.ts";
 export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
 
@@ -121,39 +120,19 @@ export function selectRecoverablePullRequestPins<
   });
 }
 
-/** One mapping from a gh list item to the wire entry, shared by the capped batch path and the
+/** One mapping from a provider summary to the wire entry, shared by the capped batch path and the
  * individual pinned-PR recovery path so the two can never drift. */
 export function buildPullRequestListEntry(input: {
   project: { id: PullRequestListEntry["projectId"]; title: string };
-  repository: string;
-  pullRequest: GitHubPullRequestListItem;
-  viewerReviewRequested: boolean;
-  viewerInvolvement?: PullRequestViewerInvolvement;
+  pullRequest: ProviderPullRequestSummary;
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
   return {
+    ...pullRequest,
     projectId: input.project.id,
     projectTitle: input.project.title,
-    provider: "github",
-    capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
-    repository: input.repository,
-    number: pullRequest.number,
-    title: pullRequest.title,
-    url: pullRequest.url,
-    author: pullRequest.author,
-    headBranch: pullRequest.headBranch,
-    baseBranch: pullRequest.baseBranch,
-    state: pullRequest.state,
-    isDraft: pullRequest.isDraft,
-    additions: pullRequest.additions,
-    deletions: pullRequest.deletions,
-    createdAt: pullRequest.createdAt,
-    updatedAt: pullRequest.updatedAt,
-    reviewDecision: pullRequest.reviewDecision,
-    viewerReviewRequested: input.viewerReviewRequested,
-    viewerInvolvement:
-      input.viewerInvolvement ?? (input.viewerReviewRequested ? "review-requested" : "none"),
+    viewerReviewRequested: pullRequest.viewerInvolvement === "review-requested",
     isPinned: input.isPinned,
     projectContexts: [
       {
@@ -162,9 +141,6 @@ export function buildPullRequestListEntry(input: {
         isPinned: input.isPinned,
       },
     ],
-    mergeability: pullRequest.mergeability,
-    stack: pullRequest.stack,
-    labels: pullRequest.labels,
   };
 }
 

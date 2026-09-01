@@ -53,6 +53,7 @@ import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/Provide
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { GitHubPullRequestProviderLive } from "./pullRequests/providers/GitHubPullRequestProvider";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { ProviderAccountServiceLive } from "./providerAccounts";
@@ -278,8 +279,12 @@ export function makeServerRuntimeServicesLayer(
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
   );
+  const githubPullRequestProviderLayer = GitHubPullRequestProviderLive.pipe(
+    Layer.provideMerge(gitLayer),
+  );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(gitLayer),
+    Layer.provideMerge(githubPullRequestProviderLayer),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
