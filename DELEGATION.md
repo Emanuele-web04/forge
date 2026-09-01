@@ -1,0 +1,10 @@
+# Delegation plan
+
+Units: 2
+
+| #   | Unit                          | Files (mine)                                                                                                                                                                                                                                                    | Worker (subagent)             | Acceptance                                                                                                                                       | Status   |
+| --- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| 1   | Migration and schema          | `packages/contracts/src/mind.ts`, `packages/contracts/src/mind.test.ts`, `packages/contracts/src/index.ts`, `apps/server/src/persistence/Migrations/099_Mind.ts`, `apps/server/src/persistence/Migrations.ts`, `apps/server/src/persistence/Migrations.test.ts` | parent-delegated poteto-agent | Migration 099 stays free; red tests prove current lineage, fresh and 97/98 replay, text-free journal retention, and exact bounded schema states. | verified |
+| 2   | Pure scoring and secret guard | `apps/server/src/mind/scoring.ts`, `apps/server/src/mind/scoring.test.ts`, `apps/server/src/mind/secretPatterns.ts`, `apps/server/src/mind/secretPatterns.test.ts`                                                                                              | parent-delegated poteto-agent | Red tests prove approved bounded deterministic scoring with memory-ID tie-break and repeat-safe secret corpus.                                   | verified |
+
+Evidence: migration 099 availability checked against origin/main; contract tests 3/3; migration and pure tests 29/29; migrations:check passed.
