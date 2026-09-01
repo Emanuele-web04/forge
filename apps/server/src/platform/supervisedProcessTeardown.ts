@@ -21,7 +21,7 @@ const DEFAULT_FORCE_EXIT_MS = 1_500;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_INSPECT_INTERVAL_MS = 250;
 const DEFAULT_WINDOWS_INITIAL_CAPTURE_MS = 3_000;
-const FINAL_PROOF_INSPECTION_MAX_MS = 25;
+const FINAL_PROOF_INSPECTION_MAX_MS = 250;
 
 export interface SupervisedProcessTeardownInput {
   readonly rootPid: number;
@@ -258,11 +258,17 @@ export async function teardownProviderProcessTree(
       } while (now() <= deadline);
 
       if (rootExited) {
-        remainingDescendants = await inspectDescendants(
-          Math.min(positiveDuration(input.pollMs, DEFAULT_POLL_MS), FINAL_PROOF_INSPECTION_MAX_MS),
+        const finalInspection = await inspectDescendants(
+          Math.min(
+            positiveDuration(input.inspectIntervalMs, DEFAULT_INSPECT_INTERVAL_MS),
+            FINAL_PROOF_INSPECTION_MAX_MS,
+          ),
         );
-        if (remainingDescendants !== null && remainingDescendants.length === 0) {
-          return { proven: true as const, remainingDescendants };
+        if (finalInspection !== null) {
+          remainingDescendants = finalInspection;
+        }
+        if (finalInspection !== null && finalInspection.length === 0) {
+          return { proven: true as const, remainingDescendants: finalInspection };
         }
       }
       return { proven: false as const, remainingDescendants };

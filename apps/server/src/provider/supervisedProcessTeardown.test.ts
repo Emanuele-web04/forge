@@ -408,4 +408,42 @@ describe("teardownProviderProcessTree", () => {
     ).resolves.toEqual({ escalated: false, signalErrors: [] });
     expect(signals).toEqual(["SIGTERM"]);
   });
+
+  it("preserves the last verified survivors when the final recheck is unverified", async () => {
+    const descendant = { pid: 912, command: "provider-worker" };
+    const tree: CapturedProcessTree = {
+      descendants: [descendant],
+      captureComplete: true,
+    };
+    let inspectCalls = 0;
+    let now = 0;
+
+    const failure = await teardownProviderProcessTree(
+      {
+        rootPid: 911,
+        rootExited: Promise.resolve(),
+        termGraceMs: 5,
+        forceExitMs: 5,
+        pollMs: 5,
+      },
+      {
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => {
+            inspectCalls += 1;
+            return inspectCalls % 2 === 1
+              ? { verified: true, survivors: [descendant] }
+              : { verified: false, survivors: [] };
+          },
+          signal: () => undefined,
+        },
+        now: () => now,
+        sleep: async (milliseconds) => {
+          now += milliseconds;
+        },
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ remainingDescendantPids: [912] });
+  });
 });
