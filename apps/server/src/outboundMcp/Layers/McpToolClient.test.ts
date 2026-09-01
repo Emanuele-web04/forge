@@ -3,7 +3,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { OutboundMcpDecodeError, type McpConsumerBinding } from "../consumerBinding.ts";
+import {
+  OutboundMcpDecodeError,
+  OutboundMcpInputError,
+  type McpConsumerBinding,
+} from "../consumerBinding.ts";
 import { makeSingleFlightRefreshFetch } from "../networkPolicy.ts";
 import type {
   OutboundMcpCredentialRecord,
@@ -22,6 +26,44 @@ import {
 
 type FixtureOperation = "read" | "optional";
 
+function encodeFixtureRead(input: unknown) {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    Object.keys(input).length === 1 &&
+    "value" in input &&
+    typeof input.value === "string"
+  ) {
+    return Effect.succeed({ value: input.value });
+  }
+  return Effect.fail(
+    new OutboundMcpInputError({
+      consumerId: "fixture-consumer",
+      operation: "read",
+      category: "invalid-input",
+    }),
+  );
+}
+
+function encodeFixtureOptional(input: unknown) {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    Object.keys(input).length === 0
+  ) {
+    return Effect.succeed({});
+  }
+  return Effect.fail(
+    new OutboundMcpInputError({
+      consumerId: "fixture-consumer",
+      operation: "optional",
+      category: "invalid-input",
+    }),
+  );
+}
+
 const fixtureBinding: McpConsumerBinding<FixtureOperation> = {
   id: "fixture-consumer",
   presetIds: new Set(["fixture"]),
@@ -30,10 +72,12 @@ const fixtureBinding: McpConsumerBinding<FixtureOperation> = {
   operations: {
     read: {
       tool: "fixture_read",
+      encode: encodeFixtureRead,
       decode: (result) => Effect.succeed(result),
     },
     optional: {
       tool: "fixture_optional",
+      encode: encodeFixtureOptional,
       decode: (result) => Effect.succeed(result),
     },
   },
@@ -129,15 +173,189 @@ describe("McpToolClient", () => {
         networkRequests += 1;
         return new Response(null, { status: 500 });
       },
+      resolveAddresses: async () => ["1.1.1.1"],
     });
 
     await expect(
       Effect.runPromise(
-        client.call(fixtureBinding, "fixture_read", {}, new AbortController().signal),
+        client.call(
+          fixtureBinding,
+          "fixture_read",
+          { value: "connected" },
+          new AbortController().signal,
+        ),
       ),
     ).rejects.toMatchObject({ category: "connection-status" });
     expect(credentialReads).toBe(0);
     expect(networkRequests).toBe(0);
+  });
+
+  it("pins established refresh discovery to the stored authorization server before secrets", async () => {
+    const record: OutboundMcpConnectionRecord = {
+      connectionId: "fixture",
+      presetId: "fixture",
+      displayName: "Fixture MCP",
+      endpoint: "https://mcp.example.test/mcp",
+      status: "connected",
+      errorCategory: null,
+      catalogFingerprint: null,
+      lastValidatedAt: null,
+      createdAt: "2026-09-01T08:00:00.000Z",
+      updatedAt: "2026-09-01T08:00:00.000Z",
+    };
+    const repository: OutboundMcpRepositoryShape = {
+      list: () => Effect.succeed([record]),
+      get: () => Effect.succeed(record),
+      upsertMetadata: () => Effect.void,
+      setStatus: () => Effect.void,
+      delete: () => Effect.void,
+    };
+    const credentials: OutboundMcpCredentialsShape = {
+      read: () =>
+        Effect.succeed({
+          authorizationServerUrl: "https://auth-a.example.test/",
+          clientInformation: {
+            client_id: "fixture-client",
+            client_secret: "synthetic-client-secret",
+          },
+          tokens: {
+            access_token: "synthetic-expired-access-token",
+            refresh_token: "synthetic-refresh-token",
+            token_type: "Bearer",
+          },
+        }),
+      write: () => Effect.void,
+      delete: () => Effect.void,
+      clearAttemptSecrets: () => Effect.void,
+    };
+    let sensitiveAuthorizationRequests = 0;
+    let storedAuthorityMetadataRequests = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const headers = new Headers(init?.headers);
+      const body = String(init?.body ?? "");
+      if (
+        url.origin.startsWith("https://auth-") &&
+        (headers.has("authorization") ||
+          body.includes("synthetic-client-secret") ||
+          body.includes("synthetic-refresh-token"))
+      ) {
+        sensitiveAuthorizationRequests += 1;
+      }
+      if (url.origin === "https://mcp.example.test" && (init?.method ?? "GET") === "POST") {
+        return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } });
+      }
+      if (url.origin === "https://mcp.example.test") {
+        return Response.json({
+          resource: "https://mcp.example.test/mcp",
+          authorization_servers: ["https://auth-b.example.test/"],
+        });
+      }
+      if (url.pathname.includes(".well-known")) {
+        if (url.origin === "https://auth-a.example.test") {
+          storedAuthorityMetadataRequests += 1;
+        }
+        return Response.json({
+          issuer: `${url.origin}/`,
+          authorization_endpoint: `${url.origin}/oauth/authorize`,
+          token_endpoint: `${url.origin}/oauth/token`,
+          registration_endpoint: `${url.origin}/oauth/register`,
+          revocation_endpoint: `${url.origin}/oauth/revoke`,
+          response_types_supported: ["code"],
+          token_endpoint_auth_methods_supported: ["client_secret_basic"],
+        });
+      }
+      return Response.json(
+        {
+          access_token: "synthetic-rotated-access-token",
+          refresh_token: "synthetic-rotated-refresh-token",
+          token_type: "Bearer",
+        },
+        { status: 200 },
+      );
+    };
+    const client = makeLiveMcpToolClient({
+      repository,
+      credentials,
+      fetch,
+      resolveAddresses: async () => ["1.1.1.1"],
+    });
+
+    await expect(
+      Effect.runPromise(
+        client.call(
+          fixtureBinding,
+          "fixture_read",
+          { value: "refresh" },
+          new AbortController().signal,
+        ),
+      ),
+    ).rejects.toMatchObject({ category: "connection" });
+    expect(storedAuthorityMetadataRequests).toBe(1);
+    expect(sensitiveAuthorizationRequests).toBe(0);
+  });
+
+  it("rejects an invalid stored authorization server before any network request", async () => {
+    const record: OutboundMcpConnectionRecord = {
+      connectionId: "fixture",
+      presetId: "fixture",
+      displayName: "Fixture MCP",
+      endpoint: "https://mcp.example.test/mcp",
+      status: "connected",
+      errorCategory: null,
+      catalogFingerprint: null,
+      lastValidatedAt: null,
+      createdAt: "2026-09-01T08:00:00.000Z",
+      updatedAt: "2026-09-01T08:00:00.000Z",
+    };
+    const repository: OutboundMcpRepositoryShape = {
+      list: () => Effect.succeed([record]),
+      get: () => Effect.succeed(record),
+      upsertMetadata: () => Effect.void,
+      setStatus: () => Effect.void,
+      delete: () => Effect.void,
+    };
+    const credentials: OutboundMcpCredentialsShape = {
+      read: () =>
+        Effect.succeed({
+          authorizationServerUrl:
+            "http://auth.example.test/private?client_secret=synthetic-client-secret",
+          clientInformation: { client_id: "fixture-client" },
+          tokens: { access_token: "synthetic-access-token", token_type: "Bearer" },
+        }),
+      write: () => Effect.void,
+      delete: () => Effect.void,
+      clearAttemptSecrets: () => Effect.void,
+    };
+    let networkRequests = 0;
+    const client = makeLiveMcpToolClient({
+      repository,
+      credentials,
+      fetch: async () => {
+        networkRequests += 1;
+        return new Response(null, { status: 500 });
+      },
+      resolveAddresses: async () => ["1.1.1.1"],
+    });
+
+    let caught: unknown;
+    try {
+      await Effect.runPromise(
+        client.call(
+          fixtureBinding,
+          "fixture_read",
+          { value: "blocked" },
+          new AbortController().signal,
+        ),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ category: "connection" });
+    expect(networkRequests).toBe(0);
+    expect(JSON.stringify(caught)).not.toContain("synthetic-client-secret");
+    expect(JSON.stringify(caught)).not.toContain("private");
   });
 
   it("aborts only the caller's live SDK HTTP request through the custom fetch boundary", async () => {
@@ -290,6 +508,36 @@ describe("McpToolClient", () => {
     expect(connectionAttempts).toBe(0);
   });
 
+  it.each([
+    ["missing", {}],
+    ["extra", { value: "allowed", extra: true }],
+    ["wrong type", { value: 42 }],
+  ])("rejects %s tool input before resolving or calling a session", async (_case, input) => {
+    let connectionAttempts = 0;
+    let toolCalls = 0;
+    const client = makeMcpToolClient({
+      resolveConnection: async () => {
+        connectionAttempts += 1;
+        return fixtureConnection;
+      },
+      createSession: async () =>
+        immediateSession({
+          callTool: async () => {
+            toolCalls += 1;
+            return {};
+          },
+        }),
+    });
+
+    await expect(
+      Effect.runPromise(
+        client.call(fixtureBinding, "fixture_read", input, new AbortController().signal),
+      ),
+    ).rejects.toBeInstanceOf(OutboundMcpInputError);
+    expect(connectionAttempts).toBe(0);
+    expect(toolCalls).toBe(0);
+  });
+
   it("shares one lazy connection attempt between concurrent callers", async () => {
     let connectionAttempts = 0;
     let releaseConnection!: () => void;
@@ -306,17 +554,17 @@ describe("McpToolClient", () => {
     });
 
     const first = Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", { value: 1 }, new AbortController().signal),
+      client.call(fixtureBinding, "fixture_read", { value: "one" }, new AbortController().signal),
     );
     const second = Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", { value: 2 }, new AbortController().signal),
+      client.call(fixtureBinding, "fixture_read", { value: "two" }, new AbortController().signal),
     );
     await eventually(() => expect(connectionAttempts).toBe(1));
     releaseConnection();
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { tool: "fixture_read", args: { value: 1 } },
-      { tool: "fixture_read", args: { value: 2 } },
+      { tool: "fixture_read", args: { value: "one" } },
+      { tool: "fixture_read", args: { value: "two" } },
     ]);
     expect(connectionAttempts).toBe(1);
   });
@@ -341,7 +589,12 @@ describe("McpToolClient", () => {
 
     const calls = Array.from({ length: 7 }, (_, index) =>
       Effect.runPromise(
-        client.call(fixtureBinding, "fixture_read", { index }, new AbortController().signal),
+        client.call(
+          fixtureBinding,
+          "fixture_read",
+          { value: String(index) },
+          new AbortController().signal,
+        ),
       ),
     );
     await eventually(() => expect(active).toBe(6));
@@ -374,7 +627,7 @@ describe("McpToolClient", () => {
     });
 
     const call = Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", {}, controller.signal),
+      client.call(fixtureBinding, "fixture_read", { value: "abort" }, controller.signal),
     );
     await eventually(() => expect(observedSignal).not.toBeNull());
     controller.abort(abortReason);
@@ -453,6 +706,7 @@ describe("McpToolClient", () => {
       operations: {
         read: {
           tool: "fixture_read",
+          encode: encodeFixtureRead,
           decode: () =>
             Effect.fail(
               new OutboundMcpDecodeError({
@@ -472,7 +726,12 @@ describe("McpToolClient", () => {
     let caught: unknown;
     try {
       await Effect.runPromise(
-        client.call(rejectingBinding, "fixture_read", {}, new AbortController().signal),
+        client.call(
+          rejectingBinding,
+          "fixture_read",
+          { value: "decode" },
+          new AbortController().signal,
+        ),
       );
     } catch (error) {
       caught = error;
@@ -498,11 +757,16 @@ describe("McpToolClient", () => {
     });
 
     await Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", {}, new AbortController().signal),
+      client.call(fixtureBinding, "fixture_read", { value: "first" }, new AbortController().signal),
     );
     await Effect.runPromise(client.invalidate("fixture"));
     await Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", {}, new AbortController().signal),
+      client.call(
+        fixtureBinding,
+        "fixture_read",
+        { value: "second" },
+        new AbortController().signal,
+      ),
     );
     await Effect.runPromise(client.closeAll());
 
@@ -529,7 +793,7 @@ describe("McpToolClient", () => {
     });
 
     const call = Effect.runPromise(
-      client.call(fixtureBinding, "fixture_read", {}, new AbortController().signal),
+      client.call(fixtureBinding, "fixture_read", { value: "late" }, new AbortController().signal),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     let invalidationSettled = false;

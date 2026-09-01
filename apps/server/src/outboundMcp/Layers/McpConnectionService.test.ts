@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
-import type { McpConsumerBinding } from "../consumerBinding.ts";
+import { OutboundMcpInputError, type McpConsumerBinding } from "../consumerBinding.ts";
 import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
 import {
   OutboundMcpCredentialsError,
@@ -26,6 +26,7 @@ import {
 
 const CALLBACK_URL = new URL("http://127.0.0.1:3773/api/mcp/outbound/oauth/callback");
 const NOW = "2026-09-01T08:00:00.000Z";
+const PUBLIC_TEST_RESOLVER = async (): Promise<ReadonlyArray<string>> => ["1.1.1.1"];
 
 function makeMemoryRepository(): OutboundMcpRepositoryShape & {
   readonly records: Map<string, OutboundMcpConnectionRecord>;
@@ -199,6 +200,21 @@ const readBinding: McpConsumerBinding<"read"> = {
   operations: {
     read: {
       tool: "read_item",
+      encode: (input) =>
+        typeof input === "object" &&
+        input !== null &&
+        !Array.isArray(input) &&
+        Object.keys(input).length === 1 &&
+        "id" in input &&
+        typeof input.id === "number"
+          ? Effect.succeed({ id: input.id })
+          : Effect.fail(
+              new OutboundMcpInputError({
+                consumerId: "test-read-consumer",
+                operation: "read",
+                category: "invalid-input",
+              }),
+            ),
       decode: (result) => Effect.succeed(result),
     },
   },
@@ -594,6 +610,7 @@ describe("McpConnectionService", () => {
               requests.push(String(input));
               return new Response(null, { status: 200 });
             },
+            resolveAddresses: PUBLIC_TEST_RESOLVER,
           }),
       });
       await Effect.runPromise(
@@ -854,6 +871,7 @@ describe("SDK OAuth lifecycle", () => {
         requests.push({ url: String(input), body: String(init?.body ?? "") });
         return new Response(null, { status: 200 });
       },
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     await Effect.runPromise(oauth.revoke({ preset: PARATY_MCP_PRESET, credentials }));

@@ -1,6 +1,9 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { outboundHttp, OutboundHttpError } from "@synara/shared/outboundHttp";
+import { assertPublicIpAddress, OutboundPolicyError } from "@synara/shared/outboundHttpPolicy";
 import { Schema } from "effect";
 
+export const OUTBOUND_MCP_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 export const OUTBOUND_MCP_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const OUTBOUND_MCP_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -55,10 +58,17 @@ export function validateOutboundMcpUrl(url: URL, _purpose: OutboundMcpUrlPurpose
 export type OutboundMcpNetworkPolicy = {
   readonly resourceUrl: URL;
   readonly fetch?: FetchLike;
+  readonly resolveAddresses?: OutboundMcpAddressResolver;
+  readonly maxRequestBytes?: number;
   readonly maxResponseBytes?: number;
   readonly timeoutMs?: number;
   readonly maxRedirects?: number;
 };
+
+export type OutboundMcpAddressResolver = (
+  hostname: string,
+  signal: AbortSignal,
+) => Promise<ReadonlyArray<string>>;
 
 function isBearerAuthorization(headers: Headers): boolean {
   return /^\s*Bearer\s+/i.test(headers.get("authorization") ?? "");
@@ -137,6 +147,138 @@ function cancelBody(body: ReadableStream<Uint8Array> | null): void {
   if (body !== null) void body.cancel().catch(() => undefined);
 }
 
+function requestBodySize(body: BodyInit | null | undefined): number {
+  if (body === undefined || body === null) return 0;
+  if (typeof body === "string") return new TextEncoder().encode(body).byteLength;
+  if (body instanceof URLSearchParams) {
+    return new TextEncoder().encode(body.toString()).byteLength;
+  }
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  if (body instanceof Blob) return body.size;
+  throw new OutboundMcpNetworkPolicyError({ category: "unsupported-request-body" });
+}
+
+async function sharedRequestBody(
+  body: BodyInit | null | undefined,
+): Promise<string | Uint8Array | undefined> {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (ArrayBuffer.isView(body)) {
+    return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  }
+  if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+  throw new OutboundMcpNetworkPolicyError({ category: "unsupported-request-body" });
+}
+
+function sharedError(error: unknown, url: URL): OutboundMcpNetworkPolicyError {
+  if (error instanceof OutboundMcpNetworkPolicyError) return error;
+  if (error instanceof OutboundPolicyError) return policyError(error.code, url);
+  if (error instanceof OutboundHttpError) {
+    const category =
+      error.code === "request" ? "network" : error.code === "aborted" ? "network" : error.code;
+    return policyError(category, url);
+  }
+  return policyError("network", url);
+}
+
+function makeSharedOutboundFetch(input: {
+  readonly maxRequestBytes: number;
+  readonly maxResponseBytes: number;
+  readonly timeoutMs: number;
+  readonly maxRedirects: number;
+}): FetchLike {
+  return async (urlInput, init = {}) => {
+    const url = parseOutboundMcpUrl(urlInput);
+    const method = (init.method ?? "GET").toUpperCase();
+    if (!new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]).has(method)) {
+      throw policyError("invalid-method", url);
+    }
+    try {
+      const result = await outboundHttp.request({
+        policy: {
+          service: "outbound-mcp",
+          allowedOrigins: [url.origin],
+          timeoutMs: input.timeoutMs,
+          maxRequestBytes: input.maxRequestBytes,
+          maxResponseBytes: input.maxResponseBytes,
+          maxRedirects: input.maxRedirects,
+          maxConcurrent: 6,
+          maxQueued: 24,
+          requirePublicAddress: true,
+        },
+        url,
+        method: method as "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE",
+        headers: init.headers,
+        body: await sharedRequestBody(init.body),
+        ...(init.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
+      });
+      return new Response(result.body, {
+        status: result.status,
+        headers: result.headers,
+      });
+    } catch (error) {
+      throw sharedError(error, url);
+    }
+  };
+}
+
+function makeInjectedOutboundFetch(
+  fetchFn: FetchLike,
+  resolveAddresses: OutboundMcpAddressResolver,
+): FetchLike {
+  return async (urlInput, init = {}) => {
+    const url = parseOutboundMcpUrl(urlInput);
+    const signal = init.signal;
+    if (signal === undefined || signal === null) {
+      throw policyError("missing-signal", url);
+    }
+    let addresses: ReadonlyArray<string>;
+    try {
+      if (signal.aborted) throw abortReason(signal);
+      addresses = await new Promise<ReadonlyArray<string>>((resolve, reject) => {
+        const onAbort = () => {
+          signal.removeEventListener("abort", onAbort);
+          reject(abortReason(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        let resolution: Promise<ReadonlyArray<string>>;
+        try {
+          resolution = resolveAddresses(url.hostname, signal);
+        } catch (error) {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+          return;
+        }
+        resolution.then(
+          (resolved) => {
+            signal.removeEventListener("abort", onAbort);
+            resolve(resolved);
+          },
+          (error) => {
+            signal.removeEventListener("abort", onAbort);
+            reject(error);
+          },
+        );
+      });
+    } catch (error) {
+      if (signal.aborted) throw abortReason(signal);
+      if (error instanceof OutboundMcpNetworkPolicyError) throw error;
+      throw policyError("dns", url);
+    }
+    if (addresses.length === 0) throw policyError("dns", url);
+    try {
+      for (const address of addresses) assertPublicIpAddress(address);
+    } catch {
+      throw policyError("private-address", url);
+    }
+    if (signal.aborted) throw abortReason(signal);
+    return fetchFn(url, init);
+  };
+}
+
 function discardResponse(response: Response, lifecycle: RequestLifecycle): void {
   cancelBody(response.body);
   lifecycle.finish();
@@ -169,6 +311,11 @@ async function boundedResponse(
   maxResponseBytes: number,
   lifecycle: RequestLifecycle,
 ): Promise<Response> {
+  const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+  if (contentEncoding !== undefined && contentEncoding !== "" && contentEncoding !== "identity") {
+    discardResponse(response, lifecycle);
+    throw policyError("compressed-response", url);
+  }
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     const parsedLength = Number(contentLength);
@@ -254,11 +401,14 @@ async function boundedResponse(
 export function makeBoundedMcpFetch(policy: OutboundMcpNetworkPolicy): FetchLike {
   const resourceUrl = validateOutboundMcpUrl(new URL(policy.resourceUrl), "resource");
   const resourceOrigin = resourceUrl.origin;
-  const fetchFn = policy.fetch ?? globalThis.fetch;
+  const maxRequestBytes = policy.maxRequestBytes ?? OUTBOUND_MCP_MAX_REQUEST_BYTES;
   const maxResponseBytes = policy.maxResponseBytes ?? OUTBOUND_MCP_MAX_RESPONSE_BYTES;
   const timeoutMs = policy.timeoutMs ?? OUTBOUND_MCP_REQUEST_TIMEOUT_MS;
   const maxRedirects = policy.maxRedirects ?? OUTBOUND_MCP_MAX_REDIRECTS;
 
+  if (!Number.isSafeInteger(maxRequestBytes) || maxRequestBytes <= 0) {
+    throw new RangeError("Outbound MCP request byte limit must be a positive safe integer.");
+  }
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
     throw new RangeError("Outbound MCP response byte limit must be a positive safe integer.");
   }
@@ -268,11 +418,23 @@ export function makeBoundedMcpFetch(policy: OutboundMcpNetworkPolicy): FetchLike
   if (!Number.isSafeInteger(maxRedirects) || maxRedirects < 0) {
     throw new RangeError("Outbound MCP redirect limit must be a non-negative safe integer.");
   }
+  if ((policy.fetch === undefined) !== (policy.resolveAddresses === undefined)) {
+    throw new RangeError("Injected outbound MCP fetch requires an explicit address resolver.");
+  }
+
+  const fetchFn =
+    policy.fetch === undefined || policy.resolveAddresses === undefined
+      ? makeSharedOutboundFetch({ maxRequestBytes, maxResponseBytes, timeoutMs, maxRedirects })
+      : makeInjectedOutboundFetch(policy.fetch, policy.resolveAddresses);
 
   return async (input, requestInit = {}) => {
     let currentUrl = parseOutboundMcpUrl(input);
     let currentInit: RequestInit = { ...requestInit };
     const deadline = Date.now() + timeoutMs;
+
+    if (requestBodySize(currentInit.body) > maxRequestBytes) {
+      throw policyError("request-too-large", currentUrl);
+    }
 
     for (let redirects = 0; ; redirects += 1) {
       const purpose: OutboundMcpUrlPurpose =

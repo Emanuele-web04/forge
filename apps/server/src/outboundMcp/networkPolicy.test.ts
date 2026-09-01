@@ -9,6 +9,7 @@ import {
 } from "./networkPolicy.ts";
 
 const RESOURCE_URL = new URL("https://mcp.example.test/mcp");
+const PUBLIC_TEST_RESOLVER = async (): Promise<ReadonlyArray<string>> => ["1.1.1.1"];
 
 describe("validateOutboundMcpUrl", () => {
   it("rejects a non-HTTPS resource URL", () => {
@@ -36,6 +37,93 @@ describe("validateOutboundMcpUrl", () => {
 });
 
 describe("makeBoundedMcpFetch", () => {
+  it.each(["127.0.0.1", "192.0.2.1"])(
+    "rejects private or reserved literal %s through the production outbound HTTP policy",
+    async (address) => {
+      const boundedFetch = makeBoundedMcpFetch({
+        resourceUrl: new URL(`https://${address}/mcp`),
+        timeoutMs: 50,
+      });
+
+      await expect(boundedFetch(`https://${address}/mcp`)).rejects.toMatchObject({
+        category: "private-address",
+      });
+    },
+  );
+
+  it("requires an explicit resolver whenever a test dispatcher is injected", () => {
+    expect(() =>
+      makeBoundedMcpFetch({
+        resourceUrl: RESOURCE_URL,
+        fetch: async () => Response.json({ bypassed: true }),
+      }),
+    ).toThrowError(/explicit address resolver/u);
+  });
+
+  it("rejects a hostname resolving to a private address before injected dispatch", async () => {
+    const baseFetch = vi.fn(async () => Response.json({ leaked: true }));
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: async () => ["169.254.169.254"],
+    });
+
+    await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({
+      category: "private-address",
+    });
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("revalidates DNS on a redirect hop and rejects rebinding to a private address", async () => {
+    let resolutions = 0;
+    const baseFetch = vi.fn(async () =>
+      baseFetch.mock.calls.length === 1
+        ? new Response(null, { status: 302, headers: { location: "/redirected" } })
+        : Response.json({ leaked: true }),
+    );
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: async () => (++resolutions === 1 ? ["1.1.1.1"] : ["127.0.0.1"]),
+    });
+
+    await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({
+      category: "private-address",
+    });
+    expect(baseFetch).toHaveBeenCalledOnce();
+    expect(resolutions).toBe(2);
+  });
+
+  it("rejects compressed responses so byte accounting stays exact", async () => {
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: async () =>
+        new Response("compressed bytes", { headers: { "content-encoding": "gzip" } }),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
+
+    await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({
+      category: "compressed-response",
+    });
+  });
+
+  it("rejects oversized request bodies before injected dispatch", async () => {
+    const baseFetch = vi.fn(async () => Response.json({ leaked: true }));
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
+
+    await expect(
+      boundedFetch(RESOURCE_URL, {
+        method: "POST",
+        body: new Uint8Array(2 * 1024 * 1024 + 1),
+      }),
+    ).rejects.toMatchObject({ category: "request-too-large" });
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
   it("normalizes an invalid initial URL without retaining its sensitive input", async () => {
     const sensitiveInput = "not a url?code=synthetic-authorization-code";
     const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL });
@@ -54,7 +142,11 @@ describe("makeBoundedMcpFetch", () => {
 
   it("allows authorization discovery on another validated HTTPS origin", async () => {
     const baseFetch = vi.fn(async () => Response.json({ issuer: "ok" }));
-    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
 
     const response = await boundedFetch(
       "https://auth.example.test/.well-known/oauth-authorization-server",
@@ -66,7 +158,11 @@ describe("makeBoundedMcpFetch", () => {
 
   it("never sends a resource bearer token to another origin", async () => {
     const baseFetch = vi.fn(async () => Response.json({ leaked: true }));
-    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
 
     await expect(
       boundedFetch("https://auth.example.test/token", {
@@ -84,7 +180,11 @@ describe("makeBoundedMcpFetch", () => {
           headers: { Location: "http://downgrade.example.test/mcp" },
         }),
     );
-    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
 
     await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({
       category: "invalid-url",
@@ -100,7 +200,11 @@ describe("makeBoundedMcpFetch", () => {
           headers: { Location: "https://other.example.test/mcp" },
         }),
     );
-    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
 
     await expect(
       boundedFetch(RESOURCE_URL, {
@@ -118,7 +222,11 @@ describe("makeBoundedMcpFetch", () => {
           headers: { Location: "https://other.example.test/token" },
         }),
     );
-    const boundedFetch = makeBoundedMcpFetch({ resourceUrl: RESOURCE_URL, fetch: baseFetch });
+    const boundedFetch = makeBoundedMcpFetch({
+      resourceUrl: RESOURCE_URL,
+      fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
+    });
 
     await expect(
       boundedFetch("https://auth.example.test/token", {
@@ -145,6 +253,7 @@ describe("makeBoundedMcpFetch", () => {
         new Response(body, {
           headers: { "Content-Length": String(OUTBOUND_MCP_MAX_RESPONSE_BYTES + 1) },
         }),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({
@@ -163,6 +272,7 @@ describe("makeBoundedMcpFetch", () => {
         new Response(body, {
           headers: { "Content-Length": String(OUTBOUND_MCP_MAX_RESPONSE_BYTES + 1) },
         }),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const outcome = await Promise.race([
@@ -192,6 +302,7 @@ describe("makeBoundedMcpFetch", () => {
     const boundedFetch = makeBoundedMcpFetch({
       resourceUrl: RESOURCE_URL,
       fetch: async () => new Response(body),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const response = await boundedFetch(RESOURCE_URL);
@@ -212,6 +323,7 @@ describe("makeBoundedMcpFetch", () => {
             once: true,
           });
         }),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     await expect(boundedFetch(RESOURCE_URL)).rejects.toMatchObject({ category: "timeout" });
@@ -234,6 +346,7 @@ describe("makeBoundedMcpFetch", () => {
             { highWaterMark: 0 },
           ),
         ),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const response = await boundedFetch(RESOURCE_URL);
@@ -260,6 +373,7 @@ describe("makeBoundedMcpFetch", () => {
       resourceUrl: RESOURCE_URL,
       timeoutMs: 10,
       fetch: baseFetch,
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     try {
@@ -276,19 +390,26 @@ describe("makeBoundedMcpFetch", () => {
     const controller = new AbortController();
     const abortReason = new DOMException("caller stopped", "AbortError");
     let observedSignal: AbortSignal | undefined;
+    let notifyFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      notifyFetchStarted = resolve;
+    });
     const boundedFetch = makeBoundedMcpFetch({
       resourceUrl: RESOURCE_URL,
       fetch: async (_url, init) => {
         observedSignal = init?.signal ?? undefined;
+        notifyFetchStarted();
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
             once: true,
           });
         });
       },
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const request = boundedFetch(RESOURCE_URL, { signal: controller.signal });
+    await fetchStarted;
     controller.abort(abortReason);
 
     await expect(request).rejects.toBe(abortReason);
@@ -313,6 +434,7 @@ describe("makeBoundedMcpFetch", () => {
             { highWaterMark: 0 },
           ),
         ),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const response = await boundedFetch(RESOURCE_URL, { signal: controller.signal });
@@ -340,6 +462,7 @@ describe("makeBoundedMcpFetch", () => {
             },
           }),
         ),
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     const response = await boundedFetch(RESOURCE_URL);
@@ -364,6 +487,7 @@ describe("makeBoundedMcpFetch", () => {
       fetch: async (url) => {
         throw new Error(`request failed for ${url}?code=authorization-code`);
       },
+      resolveAddresses: PUBLIC_TEST_RESOLVER,
     });
 
     let caught: unknown;

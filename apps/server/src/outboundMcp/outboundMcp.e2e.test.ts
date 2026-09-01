@@ -17,7 +17,11 @@ import type {
   OutboundMcpStatusUpdate,
 } from "./Services/OutboundMcpRepository.ts";
 import { makeAuthorizationAttemptRegistry } from "./authorizationAttempts.ts";
-import { OutboundMcpDecodeError, type McpConsumerBinding } from "./consumerBinding.ts";
+import {
+  OutboundMcpDecodeError,
+  OutboundMcpInputError,
+  type McpConsumerBinding,
+} from "./consumerBinding.ts";
 import {
   makeMcpConnectionService,
   makeSdkMcpConnectionOAuthLifecycle,
@@ -39,6 +43,8 @@ type FixtureContext = {
   readonly connections: McpConnectionServiceShape;
   readonly credentials: OutboundMcpCredentials["Service"];
 };
+
+const PUBLIC_FIXTURE_RESOLVER = async (): Promise<ReadonlyArray<string>> => ["1.1.1.1"];
 
 function makeMemoryRepository(): OutboundMcpRepositoryShape {
   const records = new Map<string, OutboundMcpConnectionRecord>();
@@ -108,6 +114,19 @@ function makeFixtureBinding(requiredTool = "fixture_read"): McpConsumerBinding<F
     operations: {
       read: {
         tool: requiredTool,
+        encode: (input) =>
+          typeof input === "object" &&
+          input !== null &&
+          !Array.isArray(input) &&
+          Object.keys(input).length === 0
+            ? Effect.succeed({})
+            : Effect.fail(
+                new OutboundMcpInputError({
+                  consumerId: "fixture-consumer",
+                  operation: "read",
+                  category: "invalid-input",
+                }),
+              ),
         decode: decodeTextResult,
       },
     },
@@ -167,6 +186,7 @@ function runFixture(
             repository,
             credentials,
             fetch: authority.fetch,
+            resolveAddresses: PUBLIC_FIXTURE_RESOLVER,
           });
           yield* Effect.addFinalizer(() => toolClient.closeAll());
 
@@ -175,7 +195,10 @@ function runFixture(
             repository,
             credentials,
             toolClient,
-            oauth: makeSdkMcpConnectionOAuthLifecycle({ fetch: authority.fetch }),
+            oauth: makeSdkMcpConnectionOAuthLifecycle({
+              fetch: authority.fetch,
+              resolveAddresses: PUBLIC_FIXTURE_RESOLVER,
+            }),
             attempts: makeAuthorizationAttemptRegistry({ ttlMs: 60_000 }),
             presets: makeOutboundMcpPresetRegistry([preset]),
             callbackUrl: new URL("http://127.0.0.1:43123/oauth/callback"),

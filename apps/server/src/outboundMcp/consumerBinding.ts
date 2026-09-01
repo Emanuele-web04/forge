@@ -14,8 +14,24 @@ export class OutboundMcpDecodeError extends Schema.TaggedErrorClass<OutboundMcpD
   }
 }
 
+export class OutboundMcpInputError extends Schema.TaggedErrorClass<OutboundMcpInputError>()(
+  "OutboundMcpInputError",
+  {
+    consumerId: Schema.String,
+    operation: Schema.String,
+    category: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Outbound MCP input encoding failed (${this.consumerId}/${this.operation}, ${this.category}).`;
+  }
+}
+
 export type McpConsumerOperation = {
   readonly tool: string;
+  readonly encode: (
+    input: unknown,
+  ) => Effect.Effect<Readonly<Record<string, unknown>>, OutboundMcpInputError>;
   readonly decode: (result: unknown) => Effect.Effect<unknown, OutboundMcpDecodeError>;
 };
 

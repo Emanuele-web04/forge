@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   UnauthorizedError,
+  type OAuthDiscoveryState,
   type OAuthClientProvider,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
@@ -32,7 +33,13 @@ import {
 } from "../Services/OutboundMcpRepository.ts";
 import type { McpConsumerBinding, McpConsumerOperation } from "../consumerBinding.ts";
 import {
+  validateOutboundMcpAuthorizationServerUrl,
+  validateOutboundMcpAuthorizationUrl,
+  validateOutboundMcpOAuthDiscoveryState,
+} from "../oauthMetadataPolicy.ts";
+import {
   OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
+  type OutboundMcpAddressResolver,
   isOAuthRefreshRequest,
   makeBoundedMcpFetch,
   makeSingleFlightRefreshFetch,
@@ -123,6 +130,8 @@ function validateBinding<Operation extends string>(binding: McpConsumerBinding<O
   for (const operation of Object.values<McpConsumerOperation>(binding.operations)) {
     if (
       operation.tool.trim() === "" ||
+      typeof operation.encode !== "function" ||
+      typeof operation.decode !== "function" ||
       !allowed.has(operation.tool) ||
       operationTools.has(operation.tool)
     ) {
@@ -342,6 +351,7 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
             ? error
             : clientError({ category: "invalid-binding", consumerId: binding.id }),
       });
+      const encodedArgs = yield* operation[1].encode(args);
       const connection = yield* resolve(binding);
       const session = yield* Effect.tryPromise({
         try: () => getSession(connection, signal),
@@ -362,7 +372,7 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
       }
       const result = yield* permits.withPermits(1)(
         Effect.tryPromise({
-          try: () => session.callTool(tool, args, signal),
+          try: () => session.callTool(tool, encodedArgs, signal),
           catch: (error) => {
             if (signal.aborted) return abortedError();
             return clientError({
@@ -405,13 +415,20 @@ function establishedOAuthProvider(input: {
   readonly onInvalidated: () => Promise<void>;
 }): OAuthClientProvider {
   let current = input.connection.credentials;
+  if (current.authorizationServerUrl === undefined) {
+    throw new Error("Established OAuth session has no pinned authorization server.");
+  }
+  const pinnedAuthorizationServerUrl = validateOutboundMcpAuthorizationServerUrl(
+    current.authorizationServerUrl,
+  );
+  let validatedDiscoveryState: OAuthDiscoveryState | undefined;
 
   const writeCurrent = async (next: OutboundMcpCredentialRecord): Promise<void> => {
     await Effect.runPromise(input.credentials.write(input.connection.connectionId, next));
     current = next;
   };
 
-  return makeOAuthClientProvider({
+  const provider = makeOAuthClientProvider({
     redirectUrl: new URL("http://127.0.0.1/"),
     clientMetadata: ESTABLISHED_CLIENT_METADATA,
     state: "established-session",
@@ -461,6 +478,31 @@ function establishedOAuthProvider(input: {
       return selected;
     },
   });
+  return {
+    ...provider,
+    discoveryState: () =>
+      validatedDiscoveryState ?? { authorizationServerUrl: pinnedAuthorizationServerUrl },
+    saveDiscoveryState: async (state) => {
+      const validated = validateOutboundMcpOAuthDiscoveryState({
+        pinnedAuthorizationServerUrl,
+        state,
+      });
+      validatedDiscoveryState = validated;
+      await writeCurrent({
+        ...current,
+        authorizationServerUrl: validated.authorizationServerUrl,
+      });
+    },
+    redirectToAuthorization: (url) => {
+      if (validatedDiscoveryState !== undefined) {
+        validateOutboundMcpAuthorizationUrl({
+          state: validatedDiscoveryState,
+          authorizationUrl: url,
+        });
+      }
+      throw new Error("Interactive authorization is unavailable for an established session.");
+    },
+  };
 }
 
 function isUnrecoverableAuthError(error: unknown): boolean {
@@ -506,12 +548,14 @@ async function createLiveSession(
   hooks: McpToolSessionHooks,
   credentials: OutboundMcpCredentialsShape,
   fetchFn?: FetchLike,
+  resolveAddresses?: OutboundMcpAddressResolver,
 ): Promise<McpToolSession> {
   let authInvalidated = false;
   const boundedFetch = makeSingleFlightRefreshFetch(
     makeBoundedMcpFetch({
       resourceUrl: connection.endpoint,
       ...(fetchFn === undefined ? {} : { fetch: fetchFn }),
+      ...(resolveAddresses === undefined ? {} : { resolveAddresses }),
     }),
   );
   const requestFetch = makeMcpSdkRequestFetchContext(boundedFetch);
@@ -611,6 +655,7 @@ export function makeLiveMcpToolClient(options: {
   readonly repository: OutboundMcpRepositoryShape;
   readonly credentials: OutboundMcpCredentialsShape;
   readonly fetch?: FetchLike;
+  readonly resolveAddresses?: OutboundMcpAddressResolver;
 }): McpToolClientShape {
   return makeMcpToolClient<LiveResolvedConnection>({
     resolveConnection: async (binding) => {
@@ -628,7 +673,8 @@ export function makeLiveMcpToolClient(options: {
       );
       if (
         credentialRecord?.tokens === undefined ||
-        credentialRecord.clientInformation === undefined
+        credentialRecord.clientInformation === undefined ||
+        credentialRecord.authorizationServerUrl === undefined
       ) {
         throw clientError({
           category: "credentials",
@@ -640,11 +686,23 @@ export function makeLiveMcpToolClient(options: {
         connectionId: record.connectionId,
         presetId: record.presetId,
         endpoint: validateOutboundMcpUrl(new URL(record.endpoint), "resource"),
-        credentials: credentialRecord,
+        credentials: {
+          ...credentialRecord,
+          authorizationServerUrl: validateOutboundMcpAuthorizationServerUrl(
+            credentialRecord.authorizationServerUrl,
+          ),
+        },
       };
     },
     createSession: (connection, signal, hooks) =>
-      createLiveSession(connection, signal, hooks, options.credentials, options.fetch),
+      createLiveSession(
+        connection,
+        signal,
+        hooks,
+        options.credentials,
+        options.fetch,
+        options.resolveAddresses,
+      ),
   });
 }
 

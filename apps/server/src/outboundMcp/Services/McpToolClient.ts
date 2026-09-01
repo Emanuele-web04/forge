@@ -1,7 +1,11 @@
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { McpConsumerBinding, OutboundMcpDecodeError } from "../consumerBinding.ts";
+import type {
+  McpConsumerBinding,
+  OutboundMcpDecodeError,
+  OutboundMcpInputError,
+} from "../consumerBinding.ts";
 
 export class McpToolClientError extends Schema.TaggedErrorClass<McpToolClientError>()(
   "McpToolClientError",
@@ -19,7 +23,11 @@ export class McpToolClientError extends Schema.TaggedErrorClass<McpToolClientErr
   }
 }
 
-export type McpToolClientFailure = McpToolClientError | OutboundMcpDecodeError | DOMException;
+export type McpToolClientFailure =
+  | McpToolClientError
+  | OutboundMcpDecodeError
+  | OutboundMcpInputError
+  | DOMException;
 
 export interface McpToolClientShape {
   readonly validate: <Operation extends string>(

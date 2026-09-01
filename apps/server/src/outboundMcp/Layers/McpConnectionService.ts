@@ -35,6 +35,7 @@ import type { McpConsumerBinding } from "../consumerBinding.ts";
 import {
   makeBoundedMcpFetch,
   OutboundMcpNetworkPolicyError,
+  type OutboundMcpAddressResolver,
   validateOutboundMcpUrl,
 } from "../networkPolicy.ts";
 import { makeOAuthClientProvider } from "../oauthProvider.ts";
@@ -76,6 +77,7 @@ export type McpConnectionOAuthDependencies = {
   readonly discoverServerInfo?: typeof discoverOAuthServerInfo;
   readonly authorize?: Authorize;
   readonly fetch?: FetchLike;
+  readonly resolveAddresses?: OutboundMcpAddressResolver;
 };
 
 function oauthError(cause: unknown): McpConnectionOAuthError {
@@ -248,11 +250,18 @@ async function makeAttemptProvider(input: {
 function discoveryFor(
   preset: OutboundMcpPreset,
   dependencies: Required<Pick<McpConnectionOAuthDependencies, "discoverServerInfo">> & {
-    readonly fetch: FetchLike;
+    readonly fetch?: FetchLike;
+    readonly resolveAddresses?: OutboundMcpAddressResolver;
   },
 ): Promise<OAuthServerInfo> {
   return dependencies.discoverServerInfo(preset.endpoint, {
-    fetchFn: makeBoundedMcpFetch({ resourceUrl: preset.endpoint, fetch: dependencies.fetch }),
+    fetchFn: makeBoundedMcpFetch({
+      resourceUrl: preset.endpoint,
+      ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+      ...(dependencies.resolveAddresses === undefined
+        ? {}
+        : { resolveAddresses: dependencies.resolveAddresses }),
+    }),
   });
 }
 
@@ -282,8 +291,13 @@ export function makeSdkMcpConnectionOAuthLifecycle(
 ): McpConnectionOAuthLifecycle {
   const discoverServerInfo = dependencies.discoverServerInfo ?? discoverOAuthServerInfo;
   const authorize = dependencies.authorize ?? auth;
-  const fetchFn = dependencies.fetch ?? globalThis.fetch;
-  const discoveryDependencies = { discoverServerInfo, fetch: fetchFn };
+  const networkDependencies = {
+    ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+    ...(dependencies.resolveAddresses === undefined
+      ? {}
+      : { resolveAddresses: dependencies.resolveAddresses }),
+  };
+  const discoveryDependencies = { discoverServerInfo, ...networkDependencies };
 
   const begin: McpConnectionOAuthLifecycle["begin"] = (input) =>
     Effect.tryPromise({
@@ -309,7 +323,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           serverUrl: input.preset.endpoint,
           fetchFn: makeBoundedMcpFetch({
             resourceUrl: input.preset.endpoint,
-            fetch: fetchFn,
+            ...networkDependencies,
           }),
         });
         const authorizationUrl = state.authorizationUrl();
@@ -363,7 +377,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           authorizationCode: input.code,
           fetchFn: makeBoundedMcpFetch({
             resourceUrl: input.preset.endpoint,
-            fetch: fetchFn,
+            ...networkDependencies,
           }),
         });
         if (result !== "AUTHORIZED" || state.credentials().tokens === undefined) {
@@ -422,7 +436,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         });
         const response = await makeBoundedMcpFetch({
           resourceUrl: input.preset.endpoint,
-          fetch: fetchFn,
+          ...networkDependencies,
         })(revocationUrl, { method: "POST", headers, body: params });
         await response.arrayBuffer();
         if (!response.ok) {
