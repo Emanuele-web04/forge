@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   captureProcessTree,
+  createProcessTreeKiller,
   inspectProcessTree,
   type ProcessChildrenMap,
 } from "./processTreeController";
@@ -99,5 +100,74 @@ describe("Windows process-tree controller", () => {
         { pid: 102, command: "provider-grandchild.exe", startedAt: "20260901100001.000000+000" },
       ],
     });
+  });
+
+  it("force-signals identity-verified descendants without a POSIX command lookup", () => {
+    const signalled: Array<{ pid: number; signal: "SIGTERM" | "SIGKILL" }> = [];
+    let commandLookups = 0;
+    const killer = createProcessTreeKiller({
+      captureChildrenMap: () => new Map(),
+      readCurrentCommands: () => {
+        commandLookups += 1;
+        return null;
+      },
+      signalPid: (pid, signal) => {
+        signalled.push({ pid, signal });
+        return null;
+      },
+      signalTree: (_rootPid, _signal, callback) => callback(),
+    });
+
+    killer.signal({
+      rootPid: 100,
+      signal: "SIGKILL",
+      tree: {
+        captureComplete: true,
+        descendants: [
+          { pid: 101, command: "provider-child.exe", startedAt: "20260901100000.000000+000" },
+          { pid: 102, command: "provider-grandchild.exe", startedAt: "20260901100001.000000+000" },
+        ],
+      },
+      verifiedDescendants: true,
+      includeRootTree: false,
+      onError: () => undefined,
+    });
+
+    expect(commandLookups).toBe(0);
+    expect(signalled).toEqual([
+      { pid: 102, signal: "SIGKILL" },
+      { pid: 101, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("does not force unverified descendants when identity lookup is unavailable", () => {
+    const signalled: number[] = [];
+    let commandLookups = 0;
+    const killer = createProcessTreeKiller({
+      captureChildrenMap: () => new Map(),
+      readCurrentCommands: () => {
+        commandLookups += 1;
+        return null;
+      },
+      signalPid: (pid) => {
+        signalled.push(pid);
+        return null;
+      },
+      signalTree: (_rootPid, _signal, callback) => callback(),
+    });
+
+    killer.signal({
+      rootPid: 100,
+      signal: "SIGKILL",
+      tree: {
+        captureComplete: true,
+        descendants: [{ pid: 101, command: "provider-child.exe" }],
+      },
+      includeRootTree: false,
+      onError: () => undefined,
+    });
+
+    expect(commandLookups).toBe(1);
+    expect(signalled).toEqual([]);
   });
 });
