@@ -124,12 +124,12 @@ Captured against the isolated dev instance started with
 (dry-run first). Sampler: `server.getDiagnostics` over WebSocket every 30 s for 31 minutes
 (62 samples, raw log `evidence/lane-01-memory-trace.log`).
 
-| metric (MB) | start | min | max | end |
-|---|---|---|---|---|
-| rss | 99 | 49 | 99 | 68 |
-| heapUsed | 46 | 46 | 64 | 51 |
-| external | 9 | — | 23 | 13 |
-| arrayBuffers | 0 | — | 6 | 1 |
+| metric (MB)  | start | min | max | end |
+| ------------ | ----- | --- | --- | --- |
+| rss          | 99    | 49  | 99  | 68  |
+| heapUsed     | 46    | 46  | 64  | 51  |
+| external     | 9     | —   | 23  | 13  |
+| arrayBuffers | 0     | —   | 6   | 1   |
 
 heapUsedPercent (of heapTotal, which V8 keeps small in Bun and resizes on demand) ranged
 72–99% of a 51–64 MB heapTotal; the absolute heapUsed series above is the leak signal, and
