@@ -1890,8 +1890,7 @@ export const makeCheckDevinProviderStatus = (
       `${versionResult.stdout}\n${versionResult.stderr}`,
     );
     const storedCredentials = yield* Effect.promise(() => readStoredCredentials());
-    const hasApiKey =
-      hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
+    const hasApiKey = hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
 
     return {
       provider: DEVIN_PROVIDER,
