@@ -508,6 +508,12 @@ function serviceError(category: string): McpConnectionServiceError {
   return new McpConnectionServiceError({ category });
 }
 
+function invocationUnavailableCategory(status: OutboundMcpConnectionStatus): string | null {
+  if (status === "connected") return null;
+  if (status === "disconnected") return "not-connected";
+  return status;
+}
+
 function publicConnection(
   preset: OutboundMcpPreset,
   stored: OutboundMcpConnectionRecord | null,
@@ -1084,12 +1090,7 @@ export function makeMcpConnectionService(
       yield* authorizationLockFor(preset.id).withPermits(1)(disconnectLocked(preset));
     });
 
-  const invoke: McpConnectionServiceShape["invoke"] = (
-    consumerId,
-    operation,
-    args,
-    signal = new AbortController().signal,
-  ) => {
+  const invoke: McpConnectionServiceShape["invoke"] = (consumerId, operation, args, signal) => {
     const registered = options.presets.getConsumer(consumerId);
     if (registered === null) return Effect.fail(serviceError("unknown-consumer"));
     const { binding, preset } = registered;
@@ -1101,6 +1102,8 @@ export function makeMcpConnectionService(
     ) {
       return Effect.fail(serviceError("reconnect-required"));
     }
+    const ownedController = signal === undefined ? new AbortController() : null;
+    const invocationSignal = signal ?? ownedController!.signal;
     const handleInvocationError = (error: unknown) => {
       if (error instanceof OutboundMcpDecodeError) {
         return Effect.fail(serviceError("invalid-response"));
@@ -1137,7 +1140,7 @@ export function makeMcpConnectionService(
     };
     const call = () =>
       options.toolClient
-        .call(binding, descriptor.tool, args, signal)
+        .call(binding, descriptor.tool, args, invocationSignal)
         .pipe(Effect.catch(handleInvocationError));
     const validationKey = consumerValidationKey(preset.id, binding.id);
     const validateBeforeFirstCall = consumerValidationLockFor(validationKey).withPermits(1)(
@@ -1151,17 +1154,25 @@ export function makeMcpConnectionService(
             ),
       ),
     );
-    return ensureMetadata(preset).pipe(
+    const invocation = ensureMetadata(preset).pipe(
       Effect.flatMap((record) =>
-        Effect.suspend(() =>
-          locallyFencedConnectionIds.has(preset.id) ||
-          disconnectRequestedConnectionIds.has(preset.id) ||
-          record.status !== "connected"
-            ? Effect.fail(serviceError("reconnect-required"))
-            : validateBeforeFirstCall.pipe(Effect.flatMap(call)),
-        ),
+        Effect.suspend(() => {
+          if (
+            locallyFencedConnectionIds.has(preset.id) ||
+            disconnectRequestedConnectionIds.has(preset.id)
+          ) {
+            return Effect.fail(serviceError("reconnect-required"));
+          }
+          const unavailable = invocationUnavailableCategory(record.status);
+          return unavailable === null
+            ? validateBeforeFirstCall.pipe(Effect.flatMap(call))
+            : Effect.fail(serviceError(unavailable));
+        }),
       ),
     );
+    return ownedController === null
+      ? invocation
+      : invocation.pipe(Effect.onInterrupt(() => Effect.sync(() => ownedController.abort())));
   };
 
   const subscribe: McpConnectionServiceShape["subscribe"] = (listener) =>

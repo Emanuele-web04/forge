@@ -285,7 +285,14 @@ export const makeParatyBitbucketPullRequestProvider = (
       );
 
     const detail: PullRequestProviderShape["detail"] = (input) => {
-      const key = `${cacheEpoch}:${input.repository.identityKey}:${input.number}`;
+      const key = JSON.stringify([
+        cacheEpoch,
+        input.repository.identityKey,
+        input.number,
+        input.project.id,
+        input.project.title,
+        input.project.workspaceRoot,
+      ]);
       return detailCache.get(
         key,
         Effect.all(

@@ -39,6 +39,13 @@ const project: OrchestrationProject = {
   deletedAt: null,
 };
 
+const secondProject: OrchestrationProject = {
+  ...project,
+  id: ProjectId.makeUnsafe("project-bitbucket-second"),
+  title: "Payment Seeker worktree",
+  workspaceRoot: "/tmp/payment-seeker-worktree",
+};
+
 const repository: RemoteRepositoryRef = {
   provider: "bitbucket",
   host: "bitbucket.org",
@@ -367,6 +374,39 @@ describe("ParatyBitbucketPullRequestProvider", () => {
       commentsIncomplete: false,
     });
     expect(fake.calls.map((call) => call.operation)).toEqual(["detail", "comments"]);
+  });
+
+  it("does not reuse project-local detail context across projects sharing a repository and PR", async () => {
+    const fake = makeMcp({
+      detail: [rawPullRequest(), rawPullRequest()],
+      comments: [
+        { pagelen: 50, page: 1, size: 0, values: [] },
+        { pagelen: 50, page: 1, size: 0, values: [] },
+      ],
+    });
+    const [first, second] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const provider = yield* makeParatyBitbucketPullRequestProvider({ mcp: fake.service });
+          return yield* Effect.all([
+            provider.detail({ project, repository, number: 42 }),
+            provider.detail({ project: secondProject, repository, number: 42 }),
+          ]);
+        }),
+      ),
+    );
+
+    expect(first).toMatchObject({
+      projectId: project.id,
+      projectTitle: project.title,
+      workspaceRoot: project.workspaceRoot,
+    });
+    expect(second).toMatchObject({
+      projectId: secondProject.id,
+      projectTitle: secondProject.title,
+      workspaceRoot: secondProject.workspaceRoot,
+    });
+    expect(fake.calls.filter((call) => call.operation === "detail")).toHaveLength(2);
   });
 
   it("caps an oversized comments page and marks comments truncated", async () => {

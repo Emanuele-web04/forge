@@ -1,5 +1,5 @@
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -165,6 +165,8 @@ function makeFakeToolClient(): McpToolClientShape & {
   callFailure: McpToolClientError | null;
   validateAttempts: number;
   callAttempts: number;
+  callSignal: AbortSignal | null;
+  blockCalls: boolean;
 } {
   const liveConnections = new Set<string>();
   const client: McpToolClientShape & {
@@ -173,20 +175,26 @@ function makeFakeToolClient(): McpToolClientShape & {
     callFailure: McpToolClientError | null;
     validateAttempts: number;
     callAttempts: number;
+    callSignal: AbortSignal | null;
+    blockCalls: boolean;
   } = {
     liveConnections,
     validateFailure: null,
     callFailure: null,
     validateAttempts: 0,
     callAttempts: 0,
+    callSignal: null,
+    blockCalls: false,
     validate: (binding) => {
       client.validateAttempts += 1;
       if (client.validateFailure !== null) return Effect.fail(client.validateFailure);
       liveConnections.add("paraty");
       return Effect.succeed(`catalog-${binding.id}`);
     },
-    call: (binding, tool) => {
+    call: (binding, tool, _args, signal) => {
       client.callAttempts += 1;
+      client.callSignal = signal;
+      if (client.blockCalls) return Effect.never;
       if (client.callFailure !== null) return Effect.fail(client.callFailure);
       liveConnections.add("paraty");
       const operation = Object.values(binding.operations).find(
@@ -1002,6 +1010,54 @@ describe("McpConnectionService", () => {
       status: "incompatible",
       errorCategory: "incompatible-tools",
     });
+  });
+
+  it.each([
+    ["disconnected", "not-connected"],
+    ["authorizing", "authorizing"],
+    ["incompatible", "incompatible"],
+    ["reconnect-required", "reconnect-required"],
+    ["temporarily-unavailable", "temporarily-unavailable"],
+  ] as const)(
+    "preserves %s status as %s when invocation is unavailable",
+    async (status, category) => {
+      const fixture = makeFixture({ bindings: [readBinding] });
+      fixture.repository.records.set("paraty", connectedRecord({ status }));
+
+      await expect(
+        Effect.runPromise(fixture.service.invoke(readBinding.id, "read", { id: 1 })),
+      ).rejects.toMatchObject({ category });
+      expect(fixture.toolClient.validateAttempts).toBe(0);
+      expect(fixture.toolClient.callAttempts).toBe(0);
+    },
+  );
+
+  it("aborts the internally-owned signal when an invocation Effect is interrupted", async () => {
+    const fixture = makeFixture({ bindings: [readBinding] });
+    fixture.repository.records.set("paraty", connectedRecord());
+    fixture.toolClient.blockCalls = true;
+    const fiber = Effect.runFork(fixture.service.invoke(readBinding.id, "read", { id: 1 }));
+    await waitUntil(() => expect(fixture.toolClient.callSignal).not.toBeNull());
+    expect(fixture.toolClient.callSignal?.aborted).toBe(false);
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(fixture.toolClient.callSignal?.aborted).toBe(true);
+  });
+
+  it("does not abort a caller-owned signal when an invocation Effect is interrupted", async () => {
+    const fixture = makeFixture({ bindings: [readBinding] });
+    fixture.repository.records.set("paraty", connectedRecord());
+    fixture.toolClient.blockCalls = true;
+    const controller = new AbortController();
+    const fiber = Effect.runFork(
+      fixture.service.invoke(readBinding.id, "read", { id: 1 }, controller.signal),
+    );
+    await waitUntil(() => expect(fixture.toolClient.callSignal).toBe(controller.signal));
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("maps a transient completion failure to temporarily-unavailable", async () => {
