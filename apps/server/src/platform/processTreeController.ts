@@ -44,6 +44,12 @@ export interface ProcessTreeKiller {
     readonly rootPid: number;
     readonly signal: TerminalKillSignal;
     readonly tree: CapturedProcessTree;
+    /**
+     * True only when `tree.descendants` were identity-verified immediately
+     * before this signal. This lets Windows use CIM CreationDate verification
+     * without falling back to POSIX `ps` before forced descendant cleanup.
+     */
+    readonly verifiedDescendants?: boolean | undefined;
     readonly includeRootTree?: boolean | undefined;
     readonly onError: (
       error: Error,
@@ -176,7 +182,9 @@ function capturedProcessesForSignal(
   descendants: readonly CapturedProcess[],
   signal: TerminalKillSignal,
   readCommands: (pids: readonly number[]) => ProcessCommandMap | null,
+  verifiedDescendants: boolean,
 ): CapturedProcess[] {
+  if (verifiedDescendants) return [...descendants];
   const currentCommands =
     signal === "SIGKILL" ? readCommands(descendants.map((descendant) => descendant.pid)) : null;
   return descendants.filter((descendant) =>
@@ -239,11 +247,19 @@ export function createProcessTreeKiller(
         ),
       };
     },
-    signal: ({ rootPid, signal, tree, includeRootTree = true, onError }) => {
+    signal: ({
+      rootPid,
+      signal,
+      tree,
+      verifiedDescendants = false,
+      includeRootTree = true,
+      onError,
+    }) => {
       const capturedProcesses = capturedProcessesForSignal(
         tree.descendants,
         signal,
         deps.readCurrentCommands,
+        verifiedDescendants,
       );
       for (const descendant of capturedProcesses.toReversed()) {
         const error = deps.signalPid(descendant.pid, signal);
@@ -331,6 +347,7 @@ export function signalProcessTree(input: {
   readonly rootPid: number;
   readonly signal: TerminalKillSignal;
   readonly tree?: CapturedProcessTree;
+  readonly verifiedDescendants?: boolean;
   readonly includeRootTree?: boolean;
   readonly onError?: (
     error: Error,
@@ -342,6 +359,7 @@ export function signalProcessTree(input: {
     rootPid: input.rootPid,
     signal: input.signal,
     tree: input.tree ?? { descendants: [], captureComplete: false },
+    verifiedDescendants: input.verifiedDescendants,
     includeRootTree: input.includeRootTree,
     onError: input.onError ?? (() => undefined),
   });
