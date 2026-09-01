@@ -39,6 +39,17 @@ Units: 4
 - Shared mutable state. One writer owns the existing worktree. Reviewers are read-only.
 - Smallest safe decomposition. Keep one writer because persistence and normalization share one state invariant; split verification by unit.
 
+## Lane-04 refresh delegation (PR 861 onto upstream/main 182208581e)
+
+Units: 4
+
+| #   | Unit                                                        | Files (mine)                                                                                | Worker (subagent) | Acceptance                                                                                                                                       | Status  |
+| --- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| R1  | Merge upstream/main into handoff/plan-04, verify boundaries | merge commit; `apps/web/src/components/Sidebar.tsx`, `apps/web/src/lib/disclosureMotion.ts` | worker-merge      | Merge completes; Sidebar.tsx and disclosureMotion.ts zero diff vs upstream/main; owned-file semantics preserved (v8, tri-state, hydration guard) | verified |
+| R2  | Focused vitest gate verification (gates 1-11)               | read-only runs of `apps/web` store/persistence suites                                       | worker-gates      | `bun run test` focused suites pass; gate-by-gate mapping reported with real output                                                               | verified |
+| R3  | Live full-restart proof (gate 12)                           | `./.synara-h04/**` (ephemeral home dir), port 58104                                         | worker-restart    | lsof LISTEN evidence; persisted storage shows collapsed state before and after full restart; only own processes stopped                          | verified |
+| R4  | Final bundled fmt/lint/typecheck + evidence report          | `evidence/lane-04-report.md`                                                                | orchestrator      | One bundled pass of fmt, lint, typecheck; focused tests re-run; report written with gate table                                                   | verified |
+
 ## Verification evidence
 
 - Unit 1. `git diff upstream/main...HEAD`; zero diff for `rateLimits.ts`, `Sidebar.tsx`, `disclosureMotion.ts`, and transcript files.

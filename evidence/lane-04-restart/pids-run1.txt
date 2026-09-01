@@ -1,0 +1,28 @@
+# lane-04 run1 process tree (all started by lane-04 via parent 30363 at 2026-09-01T15:48:19Z)
+# tree:
+# 30363 (sfw wrapper, PGID 30362) <- nohup root
+# └ 30576 (sfw-free bun, PGID 30362)
+#   └ 30663 (bun run dev, PGID 30663)
+#     └ 30664 (node dev-runner, PGID 30663)
+#       └ 30879 (turbo shim, PGID 30663) -> 30880 (turbo, PGID 30663)
+#         ├ 31125 (PGID 31125) -> 31142 -> 31164 (bun run dev, PGID 31164) -> 31165 (vite :8837, PGID 31164)
+#         ├ 31126 (PGID 31126) -> 31140 -> 31204 (bun run dev, PGID 31204)
+#         └ 31127 (PGID 31127) -> 31141 -> 31184 (bun run dev, PGID 31184) -> 31185 (bun server :58104, PGID 31184)
+# stop plan: kill -TERM process groups -30362 -30663 -31125 -31126 -31127 -31164 -31184 -31204, then -9 if needed
+30363     1 30362 node /opt/homebrew/bin/sfw bun run dev -- --home-dir ./.synara-h04 --port 58104
+30576 30363 30362 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev -- --home-dir ./.synara-h04 --port 58104
+30663 30576 30663 bun run dev -- --home-dir ./.synara-h04 --port 58104
+30664 30663 30663 node scripts/dev-runner.ts dev --home-dir ./.synara-h04 --port 58104
+30879 30664 30663 node /Users/user/synara-handoff-wt/plan-04/node_modules/.bin/turbo run dev --ui=tui --filter=@synara/contracts --filter=@synara/web --filter=@synara/cli --parallel
+30880 30879 30663 /Users/user/synara-handoff-wt/plan-04/node_modules/.bun/@turbo+darwin-arm64@2.10.5/node_modules/@turbo/darwin-arm64/bin/turbo run dev --ui=tui --filter=@synara/contracts --filter=@synara/web --filter=@synara/cli --parallel
+31125 30880 31125 node /opt/homebrew/bin/sfw bun run dev
+31126 30880 31126 node /opt/homebrew/bin/sfw bun run dev
+31127 30880 31127 node /opt/homebrew/bin/sfw bun run dev
+31140 31126 31126 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+31141 31127 31127 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+31142 31125 31125 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+31164 31142 31164 bun run dev
+31165 31164 31164 node /Users/user/synara-handoff-wt/plan-04/apps/web/node_modules/.bin/vite
+31184 31141 31184 bun run dev
+31185 31184 31184 bun run src/index.ts
+31204 31140 31204 bun run dev

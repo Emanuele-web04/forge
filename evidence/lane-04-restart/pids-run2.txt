@@ -1,0 +1,26 @@
+# lane-04 run2 process tree (all started by lane-04 via parent 39602 at 2026-09-01T16:03:30Z)
+# 39602 (sfw wrapper, PGID 39599) <- nohup root
+# └ 39707 (sfw-free bun, PGID 39599)
+#   └ 39961 (bun run dev, PGID 39961)
+#     └ 39962 (node dev-runner, PGID 39961) -> 40252 (turbo shim) -> 40253 (turbo, PGID 39961)
+#       ├ 40263 (PGID 40263) -> 40280 -> 40344 (bun run dev, PGID 40344) [contracts]
+#       ├ 40264 (PGID 40264) -> 40281 -> 40304 (bun run dev, PGID 40304) -> 40316 (bun server :58104, PGID 40304)
+#       └ 40265 (PGID 40265) -> 40279 -> 40324 (bun run dev, PGID 40324) -> 40325 (vite :8837, PGID 40324)
+# stop plan: kill -TERM groups -39599 -39961 -40263 -40264 -40265 -40304 -40324 -40344, then -9 if needed
+39602     1 39599 node /opt/homebrew/bin/sfw bun run dev -- --home-dir ./.synara-h04 --port 58104
+39707 39602 39599 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev -- --home-dir ./.synara-h04 --port 58104
+39961 39707 39961 bun run dev -- --home-dir ./.synara-h04 --port 58104
+39962 39961 39961 node scripts/dev-runner.ts dev --home-dir ./.synara-h04 --port 58104
+40252 39962 39961 node /Users/user/synara-handoff-wt/plan-04/node_modules/.bin/turbo run dev --ui=tui --filter=@synara/contracts --filter=@synara/web --filter=@synara/cli --parallel
+40253 40252 39961 /Users/user/synara-handoff-wt/plan-04/node_modules/.bun/@turbo+darwin-arm64@2.10.5/node_modules/@turbo/darwin-arm64/bin/turbo run dev --ui=tui --filter=@synara/contracts --filter=@synara/web --filter=@synara/cli --parallel
+40263 40253 40263 node /opt/homebrew/bin/sfw bun run dev
+40264 40253 40264 node /opt/homebrew/bin/sfw bun run dev
+40265 40253 40265 node /opt/homebrew/bin/sfw bun run dev
+40279 40265 40265 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+40280 40263 40263 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+40281 40264 40264 /opt/homebrew/lib/node_modules/sfw/.sfw-cache/v1.15.1/sfw-free-macos-arm64 bun run dev
+40304 40281 40304 bun run dev
+40316 40304 40304 bun run src/index.ts
+40324 40279 40324 bun run dev
+40325 40324 40324 node /Users/user/synara-handoff-wt/plan-04/apps/web/node_modules/.bin/vite
+40344 40280 40344 bun run dev

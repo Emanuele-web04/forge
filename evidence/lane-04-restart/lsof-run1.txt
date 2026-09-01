@@ -1,0 +1,6 @@
+=== lsof run1: server 58104 ===
+COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+bun     31185 user    9u  IPv4 0xaf0481f8bc4d67f7      0t0  TCP 127.0.0.1:58104 (LISTEN)
+=== lsof run1: web 8837 ===
+COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+node    31165 user   31u  IPv6 0x5eebe45bda7c20fb      0t0  TCP [::1]:8837 (LISTEN)

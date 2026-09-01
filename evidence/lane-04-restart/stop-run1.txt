@@ -1,0 +1,8 @@
+=== stop-run1 at 2026-09-01T16:02:10Z ===
+SIGTERM to process groups: -30362 -30663 -31125 -31126 -31127 -31164 -31184 -31204
+kill TERM exit=0
+--- survivors after TERM ---
+--- port check after TERM ---
+(empty = freed)
+--- any surviving lane-04 processes ---
+(none)
