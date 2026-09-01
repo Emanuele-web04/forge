@@ -5,6 +5,7 @@ import {
   type PullRequestDetail,
   type PullRequestInvolvement,
   type PullRequestListEntry,
+  type PullRequestProvider,
   type PullRequestsListResult,
 } from "@synara/contracts";
 import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
@@ -36,7 +37,7 @@ import {
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
 import { PullRequestService, type PullRequestServiceShape } from "../Services/PullRequestService";
-import { resolveGitHubRepositories, type GitHubRepositoryInventory } from "../repositoryResolution";
+import { resolveRemoteRepositories, type RemoteRepositoryInventory } from "../repositoryResolution";
 import {
   cleanupUnconfiguredPullRequestPins,
   indexProjectRepositoryInventories,
@@ -52,7 +53,7 @@ import {
 
 export { PULL_REQUEST_PIN_RECOVERY_LIMIT } from "../pullRequestPinRecovery";
 
-const GITHUB_REPOSITORY_CACHE_MAX_ENTRIES = 256;
+const REMOTE_REPOSITORY_CACHE_MAX_ENTRIES = 256;
 const PULL_REQUEST_LIST_CACHE_MAX_ENTRIES = 512;
 const PULL_REQUEST_PIN_ITEM_CACHE_MAX_ENTRIES = 128;
 const PULL_REQUEST_REVIEW_MATCH_CACHE_MAX_ENTRIES = 32;
@@ -77,7 +78,7 @@ export interface PullRequestServiceDependencies {
   readonly listProjects: () => Effect.Effect<ReadonlyArray<OrchestrationProject>, unknown>;
   readonly resolveRepositories: (
     project: OrchestrationProject,
-  ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
+  ) => Effect.Effect<RemoteRepositoryInventory, unknown>;
 }
 
 /**
@@ -132,8 +133,8 @@ export const makePullRequestService = (
     const githubReadSlots = yield* Semaphore.make(6);
     const withGitHubRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       githubReadSlots.withPermits(1)(effect);
-    const repositoryCache = yield* makeKeyedSingleFlightCache<GitHubRepositoryInventory, unknown>({
-      maxEntries: GITHUB_REPOSITORY_CACHE_MAX_ENTRIES,
+    const repositoryCache = yield* makeKeyedSingleFlightCache<RemoteRepositoryInventory, unknown>({
+      maxEntries: REMOTE_REPOSITORY_CACHE_MAX_ENTRIES,
       ttlMs: 30_000,
     });
     const viewerCache = yield* makeKeyedSingleFlightCache<string, GitHubCliError>({
@@ -280,32 +281,35 @@ export const makePullRequestService = (
         }),
       );
 
-    const validatePullRequestRepository = (repository: string) => {
+    const validatePullRequestRepository = (provider: PullRequestProvider, repository: string) => {
       const normalized = repository.trim();
       return isValidGitHubRepositoryNameWithOwner(normalized)
         ? Effect.succeed(normalized)
-        : Effect.fail(new Error("Invalid GitHub repository identity."));
+        : Effect.fail(new Error(`Invalid ${provider} repository identity.`));
     };
 
     const validateProjectPullRequestRepository = (
       project: OrchestrationProject,
+      provider: PullRequestProvider,
       repositoryInput: string,
     ) =>
       Effect.gen(function* () {
-        const repository = yield* validatePullRequestRepository(repositoryInput);
+        const repository = yield* validatePullRequestRepository(provider, repositoryInput);
         const inventory = yield* resolveProjectRepositories(project);
         if (!inventory.authoritative) {
-          return yield* Effect.fail(new Error("GitHub repository inventory is unavailable."));
+          return yield* Effect.fail(new Error("Repository inventory is unavailable."));
         }
         const matched = inventory.repositories.find(
-          (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
+          (candidate) =>
+            candidate.provider === provider &&
+            candidate.displayName.toLowerCase() === repository.toLowerCase(),
         );
         if (!matched) {
           return yield* Effect.fail(
-            new Error("GitHub repository does not belong to the selected project."),
+            new Error(`${provider} repository does not belong to the selected project.`),
           );
         }
-        return matched.nameWithOwner;
+        return matched.displayName;
       });
 
     const loadMergeCapabilities = (cwd: string, repository: string) =>
@@ -353,7 +357,7 @@ export const makePullRequestService = (
           pinnedRows.map((row) =>
             projectPullRequestIdentityKey({
               projectId: row.projectId,
-              provider: "github",
+              provider: row.provider,
               repository: row.repositoryKey,
               number: row.number,
             }),
@@ -373,7 +377,10 @@ export const makePullRequestService = (
           resolved,
         });
         const errors: PullRequestListError[] = [...inventoryErrors, ...cleanupErrors];
-        if (uniqueRepositories.size === 0) {
+        const githubRepositories = [...uniqueRepositories.values()].filter(
+          ({ repository }) => repository.provider === "github",
+        );
+        if (githubRepositories.length === 0) {
           return {
             viewer: null,
             entries: [],
@@ -386,12 +393,12 @@ export const makePullRequestService = (
         const viewer = yield* loadViewer();
         if (forceRefresh) {
           yield* Effect.forEach(
-            uniqueRepositories.values(),
+            githubRepositories,
             ({ repository }) =>
               Effect.forEach(
                 pullRequestListForceRefreshCacheKeys({
                   provider: "github",
-                  repository: repository.nameWithOwner,
+                  repository: repository.displayName,
                   state: input.state,
                   viewer,
                 }),
@@ -403,7 +410,7 @@ export const makePullRequestService = (
         }
 
         const batches = yield* Effect.forEach(
-          uniqueRepositories.values(),
+          githubRepositories,
           ({ projects: repositoryProjects, repository }) =>
             Effect.gen(function* () {
               const cwd = repositoryProjects[0]!.workspaceRoot;
@@ -411,7 +418,7 @@ export const makePullRequestService = (
                 [
                   loadRepositoryPullRequests(
                     cwd,
-                    repository.nameWithOwner,
+                    repository.displayName,
                     input.state,
                     involvement,
                     viewer,
@@ -419,7 +426,7 @@ export const makePullRequestService = (
                   shouldLoadReviewingCompanion(input.state, involvement)
                     ? loadRepositoryPullRequests(
                         cwd,
-                        repository.nameWithOwner,
+                        repository.displayName,
                         input.state,
                         "reviewing",
                         viewer,
@@ -433,34 +440,31 @@ export const makePullRequestService = (
               );
               return {
                 entries: repositoryProjects.flatMap((project) =>
-                  result.entries.map(
-                    (pullRequest): PullRequestListEntry => {
-                      const matchedReviewingQuery =
-                        involvement === "reviewing" ||
-                        reviewingNumbers.has(pullRequest.number);
-                      const viewerInvolvement = resolvePullRequestViewerInvolvement(
-                        pullRequest.author,
-                        pullRequest.reviewRequestLogins,
-                        viewer,
-                        matchedReviewingQuery,
-                      );
-                      return buildPullRequestListEntry({
-                        project,
-                        repository: repository.nameWithOwner,
-                        pullRequest,
-                        viewerReviewRequested: viewerInvolvement === "review-requested",
-                        viewerInvolvement,
-                        isPinned: pinnedKeys.has(
-                          projectPullRequestIdentityKey({
-                            projectId: project.id,
-                            provider: "github",
-                            repository: repository.nameWithOwner,
-                            number: pullRequest.number,
-                          }),
-                        ),
-                      });
-                    },
-                  ),
+                  result.entries.map((pullRequest): PullRequestListEntry => {
+                    const matchedReviewingQuery =
+                      involvement === "reviewing" || reviewingNumbers.has(pullRequest.number);
+                    const viewerInvolvement = resolvePullRequestViewerInvolvement(
+                      pullRequest.author,
+                      pullRequest.reviewRequestLogins,
+                      viewer,
+                      matchedReviewingQuery,
+                    );
+                    return buildPullRequestListEntry({
+                      project,
+                      repository: repository.displayName,
+                      pullRequest,
+                      viewerReviewRequested: viewerInvolvement === "review-requested",
+                      viewerInvolvement,
+                      isPinned: pinnedKeys.has(
+                        projectPullRequestIdentityKey({
+                          projectId: project.id,
+                          provider: "github",
+                          repository: repository.displayName,
+                          number: pullRequest.number,
+                        }),
+                      ),
+                    });
+                  }),
                 ),
                 // The list cap belongs to the remote repository. Reporting one batch per local
                 // worktree made the all-projects UI overcount truncated repositories.
@@ -468,13 +472,13 @@ export const makePullRequestService = (
                   projectId: project.id,
                   projectTitle: project.title,
                   provider: "github" as const,
-                  repository: repository.nameWithOwner,
+                  repository: repository.displayName,
                   truncated: result.truncated,
                 })),
                 errors: [] as PullRequestListError[],
                 recovery: {
                   cwd,
-                  repository: repository.nameWithOwner,
+                  repository: repository.displayName,
                   projects: repositoryProjects,
                   truncated: result.truncated,
                   reviewingNumbers,
@@ -492,7 +496,7 @@ export const makePullRequestService = (
                         projectId: project.id,
                         projectTitle: project.title,
                         provider: "github" as const,
-                        repository: repository.nameWithOwner,
+                        repository: repository.displayName,
                         message: error.message,
                       })),
                       recovery: null,
@@ -552,17 +556,20 @@ export const makePullRequestService = (
         const inventoryIncomplete = resolved.some(
           (item) => item.error !== null || !item.inventory.authoritative,
         );
-        if (uniqueRepositories.size === 0) {
+        const githubRepositories = [...uniqueRepositories.values()].filter(
+          ({ repository }) => repository.provider === "github",
+        );
+        if (githubRepositories.length === 0) {
           return { count: 0, incomplete: inventoryIncomplete };
         }
 
         const viewer = yield* loadViewer();
         const repositoryCounts = yield* Effect.forEach(
-          uniqueRepositories.values(),
+          githubRepositories,
           ({ projects: repositoryProjects, repository }) =>
             loadReviewRequestedPullRequestNumbers(
               repositoryProjects[0]!.workspaceRoot,
-              repository.nameWithOwner,
+              repository.displayName,
               viewer,
             ).pipe(
               Effect.map((matches) => ({
@@ -618,7 +625,7 @@ export const PullRequestServiceLive = Layer.effect(
         projection
           .getShellSnapshot()
           .pipe(Effect.map((snapshot) => snapshot.projects.map(liveProjectFromShell))),
-      resolveRepositories: (project) => resolveGitHubRepositories(git, project.workspaceRoot),
+      resolveRepositories: (project) => resolveRemoteRepositories(git, project.workspaceRoot),
     });
   }),
 );

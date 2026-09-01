@@ -61,8 +61,8 @@ function makeTestOperations(github: GitHubCliShape) {
     github,
     pins,
     findProject: () => Effect.succeed(project),
-    validateRepository: (repository) => Effect.succeed(repository),
-    validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+    validateRepository: (_provider, repository) => Effect.succeed(repository),
+    validateProjectRepository: (_project, _provider, repository) => Effect.succeed(repository),
     loadMergeCapabilities: () =>
       Effect.succeed({
         merge: true,
@@ -76,6 +76,50 @@ function makeTestOperations(github: GitHubCliShape) {
 }
 
 describe("makePullRequestOperations", () => {
+  it("forwards the explicit provider to pin persistence", async () => {
+    const writes: unknown[] = [];
+    const base = createGitHubCliWithFakeGh().service;
+    const operations = makePullRequestOperations({
+      github: base,
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: (input) => Effect.sync(() => void writes.push(input)),
+      },
+      findProject: () => Effect.succeed(project),
+      validateRepository: (_provider, repository) => Effect.succeed(repository),
+      validateProjectRepository: (_project, _provider, repository) => Effect.succeed(repository),
+      loadMergeCapabilities: () =>
+        Effect.succeed({
+          merge: true,
+          squash: true,
+          rebase: true,
+          deleteBranchOnMerge: false,
+        }),
+      withGitHubRead: (effect) => effect,
+      finalizeMutationCaches: () => Effect.void,
+    });
+
+    await Effect.runPromise(
+      operations.setPinned({
+        projectId: project.id,
+        provider: "bitbucket",
+        repository: "Acme/Widgets",
+        number: 42,
+        isPinned: true,
+      }),
+    );
+
+    expect(writes).toEqual([
+      {
+        projectId: project.id,
+        provider: "bitbucket",
+        repositoryKey: "acme/widgets",
+        number: 42,
+        isPinned: true,
+      },
+    ]);
+  });
+
   it("starts detail, merge-capability, and review-comment reads together", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -104,8 +148,9 @@ describe("makePullRequestOperations", () => {
             },
             pins,
             findProject: () => Effect.succeed(project),
-            validateRepository: (repository) => Effect.succeed(repository),
-            validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+            validateRepository: (_provider, repository) => Effect.succeed(repository),
+            validateProjectRepository: (_project, _provider, repository) =>
+              Effect.succeed(repository),
             loadMergeCapabilities: () =>
               waitForRelease(capabilitiesStarted, {
                 merge: true,

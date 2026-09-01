@@ -300,10 +300,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectSources"],
         [98, "OutboundMcpConnections"],
+        [99, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-44), [
+      assert.deepStrictEqual(tracker.slice(-45), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -348,6 +349,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
         { migration_id: 97, name: "ProjectSources" },
         { migration_id: 98, name: "OutboundMcpConnections" },
+        { migration_id: 99, name: "ProjectPullRequestPinProviders" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -438,6 +440,7 @@ agentGatewayRetentionLegacyLayer(
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectSources"],
           [98, "OutboundMcpConnections"],
+          [99, "ProjectPullRequestPinProviders"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -531,11 +534,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectSources"],
         [98, "OutboundMcpConnections"],
+        [99, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-28).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-29).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -565,6 +569,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectSources"],
           [98, "OutboundMcpConnections"],
+          [99, "ProjectPullRequestPinProviders"],
         ],
       );
 
@@ -653,11 +658,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectSources"],
         [98, "OutboundMcpConnections"],
+        [99, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-24).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-25).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -683,6 +689,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectSources"],
           [98, "OutboundMcpConnections"],
+          [99, "ProjectPullRequestPinProviders"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -831,6 +838,46 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
 });
 
 const managedAttachmentsIdempotencyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+const projectPullRequestPinProvidersLayer = it.layer(
+  Layer.mergeAll(NodeSqliteClient.layerMemory()),
+);
+
+projectPullRequestPinProvidersLayer("project pull request pin provider migration", (it) => {
+  it.effect("preserves legacy pins as GitHub rows", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 98 });
+      yield* sql`
+        INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
+        VALUES ('project-legacy-pin', 'owner/repo', 7)
+      `;
+
+      assert.deepStrictEqual(yield* runMigrations(), [[99, "ProjectPullRequestPinProviders"]]);
+      const rows = yield* sql<{
+        readonly projectId: string;
+        readonly provider: string;
+        readonly repositoryKey: string;
+        readonly number: number;
+      }>`
+        SELECT
+          project_id AS "projectId",
+          provider,
+          repository_key AS "repositoryKey",
+          pull_request_number AS "number"
+        FROM project_pull_request_pins
+      `;
+      assert.deepStrictEqual(rows, [
+        {
+          projectId: "project-legacy-pin",
+          provider: "github",
+          repositoryKey: "owner/repo",
+          number: 7,
+        },
+      ]);
+    }),
+  );
+});
 
 managedAttachmentsIdempotencyLayer("managed attachment migration idempotency", (it) => {
   it.effect("is idempotent after the managed attachment schema is registered", () =>

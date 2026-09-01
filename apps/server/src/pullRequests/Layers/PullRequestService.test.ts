@@ -1,5 +1,6 @@
 import { ProjectId } from "@synara/contracts";
 import type { OrchestrationProject } from "@synara/contracts";
+import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +19,16 @@ import {
 } from "./PullRequestService";
 
 const now = "2026-07-15T00:00:00.000Z";
+
+const bitbucketRepository: RemoteRepositoryRef = {
+  provider: "bitbucket",
+  host: "bitbucket.org",
+  owner: "paraty",
+  slug: "payment-seeker",
+  webUrl: "https://bitbucket.org/paraty/payment-seeker",
+  identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker",
+  displayName: "paraty/payment-seeker",
+};
 
 function makeProject(id: string, title: string, workspaceRoot: string): OrchestrationProject {
   return {
@@ -64,9 +75,15 @@ function makeBatch(
 }
 
 function makePins(
-  rows: ReadonlyArray<{ projectId: ProjectId; repositoryKey: string; number: number }> = [],
+  rows: ReadonlyArray<{
+    projectId: ProjectId;
+    provider?: "github" | "bitbucket";
+    repositoryKey: string;
+    number: number;
+  }> = [],
   onSetPinned?: (input: {
     projectId: ProjectId;
+    provider: "github" | "bitbucket";
     repositoryKey: string;
     number: number;
     isPinned: boolean;
@@ -74,7 +91,11 @@ function makePins(
 ): ProjectPullRequestPinsShape {
   return {
     listByProjectIds: ({ projectIds }) =>
-      Effect.succeed(rows.filter((row) => projectIds.includes(row.projectId))),
+      Effect.succeed(
+        rows
+          .filter((row) => projectIds.includes(row.projectId))
+          .map((row) => ({ ...row, provider: row.provider ?? ("github" as const) })),
+      ),
     setPinned: (input) => Effect.sync(() => onSetPinned?.(input)),
   };
 }
@@ -82,6 +103,7 @@ function makePins(
 function makeDependencies(input: {
   projects: OrchestrationProject[];
   repositories: ReadonlyMap<ProjectId, string>;
+  remoteRepositories?: ReadonlyMap<ProjectId, ReadonlyArray<RemoteRepositoryRef>>;
   github: GitHubCliShape;
   pins?: ProjectPullRequestPinsShape;
 }) {
@@ -91,10 +113,24 @@ function makeDependencies(input: {
     pins: input.pins ?? makePins(),
     listProjects: () => Effect.succeed(input.projects),
     resolveRepositories: (project: OrchestrationProject) => {
+      const remoteRepositories = input.remoteRepositories?.get(project.id);
+      if (remoteRepositories) {
+        return Effect.succeed({ repositories: remoteRepositories, authoritative: true });
+      }
       const repository = input.repositories.get(project.id);
       return Effect.succeed({
         repositories: repository
-          ? [{ nameWithOwner: repository, url: `https://github.com/${repository}` }]
+          ? [
+              {
+                provider: "github" as const,
+                host: "github.com",
+                owner: repository.split("/")[0]!,
+                slug: repository.split("/")[1]!,
+                webUrl: `https://github.com/${repository}`,
+                identityKey: `github:github.com:${repository.toLowerCase()}`,
+                displayName: repository,
+              },
+            ]
           : [],
         authoritative: true,
       });
@@ -294,12 +330,20 @@ describe("PullRequestService", () => {
   it("allows clearing a pin after its repository remote was removed", async () => {
     const project = makeProject("project-orphan", "Orphan", "/tmp/orphan");
     const base = createGitHubCliWithFakeGh().service;
-    const writes: Array<{ repositoryKey: string; isPinned: boolean }> = [];
+    const writes: Array<{
+      provider: "github" | "bitbucket";
+      repositoryKey: string;
+      isPinned: boolean;
+    }> = [];
     const pins: ProjectPullRequestPinsShape = {
       listByProjectIds: () => Effect.succeed([]),
       setPinned: (input) =>
         Effect.sync(() => {
-          writes.push({ repositoryKey: input.repositoryKey, isPinned: input.isPinned });
+          writes.push({
+            provider: input.provider,
+            repositoryKey: input.repositoryKey,
+            isPinned: input.isPinned,
+          });
         }),
     };
 
@@ -325,12 +369,19 @@ describe("PullRequestService", () => {
     );
 
     expect(result.repository).toBe("Acme/Removed");
-    expect(writes).toEqual([{ repositoryKey: "acme/removed", isPinned: false }]);
+    expect(writes).toEqual([
+      { provider: "github", repositoryKey: "acme/removed", isPinned: false },
+    ]);
   });
 
   it("cleans pins for repositories removed after a successful project inventory", async () => {
     const project = makeProject("project-stale-repo", "Stale repo", "/tmp/stale-repo");
-    const writes: Array<{ repositoryKey: string; number: number; isPinned: boolean }> = [];
+    const writes: Array<{
+      provider: "github" | "bitbucket";
+      repositoryKey: string;
+      number: number;
+      isPinned: boolean;
+    }> = [];
     const pins = makePins(
       [
         { projectId: project.id, repositoryKey: "acme/removed", number: 9 },
@@ -356,7 +407,13 @@ describe("PullRequestService", () => {
     );
 
     expect(writes).toEqual([
-      { projectId: project.id, repositoryKey: "acme/removed", number: 9, isPinned: false },
+      {
+        projectId: project.id,
+        provider: "github",
+        repositoryKey: "acme/removed",
+        number: 9,
+        isPinned: false,
+      },
     ]);
   });
 
@@ -417,6 +474,80 @@ describe("PullRequestService", () => {
     );
 
     expect(writes).toEqual([]);
+  });
+
+  it("preserves a Bitbucket pin from authoritative local Git inventory without MCP state", async () => {
+    const project = makeProject("project-bitbucket-pin", "Bitbucket", "/tmp/bitbucket");
+    const writes: unknown[] = [];
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([[project.id, [bitbucketRepository]]]),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins(
+                [
+                  {
+                    projectId: project.id,
+                    provider: "bitbucket",
+                    repositoryKey: "paraty/payment-seeker",
+                    number: 17,
+                  },
+                ],
+                (input) => writes.push(input),
+              ),
+            }),
+          );
+          return yield* service.list({ state: "open", involvement: "all" });
+        }),
+      ),
+    );
+
+    expect(writes).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("persists an explicit Bitbucket pin for a matching local remote", async () => {
+    const project = makeProject("project-pin-bitbucket", "Pin Bitbucket", "/tmp/pin-bitbucket");
+    const writes: unknown[] = [];
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([[project.id, [bitbucketRepository]]]),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins([], (input) => writes.push(input)),
+            }),
+          );
+          return yield* service.setPinned({
+            projectId: project.id,
+            provider: "bitbucket",
+            repository: "Paraty/Payment-Seeker",
+            number: 17,
+            isPinned: true,
+          });
+        }),
+      ),
+    );
+
+    expect(result.provider).toBe("bitbucket");
+    expect(writes).toEqual([
+      {
+        projectId: project.id,
+        provider: "bitbucket",
+        repositoryKey: "paraty/payment-seeker",
+        number: 17,
+        isPinned: true,
+      },
+    ]);
   });
 
   it("uses raw list cardinality to recover a pin after a malformed capped item", async () => {
@@ -607,6 +738,7 @@ describe("PullRequestService", () => {
     const project = makeProject("project-missing-pin", "Missing pin", "/tmp/missing-pin");
     const writes: Array<{
       projectId: ProjectId;
+      provider: "github" | "bitbucket";
       repositoryKey: string;
       number: number;
       isPinned: boolean;
@@ -646,7 +778,13 @@ describe("PullRequestService", () => {
     );
 
     expect(writes).toEqual([
-      { projectId: project.id, repositoryKey: "acme/shared", number: 99, isPinned: false },
+      {
+        projectId: project.id,
+        provider: "github",
+        repositoryKey: "acme/shared",
+        number: 99,
+        isPinned: false,
+      },
     ]);
   });
 

@@ -23,9 +23,13 @@ export function makePullRequestOperations(dependencies: {
   findProject: (
     projectId: Parameters<PullRequestServiceShape["detail"]>[0]["projectId"],
   ) => Effect.Effect<OrchestrationProject, unknown>;
-  validateRepository: (repository: string) => Effect.Effect<string, Error>;
+  validateRepository: (
+    provider: PullRequestProvider,
+    repository: string,
+  ) => Effect.Effect<string, Error>;
   validateProjectRepository: (
     project: OrchestrationProject,
+    provider: PullRequestProvider,
     repository: string,
   ) => Effect.Effect<string, unknown>;
   loadMergeCapabilities: (
@@ -47,7 +51,11 @@ export function makePullRequestOperations(dependencies: {
 
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
     Effect.gen(function* () {
-      const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
+      const repository = yield* dependencies.validateProjectRepository(
+        project,
+        "github",
+        repositoryInput,
+      );
       const [owner = "", repo = ""] = repository.split("/");
       const [detail, mergeCapabilities, reviewCommentsResult, stackResult] = yield* Effect.all(
         [
@@ -139,7 +147,11 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
-      const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const repository = yield* dependencies.validateProjectRepository(
+        project,
+        "github",
+        input.repository,
+      );
       return yield* dependencies.withGitHubRead(
         dependencies.github.getPullRequestDiff({
           cwd: project.workspaceRoot,
@@ -153,7 +165,11 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
-      const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const repository = yield* dependencies.validateProjectRepository(
+        project,
+        "github",
+        input.repository,
+      );
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
         const capabilities = yield* dependencies.loadMergeCapabilities(
@@ -202,7 +218,11 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       yield* requireGitHubProvider(input.provider);
       const project = yield* dependencies.findProject(input.projectId);
-      const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const repository = yield* dependencies.validateProjectRepository(
+        project,
+        "github",
+        input.repository,
+      );
       yield* dependencies.github
         .commentOnPullRequest({
           cwd: project.workspaceRoot,
@@ -229,21 +249,22 @@ export function makePullRequestOperations(dependencies: {
 
   const setPinned: PullRequestServiceShape["setPinned"] = (input) =>
     Effect.gen(function* () {
-      yield* requireGitHubProvider(input.provider);
+      const provider = input.provider ?? "github";
       const project = yield* dependencies.findProject(input.projectId);
       // Clearing an orphaned pin intentionally requires only a valid canonical repository key.
       const repository = yield* input.isPinned
-        ? dependencies.validateProjectRepository(project, input.repository)
-        : dependencies.validateRepository(input.repository);
+        ? dependencies.validateProjectRepository(project, provider, input.repository)
+        : dependencies.validateRepository(provider, input.repository);
       yield* dependencies.pins.setPinned({
         projectId: project.id,
+        provider,
         repositoryKey: repository.toLowerCase(),
         number: input.number,
         isPinned: input.isPinned,
       });
       return {
         projectId: project.id,
-        provider: "github",
+        provider,
         repository,
         number: input.number,
         isPinned: input.isPinned,

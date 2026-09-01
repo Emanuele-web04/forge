@@ -272,6 +272,7 @@ export function recoverPinnedPullRequests(input: {
         input.pinStore
           .setPinned({
             projectId: row.projectId,
+            provider: row.provider,
             repositoryKey: row.repositoryKey,
             number: row.number,
             isPinned: false,

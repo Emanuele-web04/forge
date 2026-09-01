@@ -73,9 +73,9 @@ describe("pullRequestListCacheKey", () => {
     expect(pullRequestListCacheKey("github", "OpenAI/Codex", "open", "authored", "OctoCat")).toBe(
       "github:openai/codex:open:authored:octocat",
     );
-    expect(pullRequestListCacheKey("github", "openai/codex", "open", "reviewing", "octocat")).not.toBe(
-      pullRequestListCacheKey("github", "openai/codex", "open", "all", "octocat"),
-    );
+    expect(
+      pullRequestListCacheKey("github", "openai/codex", "open", "reviewing", "octocat"),
+    ).not.toBe(pullRequestListCacheKey("github", "openai/codex", "open", "all", "octocat"));
     expect(pullRequestListCacheKey("github", "openai/codex", "open", "all", "octocat")).not.toBe(
       pullRequestListCacheKey("bitbucket", "openai/codex", "open", "all", "octocat"),
     );
@@ -139,10 +139,36 @@ describe("project pull request priority", () => {
 
   it("recovers only missing pins from truncated batches owned by the same project", () => {
     const pins = [
-      { projectId: "project-a", repositoryKey: "acme/widgets", number: 1 },
-      { projectId: "project-b", repositoryKey: "acme/widgets", number: 2 },
-      { projectId: "project-a", repositoryKey: "acme/complete", number: 3 },
-      { projectId: "project-a", repositoryKey: "acme/widgets", number: 4 },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 1,
+      },
+      {
+        projectId: "project-b",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 2,
+      },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/complete",
+        number: 3,
+      },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 4,
+      },
+      {
+        projectId: "project-a",
+        provider: "bitbucket" as const,
+        repositoryKey: "acme/widgets",
+        number: 5,
+      },
     ];
     const presentKeys = new Set([
       projectPullRequestIdentityKey({
@@ -156,8 +182,8 @@ describe("project pull request priority", () => {
       pins,
       presentKeys,
       repositoryKeysByProject: new Map([
-        ["project-a", new Set(["acme/widgets", "acme/complete"])],
-        ["project-b", new Set(["acme/other"])],
+        ["project-a", new Set(["github\0acme/widgets", "github\0acme/complete"])],
+        ["project-b", new Set(["github\0acme/other"])],
       ]),
       batches: [
         {
@@ -183,16 +209,38 @@ describe("project pull request priority", () => {
         repository: " Acme/Widgets ",
         number: 42,
       }),
-    ).toBe(repositoryPullRequestIdentityKey({ provider: "github", repository: "acme/widgets", number: 42 }));
-    expect(
-      repositoryPullRequestIdentityKey({ provider: "github", repository: "acme/widgets", number: 42 }),
-    ).not.toBe(
-      repositoryPullRequestIdentityKey({ provider: "bitbucket", repository: "acme/widgets", number: 42 }),
+    ).toBe(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
     );
     expect(
-      repositoryPullRequestIdentityKey({ provider: "github", repository: "acme/widgets", number: 42 }),
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
     ).not.toBe(
-      repositoryPullRequestIdentityKey({ provider: "github", repository: "acme/other", number: 42 }),
+      repositoryPullRequestIdentityKey({
+        provider: "bitbucket",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    );
+    expect(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    ).not.toBe(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/other",
+        number: 42,
+      }),
     );
   });
 

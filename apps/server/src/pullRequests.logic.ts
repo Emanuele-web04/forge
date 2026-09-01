@@ -15,6 +15,7 @@ import {
 } from "@synara/shared/githubRepository";
 
 import type { GitHubPullRequestListItem } from "./git/Services/GitHubCli.ts";
+import { pullRequestPinRepositoryKey } from "./pullRequests/projectRepositoryInventory.ts";
 export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
 
 export function pullRequestListCacheKey(
@@ -72,7 +73,12 @@ export function projectPullRequestIdentityKey(input: {
  * repository that happens to be configured by a different project in the same aggregate request. */
 export function selectRecoverablePullRequestPins<
   P extends string,
-  T extends { projectId: P; repositoryKey: string; number: number },
+  T extends {
+    projectId: P;
+    provider: PullRequestProvider;
+    repositoryKey: string;
+    number: number;
+  },
 >(input: {
   pins: ReadonlyArray<T>;
   presentKeys: ReadonlySet<string>;
@@ -95,12 +101,14 @@ export function selectRecoverablePullRequestPins<
   );
   return input.pins.filter((pin) => {
     const repository = pin.repositoryKey.trim().toLowerCase();
-    const provider: PullRequestProvider = "github";
+    const provider = pin.provider;
     const batch = batches.get(`${provider}\u0000${repository}`);
     return (
       batch?.truncated === true &&
       batch.projectIds.includes(pin.projectId) &&
-      input.repositoryKeysByProject.get(pin.projectId)?.has(repository) === true &&
+      input.repositoryKeysByProject
+        .get(pin.projectId)
+        ?.has(pullRequestPinRepositoryKey(provider, repository)) === true &&
       !input.presentKeys.has(
         projectPullRequestIdentityKey({
           projectId: pin.projectId,

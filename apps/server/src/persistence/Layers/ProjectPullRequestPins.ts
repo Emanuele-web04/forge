@@ -23,12 +23,14 @@ const makeProjectPullRequestPins = Effect.gen(function* () {
     execute: ({ projectIds }) => sql`
       SELECT
         project_id AS "projectId",
+        provider,
         repository_key AS "repositoryKey",
         pull_request_number AS "number"
       FROM project_pull_request_pins
       WHERE project_id IN ${sql.in(projectIds)}
       ORDER BY
         project_id ASC,
+        provider ASC,
         repository_key ASC,
         pull_request_number ASC
     `,
@@ -42,12 +44,13 @@ const makeProjectPullRequestPins = Effect.gen(function* () {
   const readProjectPinCount = SqlSchema.findOne({
     Request: SetProjectPullRequestPinnedInput,
     Result: PinCountRow,
-    execute: ({ projectId, repositoryKey, number }) => sql`
+    execute: ({ projectId, provider, repositoryKey, number }) => sql`
       SELECT
         COUNT(*) AS "count",
         COALESCE(MAX(
           CASE
             WHEN repository_key = ${repositoryKey}
+              AND provider = ${provider}
               AND pull_request_number = ${number}
             THEN 1
             ELSE 0
@@ -60,22 +63,24 @@ const makeProjectPullRequestPins = Effect.gen(function* () {
 
   const insertPinRow = SqlSchema.void({
     Request: SetProjectPullRequestPinnedInput,
-    execute: ({ projectId, repositoryKey, number }) => sql`
+    execute: ({ projectId, provider, repositoryKey, number }) => sql`
       INSERT INTO project_pull_request_pins (
         project_id,
+        provider,
         repository_key,
         pull_request_number
       )
-      VALUES (${projectId}, ${repositoryKey}, ${number})
-      ON CONFLICT (project_id, repository_key, pull_request_number) DO NOTHING
+      VALUES (${projectId}, ${provider}, ${repositoryKey}, ${number})
+      ON CONFLICT (project_id, provider, repository_key, pull_request_number) DO NOTHING
     `,
   });
 
   const deletePinRow = SqlSchema.void({
     Request: SetProjectPullRequestPinnedInput,
-    execute: ({ projectId, repositoryKey, number }) => sql`
+    execute: ({ projectId, provider, repositoryKey, number }) => sql`
       DELETE FROM project_pull_request_pins
       WHERE project_id = ${projectId}
+        AND provider = ${provider}
         AND repository_key = ${repositoryKey}
         AND pull_request_number = ${number}
     `,
