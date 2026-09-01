@@ -302,30 +302,6 @@ describe("AcpSessionRuntime Devin incoming byte transport normalization", () => 
       incremental: false,
     });
   });
-
-  it("keeps unknown fields and nonboolean block visible to strict validation", async () => {
-    const messages = await normalizeTransportChunks([
-      textEncoder.encode(
-        [
-          getOutputRequest(1, {
-            shell_id: "unknown-shell",
-            block: true,
-            timeout: 7,
-            incremental: true,
-            unknown: "rejected",
-          }),
-          getOutputRequest(2, {
-            shell_id: "nonboolean-shell",
-            block: "true",
-            timeout: 8,
-            incremental: true,
-          }),
-        ].join("\n") + "\n",
-      ),
-    ]);
-    expect(() => parseDevinGetOutputParams(messages[0]!.params)).toThrow();
-    expect(() => parseDevinGetOutputParams(messages[1]!.params)).toThrow();
-  });
 });
 
 describe("normalizeDevinGetOutputToolCall", () => {

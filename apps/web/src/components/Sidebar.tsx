@@ -2613,6 +2613,11 @@ export default function Sidebar() {
           if (recovered) {
             return;
           }
+          if (creationResult.created) {
+            // The opener's draft navigation was superseded; retrying here
+            // would override the user's newer route.
+            throw new Error("Project creation was superseded before its chat opened.");
+          }
         }
 
         if (!creationResult.created) {
@@ -3408,8 +3413,7 @@ export default function Sidebar() {
               if (!project || !snapshot) return false;
 
               handleSelectSpaceForIncomingProject(project.spaceId ?? null);
-              await openExistingProjectFromSnapshot(project.id, snapshot);
-              return true;
+              return openExistingProjectFromSnapshot(project.id, snapshot);
             };
             const requestedProjectId = newProjectId();
             const requestedWorkspaceRoot = joinProjectPath(
