@@ -27,7 +27,9 @@ const UnitWeight = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
 export const MindMemory = Schema.Struct({
   memoryId: MindMemoryId,
   projectId: ProjectId,
-  text: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(MIND_MEMORY_TEXT_MAX_CHARS)),
+  text: Schema.String.check(Schema.isNonEmpty()).check(
+    Schema.isMaxLength(MIND_MEMORY_TEXT_MAX_CHARS),
+  ),
   type: MindMemoryType,
   weight: UnitWeight,
   accessCount: NonNegativeInt,
@@ -68,8 +70,15 @@ export const MindJournalOp = Schema.Literals([
 export type MindJournalOp = typeof MindJournalOp.Type;
 
 export const MindJournalEntry = Schema.Struct({
-  memoryId: MindMemoryId, projectId: ProjectId, op: MindJournalOp,
-  actor: Schema.Union([Schema.Struct({ kind: Schema.Literal("agent"), provider: ProviderKind }), Schema.Struct({ kind: Schema.Literal("user") })]),
-  threadId: Schema.NullOr(ThreadId), turnId: Schema.NullOr(TrimmedNonEmptyString), createdAt: IsoDateTime,
+  memoryId: MindMemoryId,
+  projectId: ProjectId,
+  op: MindJournalOp,
+  actor: Schema.Union([
+    Schema.Struct({ kind: Schema.Literal("agent"), provider: ProviderKind }),
+    Schema.Struct({ kind: Schema.Literal("user") }),
+  ]),
+  threadId: Schema.NullOr(ThreadId),
+  turnId: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
 });
 export type MindJournalEntry = typeof MindJournalEntry.Type;
