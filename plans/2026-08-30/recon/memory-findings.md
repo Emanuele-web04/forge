@@ -116,3 +116,28 @@ Suspects 3.1 and 3.3 require deeper investigation of the Pi SDK/extension runner
 1. Why did `repairState` run at 11:20:56? The preceding `generateThreadTitle` failure suggests an empty-route or desktop-recovery path called `api.orchestration.repairState()` (see `apps/web/src/routes/__root.tsx:2343` and `routeRestoreRefreshCoordinator.ts`). The repair is expensive and re-bootstraps all projectors; calling it on title-generation failure or thread-switch may be unintentional.
 2. Can `repairState` be throttled or made observable? The cooldown exists, but the repair still blocks command reads for the duration of the replay. Adding a metric/log with the caller context would help confirm the trigger.
 3. Does the Pi SDK 0.84.4 bump remove the OOM-prone handoff loop? The SDK bump fixes the `modelRegistry.complete` incompatibility, but the extension runner may still retain large state. Live Pi soak with a heap snapshot is the only way to verify.
+
+## 6. Isolated-instance 30-minute trace (2026-09-01, lane-01)
+
+Captured against the isolated dev instance started with
+`env -u SYNARA_AUTH_TOKEN SYNARA_PORT_OFFSET=3101 SYNARA_NO_BROWSER=1 bun run dev -- --home-dir ./.synara-h01 --port 58101`
+(dry-run first). Sampler: `server.getDiagnostics` over WebSocket every 30 s for 31 minutes
+(62 samples, raw log `evidence/lane-01-memory-trace.log`).
+
+| metric (MB) | start | min | max | end |
+|---|---|---|---|---|
+| rss | 99 | 49 | 99 | 68 |
+| heapUsed | 46 | 46 | 64 | 51 |
+| external | 9 | — | 23 | 13 |
+| arrayBuffers | 0 | — | 6 | 1 |
+
+heapUsedPercent (of heapTotal, which V8 keeps small in Bun and resizes on demand) ranged
+72–99% of a 51–64 MB heapTotal; the absolute heapUsed series above is the leak signal, and
+it shows no monotonic growth. No monotonic growth in any series across 31 minutes of steady
+state; RSS declined from 99 to 68 MB.
+This is consistent with the 512 KB per-message in-memory cap doing its job: the read model
+does not accumulate unbounded text even with the lane's Pi session data in the projection
+(store carried the gate-2 project/thread rows). Byte-level retainer ranking still requires
+a heap snapshot (Bun exposes no runtime inspector trigger; SIGUSR1 terminates the process),
+so the suspect ranking in section 3 remains qualitative; the measured external/arrayBuffers
+series above are the bounded byte sizes of those retainer classes in steady state.
