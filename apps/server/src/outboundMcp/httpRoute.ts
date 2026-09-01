@@ -39,6 +39,43 @@ function disabledResponse() {
   });
 }
 
+export function isOutboundMcpCallbackAuthority(
+  authority: string | undefined,
+  callbackUrl: URL,
+): boolean {
+  if (authority === undefined || authority.length === 0) return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${authority}/`);
+  } catch {
+    return false;
+  }
+
+  return (
+    parsed.username.length === 0 &&
+    parsed.password.length === 0 &&
+    parsed.host === callbackUrl.host &&
+    authority === parsed.host
+  );
+}
+
+function requestHostAuthorities(
+  request: HttpServerRequest.HttpServerRequest,
+): ReadonlyArray<string> {
+  const source = request.source;
+  if (!("rawHeaders" in source) || !Array.isArray(source.rawHeaders)) return [];
+
+  const authorities: string[] = [];
+  for (let index = 0; index < source.rawHeaders.length; index += 2) {
+    const name = source.rawHeaders[index];
+    const value = source.rawHeaders[index + 1];
+    if (typeof name !== "string" || typeof value !== "string") return [];
+    if (name.toLowerCase() === "host") authorities.push(value);
+  }
+  return authorities;
+}
+
 function readCallback(url: URL): McpCompleteAuthorizationInput | null {
   const state = url.searchParams.getAll("state");
   const code = url.searchParams.getAll("code");
@@ -63,9 +100,14 @@ const oauthCallback = HttpRouter.add(
   OUTBOUND_MCP_OAUTH_CALLBACK_PATH,
   Effect.gen(function* () {
     const callbackEndpoint = yield* OutboundMcpCallbackEndpoint;
-    if ((yield* callbackEndpoint.currentUrl) === null) return disabledResponse();
+    const callbackUrl = yield* callbackEndpoint.currentUrl;
+    if (callbackUrl === null) return disabledResponse();
 
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const authorities = requestHostAuthorities(request);
+    if (authorities.length !== 1 || !isOutboundMcpCallbackAuthority(authorities[0], callbackUrl)) {
+      return disabledResponse();
+    }
     const url = HttpServerRequest.toURL(request);
     const callback = url === null ? null : readCallback(url);
     if (callback === null) return callbackResponse(false);

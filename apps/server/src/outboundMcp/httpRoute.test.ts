@@ -15,7 +15,49 @@ import {
   McpConnectionService,
   type McpCompleteAuthorizationInput,
 } from "./Services/McpConnectionService.ts";
-import { OUTBOUND_MCP_OAUTH_CALLBACK_PATH, outboundMcpRouteLayer } from "./httpRoute.ts";
+import {
+  isOutboundMcpCallbackAuthority,
+  OUTBOUND_MCP_OAUTH_CALLBACK_PATH,
+  outboundMcpRouteLayer,
+} from "./httpRoute.ts";
+
+interface CallbackHttpResponse {
+  readonly body: string;
+  readonly headers: http.IncomingHttpHeaders;
+  readonly status: number;
+}
+
+function requestCallback(
+  origin: string,
+  path: string,
+  headers: ReadonlyArray<string>,
+): Promise<CallbackHttpResponse> {
+  const target = new URL(path, origin);
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: "GET",
+        headers,
+        setHost: false,
+      },
+      (response) => {
+        response.setEncoding("utf8");
+        let body = "";
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          resolve({ body, headers: response.headers, status: response.statusCode ?? 0 });
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
 
 async function withOutboundMcpCallbackServer(
   input: {
@@ -111,6 +153,45 @@ async function withOutboundMcpCallbackServer(
 }
 
 describe("outboundMcpRouteLayer", () => {
+  it.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["duplicate", "127.0.0.1:58090, attacker.example.test"],
+    ["userinfo-like", "attacker@127.0.0.1:58090"],
+    ["malformed port", "127.0.0.1:58090:80"],
+    ["scheme-like", "http://127.0.0.1:58090"],
+    ["default-port alias", "127.0.0.1:80"],
+  ])("rejects a %s callback authority", (_label, authority) => {
+    expect(
+      isOutboundMcpCallbackAuthority(
+        authority,
+        new URL("http://127.0.0.1:58090/api/mcp/outbound/oauth/callback"),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts exact canonical IPv4 and bracketed IPv6 callback authorities", () => {
+    expect(
+      isOutboundMcpCallbackAuthority(
+        "127.0.0.1:58090",
+        new URL("http://127.0.0.1:58090/api/mcp/outbound/oauth/callback"),
+      ),
+    ).toBe(true);
+    expect(
+      isOutboundMcpCallbackAuthority(
+        "[::1]:58090",
+        new URL("http://[::1]:58090/api/mcp/outbound/oauth/callback"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an explicit default port when WHATWG canonicalization omits it", () => {
+    const callbackUrl = new URL("http://127.0.0.1:80/api/mcp/outbound/oauth/callback");
+
+    expect(isOutboundMcpCallbackAuthority("127.0.0.1:80", callbackUrl)).toBe(false);
+    expect(isOutboundMcpCallbackAuthority("127.0.0.1", callbackUrl)).toBe(true);
+  });
+
   it("derives the redirect URI from the resolved IPv4 listener port and clears it", async () => {
     const endpoint = makeOutboundMcpCallbackEndpoint();
     const stableCallbackUrl = endpoint.callbackUrl;
@@ -176,22 +257,56 @@ describe("outboundMcpRouteLayer", () => {
   it("completes a loopback callback once without reflecting OAuth values", async () => {
     await withOutboundMcpCallbackServer({}, async ({ origin, completed, callbackUrl }) => {
       const requestUrl = `${origin}${OUTBOUND_MCP_OAUTH_CALLBACK_PATH}?code=c1&state=s1`;
-      const response = await fetch(requestUrl, {
-        headers: { Host: "attacker.example.test" },
-      });
-      const body = await response.text();
+      const response = await requestCallback(origin, requestUrl, [
+        "Host",
+        callbackUrl?.host ?? "missing.test",
+        "X-Forwarded-Host",
+        "attacker.example.test",
+        "X-Forwarded-Proto",
+        "https",
+      ]);
 
       expect(response.status).toBe(200);
       expect(callbackUrl?.href).toBe(new URL(OUTBOUND_MCP_OAUTH_CALLBACK_PATH, origin).href);
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(body).not.toContain("c1");
-      expect(body).not.toContain("s1");
-      expect(body).not.toContain("attacker.example.test");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toContain("c1");
+      expect(response.body).not.toContain("s1");
+      expect(response.body).not.toContain("attacker.example.test");
       expect(completed).toEqual([{ code: "c1", state: "s1" }]);
 
       const replay = await fetch(requestUrl);
       expect(replay.status).toBe(400);
       expect(await replay.text()).not.toContain("c1");
+    });
+  });
+
+  it("rejects spoofed and malformed Host values before completing authorization", async () => {
+    await withOutboundMcpCallbackServer({}, async ({ origin, completed, callbackUrl }) => {
+      const query = "?code=secret-code&state=secret-state";
+      const expectedAuthority = callbackUrl?.host ?? "127.0.0.1:1";
+      const requests: ReadonlyArray<readonly [string, ReadonlyArray<string>, number]> = [
+        ["hostile", ["Host", "attacker.example.test"], 404],
+        ["missing", [], 400],
+        ["duplicate", ["Host", expectedAuthority, "Host", "attacker.example.test"], 404],
+        ["missing port", ["Host", "127.0.0.1"], 404],
+        ["userinfo-like", ["Host", `attacker@${expectedAuthority}`], 404],
+        ["malformed", ["Host", `${expectedAuthority}:80`], 404],
+      ];
+
+      for (const [label, rawHeaders, expectedStatus] of requests) {
+        const response = await requestCallback(
+          origin,
+          `${OUTBOUND_MCP_OAUTH_CALLBACK_PATH}${query}`,
+          [...rawHeaders, "X-Forwarded-Host", expectedAuthority, "X-Forwarded-Proto", "http"],
+        );
+
+        expect(response.status, label).toBe(expectedStatus);
+        if (expectedStatus === 404) expect(response.headers["cache-control"]).toBe("no-store");
+        expect(response.body).not.toContain(expectedAuthority);
+        expect(response.body).not.toContain("secret-code");
+        expect(response.body).not.toContain("secret-state");
+      }
+      expect(completed).toEqual([]);
     });
   });
 
