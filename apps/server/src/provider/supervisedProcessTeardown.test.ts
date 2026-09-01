@@ -98,6 +98,73 @@ describe("teardownProviderProcessTree", () => {
     expect(signals.at(-1)).toEqual({ signal: "SIGKILL", includeRootTree: false });
   });
 
+  it("re-verifies Windows descendants before force and signals only current identities", async () => {
+    const child: CapturedProcess = {
+      pid: 802,
+      command: "provider-child.exe",
+      startedAt: "20260901100000.000000+000",
+    };
+    const grandchild: CapturedProcess = {
+      pid: 803,
+      command: "provider-grandchild.exe",
+      startedAt: "20260901100001.000000+000",
+    };
+    const tree: CapturedProcessTree = {
+      descendants: [child, grandchild],
+      captureComplete: true,
+    };
+    let descendantsRunning = true;
+    let resolveRootExit: (() => void) | undefined;
+    const rootExited = new Promise<void>((resolve) => {
+      resolveRootExit = resolve;
+    });
+    const signals: Array<{
+      signal: TerminalKillSignal;
+      includeRootTree: boolean | undefined;
+      verifiedDescendants: boolean | undefined;
+      descendants: ReadonlyArray<CapturedProcess>;
+    }> = [];
+    const processTreeKiller: ProcessTreeKiller = {
+      capture: () => tree,
+      signal: ({ signal, includeRootTree, verifiedDescendants, tree: signalTree }) => {
+        signals.push({
+          signal,
+          includeRootTree,
+          verifiedDescendants,
+          descendants: [...signalTree.descendants],
+        });
+        if (signal === "SIGTERM") resolveRootExit?.();
+        if (signal === "SIGKILL") descendantsRunning = false;
+      },
+    };
+    const clock = deterministicClock();
+
+    await expect(
+      teardownProviderProcessTree(
+        { rootPid: 801, rootExited, termGraceMs: 5, forceExitMs: 5, pollMs: 5 },
+        {
+          platform: "win32",
+          processTreeKiller,
+          captureProcessTree: async () => tree,
+          inspectProcessTree: async () => ({
+            verified: true,
+            // The child PID was reused during the grace period; only the
+            // original grandchild still matches its CIM creation identity.
+            survivors: descendantsRunning ? [grandchild] : [],
+          }),
+          ...clock,
+        },
+      ),
+    ).resolves.toEqual({ escalated: true, signalErrors: [] });
+
+    expect(signals.at(-1)).toEqual({
+      signal: "SIGKILL",
+      includeRootTree: false,
+      verifiedDescendants: true,
+      descendants: [grandchild],
+    });
+  });
+
   it("does not accept root exit as descendant proof when the snapshot failed", async () => {
     const tree: CapturedProcessTree = { descendants: [], captureComplete: false };
     const signals: Array<{ signal: TerminalKillSignal; includeRootTree: boolean | undefined }> = [];
