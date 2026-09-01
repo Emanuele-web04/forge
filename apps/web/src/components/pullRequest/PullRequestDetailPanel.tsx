@@ -185,6 +185,9 @@ export function PullRequestDetailPanel({
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
+  const canMutatePullRequestState = detail?.capabilities.stateMutation === true;
+  const canMergePullRequest = detail?.capabilities.merge === true;
+  const canResolvePullRequestComments = detail?.capabilities.resolveComment === true;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
   // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
   // invalidate exactly like every other prepare-thread flow in the app.
@@ -199,6 +202,8 @@ export function PullRequestDetailPanel({
   // React Compiler does not yet support try/finally and would skip this
   // component entirely.
   const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
+    const actionAllowed = action === "merge" ? canMergePullRequest : canMutatePullRequestState;
+    if (!actionAllowed) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     void actionMutation
@@ -320,7 +325,9 @@ export function PullRequestDetailPanel({
   };
 
   const allowedMethods = detail
-    ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
+    ? (["merge", "squash", "rebase"] as const).filter(
+        (method) => canMergePullRequest && detail.mergeCapabilities[method],
+      )
     : [];
   const selectedMergeMethod = allowedMethods.includes(mergeMethod)
     ? mergeMethod
@@ -397,7 +404,7 @@ export function PullRequestDetailPanel({
                 {/* Same popup chrome as the composer pickers (model/handoff), with emoji
                     leads for scannability. */}
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
-                  {detail.state === "open" ? (
+                  {detail.state === "open" && canMutatePullRequestState ? (
                     <>
                       <MenuRadioGroup
                         value={detail.isDraft ? "draft" : "ready"}
@@ -424,6 +431,7 @@ export function PullRequestDetailPanel({
                       button it used to sit in made Merge a visibly different control from
                       "Ready for review". Hidden while conflicting — every method would fail. */}
                   {detail.state === "open" &&
+                  canMergePullRequest &&
                   !detail.isDraft &&
                   mergeBlocker === null &&
                   allowedMethods.length > 0 ? (
@@ -455,7 +463,9 @@ export function PullRequestDetailPanel({
                   {/* Sits beside Fix findings because it is the same kind of action: hand the
                       work to a new thread. Offered only when there is a conflict to resolve,
                       which is also when the header's Merge pill is disabled. */}
-                  {detail.state === "open" && detail.mergeability === "conflicting" ? (
+                  {detail.state === "open" &&
+                  detail.mergeability === "conflicting" &&
+                  canResolvePullRequestComments ? (
                     <MenuItem onClick={resolveConflicts} disabled={preparingThread !== null}>
                       <GitMergeConflictIcon className="size-3.5 shrink-0" />
                       <span>
@@ -465,8 +475,10 @@ export function PullRequestDetailPanel({
                       </span>
                     </MenuItem>
                   ) : null}
-                  {detail.state !== "merged" ? <MenuSeparator /> : null}
-                  {detail.state === "open" ? (
+                  {detail.state !== "merged" && canMutatePullRequestState ? (
+                    <MenuSeparator />
+                  ) : null}
+                  {detail.state === "open" && canMutatePullRequestState ? (
                     <MenuItem
                       variant="destructive"
                       disabled={actionPending}
@@ -475,7 +487,7 @@ export function PullRequestDetailPanel({
                       <GitPullRequestClosedIcon className="size-3.5 shrink-0" />
                       <span>Close pull request</span>
                     </MenuItem>
-                  ) : detail.state === "closed" ? (
+                  ) : detail.state === "closed" && canMutatePullRequestState ? (
                     <MenuItem disabled={actionPending} onClick={() => void runAction("reopen")}>
                       <GitPullRequestIcon className="size-3.5 shrink-0" />
                       <span>Reopen pull request</span>
@@ -483,7 +495,7 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </ComposerPickerMenuPopup>
               </Menu>
-              {detail.state === "open" && detail.isDraft ? (
+              {detail.state === "open" && detail.isDraft && canMutatePullRequestState ? (
                 // A draft's primary action is publishing it for review — merge/conflicts
                 // only become relevant once it leaves draft.
                 <Button
@@ -494,7 +506,7 @@ export function PullRequestDetailPanel({
                 >
                   Ready for review
                 </Button>
-              ) : detail.state === "open" && mergeBlocker !== null ? (
+              ) : detail.state === "open" && mergeBlocker !== null && canMergePullRequest ? (
                 // Non-draft only (a draft's next step is "Ready for review"). The header keeps
                 // saying Merge — the action the PR is heading for — but the pill is inert until
                 // the branch is reconciled, and hovering it says why. No method chevron: there
@@ -530,7 +542,10 @@ export function PullRequestDetailPanel({
                   </TooltipTrigger>
                   <TooltipPopup side="bottom">{mergeBlocker}</TooltipPopup>
                 </Tooltip>
-              ) : detail.state === "open" && !detail.isDraft && allowedMethods.length > 0 ? (
+              ) : detail.state === "open" &&
+                !detail.isDraft &&
+                canMergePullRequest &&
+                allowedMethods.length > 0 ? (
                 // One pill, no method chevron beside it: a split button's label can never sit
                 // on the group's centre (it lands half the chevron's width to the left) and its
                 // inner corners are pinned to radius 0, so Merge read as a different control
@@ -618,7 +633,10 @@ export function PullRequestDetailPanel({
       </div>
 
       <AlertDialog
-        open={confirmAction !== null}
+        open={
+          (confirmAction === "merge" && canMergePullRequest) ||
+          (confirmAction === "close" && canMutatePullRequestState)
+        }
         onOpenChange={(open) => !open && setConfirmAction(null)}
       >
         <AlertDialogPopup>

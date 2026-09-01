@@ -51,6 +51,14 @@ const READ_ONLY_CAPABILITIES = {
   merge: false,
 } as const;
 
+const BITBUCKET_WRITABLE_CAPABILITY_KEYS = [
+  "checks",
+  "comment",
+  "resolveComment",
+  "stateMutation",
+  "merge",
+] as const;
+
 function listEntry() {
   return {
     projectId: "project-1",
@@ -114,6 +122,24 @@ describe("PullRequestListEntry", () => {
     expect(() => decodeListEntry({ ...listEntry(), provider: "bitbucket" })).toThrow();
   });
 
+  it("rejects explicit Bitbucket list rows with writable capabilities", () => {
+    for (const capability of BITBUCKET_WRITABLE_CAPABILITY_KEYS) {
+      expect(() =>
+        decodeListEntry({
+          ...listEntry(),
+          provider: "bitbucket",
+          repository: "paraty/payment-seeker",
+          url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/42",
+          capabilities: { ...READ_ONLY_CAPABILITIES, [capability]: true },
+          viewerInvolvement: "unknown",
+          additions: null,
+          deletions: null,
+          mergeability: null,
+        }),
+      ).toThrow();
+    }
+  });
+
   it("decodes explicit Bitbucket read-only rows without fabricating unavailable stats", () => {
     const decoded = decodeListEntry({
       ...listEntry(),
@@ -137,6 +163,52 @@ describe("PullRequestListEntry", () => {
 });
 
 describe("PullRequestDetail", () => {
+  function bitbucketDetail(overrides: Record<string, unknown> = {}) {
+    return {
+      projectId: "project-1",
+      projectTitle: "Project One",
+      workspaceRoot: "/workspace/project-one",
+      provider: "bitbucket",
+      repository: "paraty/payment-seeker",
+      number: 12,
+      title: "Read-only provider",
+      body: "Description",
+      url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/12",
+      capabilities: READ_ONLY_CAPABILITIES,
+      author: null,
+      state: "open",
+      isDraft: false,
+      mergeable: null,
+      mergeability: null,
+      mergeStateStatus: null,
+      reviewDecision: null,
+      additions: null,
+      deletions: null,
+      changedFiles: null,
+      headBranch: "feature/readonly",
+      baseBranch: "main",
+      createdAt: "2026-07-13T08:00:00.000Z",
+      updatedAt: "2026-07-14T08:00:00.000Z",
+      mergedAt: null,
+      closedAt: null,
+      maintainerCanModify: false,
+      reviewers: [],
+      labels: [],
+      checks: null,
+      comments: [],
+      commentsTruncated: false,
+      commentsIncomplete: false,
+      commits: [],
+      mergeCapabilities: {
+        merge: false,
+        squash: false,
+        rebase: false,
+        deleteBranchOnMerge: false,
+      },
+      ...overrides,
+    };
+  }
+
   it("defaults mergeability for a real pre-field detail payload", () => {
     const decoded = decodeDetail({
       projectId: "project-1",
@@ -263,49 +335,26 @@ describe("PullRequestDetail", () => {
     expect(decoded.stack?.entries.map((entry) => entry.number)).toEqual([42, 43]);
   });
 
+  it("rejects explicit Bitbucket detail without explicit capabilities", () => {
+    const { capabilities, ...detailWithoutCapabilities } = bitbucketDetail();
+    expect(() => decodeDetail(detailWithoutCapabilities)).toThrow();
+    expect(capabilities).toEqual(READ_ONLY_CAPABILITIES);
+  });
+
+  it("rejects explicit Bitbucket detail with writable capabilities", () => {
+    for (const capability of BITBUCKET_WRITABLE_CAPABILITY_KEYS) {
+      expect(() =>
+        decodeDetail(
+          bitbucketDetail({
+            capabilities: { ...READ_ONLY_CAPABILITIES, [capability]: true },
+          }),
+        ),
+      ).toThrow();
+    }
+  });
+
   it("decodes explicit Bitbucket detail with unavailable provider-owned metadata", () => {
-    const decoded = decodeDetail({
-      projectId: "project-1",
-      projectTitle: "Project One",
-      workspaceRoot: "/workspace/project-one",
-      provider: "bitbucket",
-      repository: "paraty/payment-seeker",
-      number: 12,
-      title: "Read-only provider",
-      body: "Description",
-      url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/12",
-      capabilities: READ_ONLY_CAPABILITIES,
-      author: null,
-      state: "open",
-      isDraft: false,
-      mergeable: null,
-      mergeability: null,
-      mergeStateStatus: null,
-      reviewDecision: null,
-      additions: null,
-      deletions: null,
-      changedFiles: null,
-      headBranch: "feature/readonly",
-      baseBranch: "main",
-      createdAt: "2026-07-13T08:00:00.000Z",
-      updatedAt: "2026-07-14T08:00:00.000Z",
-      mergedAt: null,
-      closedAt: null,
-      maintainerCanModify: false,
-      reviewers: [],
-      labels: [],
-      checks: null,
-      comments: [],
-      commentsTruncated: false,
-      commentsIncomplete: false,
-      commits: [],
-      mergeCapabilities: {
-        merge: false,
-        squash: false,
-        rebase: false,
-        deleteBranchOnMerge: false,
-      },
-    });
+    const decoded = decodeDetail(bitbucketDetail());
 
     expect(decoded.provider).toBe("bitbucket");
     expect(decoded.capabilities).toEqual(READ_ONLY_CAPABILITIES);

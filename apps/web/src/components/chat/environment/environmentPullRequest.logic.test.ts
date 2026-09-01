@@ -120,6 +120,21 @@ describe("summarizePullRequestDiffStat", () => {
     ).toEqual({ additions: 5, deletions: 2, filesLabel: null });
   });
 
+  it("preserves partial null line counts instead of fabricating zeros", () => {
+    expect(
+      summarizePullRequestDiffStat({ additions: null, deletions: 2, changedFiles: null }),
+    ).toEqual({ additions: null, deletions: 2, filesLabel: null });
+    expect(
+      summarizePullRequestDiffStat({ additions: 5, deletions: null, changedFiles: null }),
+    ).toEqual({ additions: 5, deletions: null, filesLabel: null });
+  });
+
+  it("keeps file-count-only stats without fabricating line counts", () => {
+    expect(
+      summarizePullRequestDiffStat({ additions: null, deletions: null, changedFiles: 3 }),
+    ).toEqual({ additions: null, deletions: null, filesLabel: "3 files" });
+  });
+
   it("returns null when gh reported no diff sizes at all", () => {
     expect(
       summarizePullRequestDiffStat({ additions: null, deletions: null, changedFiles: null }),

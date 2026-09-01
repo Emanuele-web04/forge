@@ -115,6 +115,17 @@ export const PullRequestCapabilities = Schema.Struct({
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
+const BitbucketReadOnlyPullRequestCapabilities = Schema.Struct({
+  detail: Schema.Literal(true),
+  diff: Schema.Literal(true),
+  comments: Schema.Literal(true),
+  checks: Schema.Literal(false),
+  comment: Schema.Literal(false),
+  resolveComment: Schema.Literal(false),
+  stateMutation: Schema.Literal(false),
+  merge: Schema.Literal(false),
+});
+
 export const LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES: PullRequestCapabilities = {
   detail: true,
   diff: true,
@@ -240,7 +251,7 @@ const GitHubPullRequestListEntry = Schema.Struct({
 const BitbucketPullRequestListEntry = Schema.Struct({
   ...PullRequestListEntryBaseFields,
   provider: Schema.Literal("bitbucket"),
-  capabilities: PullRequestCapabilities,
+  capabilities: BitbucketReadOnlyPullRequestCapabilities,
   viewerInvolvement: PullRequestViewerInvolvement,
   additions: Schema.NullOr(NonNegativeInt),
   deletions: Schema.NullOr(NonNegativeInt),
@@ -298,8 +309,7 @@ export const PullRequestProviderRequirementStatus = Schema.Literals([
   "incompatible",
   "temporarily-unavailable",
 ]);
-export type PullRequestProviderRequirementStatus =
-  typeof PullRequestProviderRequirementStatus.Type;
+export type PullRequestProviderRequirementStatus = typeof PullRequestProviderRequirementStatus.Type;
 
 export const PullRequestProviderRequirement = Schema.Struct({
   provider: PullRequestProvider,
@@ -397,7 +407,7 @@ const GitHubPullRequestDetail = Schema.Struct({
 const BitbucketPullRequestDetail = Schema.Struct({
   ...PullRequestDetailBaseFields,
   provider: Schema.Literal("bitbucket"),
-  capabilities: PullRequestCapabilities,
+  capabilities: BitbucketReadOnlyPullRequestCapabilities,
   mergeability: Schema.NullOr(GitPullRequestMergeability),
   additions: Schema.NullOr(NonNegativeInt),
   deletions: Schema.NullOr(NonNegativeInt),

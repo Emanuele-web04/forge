@@ -246,7 +246,7 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
               ))}
             </div>
           )}
-          <PullRequestCommentComposer detail={detail} />
+          {detail.capabilities.comment ? <PullRequestCommentComposer detail={detail} /> : null}
         </div>
       </DisclosureSection>
     </div>

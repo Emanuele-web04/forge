@@ -266,6 +266,7 @@ export function EnvironmentPullRequestSection({
       openPane(activeThreadId, {
         kind: "pullRequest",
         pullRequestProjectId: projectId,
+        pullRequestProvider: "github",
         pullRequestRepository,
         pullRequestNumber: displayPr.number,
         pullRequestInitialTab: initialTab,
