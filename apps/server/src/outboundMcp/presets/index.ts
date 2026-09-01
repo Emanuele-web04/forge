@@ -25,6 +25,9 @@ export class OutboundMcpPresetError extends Schema.TaggedErrorClass<OutboundMcpP
 export type OutboundMcpPresetRegistry = {
   readonly all: () => ReadonlyArray<OutboundMcpPreset>;
   readonly get: (presetId: string) => OutboundMcpPreset | null;
+  readonly getConsumer: (
+    consumerId: string,
+  ) => { readonly preset: OutboundMcpPreset; readonly binding: McpConsumerBinding<string> } | null;
 };
 
 function validatePreset(preset: OutboundMcpPreset): void {
@@ -45,17 +48,31 @@ export function makeOutboundMcpPresetRegistry(
   presets: ReadonlyArray<OutboundMcpPreset>,
 ): OutboundMcpPresetRegistry {
   const byId = new Map<string, OutboundMcpPreset>();
+  const consumers = new Map<
+    string,
+    { readonly preset: OutboundMcpPreset; readonly binding: McpConsumerBinding<string> }
+  >();
   for (const preset of presets) {
     validatePreset(preset);
     if (byId.has(preset.id)) {
       throw new OutboundMcpPresetError({ category: "duplicate-preset" });
     }
     byId.set(preset.id, preset);
+    for (const binding of preset.consumers) {
+      if (!binding.presetIds.has(preset.id)) {
+        throw new OutboundMcpPresetError({ category: "invalid-consumer" });
+      }
+      if (consumers.has(binding.id)) {
+        throw new OutboundMcpPresetError({ category: "duplicate-consumer" });
+      }
+      consumers.set(binding.id, { preset, binding });
+    }
   }
   const ordered = [...byId.values()];
   return {
     all: () => ordered,
     get: (presetId) => byId.get(presetId) ?? null,
+    getConsumer: (consumerId) => consumers.get(consumerId) ?? null,
   };
 }
 

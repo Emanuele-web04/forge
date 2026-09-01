@@ -7,8 +7,6 @@ import type {
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { McpConsumerBinding } from "../consumerBinding.ts";
-
 export type McpConnectionEvent = {
   readonly connectionId: string;
   readonly type: "connected" | "credentials-invalidated" | "disconnected";
@@ -56,9 +54,9 @@ export interface McpConnectionServiceShape {
   readonly disconnect: (
     input: OutboundMcpDisconnectInput,
   ) => Effect.Effect<void, McpConnectionServiceError>;
-  readonly invoke: <Operation extends string>(
-    binding: McpConsumerBinding<Operation>,
-    operation: Operation,
+  readonly invoke: (
+    consumerId: string,
+    operation: string,
     args: Readonly<Record<string, unknown>>,
     signal?: AbortSignal,
   ) => Effect.Effect<unknown, McpConnectionServiceError>;

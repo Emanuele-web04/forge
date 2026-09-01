@@ -11,7 +11,7 @@ import {
 import type { OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OutboundMcpConnection, OutboundMcpConnectionStatus } from "@synara/contracts";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Semaphore } from "effect";
 import {
   McpConnectionServiceError,
   type McpAuthorizationCompletion,
@@ -31,7 +31,6 @@ import {
   type AuthorizationAttempt,
   type AuthorizationAttemptRegistry,
 } from "../authorizationAttempts.ts";
-import type { McpConsumerBinding } from "../consumerBinding.ts";
 import {
   makeBoundedMcpFetch,
   OutboundMcpNetworkPolicyError,
@@ -39,6 +38,12 @@ import {
   validateOutboundMcpUrl,
 } from "../networkPolicy.ts";
 import { makeOAuthClientProvider } from "../oauthProvider.ts";
+import {
+  OutboundMcpOAuthMetadataError,
+  validateOutboundMcpAuthorizationServerUrl,
+  validateOutboundMcpAuthorizationUrl,
+  validateOutboundMcpOAuthDiscoveryState,
+} from "../oauthMetadataPolicy.ts";
 import type { OutboundMcpPreset, OutboundMcpPresetRegistry } from "../presets/index.ts";
 
 export class McpConnectionOAuthError extends Schema.TaggedErrorClass<McpConnectionOAuthError>()(
@@ -82,6 +87,12 @@ export type McpConnectionOAuthDependencies = {
 
 function oauthError(cause: unknown): McpConnectionOAuthError {
   if (cause instanceof McpConnectionOAuthError) return cause;
+  if (
+    cause instanceof OutboundMcpOAuthMetadataError &&
+    cause.category === "authorization-server-mismatch"
+  ) {
+    return new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
+  }
   if (cause instanceof OutboundMcpNetworkPolicyError) {
     return new McpConnectionOAuthError({ category: "temporarily-unavailable" });
   }
@@ -120,14 +131,6 @@ function clientSupportsAuthorization(
   }
   if (preset.publicClientId !== undefined) return acceptsPublicClients;
   return serverInfo.authorizationServerMetadata?.registration_endpoint !== undefined;
-}
-
-function authorizationServerHref(value: string): string {
-  return validateOutboundMcpUrl(new URL(value), "authorization").href;
-}
-
-function authorizationServersMatch(left: string, right: string): boolean {
-  return authorizationServerHref(left) === authorizationServerHref(right);
 }
 
 type ProviderState = {
@@ -230,14 +233,18 @@ async function makeAttemptProvider(input: {
     discoveryState: () => input.serverInfo,
     saveDiscoveryState: async (state) => {
       const expected = input.attempt.oauthDiscoveryState?.authorizationServerUrl;
-      if (
-        expected === undefined ||
-        !authorizationServersMatch(expected, state.authorizationServerUrl)
-      ) {
+      if (expected === undefined) {
         throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
       }
-      input.attempt.oauthDiscoveryState = state;
-      await persist({ ...current, authorizationServerUrl: state.authorizationServerUrl });
+      const validated = validateOutboundMcpOAuthDiscoveryState({
+        pinnedAuthorizationServerUrl: expected,
+        state,
+      });
+      input.attempt.oauthDiscoveryState = validated;
+      await persist({
+        ...current,
+        authorizationServerUrl: validated.authorizationServerUrl,
+      });
     },
   };
   return {
@@ -307,7 +314,11 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         if (stored.tokens !== undefined) {
           await Effect.runPromise(input.credentials.write(input.preset.id, initial));
         }
-        const serverInfo = await discoveryFor(input.preset, discoveryDependencies);
+        const discoveredServerInfo = await discoveryFor(input.preset, discoveryDependencies);
+        const serverInfo = validateOutboundMcpOAuthDiscoveryState({
+          pinnedAuthorizationServerUrl: discoveredServerInfo.authorizationServerUrl,
+          state: discoveredServerInfo,
+        });
         if (!clientSupportsAuthorization(input.preset, initial, serverInfo)) {
           throw new McpConnectionOAuthError({ category: "incompatible-client" });
         }
@@ -330,7 +341,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         if (result !== "REDIRECT" || authorizationUrl === null) {
           throw new McpConnectionOAuthError({ category: "authorization-not-started" });
         }
-        return validateOutboundMcpUrl(authorizationUrl, "authorization");
+        return validateOutboundMcpAuthorizationUrl({ state: serverInfo, authorizationUrl });
       },
       catch: oauthError,
     });
@@ -342,26 +353,28 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           throw new McpConnectionOAuthError({ category: "invalid-authorization-attempt" });
         }
         const initial = (await Effect.runPromise(input.credentials.read(input.preset.id))) ?? {};
-        const boundServerInfo = input.attempt.oauthDiscoveryState;
+        const attemptedServerInfo = input.attempt.oauthDiscoveryState;
+        if (attemptedServerInfo === null || initial.authorizationServerUrl === undefined) {
+          throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
+        }
+        const boundServerInfo = validateOutboundMcpOAuthDiscoveryState({
+          pinnedAuthorizationServerUrl: attemptedServerInfo.authorizationServerUrl,
+          state: attemptedServerInfo,
+        });
+        const boundAuthorizationServerUrl = validateOutboundMcpAuthorizationServerUrl(
+          boundServerInfo.authorizationServerUrl,
+        );
         if (
-          boundServerInfo === null ||
-          initial.authorizationServerUrl === undefined ||
-          !authorizationServersMatch(
-            boundServerInfo.authorizationServerUrl,
-            initial.authorizationServerUrl,
-          )
+          validateOutboundMcpAuthorizationServerUrl(initial.authorizationServerUrl) !==
+          boundAuthorizationServerUrl
         ) {
           throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
         }
-        const currentServerInfo = await discoveryFor(input.preset, discoveryDependencies);
-        if (
-          !authorizationServersMatch(
-            boundServerInfo.authorizationServerUrl,
-            currentServerInfo.authorizationServerUrl,
-          )
-        ) {
-          throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
-        }
+        const discoveredCurrentServerInfo = await discoveryFor(input.preset, discoveryDependencies);
+        validateOutboundMcpOAuthDiscoveryState({
+          pinnedAuthorizationServerUrl: boundAuthorizationServerUrl,
+          state: discoveredCurrentServerInfo,
+        });
         if (!clientSupportsAuthorization(input.preset, initial, boundServerInfo)) {
           throw new McpConnectionOAuthError({ category: "incompatible-client" });
         }
@@ -403,22 +416,32 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           return;
         }
 
-        const serverInfo = await discoveryFor(input.preset, discoveryDependencies);
-        if (
-          !authorizationServersMatch(
+        let pinnedAuthorizationServerUrl: string;
+        try {
+          pinnedAuthorizationServerUrl = validateOutboundMcpAuthorizationServerUrl(
             storedAuthorizationServerUrl,
-            serverInfo.authorizationServerUrl,
-          )
-        ) {
+          );
+        } catch {
           return;
         }
+        const discoveredServerInfo = await discoveryFor(input.preset, discoveryDependencies);
+        let discoveredAuthorizationServerUrl: string;
+        try {
+          discoveredAuthorizationServerUrl = validateOutboundMcpAuthorizationServerUrl(
+            discoveredServerInfo.authorizationServerUrl,
+          );
+        } catch {
+          return;
+        }
+        if (pinnedAuthorizationServerUrl !== discoveredAuthorizationServerUrl) return;
+        const serverInfo = validateOutboundMcpOAuthDiscoveryState({
+          pinnedAuthorizationServerUrl,
+          state: discoveredServerInfo,
+        });
         const metadata = serverInfo.authorizationServerMetadata;
         if (metadata?.revocation_endpoint === undefined) return;
 
-        const revocationUrl = validateOutboundMcpUrl(
-          new URL(metadata.revocation_endpoint),
-          "authorization",
-        );
+        const revocationUrl = new URL(metadata.revocation_endpoint);
         const params = new URLSearchParams({
           token,
           token_type_hint:
@@ -550,6 +573,7 @@ export function makeMcpConnectionService(
     { readonly attemptId: string; readonly connectionId: string }
   >();
   const pendingStateByConnectionId = new Map<string, string>();
+  const authorizationLocks = new Map<string, Semaphore.Semaphore>();
   const locallyFencedConnectionIds = new Set<string>();
   const now = options.now ?? (() => new Date().toISOString());
 
@@ -568,10 +592,45 @@ export function makeMcpConnectionService(
     return preset === null ? Effect.fail(serviceError("unknown-preset")) : Effect.succeed(preset);
   };
 
+  const fenceConnection = (connectionId: string) =>
+    Effect.sync(() => {
+      locallyFencedConnectionIds.add(connectionId);
+    }).pipe(Effect.andThen(options.toolClient.invalidate(connectionId)));
+
+  const authorizationLockFor = (connectionId: string): Semaphore.Semaphore => {
+    let lock = authorizationLocks.get(connectionId);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      authorizationLocks.set(connectionId, lock);
+    }
+    return lock;
+  };
+
   const ensureMetadata = (preset: OutboundMcpPreset) =>
     Effect.gen(function* () {
       const current = yield* options.repository.get(preset.id);
-      if (current !== null) return current;
+      if (current !== null) {
+        const endpointChanged = current.endpoint !== preset.endpoint.href;
+        const metadataChanged =
+          endpointChanged ||
+          current.presetId !== preset.id ||
+          current.displayName !== preset.displayName;
+        if (!metadataChanged) return current;
+        if (endpointChanged) yield* fenceConnection(preset.id);
+        const record: OutboundMcpConnectionRecord = {
+          ...current,
+          presetId: preset.id,
+          displayName: preset.displayName,
+          endpoint: preset.endpoint.href,
+          status: endpointChanged ? "reconnect-required" : current.status,
+          errorCategory: endpointChanged ? "endpoint-changed" : current.errorCategory,
+          catalogFingerprint: endpointChanged ? null : current.catalogFingerprint,
+          lastValidatedAt: endpointChanged ? null : current.lastValidatedAt,
+          updatedAt: now(),
+        };
+        yield* options.repository.upsertMetadata(record);
+        return record;
+      }
       const timestamp = now();
       const record = {
         connectionId: preset.id,
@@ -608,11 +667,6 @@ export function makeMcpConnectionService(
     pendingByState.delete(state);
     pendingStateByConnectionId.delete(connectionId);
   };
-
-  const fenceConnection = (connectionId: string) =>
-    Effect.sync(() => {
-      locallyFencedConnectionIds.add(connectionId);
-    }).pipe(Effect.andThen(options.toolClient.invalidate(connectionId)));
 
   const invalidateCredentials = (connectionId: string) =>
     Effect.gen(function* () {
@@ -656,15 +710,12 @@ export function makeMcpConnectionService(
     Effect.gen(function* () {
       yield* expirePendingAuthorizations;
       return yield* Effect.forEach(options.presets.all(), (preset) =>
-        options.repository
-          .get(preset.id)
-          .pipe(Effect.map((stored) => publicConnection(preset, stored))),
+        ensureMetadata(preset).pipe(Effect.map((stored) => publicConnection(preset, stored))),
       ).pipe(Effect.mapError(() => serviceError("persistence")));
     });
 
-  const beginAuthorization: McpConnectionServiceShape["beginAuthorization"] = (input) =>
+  const beginAuthorizationLocked = (preset: OutboundMcpPreset) =>
     Effect.gen(function* () {
-      const preset = yield* presetOrFail(input.presetId);
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
       yield* fenceConnection(preset.id);
@@ -701,10 +752,29 @@ export function makeMcpConnectionService(
       return { attemptId: attempt.id, authorizationUrl: authorizationUrl.href };
     });
 
-  const completeAuthorization: McpConnectionServiceShape["completeAuthorization"] = (input) =>
+  const beginAuthorization: McpConnectionServiceShape["beginAuthorization"] = (input) =>
+    Effect.gen(function* () {
+      const preset = yield* presetOrFail(input.presetId);
+      return yield* authorizationLockFor(preset.id).withPermits(1)(
+        beginAuthorizationLocked(preset),
+      );
+    });
+
+  const completeAuthorizationLocked = (
+    input: Parameters<McpConnectionServiceShape["completeAuthorization"]>[0],
+    observedPending: { readonly attemptId: string; readonly connectionId: string },
+  ) =>
     Effect.gen(function* () {
       const pending = pendingByState.get(input.state);
-      if (pending === undefined) {
+      if (
+        pending === undefined ||
+        pending.attemptId !== observedPending.attemptId ||
+        pendingStateByConnectionId.get(pending.connectionId) !== input.state
+      ) {
+        if (pending?.attemptId === observedPending.attemptId) {
+          pendingByState.delete(input.state);
+        }
+        options.attempts.cancel(observedPending.attemptId);
         return { ok: false, category: "invalid-authorization-attempt" } as const;
       }
       pendingByState.delete(input.state);
@@ -821,9 +891,22 @@ export function makeMcpConnectionService(
       return { ok: true } as const;
     });
 
-  const disconnect: McpConnectionServiceShape["disconnect"] = (input) =>
+  const completeAuthorization: McpConnectionServiceShape["completeAuthorization"] = (input) =>
+    Effect.suspend(() => {
+      const observedPending = pendingByState.get(input.state);
+      if (observedPending === undefined) {
+        return Effect.succeed({
+          ok: false,
+          category: "invalid-authorization-attempt",
+        } as const);
+      }
+      return authorizationLockFor(observedPending.connectionId).withPermits(1)(
+        completeAuthorizationLocked(input, observedPending),
+      );
+    });
+
+  const disconnectLocked = (preset: OutboundMcpPreset) =>
     Effect.gen(function* () {
-      const preset = yield* presetOrFail(input.connectionId);
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
       yield* fenceConnection(preset.id);
@@ -864,47 +947,67 @@ export function makeMcpConnectionService(
       publish({ connectionId: preset.id, type: "disconnected" });
     });
 
+  const disconnect: McpConnectionServiceShape["disconnect"] = (input) =>
+    Effect.gen(function* () {
+      const preset = yield* presetOrFail(input.connectionId);
+      cancelPendingAuthorization(preset.id);
+      yield* fenceConnection(preset.id);
+      yield* authorizationLockFor(preset.id).withPermits(1)(disconnectLocked(preset));
+    });
+
   const invoke: McpConnectionServiceShape["invoke"] = (
-    binding,
+    consumerId,
     operation,
     args,
     signal = new AbortController().signal,
   ) => {
+    const registered = options.presets.getConsumer(consumerId);
+    if (registered === null) return Effect.fail(serviceError("unknown-consumer"));
+    const { binding, preset } = registered;
     const descriptor = binding.operations[operation];
     if (descriptor === undefined) return Effect.fail(serviceError("invalid-operation"));
-    if ([...binding.presetIds].some((presetId) => locallyFencedConnectionIds.has(presetId))) {
+    if (locallyFencedConnectionIds.has(preset.id)) {
       return Effect.fail(serviceError("reconnect-required"));
     }
-    return options.toolClient.call(binding, descriptor.tool, args, signal).pipe(
-      Effect.catch((error) => {
-        if (error instanceof McpToolClientError && error.category === "authentication") {
-          return invalidateCredentials(error.connectionId ?? "").pipe(
-            Effect.flatMap(() => Effect.fail(serviceError("reconnect-required"))),
-          );
-        }
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return Effect.fail(serviceError("cancelled"));
-        }
-        const category =
-          error instanceof McpToolClientError &&
-          (error.category === "missing-required-tool" || error.category === "invalid-catalog")
-            ? "incompatible-tools"
-            : "temporarily-unavailable";
-        if (error instanceof McpToolClientError && error.connectionId !== undefined) {
-          const connectionId = error.connectionId;
-          return Effect.gen(function* () {
-            yield* options.toolClient.invalidate(connectionId);
-            yield* setStatus({
-              connectionId,
-              status:
-                category === "incompatible-tools" ? "incompatible" : "temporarily-unavailable",
-              errorCategory: category === "incompatible-tools" ? category : "network",
-            });
-            return yield* Effect.fail(serviceError(category));
+    const handleInvocationError = (error: unknown) => {
+      if (error instanceof McpToolClientError && error.category === "authentication") {
+        return invalidateCredentials(error.connectionId ?? "").pipe(
+          Effect.flatMap(() => Effect.fail(serviceError("reconnect-required"))),
+        );
+      }
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return Effect.fail(serviceError("cancelled"));
+      }
+      const category =
+        error instanceof McpToolClientError &&
+        (error.category === "missing-required-tool" || error.category === "invalid-catalog")
+          ? "incompatible-tools"
+          : "temporarily-unavailable";
+      if (error instanceof McpToolClientError && error.connectionId !== undefined) {
+        const connectionId = error.connectionId;
+        return Effect.gen(function* () {
+          yield* options.toolClient.invalidate(connectionId);
+          yield* setStatus({
+            connectionId,
+            status:
+              category === "incompatible-tools" ? "incompatible" : "temporarily-unavailable",
+            errorCategory: category === "incompatible-tools" ? category : "network",
           });
-        }
-        return Effect.fail(serviceError(category));
-      }),
+          return yield* Effect.fail(serviceError(category));
+        });
+      }
+      return Effect.fail(serviceError(category));
+    };
+    const call = () =>
+      options.toolClient
+        .call(binding, descriptor.tool, args, signal)
+        .pipe(Effect.catch(handleInvocationError));
+    return ensureMetadata(preset).pipe(
+      Effect.flatMap((record) =>
+        locallyFencedConnectionIds.has(preset.id) || record.status !== "connected"
+          ? Effect.fail(serviceError("reconnect-required"))
+          : call(),
+      ),
     );
   };
 

@@ -252,14 +252,14 @@ describe("outbound MCP foundation integration", () => {
 
             const requestsBeforeRejectedInvocation = authority.metrics().mcpRequests;
             const rejected = yield* Effect.flip(
-              connections.invoke(binding, "undeclared" as FixtureOperation, {}),
+              connections.invoke(binding.id, "undeclared" as FixtureOperation, {}),
             );
             expect(rejected).toBeInstanceOf(McpConnectionServiceError);
             expect(rejected.category).toBe("invalid-operation");
             expect(authority.metrics().mcpRequests).toBe(requestsBeforeRejectedInvocation);
 
             yield* authority.expireAccessTokens();
-            expect(yield* connections.invoke(binding, "read", {})).toBe("ok");
+            expect(yield* connections.invoke(binding.id, "read", {})).toBe("ok");
             expect(authority.metrics().refreshRotations).toBe(1);
             expect(authority.matchesCurrentCredentials(yield* credentials.read("fixture"))).toBe(
               true,
@@ -314,7 +314,7 @@ describe("outbound MCP foundation integration", () => {
             expect(authority.metrics().revocations).toBe(0);
 
             yield* authority.expireAccessTokens();
-            expect(yield* connections.invoke(binding, "read", {})).toBe("ok");
+            expect(yield* connections.invoke(binding.id, "read", {})).toBe("ok");
             const rotatedCredentials = yield* credentials.read("fixture");
             expect(authority.matchesCurrentCredentials(rotatedCredentials)).toBe(true);
 
