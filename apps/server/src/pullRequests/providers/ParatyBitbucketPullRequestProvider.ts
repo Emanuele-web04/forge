@@ -128,20 +128,23 @@ function reasonFor(category: string): PullRequestProviderErrorReason {
   return "temporarily-unavailable";
 }
 
+function errorCategory(error: unknown): string {
+  return error instanceof McpConnectionServiceError
+    ? error.category
+    : typeof error === "object" &&
+        error !== null &&
+        "category" in error &&
+        typeof error.category === "string"
+      ? error.category
+      : "temporarily-unavailable";
+}
+
 function providerError(
   error: unknown,
   operation: string,
   repository: RemoteRepositoryRef,
 ): PullRequestProviderError {
-  const category =
-    error instanceof McpConnectionServiceError
-      ? error.category
-      : typeof error === "object" &&
-          error !== null &&
-          "category" in error &&
-          typeof error.category === "string"
-        ? error.category
-        : "temporarily-unavailable";
+  const category = errorCategory(error);
   const reason = reasonFor(category);
   const global = reason !== "invalid-response";
   return new PullRequestProviderError({
@@ -166,7 +169,11 @@ function invoke<A>(
 ): Effect.Effect<A, PullRequestProviderError> {
   return mcp.invoke(PARATY_BITBUCKET_CONSUMER_ID, operation, args).pipe(
     Effect.map((value) => value as A),
-    Effect.mapError((error) => providerError(error, operation, repository)),
+    Effect.catch((error) =>
+      errorCategory(error) === "cancelled"
+        ? Effect.interrupt
+        : Effect.fail(providerError(error, operation, repository)),
+    ),
   );
 }
 

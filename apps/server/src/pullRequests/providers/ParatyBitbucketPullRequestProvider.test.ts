@@ -4,12 +4,13 @@ import {
   type OrchestrationProject,
 } from "@synara/contracts";
 import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  McpConnectionEvent,
-  McpConnectionServiceShape,
+import {
+  McpConnectionServiceError,
+  type McpConnectionEvent,
+  type McpConnectionServiceShape,
 } from "../../outboundMcp/Services/McpConnectionService.ts";
 import {
   OutboundMcpDecodeError,
@@ -521,5 +522,35 @@ describe("ParatyBitbucketPullRequestProvider", () => {
     );
     expect(error).toMatchObject({ reason: "invalid-response", scope: "repository" });
     expect(error.message).not.toContain("secret");
+  });
+
+  it("preserves a cancelled MCP invocation as interruption", async () => {
+    const fake = makeMcp({});
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const provider = yield* makeParatyBitbucketPullRequestProvider({
+            mcp: {
+              ...fake.service,
+              invoke: () =>
+                Effect.fail(new McpConnectionServiceError({ category: "cancelled" })),
+            },
+          });
+          return yield* provider.list({
+            cwd: project.workspaceRoot,
+            repository,
+            state: "open",
+            involvement: "all",
+            viewer: null,
+            forceRefresh: false,
+          });
+        }),
+      ),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }
   });
 });

@@ -595,6 +595,163 @@ describe("PullRequestService", () => {
     ]);
   });
 
+  it.each(["not-installed", "not-authenticated"] as const)(
+    "preserves legacy GitHub-only %s list failures for RPC mapping",
+    async (reason) => {
+      const project = makeProject("project-github-only-auth", "GitHub auth", "/tmp/github-auth");
+      const error = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* makePullRequestService({
+              ...makeDependencies({
+                projects: [project],
+                repositories: new Map([[project.id, githubRepository.displayName]]),
+                github: createGitHubCliWithFakeGh().service,
+              }),
+              providers: [
+                syntheticProvider(githubRepository, {
+                  viewer: () =>
+                    Effect.fail(
+                      new PullRequestProviderError({
+                        provider: "github",
+                        host: "github.com",
+                        operation: "viewer",
+                        repository: null,
+                        scope: "global",
+                        reason,
+                        message: "GitHub CLI is not installed.",
+                      }),
+                    ),
+                }),
+              ],
+            });
+            return yield* Effect.flip(service.list({ state: "open", involvement: "all" }));
+          }),
+        ),
+      );
+
+      expect(error).toMatchObject({ provider: "github", reason, scope: "global" });
+    },
+  );
+
+  it("isolates global GitHub pin recovery when Bitbucket loaded successfully", async () => {
+    const project = makeProject("project-mixed-recovery", "Mixed recovery", "/tmp/mixed-recovery");
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map(),
+              remoteRepositories: new Map([[project.id, [githubRepository, bitbucketRepository]]]),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins([
+                {
+                  projectId: project.id,
+                  provider: "github",
+                  repositoryKey: githubRepository.displayName,
+                  number: 77,
+                },
+              ]),
+            }),
+            providers: [
+              syntheticProvider(githubRepository, {
+                list: () =>
+                  Effect.succeed({
+                    entries: [],
+                    truncated: true,
+                    reviewingNumbers: new Set(),
+                    reviewingTruncated: false,
+                  }),
+                exactSummary: () =>
+                  Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "github",
+                      host: "github.com",
+                      operation: "detail",
+                      repository: null,
+                      scope: "global",
+                      reason: "not-authenticated",
+                      message: "GitHub authentication required.",
+                    }),
+                  ),
+              }),
+              syntheticProvider(bitbucketRepository, {
+                list: () =>
+                  Effect.succeed({
+                    entries: [providerSummary(bitbucketRepository, 21)],
+                    truncated: false,
+                    reviewingNumbers: new Set(),
+                    reviewingTruncated: false,
+                  }),
+              }),
+            ],
+          });
+          return yield* service.list({ state: "open", involvement: "all" });
+        }),
+      ),
+    );
+
+    expect(result.entries.map((entry) => entry.provider)).toEqual(["bitbucket"]);
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        message: expect.stringContaining("GitHub authentication required."),
+      }),
+    ]);
+  });
+
+  it("preserves legacy GitHub-only global pin recovery failures", async () => {
+    const project = makeProject("project-github-recovery", "GitHub recovery", "/tmp/gh-recovery");
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map([[project.id, githubRepository.displayName]]),
+              github: createGitHubCliWithFakeGh().service,
+              pins: makePins([
+                {
+                  projectId: project.id,
+                  provider: "github",
+                  repositoryKey: githubRepository.displayName,
+                  number: 78,
+                },
+              ]),
+            }),
+            providers: [
+              syntheticProvider(githubRepository, {
+                list: () =>
+                  Effect.succeed({
+                    entries: [],
+                    truncated: true,
+                    reviewingNumbers: new Set(),
+                    reviewingTruncated: false,
+                  }),
+                exactSummary: () =>
+                  Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "github",
+                      host: "github.com",
+                      operation: "detail",
+                      repository: null,
+                      scope: "global",
+                      reason: "not-authenticated",
+                      message: "GitHub authentication required.",
+                    }),
+                  ),
+              }),
+            ],
+          });
+          return yield* Effect.flip(service.list({ state: "open", involvement: "all" }));
+        }),
+      ),
+    );
+
+    expect(error).toMatchObject({ provider: "github", reason: "not-authenticated" });
+  });
+
   it("preserves Bitbucket rows and reports a repository error when GitHub loading fails", async () => {
     const project = makeProject("project-github-failure", "GitHub failure", "/tmp/github-failure");
     const result = await Effect.runPromise(
@@ -984,6 +1141,42 @@ describe("PullRequestService", () => {
     );
 
     expect(result).toEqual({ count: 0, incomplete: true });
+  });
+
+  it("preserves legacy global GitHub review-count failures", async () => {
+    const project = makeProject("project-count-github-auth", "Count auth", "/tmp/count-auth");
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...makeDependencies({
+              projects: [project],
+              repositories: new Map([[project.id, githubRepository.displayName]]),
+              github: createGitHubCliWithFakeGh().service,
+            }),
+            providers: [
+              syntheticProvider(githubRepository, {
+                reviewRequestCount: () =>
+                  Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "github",
+                      host: "github.com",
+                      operation: "reviewRequestCount",
+                      repository: null,
+                      scope: "global",
+                      reason: "not-authenticated",
+                      message: "GitHub authentication required.",
+                    }),
+                  ),
+              }),
+            ],
+          });
+          return yield* Effect.flip(service.reviewRequestCount({ projectId: null }));
+        }),
+      ),
+    );
+
+    expect(error).toMatchObject({ provider: "github", reason: "not-authenticated" });
   });
 
   it("marks the review count incomplete when repository discovery is non-authoritative", async () => {

@@ -351,6 +351,7 @@ export const makePullRequestService = (
                     truncated: result.truncated,
                   })),
                   errors: [] as PullRequestListError[],
+                  globalError: null as PullRequestProviderError | null,
                   recovery: {
                     cwd: repositoryProjects[0]!.workspaceRoot,
                     repository,
@@ -379,13 +380,26 @@ export const makePullRequestService = (
                           repository: repository.displayName,
                           message: error.message,
                         })),
+                    globalError: isGlobalPullRequestProviderError(error) ? error : null,
                     recovery: null,
                   });
                 }),
               ),
           { concurrency: 6 },
         );
+        const legacyGitHubUnavailable = batches.find(
+          (batch) =>
+            batch.globalError?.provider === "github" &&
+            (batch.globalError.reason === "not-installed" ||
+              batch.globalError.reason === "not-authenticated"),
+        )?.globalError;
+        if (legacyGitHubUnavailable && !batches.some((batch) => batch.recovery !== null)) {
+          return yield* Effect.fail(legacyGitHubUnavailable);
+        }
         const batchEntries = batches.flatMap((batch) => batch.entries);
+        const hasSuccessfulBitbucketBatch = batches.some(
+          (batch) => batch.recovery?.adapter.provider === "bitbucket",
+        );
         const recovery = yield* recoverPinnedPullRequests({
           state: input.state,
           involvement,
@@ -396,7 +410,13 @@ export const makePullRequestService = (
           recoveryContexts: batches.flatMap((batch) => (batch.recovery ? [batch.recovery] : [])),
           repositoryKeysByProject,
           projectById,
-          isGlobalError: isGlobalPullRequestProviderError,
+          isGlobalError: (error) =>
+            isGlobalPullRequestProviderError(error) &&
+            !(
+              hasSuccessfulBitbucketBatch &&
+              error instanceof PullRequestProviderError &&
+              error.provider === "github"
+            ),
           isRequirementError: recordProviderRequirement,
         });
 
@@ -451,7 +471,13 @@ export const makePullRequestService = (
                   repository,
                   viewer: viewers.get(adapter) ?? null,
                   forceRefresh: false,
-                })).pipe(Effect.catch(() => Effect.succeed({ count: 0, incomplete: true })));
+                })).pipe(
+              Effect.catch((error) =>
+                isGlobalPullRequestProviderError(error) && error.provider === "github"
+                  ? Effect.fail(error)
+                  : Effect.succeed({ count: 0, incomplete: true }),
+              ),
+            );
           },
           { concurrency: 6 },
         );
