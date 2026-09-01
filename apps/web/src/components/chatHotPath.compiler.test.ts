@@ -99,11 +99,12 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
 
 /**
  * These are among the largest modules in the app — ChatView.tsx alone is ~11k lines, and a cold
- * Babel compile of it was measured at 66s while the rest of the workspace suite competed for CPU.
- * The budget only exists to stop a hang, so it is set far above the observed worst case rather
- * than near it; a tight bound here fails the suite for machine load, not for a real regression.
+ * Babel compile of it was measured at 66s while the rest of the workspace suite competed for CPU
+ * (and 237s on an 8-core machine at load ~25 with parallel lanes building). The budget only
+ * exists to stop a hang, so it is set far above the observed worst case rather than near it; a
+ * tight bound here fails the suite for machine load, not for a real regression.
  */
-const COMPILE_TIMEOUT_MS = 240_000;
+const COMPILE_TIMEOUT_MS = 600_000;
 
 describe("chat hot-path React Compiler coverage", () => {
   for (const module of HOT_PATH_MODULES) {

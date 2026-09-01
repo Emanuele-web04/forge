@@ -17,6 +17,7 @@ describe("Sidebar module", () => {
     const module = await import("./Sidebar");
 
     expect(module.default).toBeTypeOf("function");
-    // Full-suite runs transform many web files concurrently; this import can cross Vitest's 5s default.
-  }, 15_000);
+    // Full-suite runs transform many web files concurrently; this import can
+    // cross Vitest's 5s default several times over on a loaded machine.
+  }, 60_000);
 });
