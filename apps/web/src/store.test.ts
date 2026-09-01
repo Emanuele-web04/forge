@@ -529,12 +529,14 @@ describe("store facade", () => {
       const fresh = await import("./store");
       const project1 = ProjectId.makeUnsafe("project-1");
       const project2 = ProjectId.makeUnsafe("project-2");
-      fresh.useStore.getState().syncServerReadModel(
-        makeProjectsReadModel([
-          makeReadModelProject({ id: project1, workspaceRoot: "/tmp/project-1" }),
-          makeReadModelProject({ id: project2, workspaceRoot: "/tmp/project-2" }),
-        ]),
-      );
+      fresh.useStore
+        .getState()
+        .syncServerReadModel(
+          makeProjectsReadModel([
+            makeReadModelProject({ id: project1, workspaceRoot: "/tmp/project-1" }),
+            makeReadModelProject({ id: project2, workspaceRoot: "/tmp/project-2" }),
+          ]),
+        );
 
       fresh.useStore.getState().setAllProjectsExpanded(false);
       fresh.useStore.getState().toggleProject(project1);
