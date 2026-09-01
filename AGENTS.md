@@ -8,6 +8,7 @@
 - If a user asks for a small follow-up right after a recent full verification pass, prefer no rerun or the smallest reasonable re-check unless the user explicitly asks for full validation again.
 - If the user asks to focus on code only, do not run `bun fmt`, `bun lint`, or `bun typecheck` automatically. In that mode, make the code changes first and only run verification if the user explicitly asks for it.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- If `bun fmt` reflows lines that are unrelated to the requested change (pure Prettier line-wrapping, no logic touched), commit that reformatting separately from the logic change — do not mix `style:` diffs into a `fix:`/`feat:` commit. This keeps the substantive diff clean for review.
 
 ## Project Snapshot
 
