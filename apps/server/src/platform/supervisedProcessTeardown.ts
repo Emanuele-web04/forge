@@ -14,7 +14,10 @@ import {
   type ProcessTreeKiller,
   type TerminalKillSignal,
 } from "./processTreeController";
-import { createWindowsProcessSnapshotObserver } from "./windowsProcessSnapshot";
+import {
+  captureWindowsProcessChildrenMapForTeardown,
+  createWindowsProcessSnapshotObserver,
+} from "./windowsProcessSnapshot";
 
 const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
@@ -152,6 +155,9 @@ export async function teardownProviderProcessTree(
     dependencies.processTreeKiller === undefined
       ? createWindowsProcessSnapshotObserver()
       : null;
+  const captureWindowsChildren = windowsObserver
+    ? () => captureWindowsProcessChildrenMapForTeardown(windowsObserver)
+    : undefined;
   const captureTree =
     dependencies.captureProcessTree ??
     (dependencies.processTreeKiller
@@ -159,7 +165,7 @@ export async function teardownProviderProcessTree(
       : async (rootPid: number) =>
           captureProcessTree(rootPid, {
             platform,
-            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
+            ...(captureWindowsChildren ? { captureWindowsChildren } : {}),
           }));
   const inspectTree =
     dependencies.inspectProcessTree ??
@@ -172,7 +178,7 @@ export async function teardownProviderProcessTree(
       : async (tree: CapturedProcessTree) =>
           inspectProcessTree(tree, {
             platform,
-            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
+            ...(captureWindowsChildren ? { captureWindowsChildren } : {}),
           }));
   const now = dependencies.now ?? Date.now;
   const sleep =

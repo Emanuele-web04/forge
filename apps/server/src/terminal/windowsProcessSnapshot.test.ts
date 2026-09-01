@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ProcessChildrenMap } from "./processTreeKiller";
 import {
+  captureWindowsProcessChildrenMapForTeardown,
   createWindowsProcessSnapshotObserver,
   parseWindowsProcessSnapshotLine,
   type ProcessChildrenSnapshotWorker,
@@ -156,5 +157,21 @@ describe("Windows process snapshots", () => {
     expect(createWorker).toHaveBeenCalledTimes(3);
     expect(recoveredWorker.capture).toHaveBeenCalledTimes(2);
     observer.dispose();
+  });
+
+  it("bypasses observer backoff when teardown needs a fresh snapshot", async () => {
+    const fallbackSnapshot = snapshot([{ ppid: 400, pid: 401, command: "provider.exe" }]);
+    const observer = {
+      capture: vi.fn().mockResolvedValue(null),
+      retryDelayMs: vi.fn().mockReturnValue(2_000),
+      dispose: vi.fn(),
+    };
+    const fallback = vi.fn().mockResolvedValue(fallbackSnapshot);
+
+    await expect(captureWindowsProcessChildrenMapForTeardown(observer, fallback)).resolves.toBe(
+      fallbackSnapshot,
+    );
+    expect(observer.capture).toHaveBeenCalledTimes(1);
+    expect(fallback).toHaveBeenCalledTimes(1);
   });
 });

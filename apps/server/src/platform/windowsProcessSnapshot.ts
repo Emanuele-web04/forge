@@ -347,6 +347,17 @@ export function createWindowsProcessSnapshotObserver(
   };
 }
 
+/**
+ * Reuses the shared worker while it is healthy, but bypasses its retry backoff
+ * when a teardown needs a current process-table proof before its deadline.
+ */
+export async function captureWindowsProcessChildrenMapForTeardown(
+  observer: ProcessChildrenSnapshotObserver,
+  fallback: () => Promise<ProcessChildrenMap | null> = captureWindowsProcessChildrenMap,
+): Promise<ProcessChildrenMap | null> {
+  return (await observer.capture()) ?? fallback();
+}
+
 /** One-shot fallback for teardown owners; terminal manager uses a shared observer. */
 export async function captureWindowsProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   const observer = createWindowsProcessSnapshotObserver();
