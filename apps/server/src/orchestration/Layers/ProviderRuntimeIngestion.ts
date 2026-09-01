@@ -3156,6 +3156,7 @@ const make = Effect.gen(function* () {
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
       Effect.andThen(processRuntimeEvent(event, sequence)),
+      Effect.as(true),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -3164,7 +3165,7 @@ const make = Effect.gen(function* () {
               eventType: event.type,
               threadId: event.threadId,
               cause: Cause.pretty(cause),
-            }),
+            }).pipe(Effect.as(false)),
       ),
     );
 
@@ -3173,18 +3174,45 @@ const make = Effect.gen(function* () {
   // deduplicate durable effects while the caches are rebuilt in event order.
   const rebuildAcceptedOpenTurnState = Effect.gen(function* () {
     let sequence = 0;
+    // Replay failures are, in practice, deterministic (stored rejection,
+    // decode failure, receipt identity collision), so the rest of that turn
+    // fails the same way while each attempt costs a full command pipeline
+    // pass plus a stack-trace warning on the pre-listen boot path. Skip the
+    // remainder of the turn and log its failure once; the caches it would
+    // have rebuilt are process-local and bounded, so a rare transient failure
+    // only loses that turn's cache warm-up, never durable state.
+    const failedTurns = new Set<string>();
+    let skippedEvents = 0;
     while (true) {
       const page = yield* runtimeEvents.readAcceptedOpenTurnEvents({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
         sequenceExclusive: sequence,
         limit: PROVIDER_RUNTIME_REPLAY_PAGE_SIZE,
       });
-      if (page.length === 0) return;
+      if (page.length === 0) break;
       for (const entry of page) {
-        yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
         sequence = entry.sequence;
+        // Open-turn rows are keyed by (thread, turn), so a replayed event
+        // always carries a turn id.
+        const turnId = toTurnId(entry.event.turnId);
+        const turnKey = turnId ? providerTurnKey(entry.event.threadId, turnId) : null;
+        if (turnKey !== null && failedTurns.has(turnKey)) {
+          skippedEvents += 1;
+          continue;
+        }
+        const replayed = yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
+        if (!replayed && turnKey !== null) failedTurns.add(turnKey);
       }
-      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) return;
+      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) break;
+    }
+    if (failedTurns.size > 0) {
+      yield* Effect.logWarning(
+        "provider runtime ingestion skipped open-turn replay after failure",
+        {
+          failedTurns: failedTurns.size,
+          skippedEvents,
+        },
+      );
     }
   });
   const startupRuntimeReplayComplete = yield* Deferred.make<void>();

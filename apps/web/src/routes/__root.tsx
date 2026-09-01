@@ -1466,11 +1466,43 @@ function EventRouter() {
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
     };
 
-    const loadShellSnapshotOnce = async () => {
-      if (disposed) return;
+    // The live shell stream normally delivers the bootstrap snapshot. Only fall
+    // back to the query while `shouldApplyBootstrapShellSnapshot` could still
+    // accept its result (store not hydrated, or hydrated with an empty
+    // dimension): every extra request recomputes and ships the whole sidebar
+    // (about 1 MB per 600 threads) and queues behind the thread-detail
+    // snapshot on the server's single SQLite connection, so a redundant fetch
+    // directly delays the first paint.
+    const needsBootstrapShellSnapshot = () => {
+      const currentState = useStore.getState();
+      return (
+        !currentState.threadsHydrated ||
+        currentState.spaces.length === 0 ||
+        currentState.projects.length === 0 ||
+        (currentState.threadIds?.length ?? 0) === 0
+      );
+    };
+
+    const loadBootstrapShellSnapshotIfMissing = async () => {
+      if (disposed || !needsBootstrapShellSnapshot()) return;
       const snapshot = await api.orchestration.getShellSnapshot();
       if (disposed) return;
       applyQueriedShellSnapshot(snapshot);
+    };
+
+    // Arms the one-shot fallback query if it is not already pending. Deferring
+    // it gives the shell stream's own snapshot time to land first, so a healthy
+    // connect never issues the query at all; not re-arming keeps a fast
+    // reconnect loop from postponing the fallback indefinitely.
+    let shellSnapshotFallbackTimer: number | null = null;
+    const scheduleShellSnapshotFallback = () => {
+      if (shellSnapshotFallbackTimer !== null) {
+        return;
+      }
+      shellSnapshotFallbackTimer = window.setTimeout(() => {
+        shellSnapshotFallbackTimer = null;
+        void loadBootstrapShellSnapshotIfMissing().catch(() => undefined);
+      }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     };
 
     const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
@@ -1491,7 +1523,7 @@ function EventRouter() {
       const refresh = (async () => {
         shellSnapshotSequence = -1;
         pendingShellEvents = [];
-        await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+        await api.orchestration.subscribeShell().catch(() => loadBootstrapShellSnapshotIfMissing());
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
           pendingThreadEventsById.clear();
@@ -2070,7 +2102,7 @@ function EventRouter() {
         if (disposed) {
           return;
         }
-        await loadShellSnapshotOnce();
+        scheduleShellSnapshotFallback();
 
         if (!payload.bootstrapProjectId || !payload.bootstrapThreadId) {
           return;
@@ -2187,9 +2219,7 @@ function EventRouter() {
     void ensureScopedSubscriptions();
     // The shell stream normally delivers the sidebar snapshot. If it fails before
     // the first event, use the same lightweight query instead of the full history.
-    const shellBootstrapFallbackTimer = window.setTimeout(() => {
-      void loadShellSnapshotOnce().catch(() => undefined);
-    }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
+    scheduleShellSnapshotFallback();
     const threadDetailCatchupInterval = window.setInterval(() => {
       const now = Date.now();
       let availableProjectionReconcileSlots = Math.max(
@@ -2248,7 +2278,10 @@ function EventRouter() {
     return () => {
       flushPendingDomainEvents();
       disposed = true;
-      window.clearTimeout(shellBootstrapFallbackTimer);
+      if (shellSnapshotFallbackTimer !== null) {
+        window.clearTimeout(shellSnapshotFallbackTimer);
+        shellSnapshotFallbackTimer = null;
+      }
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
