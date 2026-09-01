@@ -39,10 +39,10 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
 import {
   readOpenCodeAuthFileUtf8,
@@ -867,14 +867,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
         const childEnv = buildOpenCodeServerProcessEnv({});
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.binaryPath, input.args, {
+            requireExecutable: true,
             ...(input.cwd ? { cwd: input.cwd } : {}),
             env: childEnv,
           }),
@@ -937,18 +932,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
         });
-        // Match runOpenCodeCommand: bare npm/pi-node shims like `opencode.cmd` need
-        // Windows-safe resolution before Effect/Node spawn can launch them.
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
-
         const child = yield* spawner
           .spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(input.binaryPath, args, {
+              requireExecutable: true,
               env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,

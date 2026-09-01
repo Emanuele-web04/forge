@@ -1,10 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
+export {
+  sameFileIdentity,
+  supportsPosixPermissions,
+  syncDirectoryEntry,
+  syncRegularFile,
+} from "@synara/shared/filesystemPlatform";
+
 export const PRIVATE_DIRECTORY_MODE = 0o700;
 export const PRIVATE_FILE_MODE = 0o600;
 export const PRIVATE_EXECUTABLE_FILE_MODE = 0o700;
-const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set(["EINVAL", "ENOTSUP", "EBADF"]);
 
 export class PrivatePathPermissionError extends Error {
   readonly path: string;
@@ -24,31 +31,6 @@ function withPathContext<T>(operation: string, targetPath: string, action: () =>
   } catch (cause) {
     if (cause instanceof PrivatePathPermissionError) throw cause;
     throw new PrivatePathPermissionError(operation, targetPath, cause);
-  }
-}
-
-export function supportsPosixPermissions(platform: NodeJS.Platform = process.platform): boolean {
-  return platform !== "win32";
-}
-
-/** Flushes directory-entry changes where the platform exposes durable directory fsync. */
-export async function syncDirectoryEntry(
-  directoryPath: string,
-  platform: NodeJS.Platform = process.platform,
-): Promise<void> {
-  if (!supportsPosixPermissions(platform)) return;
-
-  const handle = await fs.promises.open(
-    directoryPath,
-    fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
-  );
-  try {
-    await handle.sync().catch((cause) => {
-      const code = (cause as NodeJS.ErrnoException).code;
-      if (!code || !UNSUPPORTED_DIRECTORY_SYNC_CODES.has(code)) throw cause;
-    });
-  } finally {
-    await handle.close();
   }
 }
 

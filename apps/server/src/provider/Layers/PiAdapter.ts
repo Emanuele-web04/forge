@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  spawn as spawnChildProcess,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -38,6 +34,10 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -181,7 +181,7 @@ export interface PiBashProcessSupervisorOptions {
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => ChildProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
@@ -189,7 +189,14 @@ export interface PiBashProcessSupervisorOptions {
 export function makePiBashProcessSupervisor(
   options: PiBashProcessSupervisorOptions,
 ): PiBashProcessSupervisor {
-  const spawnProcess = options.spawnProcess ?? spawnChildProcess;
+  const spawnProcess =
+    options.spawnProcess ??
+    ((command: string, args: ReadonlyArray<string>, spawnOptions: RuntimeSpawnOptions) =>
+      spawnPlatformProcess(command, args, {
+        ...spawnOptions,
+        requireExecutable: true,
+        ownProcessGroup: true,
+      }));
   const teardownProcessTree = options.teardownProcessTree ?? teardownProviderProcessTree;
   const activeProcesses = new Set<PiActiveProcess>();
   let configuredShellPath: string | undefined;
@@ -230,13 +237,11 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
-          detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-          windowsHide: true,
         },
       );
       const active: PiActiveProcess = {

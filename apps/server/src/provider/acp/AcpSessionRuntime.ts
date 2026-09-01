@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { parseWindowsWslUncPath, prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { resolveExecutionWorkingDirectory } from "@synara/shared/wslBridge";
 import {
   Cause,
   Deferred,
@@ -20,7 +20,8 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
@@ -229,10 +230,7 @@ export function resolveAcpSessionCwd(
   cwd: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (platform !== "win32") {
-    return cwd;
-  }
-  return parseWindowsWslUncPath(cwd)?.linuxPath ?? cwd;
+  return resolveExecutionWorkingDirectory(cwd, platform);
 }
 
 export interface AcpFreshSessionRetryPolicy {
@@ -1346,17 +1344,12 @@ const makeAcpSessionRuntime = (
       provider: "acp",
       baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
     });
-    const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
-      cwd: options.spawn.cwd,
-      env,
-    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(prepared.command, prepared.args, {
+        makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
+          requireExecutable: true,
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
-          shell: prepared.shell,
-          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }),
       )
       .pipe(

@@ -26,7 +26,6 @@ import {
   normalizeGrokModelOptions,
 } from "@synara/shared/model";
 import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -43,7 +42,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
@@ -2394,11 +2394,9 @@ export function makeGrokAdapter(
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
           const childEnv = buildProviderChildEnvironment({ provider: "grok" });
-          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: childEnv });
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(binaryPath, ["models"], {
+              requireExecutable: true,
               env: childEnv,
             }),
           );

@@ -1,4 +1,4 @@
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -37,7 +37,7 @@ import {
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { spawnProcess } from "@synara/shared/processRuntime";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -719,17 +719,11 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-  return spawn(prepared.command, prepared.args, {
+  return spawnProcess(input.binaryPath, ["app-server"], {
+    requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
     stdio: ["pipe", "pipe", "pipe"],
-    shell: prepared.shell,
-    windowsHide: prepared.windowsHide,
-    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -4130,21 +4124,14 @@ function runCodexVersionCommand(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<CodexVersionCommandResult> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-
   return new Promise<CodexVersionCommandResult>((resolve) => {
     let child: ChildProcess;
     try {
-      child = spawn(prepared.command, prepared.args, {
+      child = spawnProcess(input.binaryPath, ["--version"], {
+        requireExecutable: true,
         cwd: input.cwd,
         env: input.env,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: prepared.shell,
-        windowsHide: prepared.windowsHide,
-        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       });
     } catch (error) {
       resolve({

@@ -20,7 +20,6 @@ import type {
 import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -41,7 +40,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
   compareCodexCliVersions,
@@ -660,10 +660,8 @@ const runProviderCommand = (
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const prepared = prepareWindowsSafeProcess(executable, args, { env });
-    const command = ChildProcess.make(prepared.command, prepared.args, {
-      shell: prepared.shell,
-      ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    const command = makeEffectProcessCommand(executable, args, {
+      requireExecutable: true,
       env,
       // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
       // such as Antigravity waiting even after a read-only subcommand has finished.
@@ -2592,11 +2590,9 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 .join(OS.platform() === "win32" ? ";" : ":"),
             }
           : baseEnv;
-        const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: updateEnv });
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.command, input.args, {
+            requireExecutable: true,
             env: updateEnv,
           }),
         );

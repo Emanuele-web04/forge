@@ -6,7 +6,7 @@
  *
  * @module ClaudeAdapterLive
  */
-import { execFile, spawn as spawnChildProcess } from "node:child_process";
+import { execProcessFile, spawnProcess } from "@synara/shared/processRuntime";
 import type {
   AgentInfo,
   CanUseTool,
@@ -71,7 +71,6 @@ import {
   trimOrNull,
 } from "@synara/shared/model";
 import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -515,18 +514,12 @@ interface ClaudeProcessOwner {
 }
 
 function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
-  const prepared = prepareWindowsSafeProcess(options.command, options.args, {
-    cwd: options.cwd,
-    env: options.env,
-  });
-  return spawnChildProcess(prepared.command, prepared.args, {
+  return spawnProcess(options.command, options.args, {
+    requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
     signal: options.signal,
-    shell: prepared.shell,
-    ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     stdio: ["pipe", "pipe", "inherit"],
-    windowsHide: true,
   }) as unknown as ClaudeOwnedProcess;
 }
 
@@ -535,20 +528,14 @@ async function readInstalledClaudeCliVersion(input: {
   readonly cwd?: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<string | null> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
   return new Promise((resolve, reject) => {
-    execFile(
-      prepared.command,
-      prepared.args,
+    execProcessFile(
+      input.binaryPath,
+      ["--version"],
       {
+        requireExecutable: true,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         env: input.env,
-        shell: prepared.shell,
-        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-        windowsHide: true,
         timeout: 10_000,
         maxBuffer: 64 * 1024,
         encoding: "utf8",

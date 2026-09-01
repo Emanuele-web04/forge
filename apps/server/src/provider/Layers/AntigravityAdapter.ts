@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,10 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, Layer, Option, Queue, Stream } from "effect";
 
 import {
@@ -388,15 +392,20 @@ export async function runAntigravityHelperProcess(
   code: number;
 }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnPlatformProcess(command, args, {
       cwd: options.cwd,
       env: buildProviderChildEnvironment({ provider: PROVIDER }),
       stdio: ["ignore", "pipe", "pipe"],
-    });
+      requireExecutable: true,
+      ownProcessGroup: true,
+    }) as AntigravityChildProcess;
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
+    const timeoutError = () =>
+      new Error(`Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`);
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
@@ -404,21 +413,30 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() =>
-        reject(
-          new Error(
-            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+      timedOut = true;
+      void teardownChildProcessTree(child).then(
+        () => finish(() => reject(timeoutError())),
+        (cause) =>
+          finish(() =>
+            reject(
+              new AggregateError(
+                [cause],
+                `${timeoutError().message} Process-tree exit could not be proven.`,
+              ),
+            ),
           ),
-        ),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
     child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => finish(() => reject(cause)));
-    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
+    child.once("error", (cause) => {
+      if (!timedOut) finish(() => reject(cause));
+    });
+    child.once("close", (code) => {
+      if (!timedOut) finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
+    });
   });
 }
 
@@ -900,7 +918,7 @@ export interface AntigravityAdapterDependencies {
   readonly spawnProcess?: (
     command: string,
     args: readonly string[],
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => AntigravityChildProcess;
 }
 
@@ -2155,8 +2173,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         try {
           const spawnProcess =
             dependencies.spawnProcess ??
-            ((command: string, spawnArgs: readonly string[], options: SpawnOptions) =>
-              spawn(command, spawnArgs, options) as AntigravityChildProcess);
+            ((command: string, spawnArgs: readonly string[], options: RuntimeSpawnOptions) =>
+              spawnPlatformProcess(command, spawnArgs, {
+                ...options,
+                requireExecutable: true,
+                ownProcessGroup: true,
+              }) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({

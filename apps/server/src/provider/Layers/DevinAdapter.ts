@@ -36,7 +36,6 @@ import {
   resolveDevinModelVariant,
   trimOrNull,
 } from "@synara/shared/model";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -53,7 +52,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
@@ -1204,15 +1204,9 @@ export function makeDevinAdapter(
         let discoveryError: string | undefined;
         const cliModels = yield* Effect.gen(function* () {
           const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
-          const prepared = prepareWindowsSafeProcess(
-            binaryPath,
-            ["models", "list", "--format", "json"],
-            { env: childEnv },
-          );
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(binaryPath, ["models", "list", "--format", "json"], {
+              requireExecutable: true,
               env: childEnv,
             }),
           );

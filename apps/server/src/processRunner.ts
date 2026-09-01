@@ -1,6 +1,8 @@
-import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import type { ChildProcess as ChildProcessHandle } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { spawnProcess } from "@synara/shared/processRuntime";
+
+import { signalProcessTree } from "./platform/processTreeController.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -42,21 +44,11 @@ function normalizeSpawnError(command: string, args: readonly string[], error: un
   return new Error(`Failed to run ${commandLabel(command, args)}: ${error.message}`);
 }
 
-function isWindowsCommandNotFound(code: number | null, stderr: string): boolean {
-  if (process.platform !== "win32") return false;
-  if (code === 9009) return true;
-  return /is not recognized as an internal or external command/i.test(stderr);
-}
-
 function normalizeExitError(
   command: string,
   args: readonly string[],
   result: ProcessRunResult,
 ): Error {
-  if (isWindowsCommandNotFound(result.code, result.stderr)) {
-    return new Error(`Command not found: ${command}`);
-  }
-
   const reason = result.timedOut
     ? "timed out"
     : `failed (code=${result.code ?? "null"}, signal=${result.signal ?? "null"})`;
@@ -91,18 +83,13 @@ function processAbortError(): Error {
   return error;
 }
 
-// Windows `.cmd` shims may run under an explicit cmd.exe wrapper; taskkill keeps
-// timeout/cancel paths from leaving the real command behind.
-function killChild(child: ChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
+// Process-tree signaling is platform-owned; application code never invokes OS tree commands.
+function killChild(child: ChildProcessHandle, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+  if (child.pid === undefined) {
+    child.kill(signal);
+    return;
   }
-  child.kill(signal);
+  signalProcessTree({ rootPid: child.pid, signal });
 }
 
 function appendChunkWithinLimit(
@@ -142,17 +129,11 @@ export async function runProcess(
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
-    const prepared = prepareWindowsSafeProcess(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-    });
-    const child = spawn(prepared.command, prepared.args, {
+    const child = spawnProcess(command, args, {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: prepared.shell,
-      windowsHide: prepared.windowsHide,
-      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      requireExecutable: true,
     });
 
     let stdout = "";

@@ -52,6 +52,30 @@
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
     },
+    "./executable": {
+      "types": "./src/executable.ts",
+      "import": "./src/executable.ts"
+    },
+    "./platformProcess": {
+      "types": "./src/platformProcess.ts",
+      "import": "./src/platformProcess.ts"
+    },
+    "./processRuntime": {
+      "types": "./src/processRuntime.ts",
+      "import": "./src/processRuntime.ts"
+    },
+    "./filesystemPlatform": {
+      "types": "./src/filesystemPlatform.ts",
+      "import": "./src/filesystemPlatform.ts"
+    },
+    "./platformEnvironment": {
+      "types": "./src/platformEnvironment.ts",
+      "import": "./src/platformEnvironment.ts"
+    },
+    "./wslBridge": {
+      "types": "./src/wslBridge.ts",
+      "import": "./src/wslBridge.ts"
+    },
     "./windowsCertificate": {
       "types": "./src/windowsCertificate.ts",
       "import": "./src/windowsCertificate.ts"

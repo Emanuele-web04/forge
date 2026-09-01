@@ -19,6 +19,11 @@ export {
   migrationRecoveryMarkerPath,
 } from "@synara/shared/migrationRecovery";
 
+import {
+  sameFileIdentity,
+  syncDirectoryEntry,
+  syncRegularFile,
+} from "@synara/shared/filesystemPlatform";
 import { ensurePrivateDirectorySync, repairPrivateFile } from "../privatePathPermissions.ts";
 import { withDatabaseLifecycleLock } from "./DatabaseLifecycleLock.ts";
 import {
@@ -299,41 +304,6 @@ async function ensurePrivateBackupDirectory(directory: string): Promise<void> {
   ensurePrivateDirectorySync(directory);
 }
 
-async function syncDirectory(directory: string): Promise<void> {
-  if (process.platform === "win32") return;
-  const handle = await fs.open(
-    directory,
-    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
-  );
-  try {
-    await handle.sync();
-  } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code;
-    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EBADF") throw cause;
-  } finally {
-    await handle.close();
-  }
-}
-
-/**
- * Flushes a freshly written regular file to stable storage.
- *
- * The handle is opened read-write on purpose. Windows `FlushFileBuffers`
- * requires `GENERIC_WRITE`, so syncing through an `O_RDONLY` handle fails there
- * with EPERM/EACCES — which is how a full-size `.partial` snapshot was stranded
- * on every single backup attempt.
- */
-async function syncRegularFile(filePath: string): Promise<void> {
-  const flags =
-    process.platform === "win32" ? fsConstants.O_RDWR : fsConstants.O_RDWR | fsConstants.O_NOFOLLOW;
-  const handle = await fs.open(filePath, flags);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function ensurePrivateRegularFile(filePath: string) {
   await repairPrivateFile(filePath);
   const stat = await fs.lstat(filePath);
@@ -341,10 +311,6 @@ async function ensurePrivateRegularFile(filePath: string) {
     throw new Error(`Migration backup is not a regular file: ${filePath}`);
   }
   return stat;
-}
-
-function sameFileIdentity(left: Stats, right: Stats): boolean {
-  return process.platform === "win32" || (left.dev === right.dev && left.ino === right.ino);
 }
 
 async function assertDirectoryIdentity(directory: string, openedStat: Stats): Promise<void> {
@@ -735,7 +701,7 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
         await ensurePrivateRegularFile(temporaryPath);
         await syncRegularFile(temporaryPath);
         await fs.rename(temporaryPath, backupPath);
-        await syncDirectory(backupDirectory);
+        await syncDirectoryEntry(backupDirectory);
       });
     }).pipe(
       // Must span the whole critical section, not just the vacuum. A failure
@@ -759,7 +725,7 @@ async function writePrivateJsonFile(filePath: string, payload: unknown): Promise
     await ensurePrivateRegularFile(temporaryPath);
     await syncRegularFile(temporaryPath);
     await fs.rename(temporaryPath, filePath);
-    await syncDirectory(path.dirname(filePath));
+    await syncDirectoryEntry(path.dirname(filePath));
   } catch (cause) {
     await fs.unlink(temporaryPath).catch(() => undefined);
     throw cause;
@@ -803,7 +769,7 @@ const writeCompletedMigrationProvenance = (dbPath: string, payload: Record<strin
 const removeRecoveryMarker = (dbPath: string) =>
   attemptPromise(async () => {
     await fs.unlink(migrationRecoveryMarkerPath(dbPath));
-    await syncDirectory(path.dirname(dbPath));
+    await syncDirectoryEntry(path.dirname(dbPath));
   });
 
 const removeRecoveryMarkerIfPresent = async (dbPath: string): Promise<void> => {
@@ -813,7 +779,7 @@ const removeRecoveryMarkerIfPresent = async (dbPath: string): Promise<void> => {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return;
     throw cause;
   }
-  await syncDirectory(path.dirname(dbPath));
+  await syncDirectoryEntry(path.dirname(dbPath));
 };
 
 export interface RunWithPreMigrationBackupOptions {
@@ -920,9 +886,9 @@ const restoreSqliteMigrationBackup = (input: {
     // Make the database/WAL/SHM swap durable before the caller records the
     // completed restore and clears the marker. Until both happen, a crash or
     // cleanup failure remains an explicit, retryable recovery state.
-    await syncDirectory(path.dirname(input.dbPath));
+    await syncDirectoryEntry(path.dirname(input.dbPath));
     await pruneFailedMigrationBundles(input.dbPath);
-    await syncDirectory(path.dirname(input.dbPath));
+    await syncDirectoryEntry(path.dirname(input.dbPath));
   });
 
 interface SqliteMigrationBackupInspection {
@@ -1446,6 +1412,6 @@ export const restoreMarkedMigrationBackup = (
       await fs.unlink(migrationRecoveryMarkerPath(dbPath)).catch((cause) => {
         if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
       });
-      await syncDirectory(path.dirname(dbPath));
+      await syncDirectoryEntry(path.dirname(dbPath));
     }),
   );
