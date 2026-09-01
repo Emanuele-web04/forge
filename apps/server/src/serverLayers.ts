@@ -54,6 +54,7 @@ import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosti
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { GitHubPullRequestProviderLive } from "./pullRequests/providers/GitHubPullRequestProvider";
+import { ParatyBitbucketPullRequestProviderLive } from "./pullRequests/providers/ParatyBitbucketPullRequestProvider";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { ProviderAccountServiceLive } from "./providerAccounts";
@@ -282,9 +283,13 @@ export function makeServerRuntimeServicesLayer(
   const githubPullRequestProviderLayer = GitHubPullRequestProviderLive.pipe(
     Layer.provideMerge(gitLayer),
   );
+  const bitbucketPullRequestProviderLayer = ParatyBitbucketPullRequestProviderLive.pipe(
+    Layer.provideMerge(outboundMcpLayer),
+  );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(gitLayer),
     Layer.provideMerge(githubPullRequestProviderLayer),
+    Layer.provideMerge(bitbucketPullRequestProviderLayer),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );

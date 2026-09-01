@@ -4,6 +4,7 @@ import {
   type ProjectId,
   type PullRequestListEntry,
   type PullRequestProvider,
+  type PullRequestProviderRequirement,
   type PullRequestsListResult,
 } from "@synara/contracts";
 import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
@@ -26,6 +27,7 @@ import {
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
 import {
+  PullRequestProviderError,
   PullRequestProviderSelectionError,
   isGlobalPullRequestProviderError,
   makePullRequestProviderRegistry,
@@ -36,6 +38,7 @@ import {
   GitHubPullRequestProvider,
   isDefinitivePullRequestNotFound,
 } from "../providers/GitHubPullRequestProvider";
+import { ParatyBitbucketPullRequestProvider } from "../providers/ParatyBitbucketPullRequestProvider";
 import { resolveRemoteRepositories, type RemoteRepositoryInventory } from "../repositoryResolution";
 import {
   cleanupUnconfiguredPullRequestPins,
@@ -51,6 +54,37 @@ export { isDefinitivePullRequestNotFound };
 const REMOTE_REPOSITORY_CACHE_MAX_ENTRIES = 256;
 
 type PullRequestListError = PullRequestsListResult["errors"][number];
+
+const BITBUCKET_REQUIREMENT_REASONS: ReadonlyArray<
+  PullRequestProviderRequirement["status"]
+> = [
+  "not-connected",
+  "authorizing",
+  "reconnect-required",
+  "incompatible",
+  "temporarily-unavailable",
+] as const;
+
+function isBitbucketRequirementReason(
+  reason: string,
+): reason is PullRequestProviderRequirement["status"] {
+  return BITBUCKET_REQUIREMENT_REASONS.some((candidate) => candidate === reason);
+}
+
+function bitbucketProviderRequirement(error: unknown): PullRequestProviderRequirement | null {
+  if (
+    !(error instanceof PullRequestProviderError) ||
+    error.provider !== "bitbucket" ||
+    !isBitbucketRequirementReason(error.reason)
+  ) {
+    return null;
+  }
+  return {
+    provider: "bitbucket",
+    presetId: "paraty",
+    status: error.reason,
+  };
+}
 
 export interface PullRequestServiceDependencies {
   readonly providers: ReadonlyArray<PullRequestProviderShape>;
@@ -172,10 +206,22 @@ export const makePullRequestService = (
           adapter.viewer
             ? adapter
                 .viewer({ cwd: project.workspaceRoot, forceRefresh })
-                .pipe(Effect.map((viewer) => [adapter, viewer] as const))
-            : Effect.succeed([adapter, null] as const),
+                .pipe(
+                  Effect.map((viewer) => ({ adapter, viewer, error: null } as const)),
+                  Effect.catch((error) =>
+                    Effect.succeed({ adapter, viewer: null, error } as const),
+                  ),
+                )
+            : Effect.succeed({ adapter, viewer: null, error: null } as const),
         { concurrency: "unbounded" },
-      ).pipe(Effect.map((viewers) => new Map(viewers)));
+      ).pipe(
+        Effect.map((results) => ({
+          viewers: new Map(results.map(({ adapter, viewer }) => [adapter, viewer])),
+          errors: new Map(
+            results.flatMap(({ adapter, error }) => (error ? [[adapter, error] as const] : [])),
+          ),
+        })),
+      );
     };
 
     const list: PullRequestServiceShape["list"] = (input) =>
@@ -219,6 +265,13 @@ export const makePullRequestService = (
             }),
           ),
         );
+        const providerRequirements = new Map<string, PullRequestProviderRequirement>();
+        const recordProviderRequirement = (error: unknown): boolean => {
+          const requirement = bitbucketProviderRequirement(error);
+          if (!requirement) return false;
+          providerRequirements.set(`${requirement.provider}:${requirement.presetId}`, requirement);
+          return true;
+        };
 
         const {
           errors: inventoryErrors,
@@ -246,24 +299,31 @@ export const makePullRequestService = (
           };
         }
 
-        const viewers = yield* loadProviderViewers(providerRepositories, forceRefresh);
-        const githubRepository = providerRepositories.find(
+        const eligibleProviderRepositories = providerRepositories.filter(
+          ({ adapter }) => adapter.provider !== "bitbucket" || involvement === "all",
+        );
+        const { viewers, errors: viewerErrors } = yield* loadProviderViewers(
+          eligibleProviderRepositories,
+          forceRefresh,
+        );
+        const githubRepository = eligibleProviderRepositories.find(
           ({ adapter }) => adapter.provider === "github",
         );
         const viewer = githubRepository ? (viewers.get(githubRepository.adapter) ?? null) : null;
 
         const batches = yield* Effect.forEach(
-          providerRepositories,
+          eligibleProviderRepositories,
           ({ adapter, projects: repositoryProjects, repository }) =>
-            adapter
-              .list({
-                cwd: repositoryProjects[0]!.workspaceRoot,
-                repository,
-                state: input.state,
-                involvement,
-                viewer: viewers.get(adapter) ?? null,
-                forceRefresh,
-              })
+            (viewerErrors.has(adapter)
+              ? Effect.fail(viewerErrors.get(adapter)!)
+              : adapter.list({
+                  cwd: repositoryProjects[0]!.workspaceRoot,
+                  repository,
+                  state: input.state,
+                  involvement,
+                  viewer: viewers.get(adapter) ?? null,
+                  forceRefresh,
+                }))
               .pipe(
                 Effect.map((result) => ({
                   entries: repositoryProjects.flatMap((project) =>
@@ -302,22 +362,26 @@ export const makePullRequestService = (
                     reviewingTruncated: result.reviewingTruncated,
                   },
                 })),
-                Effect.catch((error) =>
-                  isGlobalPullRequestProviderError(error)
-                    ? Effect.fail(error)
-                    : Effect.succeed({
-                        entries: [] as PullRequestListEntry[],
-                        repositoryBatches: [],
-                        errors: repositoryProjects.map((project) => ({
+                Effect.catch((error) => {
+                  const requirement = bitbucketProviderRequirement(error);
+                  if (requirement) {
+                    recordProviderRequirement(error);
+                  }
+                  return Effect.succeed({
+                    entries: [] as PullRequestListEntry[],
+                    repositoryBatches: [],
+                    errors: requirement
+                      ? []
+                      : repositoryProjects.map((project) => ({
                           projectId: project.id,
                           projectTitle: project.title,
                           provider: repository.provider,
                           repository: repository.displayName,
                           message: error.message,
                         })),
-                        recovery: null,
-                      }),
-                ),
+                    recovery: null,
+                  });
+                }),
               ),
           { concurrency: 6 },
         );
@@ -333,6 +397,7 @@ export const makePullRequestService = (
           repositoryKeysByProject,
           projectById,
           isGlobalError: isGlobalPullRequestProviderError,
+          isRequirementError: recordProviderRequirement,
         });
 
         const visibleEntries = coalescePullRequestListEntries([
@@ -344,7 +409,7 @@ export const makePullRequestService = (
           entries: orderPullRequestListEntries(visibleEntries),
           errors: [...errors, ...batches.flatMap((batch) => batch.errors), ...recovery.errors],
           repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
-          providerRequirements: [],
+          providerRequirements: [...providerRequirements.values()],
         };
       });
 
@@ -374,23 +439,19 @@ export const makePullRequestService = (
           return { count: 0, incomplete: inventoryIncomplete };
         }
 
-        const viewers = yield* loadProviderViewers(countProviders, false);
+        const { viewers, errors: viewerErrors } = yield* loadProviderViewers(countProviders, false);
         const repositoryCounts = yield* Effect.forEach(
           countProviders,
           ({ adapter, projects: repositoryProjects, repository }) => {
             const count = adapter.reviewRequestCount!;
-            return count({
-              cwd: repositoryProjects[0]!.workspaceRoot,
-              repository,
-              viewer: viewers.get(adapter) ?? null,
-              forceRefresh: false,
-            }).pipe(
-              Effect.catch((error) =>
-                isGlobalPullRequestProviderError(error)
-                  ? Effect.fail(error)
-                  : Effect.succeed({ count: 0, incomplete: true }),
-              ),
-            );
+            return (viewerErrors.has(adapter)
+              ? Effect.fail(viewerErrors.get(adapter)!)
+              : count({
+                  cwd: repositoryProjects[0]!.workspaceRoot,
+                  repository,
+                  viewer: viewers.get(adapter) ?? null,
+                  forceRefresh: false,
+                })).pipe(Effect.catch(() => Effect.succeed({ count: 0, incomplete: true })));
           },
           { concurrency: 6 },
         );
@@ -421,10 +482,11 @@ export const PullRequestServiceLive = Layer.effect(
   Effect.gen(function* () {
     const git = yield* GitCore;
     const githubProvider = yield* GitHubPullRequestProvider;
+    const bitbucketProvider = yield* ParatyBitbucketPullRequestProvider;
     const pins = yield* ProjectPullRequestPins;
     const projection = yield* ProjectionSnapshotQuery;
     return yield* makePullRequestService({
-      providers: [githubProvider],
+      providers: [githubProvider, bitbucketProvider],
       pins,
       listProjects: () =>
         projection

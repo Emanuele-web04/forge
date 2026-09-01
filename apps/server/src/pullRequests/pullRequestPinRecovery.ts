@@ -61,6 +61,7 @@ export function recoverPinnedPullRequests(input: {
   repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   projectById: ReadonlyMap<ProjectId, OrchestrationProject>;
   isGlobalError: (error: unknown) => boolean;
+  isRequirementError?: (error: unknown) => boolean;
 }) {
   return Effect.gen(function* () {
     const errors = new Map<string, PullRequestListError>();
@@ -173,7 +174,12 @@ export function recoverPinnedPullRequests(input: {
           }).pipe(
             Effect.map((matches) => [key, { ...matches, error: null }] as const),
             Effect.catch((error) =>
-              input.isGlobalError(error)
+              input.isRequirementError?.(error)
+                ? Effect.succeed([
+                    key,
+                    { numbers: new Set<number>(), incomplete: false, error: null },
+                  ] as const)
+                : input.isGlobalError(error)
                 ? Effect.fail(error)
                 : Effect.succeed([
                     key,
@@ -257,7 +263,9 @@ export function recoverPinnedPullRequests(input: {
             .pipe(
               Effect.map((result) => [key, { result, error: null }] as const),
               Effect.catch((error) =>
-                input.isGlobalError(error)
+                input.isRequirementError?.(error)
+                  ? Effect.succeed([key, { result: null, error: null }] as const)
+                  : input.isGlobalError(error)
                   ? Effect.fail(error)
                   : Effect.succeed([key, { result: null, error }] as const),
               ),

@@ -1,9 +1,14 @@
-import { ProjectId, type OrchestrationProject } from "@synara/contracts";
+import {
+  ProjectId,
+  type OrchestrationProject,
+  type PullRequestProvider,
+} from "@synara/contracts";
 import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
+import { PullRequestCapabilityError } from "./Errors";
 import {
   makePullRequestProviderRegistry,
   type PullRequestProviderShape,
@@ -56,7 +61,9 @@ function githubProvider(action = vi.fn()): PullRequestProviderShape {
 
 function makeOperations(input: {
   readonly pins: ProjectPullRequestPinsShape;
-  readonly resolveProjectRepository: () => Effect.Effect<RemoteRepositoryRef>;
+  readonly resolveProjectRepository: (
+    provider: PullRequestProvider,
+  ) => Effect.Effect<RemoteRepositoryRef>;
   readonly providers?: ReadonlyArray<PullRequestProviderShape>;
 }) {
   return makePullRequestOperations({
@@ -64,7 +71,7 @@ function makeOperations(input: {
     pins: input.pins,
     findProject: () => Effect.succeed(project),
     validateRepository: (_provider, repository) => Effect.succeed(repository),
-    resolveProjectRepository: input.resolveProjectRepository,
+    resolveProjectRepository: (_project, provider) => input.resolveProjectRepository(provider),
   });
 }
 
@@ -128,14 +135,62 @@ describe("makePullRequestOperations", () => {
     expect(pinWrites).toEqual([]);
   });
 
-  it("fails an unsupported provider mutation as a normal operation error", async () => {
+  it.each([
+    ["close", "stateMutation"],
+    ["merge", "merge"],
+  ] as const)(
+    "rejects a read-only provider %s action before a provider write",
+    async (action, capability) => {
+      const remoteAction = vi.fn(() => Effect.die("Bitbucket write must not be called"));
+      const readOnlyBitbucket: PullRequestProviderShape = {
+        ...githubProvider(),
+        provider: "bitbucket",
+        host: "bitbucket.org",
+        supports: (repository) =>
+          repository.provider === "bitbucket" && repository.host === "bitbucket.org",
+        action: remoteAction,
+      };
+      const operations = makeOperations({
+        pins: {
+          listByProjectIds: () => Effect.succeed([]),
+          setPinned: () => Effect.void,
+        },
+        resolveProjectRepository: () => Effect.succeed(bitbucketRepository),
+        providers: [readOnlyBitbucket],
+      });
+
+      const error = await Effect.runPromise(
+        Effect.flip(
+          operations.action({
+            projectId: project.id,
+            provider: "bitbucket",
+            repository: bitbucketRepository.displayName,
+            number: 42,
+            action,
+          }),
+        ),
+      );
+
+      expect(error).toBeInstanceOf(PullRequestCapabilityError);
+      expect(error).toMatchObject({
+        _tag: "PullRequestCapabilityError",
+        provider: "bitbucket",
+        capability,
+      });
+      expect(error.message).toBe("This pull request provider does not support that operation.");
+      expect(remoteAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a read-only provider comment before invoking its adapter", async () => {
+    const remoteComment = vi.fn(() => Effect.die("Bitbucket comment must not be called"));
     const readOnlyBitbucket: PullRequestProviderShape = {
       ...githubProvider(),
       provider: "bitbucket",
       host: "bitbucket.org",
       supports: (repository) =>
         repository.provider === "bitbucket" && repository.host === "bitbucket.org",
-      action: undefined,
+      comment: remoteComment,
     };
     const operations = makeOperations({
       pins: {
@@ -148,17 +203,101 @@ describe("makePullRequestOperations", () => {
 
     const error = await Effect.runPromise(
       Effect.flip(
-        operations.action({
+        operations.comment({
           projectId: project.id,
           provider: "bitbucket",
           repository: bitbucketRepository.displayName,
           number: 42,
-          action: "close",
+          body: "No remote write",
         }),
       ),
     );
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toBe("bitbucket pull requests do not support action.");
+    expect(error).toBeInstanceOf(PullRequestCapabilityError);
+    expect(error).toMatchObject({ provider: "bitbucket", capability: "comment" });
+    expect(remoteComment).not.toHaveBeenCalled();
+  });
+
+  it("routes detail and diff by the explicit provider after local identity validation", async () => {
+    const routedProviders: PullRequestProvider[] = [];
+    const detail = vi.fn(() => Effect.succeed({ route: "bitbucket-detail" } as never));
+    const diff = vi.fn(() => Effect.succeed({ patch: "bitbucket-diff", truncated: false }));
+    const bitbucket: PullRequestProviderShape = {
+      ...githubProvider(),
+      provider: "bitbucket",
+      host: "bitbucket.org",
+      supports: (repository) => repository.identityKey === bitbucketRepository.identityKey,
+      detail,
+      diff,
+      action: undefined,
+    };
+    const operations = makeOperations({
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      resolveProjectRepository: (provider) =>
+        Effect.sync(() => {
+          routedProviders.push(provider);
+          return bitbucketRepository;
+        }),
+      providers: [githubProvider(), bitbucket],
+    });
+
+    const [detailResult, diffResult] = await Effect.runPromise(
+      Effect.all([
+        operations.detail({
+          projectId: project.id,
+          provider: "bitbucket",
+          repository: bitbucketRepository.displayName,
+          number: 42,
+        }),
+        operations.diff({
+          projectId: project.id,
+          provider: "bitbucket",
+          repository: bitbucketRepository.displayName,
+          number: 42,
+        }),
+      ]),
+    );
+
+    expect(detailResult).toEqual({ route: "bitbucket-detail" });
+    expect(diffResult).toEqual({ patch: "bitbucket-diff", truncated: false });
+    expect(routedProviders).toEqual(["bitbucket", "bitbucket"]);
+  });
+
+  it("rejects a fabricated Bitbucket identity before provider dispatch", async () => {
+    const detail = vi.fn(() => Effect.die("Provider must not receive a fabricated repository"));
+    const bitbucket: PullRequestProviderShape = {
+      ...githubProvider(),
+      provider: "bitbucket",
+      host: "bitbucket.org",
+      supports: () => true,
+      detail,
+      action: undefined,
+    };
+    const operations = makeOperations({
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      resolveProjectRepository: () =>
+        Effect.fail(new Error("bitbucket repository does not belong to the selected project.")),
+      providers: [bitbucket],
+    });
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        operations.detail({
+          projectId: project.id,
+          provider: "bitbucket",
+          repository: bitbucketRepository.displayName,
+          number: 42,
+        }),
+      ),
+    );
+
+    expect(error.message).toContain("does not belong");
+    expect(detail).not.toHaveBeenCalled();
   });
 });

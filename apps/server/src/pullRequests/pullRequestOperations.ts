@@ -3,6 +3,7 @@ import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
+import { PullRequestCapabilityError } from "./Errors";
 import type {
   PullRequestProviderRegistryShape,
   PullRequestProviderShape,
@@ -44,11 +45,12 @@ export function makePullRequestOperations(dependencies: {
   const requireOperation = <K extends "action" | "comment">(
     adapter: PullRequestProviderShape,
     operation: K,
-  ): Effect.Effect<NonNullable<PullRequestProviderShape[K]>, Error> => {
+    capability: "merge" | "stateMutation" | "comment",
+  ): Effect.Effect<NonNullable<PullRequestProviderShape[K]>, PullRequestCapabilityError> => {
     const implementation = adapter[operation];
-    return implementation
+    return adapter.provider !== "bitbucket" && implementation
       ? Effect.succeed(implementation as NonNullable<PullRequestProviderShape[K]>)
-      : Effect.fail(new Error(`${adapter.provider} pull requests do not support ${operation}.`));
+      : Effect.fail(new PullRequestCapabilityError({ provider: adapter.provider, capability }));
   };
 
   const detail: PullRequestServiceShape["detail"] = (input) =>
@@ -81,7 +83,11 @@ export function makePullRequestOperations(dependencies: {
         input.provider ?? "github",
         input.repository,
       );
-      const runAction = yield* requireOperation(adapter, "action");
+      const runAction = yield* requireOperation(
+        adapter,
+        "action",
+        input.action === "merge" ? "merge" : "stateMutation",
+      );
       return yield* runAction({
         project,
         repository,
@@ -99,7 +105,7 @@ export function makePullRequestOperations(dependencies: {
         input.provider ?? "github",
         input.repository,
       );
-      const runComment = yield* requireOperation(adapter, "comment");
+      const runComment = yield* requireOperation(adapter, "comment", "comment");
       return yield* runComment({
         project,
         repository,
