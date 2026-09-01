@@ -45,19 +45,15 @@ describe("ChatMarkdown React Compiler coverage", () => {
   // A cold Babel compile of ChatMarkdown.tsx takes seconds on its own and
   // stretches further while the workspace suite competes for CPU; the budget
   // only exists to stop a hang, not to bound machine load.
-  it(
-    "compiles every function in ChatMarkdown.tsx without bailouts",
-    () => {
-      const events = compileEvents(join(import.meta.dirname, "ChatMarkdown.tsx"));
-      const errors = events
-        .filter((event) => event.kind === "CompileError")
-        .map(
-          (event) =>
-            `${event.fnName ?? "<anonymous>"}: ${event.detail?.reason ?? event.detail?.description ?? "unknown"}`,
-        );
-      expect(errors).toEqual([]);
-      expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
-    },
-    120_000,
-  );
+  it("compiles every function in ChatMarkdown.tsx without bailouts", () => {
+    const events = compileEvents(join(import.meta.dirname, "ChatMarkdown.tsx"));
+    const errors = events
+      .filter((event) => event.kind === "CompileError")
+      .map(
+        (event) =>
+          `${event.fnName ?? "<anonymous>"}: ${event.detail?.reason ?? event.detail?.description ?? "unknown"}`,
+      );
+    expect(errors).toEqual([]);
+    expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
+  }, 120_000);
 });
