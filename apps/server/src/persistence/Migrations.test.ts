@@ -301,10 +301,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "Mind"],
+        [100, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-45), [
+      assert.deepStrictEqual(tracker.slice(-46), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -350,6 +351,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
         { migration_id: 98, name: "MigrateKiloToOpenCode" },
         { migration_id: 99, name: "Mind" },
+        { migration_id: 100, name: "MindRuntimeIntegrity" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -441,6 +443,7 @@ agentGatewayRetentionLegacyLayer(
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "Mind"],
+          [100, "MindRuntimeIntegrity"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -535,11 +538,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "Mind"],
+        [100, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-29).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-30).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -570,6 +574,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "Mind"],
+          [100, "MindRuntimeIntegrity"],
         ],
       );
 
@@ -631,7 +636,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         WHERE migration_id = 74
       `;
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 99 });
       assert.deepStrictEqual(executed, [
         [74, "ExternalMcpIntegrations"],
         [75, "ExternalMcpActiveCapacity"],
@@ -856,7 +861,7 @@ mindMigrationLayer("Mind migration", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 98 });
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 99 });
       assert.deepStrictEqual(executed, [[99, "Mind"]]);
       yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
       yield* sql`INSERT INTO mind_journal (project_id, memory_id, op, actor, created_at) VALUES ('p1', 'm1', 'forget', 'user:ui', '2026-09-01T00:00:00.000Z')`;
@@ -873,6 +878,85 @@ mindMigrationLayer("Mind migration", (it) => {
         columns.map(({ name }) => name),
         "text",
       );
+    }),
+  );
+});
+
+const mindRuntimeIntegrityLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
+  it.effect(
+    "upgrades 099 without loss and backfills provenance from complete source metadata",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 99 });
+        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES ('p1', 'One', '/one', '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+        yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id, source_provider) VALUES ('agent', 'p1', 'agent memory', 'semantic', 'agent-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-1', 'codex')`;
+        yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id) VALUES ('partial', 'p1', 'partial memory', 'semantic', 'partial-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-2')`;
+        yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('user', 'p1', 'user memory', 'semantic', 'user-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(executed, [[100, "MindRuntimeIntegrity"]]);
+        const rows = yield* sql<{
+          readonly id: string;
+          readonly provenanceKind: string;
+        }>`SELECT id, provenance_kind AS "provenanceKind" FROM mind_memories ORDER BY id`;
+        assert.deepStrictEqual(rows, [
+          { id: "agent", provenanceKind: "agent" },
+          { id: "partial", provenanceKind: "user" },
+          { id: "user", provenanceKind: "user" },
+        ]);
+        const rerun = yield* runMigrations();
+        assert.lengthOf(rerun, 0);
+      }),
+  );
+
+  it.effect("creates constrained provenance and project-scoped durable receipts", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      for (const projectId of ["p1", "p2"]) {
+        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${`receipt-${projectId}`}, ${projectId}, ${`/${projectId}`}, '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+      }
+      const invalidProvenance = yield* Effect.flip(
+        sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, provenance_kind) VALUES ('bad', 'p1', 'bad provenance', 'semantic', 'bad-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'system')`,
+      );
+      assert.isDefined(invalidProvenance);
+
+      yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{"id":"one"}', '2026-09-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p2', 'same-op', 'remember', '{"id":"two"}', '2026-09-01T00:00:00.000Z')`;
+      const duplicate = yield* Effect.flip(
+        sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{}', '2026-09-01T00:00:00.000Z')`,
+      );
+      assert.isDefined(duplicate);
+      yield* sql`DELETE FROM projection_projects WHERE project_id = 'receipt-p1'`;
+      const receipts = yield* sql<{
+        readonly projectId: string;
+      }>`SELECT project_id AS "projectId" FROM mind_operation_receipts ORDER BY project_id`;
+      assert.deepStrictEqual(receipts, [{ projectId: "receipt-p2" }]);
+    }),
+  );
+
+  it.effect("keeps FTS insert, update, and delete triggers working", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('fts', 'p1', 'alpha token', 'semantic', 'fts-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+      const inserted = yield* sql<{
+        readonly id: string;
+      }>`SELECT mind_memories.id FROM mind_memories_fts JOIN mind_memories ON mind_memories.rowid = mind_memories_fts.rowid WHERE mind_memories_fts MATCH 'alpha'`;
+      assert.deepStrictEqual(inserted, [{ id: "fts" }]);
+      yield* sql`UPDATE mind_memories SET text = 'beta token' WHERE id = 'fts'`;
+      const updated = yield* sql<{
+        readonly id: string;
+      }>`SELECT mind_memories.id FROM mind_memories_fts JOIN mind_memories ON mind_memories.rowid = mind_memories_fts.rowid WHERE mind_memories_fts MATCH 'beta'`;
+      assert.deepStrictEqual(updated, [{ id: "fts" }]);
+      yield* sql`DELETE FROM mind_memories WHERE id = 'fts'`;
+      const deleted = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM mind_memories_fts WHERE mind_memories_fts MATCH 'beta'`;
+      assert.strictEqual(deleted[0]?.count, 0);
     }),
   );
 });
