@@ -6,11 +6,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ThreadId, TurnId } from "@synara/contracts";
-import { Deferred, Effect, Exit, Layer, Scope, Semaphore, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { Deferred, Effect, Exit, Layer, Queue, Scope, Semaphore, Stream } from "effect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import type { AcpParsedSessionEvent } from "../acp/AcpRuntimeModel.ts";
 import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import {
   applyDevinSessionConfiguration,
@@ -22,6 +23,7 @@ import {
   makeDevinAdapterLive,
   parseDevinCliModelList,
   pruneDevinToolCallTurnIds,
+  resolveDevinAdapterTimeouts,
   resolveDevinEffectiveModel,
   resolveDevinStartModel,
   resolveDevinToolCallUpdatedTurnId,
@@ -113,11 +115,72 @@ function makeLifecycleAcpRuntime(
   } as AcpSessionRuntimeShape;
 }
 
-function makeDevinAdapterTestLayer(runtime: AcpSessionRuntimeShape) {
+function makeEventAcpRuntime(prompt: AcpSessionRuntimeShape["prompt"]) {
+  type EventEnvelope = {
+    readonly event: AcpParsedSessionEvent;
+    readonly processed: Deferred.Deferred<void>;
+  };
+  const events = Effect.runSync(Queue.unbounded<EventEnvelope>());
+  const pendingCompletions: Array<Deferred.Deferred<void>> = [];
+  const runtime = makeLifecycleAcpRuntime(prompt);
+  const emit = (event: AcpParsedSessionEvent) =>
+    Effect.gen(function* () {
+      const processed = yield* Deferred.make<void>();
+      yield* Queue.offer(events, { event, processed });
+      yield* flushTimers();
+      yield* Deferred.await(processed);
+    });
+  return {
+    runtime: {
+      ...runtime,
+      getEvents: () =>
+        Stream.fromQueue(events).pipe(
+          Stream.map(({ event, processed }) => {
+            pendingCompletions.push(processed);
+            return event;
+          }),
+        ),
+    } as AcpSessionRuntimeShape,
+    emitToolCall: (toolCallId: string, status: "pending" | "inProgress" | "completed" | "failed") =>
+      emit({
+        _tag: "ToolCallUpdated",
+        toolCall: { toolCallId, status, data: {} },
+        rawPayload: { toolCallId, status },
+      }),
+    emitProgress: (text = "progress") =>
+      emit({
+        _tag: "ContentDelta",
+        text,
+        rawPayload: { text },
+      }),
+    completeProcessedEvent: () => {
+      const processed = pendingCompletions.shift();
+      if (processed !== undefined) {
+        Effect.runSync(Deferred.succeed(processed, undefined));
+      }
+    },
+  };
+}
+
+function advanceTimers(ms: number): Effect.Effect<void> {
+  return Effect.promise(() => vi.advanceTimersByTimeAsync(ms));
+}
+
+function flushTimers(): Effect.Effect<void> {
+  return advanceTimers(0);
+}
+
+function makeDevinAdapterTestLayer(
+  runtime: AcpSessionRuntimeShape,
+  onSessionUpdateProcessed?: () => void,
+  timeouts: { turnIdleMs: number; toolIdleMs: number } = { turnIdleMs: 30, toolIdleMs: 60 },
+) {
   return makeDevinAdapterLive(
     {},
     {
       makeAcpRuntime: () => Effect.succeed(runtime),
+      timeouts,
+      ...(onSessionUpdateProcessed ? { onSessionUpdateProcessed } : {}),
     },
   ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
@@ -125,7 +188,29 @@ function makeDevinAdapterTestLayer(runtime: AcpSessionRuntimeShape) {
   );
 }
 
+describe("resolveDevinAdapterTimeouts", () => {
+  it("uses the production defaults when overrides are absent", () => {
+    expect(resolveDevinAdapterTimeouts({})).toEqual({
+      turnIdleMs: 30 * 60 * 1000,
+      toolIdleMs: 60 * 60 * 1000,
+    });
+  });
+
+  it("uses valid environment overrides", () => {
+    expect(
+      resolveDevinAdapterTimeouts({
+        SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS: "1234",
+        SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS: "5678",
+      }),
+    ).toEqual({ turnIdleMs: 1234, toolIdleMs: 5678 });
+  });
+});
+
 describe("Devin adapter lifecycle", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rejects an overlapping send without replacing the active turn", async () => {
     const promptStarted = await Effect.runPromise(Deferred.make<void>());
     const runtime = makeLifecycleAcpRuntime(() =>
@@ -142,14 +227,8 @@ describe("Devin adapter lifecycle", () => {
           runtimeMode: "full-access",
           cwd: process.cwd(),
         });
-
-        const firstTurn = yield* adapter.sendTurn({
-          threadId,
-          input: "first",
-          attachments: [],
-        });
+        const firstTurn = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
         yield* Deferred.await(promptStarted);
-
         const duplicateError = yield* adapter
           .sendTurn({ threadId, input: "second", attachments: [] })
           .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }));
@@ -157,12 +236,9 @@ describe("Devin adapter lifecycle", () => {
           _tag: "ProviderAdapterValidationError",
           operation: "sendTurn",
         });
-
-        const runningSession = (yield* adapter.listSessions()).find(
-          (session) => session.threadId === threadId,
-        );
-        expect(runningSession?.activeTurnId).toBe(firstTurn.turnId);
-
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "running", activeTurnId: firstTurn.turnId });
         yield* adapter.interruptTurn(threadId, firstTurn.turnId);
         const readySession = (yield* adapter.listSessions()).find(
           (session) => session.threadId === threadId,
@@ -170,8 +246,175 @@ describe("Devin adapter lifecycle", () => {
         expect(readySession?.activeTurnId).toBeUndefined();
         expect(readySession?.status).toBe("ready");
         yield* adapter.stopSession(threadId);
-      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime))),
+      }).pipe(
+        Effect.provide(
+          // Real timers: keep the watchdog's first check (5s cadence at these
+          // budgets) far beyond the assertion window instead of racing it.
+          makeDevinAdapterTestLayer(runtime, undefined, {
+            turnIdleMs: 3_600_000,
+            toolIdleMs: 3_600_000,
+          }),
+        ),
+      ),
     );
+  });
+
+  it("keeps tool budget for every active tool and ignores terminal regressions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { runtime, emitToolCall, completeProcessedEvent } = makeEventAcpRuntime(
+      () => Effect.never,
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-tool-budget");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const turn = yield* adapter.sendTurn({ threadId, input: "run tools", attachments: [] });
+        for (const [toolCallId, status] of [
+          ["tool-a", "pending"],
+          ["tool-b", "inProgress"],
+          ["tool-a", "completed"],
+          ["tool-a", "pending"],
+        ] as const) {
+          yield* emitToolCall(toolCallId, status);
+        }
+        yield* advanceTimers(30);
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "running", activeTurnId: turn.turnId });
+        yield* emitToolCall("tool-b", "failed");
+        yield* advanceTimers(30);
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "error" });
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
+    );
+  });
+
+  it("does not let stale prior-turn tool updates refresh or extend the current turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const firstPrompt = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+    const prompts = [
+      Deferred.await(firstPrompt),
+      Effect.never as Effect.Effect<Acp.PromptResponse>,
+    ];
+    const { runtime, emitToolCall, completeProcessedEvent } = makeEventAcpRuntime(
+      () => prompts.shift() ?? Effect.never,
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-stale-tool");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
+        yield* emitToolCall("old-tool", "pending");
+        yield* Deferred.succeed(firstPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
+        yield* advanceTimers(1);
+        const second = yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
+        yield* emitToolCall("old-tool", "completed");
+        yield* advanceTimers(15);
+        yield* emitToolCall("old-tool", "inProgress");
+        yield* advanceTimers(40);
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "error" });
+        expect(second.turnId).toBeDefined();
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
+    );
+  });
+
+  it("resets the ordinary clock for other valid progress events", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { runtime, emitProgress, completeProcessedEvent } = makeEventAcpRuntime(
+      () => Effect.never,
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-progress-clock");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const turn = yield* adapter.sendTurn({ threadId, input: "progress", attachments: [] });
+        yield* advanceTimers(15);
+        yield* emitProgress();
+        yield* advanceTimers(15);
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "running", activeTurnId: turn.turnId });
+        yield* advanceTimers(30);
+        expect(
+          (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+        ).toMatchObject({ status: "error" });
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
+    );
+  });
+
+  it("clears active tool budget on normal settlement, interrupt, timeout, and teardown", async () => {
+    const outcomes = ["settle", "interrupt", "timeout", "teardown"] as const;
+    for (const outcome of outcomes) {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const promptResult = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+      const { runtime, emitToolCall, completeProcessedEvent } = makeEventAcpRuntime(() =>
+        Deferred.await(promptResult),
+      );
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe(`thread-devin-clear-${outcome}`);
+          yield* adapter.startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+          });
+          const turn = yield* adapter.sendTurn({ threadId, input: outcome, attachments: [] });
+          yield* emitToolCall("tool", "pending");
+          if (outcome === "settle") {
+            yield* Deferred.succeed(promptResult, { stopReason: "end_turn" } as Acp.PromptResponse);
+            yield* advanceTimers(1);
+            expect(
+              (yield* adapter.listSessions()).find((session) => session.threadId === threadId)
+                ?.status,
+            ).toBe("ready");
+          } else if (outcome === "interrupt") {
+            yield* adapter.interruptTurn(threadId, turn.turnId);
+          } else if (outcome === "timeout") {
+            yield* emitToolCall("tool", "completed");
+            yield* advanceTimers(40);
+            expect(
+              (yield* adapter.listSessions()).find((session) => session.threadId === threadId)
+                ?.status,
+            ).toBe("error");
+          }
+          yield* adapter.stopSession(threadId);
+          expect(
+            (yield* adapter.listSessions()).find((session) => session.threadId === threadId),
+          ).toBeUndefined();
+        }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
+      );
+      vi.useRealTimers();
+    }
   });
 });
 

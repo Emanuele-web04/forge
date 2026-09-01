@@ -157,9 +157,12 @@ const DEVIN_RESUME_VERSION = 1 as const;
 
 const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
-  defaultMs: 10 * 60 * 1000,
+  defaultMs: 30 * 60 * 1000,
 });
-const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
+const DEVIN_TOOL_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS",
+  defaultMs: 60 * 60 * 1000,
+});
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const DEVIN_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DEVIN_COMMAND_DISCOVERY_TIMEOUT_MS = 15_000;
@@ -184,7 +187,7 @@ const DEVIN_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
 const DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const DEVIN_TURN_SETTLE_DRAIN_POLL_MS = 25;
 // Reuses the turn idle timeout value as a generous ceiling (compactions stream
-// activity well under it); override both with SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS.
+// activity well under it); override it with SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS.
 const DEVIN_COMPACT_TIMEOUT_MS = DEVIN_TURN_IDLE_TIMEOUT_MS;
 // After a timed-out /compact the cancel is only best-effort: the child may
 // still stream stale compaction updates for a moment. Hold new turns for this
@@ -211,10 +214,34 @@ const DEVIN_PLAN_MODE_PROMPT_PREFIX = [
   "When ready, create the final implementation plan.",
 ].join("\n");
 
+export interface DevinAdapterTimeouts {
+  readonly turnIdleMs: number;
+  readonly toolIdleMs: number;
+}
+
+export function resolveDevinAdapterTimeouts(
+  env: NodeJS.ProcessEnv = process.env,
+): DevinAdapterTimeouts {
+  return {
+    turnIdleMs: resolveAcpTurnIdleTimeoutMs({
+      envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
+      defaultMs: 30 * 60 * 1000,
+      env,
+    }),
+    toolIdleMs: resolveAcpTurnIdleTimeoutMs({
+      envVar: "SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS",
+      defaultMs: 60 * 60 * 1000,
+      env,
+    }),
+  };
+}
+
 interface DevinAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly makeAcpRuntime?: typeof makeDevinAcpRuntime;
+  readonly onSessionUpdateProcessed?: () => void;
+  readonly timeouts?: DevinAdapterTimeouts;
 }
 
 interface PendingApproval {
@@ -266,6 +293,7 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   // turn. Pruned to the just-settled turn on each dispatch (a straggler can
   // lag by at most one turn on the FIFO session/update stream).
   readonly turnToolCallIds: Map<string, TurnId>;
+  readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
   // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
   // session updates have been fully handled by the notification consumer.
   sessionUpdatesProcessed: number;
@@ -1124,7 +1152,41 @@ function settleDevinActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolea
     return false;
   }
   ctx.lastSettledTurnId = turnId;
+  clearDevinActiveToolCallIdleState(ctx);
   return true;
+}
+
+function resolveDevinCurrentIdleTimeoutMs(
+  ctx: Pick<DevinSessionContext, "devinToolCallLifecycleById">,
+  timeouts: DevinAdapterTimeouts,
+): number {
+  for (const lifecycle of ctx.devinToolCallLifecycleById.values()) {
+    if (lifecycle === "active") {
+      return timeouts.toolIdleMs;
+    }
+  }
+  return timeouts.turnIdleMs;
+}
+
+function updateDevinToolCallIdleState(
+  ctx: Pick<DevinSessionContext, "devinToolCallLifecycleById">,
+  toolCall: AcpToolCallState,
+): void {
+  const { toolCallId, status } = toolCall;
+  if (status === "completed" || status === "failed") {
+    ctx.devinToolCallLifecycleById.set(toolCallId, "terminal");
+    return;
+  }
+  if (
+    (status === "pending" || status === "inProgress") &&
+    ctx.devinToolCallLifecycleById.get(toolCallId) !== "terminal"
+  ) {
+    ctx.devinToolCallLifecycleById.set(toolCallId, "active");
+  }
+}
+
+function clearDevinActiveToolCallIdleState(ctx: DevinSessionContext): void {
+  ctx.devinToolCallLifecycleById.clear();
 }
 
 export function closeDevinSessionResources(input: {
@@ -1145,6 +1207,9 @@ export function makeDevinAdapter(
   devinSettings: DevinAcpRuntimeSettings = {},
   options?: DevinAdapterLiveOptions,
 ) {
+  const timeouts = options?.timeouts ?? resolveDevinAdapterTimeouts();
+  const watchdogIntervalMs = Math.min(5_000, timeouts.turnIdleMs, timeouts.toolIdleMs);
+
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1343,6 +1408,7 @@ export function makeDevinAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        clearDevinActiveToolCallIdleState(ctx);
         yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
         ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
@@ -1866,6 +1932,7 @@ export function makeDevinAdapter(
             lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
+            devinToolCallLifecycleById: new Map(),
             sessionUpdatesProcessed: 0,
             sessionConfigReady,
             resumeReplayReady,
@@ -1887,7 +1954,7 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 // Only genuine turn-progress events keep the idle watchdog at
                 // bay; mode/config/usage heartbeats must not mask a hung turn.
-                if (isAcpTurnProgressEventTag(event._tag)) {
+                if (event._tag !== "ToolCallUpdated" && isAcpTurnProgressEventTag(event._tag)) {
                   ctx.lastTurnActivityAt = Date.now();
                 }
                 switch (event._tag) {
@@ -1993,6 +2060,8 @@ export function makeDevinAdapter(
                       if (activeTurnId === undefined) {
                         return;
                       }
+                      ctx.lastTurnActivityAt = Date.now();
+                      updateDevinToolCallIdleState(ctx, event.toolCall);
                       ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
@@ -2075,6 +2144,7 @@ export function makeDevinAdapter(
                 Effect.ensuring(
                   Effect.sync(() => {
                     ctx.sessionUpdatesProcessed += 1;
+                    options?.onSessionUpdateProcessed?.();
                   }),
                 ),
               ),
@@ -2330,6 +2400,7 @@ export function makeDevinAdapter(
         const keptTurnId = ctx.lastSettledTurnId;
         ctx.lastSettledTurnId = undefined;
         ctx.activeTurnId = turnId;
+        clearDevinActiveToolCallIdleState(ctx);
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
@@ -2508,8 +2579,9 @@ export function makeDevinAdapter(
         yield* forkAcpAdapterTurnIdleWatchdog({
           context: ctx,
           turnId,
-          idleTimeoutMs: DEVIN_TURN_IDLE_TIMEOUT_MS,
-          checkIntervalMs: DEVIN_TURN_WATCHDOG_INTERVAL_MS,
+          idleTimeoutMs: timeouts.turnIdleMs,
+          currentIdleTimeoutMs: () => resolveDevinCurrentIdleTimeoutMs(ctx, timeouts),
+          checkIntervalMs: watchdogIntervalMs,
           onIdleTimeout: (idleMs) => failDevinTurnAsTimedOut(ctx, turnId, idleMs),
         });
 

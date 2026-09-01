@@ -6498,15 +6498,86 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // The dialog closes on success and the sidebar picks the project up from
-      // the refreshed shell snapshot.
+      // The dialog closes only after the new project's draft route commits.
       await expect
         .element(page.getByRole("heading", { name: "Create project" }))
         .not.toBeInTheDocument();
       await expect
         .element(page.getByText("new-project", { exact: true }).first())
         .toBeInTheDocument();
+      const draftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Project creation should land on a draft thread route.",
+      );
+      expect(
+        useComposerDraftStore.getState().getDraftThread(ThreadId.makeUnsafe(draftPath.slice(1))),
+      ).toMatchObject({
+        projectId: expect.any(String),
+      });
+      await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the prior route and exposes an error when project draft navigation is superseded", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-create-project-superseded" as MessageId,
+        targetText: "create project superseded navigation",
+      }),
+    });
+    const previousPath = mounted.router.state.location.pathname;
+    const previousNativeApi = window.nativeApi;
+    const wsNativeApi = readNativeApi();
+    expect(wsNativeApi).toBeDefined();
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...wsNativeApi,
+        orchestration: {
+          ...wsNativeApi?.orchestration,
+          dispatchCommand: vi.fn(async (command: unknown) => {
+            if (recordProjectCreateCommand(command)) {
+              return { sequence: fixture.snapshot.snapshotSequence };
+            }
+            return { sequence: fixture.snapshot.snapshotSequence + 1 };
+          }),
+          getShellSnapshot: vi.fn(async () => createShellSnapshotFromReadModel(fixture.snapshot)),
+        },
+      },
+    });
+    const navigateSpy = vi.spyOn(mounted.router, "navigate").mockImplementation(async (options) => {
+      const targetThreadId =
+        typeof options === "object" && options && "params" in options
+          ? (options.params as { threadId?: string } | undefined)?.threadId
+          : undefined;
+      if (targetThreadId) return;
+      return undefined;
+    });
+
+    try {
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      await page.getByLabelText("Project folder path").fill("/repo/superseded-project");
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+
+      await expect
+        .element(page.getByRole("alert"))
+        .toHaveTextContent("Project creation was superseded before its chat opened.");
+      expect(mounted.router.state.location.pathname).toBe(previousPath);
+      await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+    } finally {
+      navigateSpy.mockRestore();
+      if (previousNativeApi) {
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      } else {
+        Reflect.deleteProperty(window, "nativeApi");
+      }
       await mounted.cleanup();
     }
   });
