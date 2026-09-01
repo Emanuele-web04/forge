@@ -301,6 +301,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
+        [101, "Mind"],
+        [102, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -350,6 +352,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
         { migration_id: 98, name: "MigrateKiloToOpenCode" },
         { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
+        { migration_id: 101, name: "Mind" },
+        { migration_id: 102, name: "MindRuntimeIntegrity" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -441,6 +445,8 @@ agentGatewayRetentionLegacyLayer(
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
+          [101, "Mind"],
+          [102, "MindRuntimeIntegrity"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -535,6 +541,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
+        [101, "Mind"],
+        [102, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -570,6 +578,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
+          [101, "Mind"],
+          [102, "MindRuntimeIntegrity"],
         ],
       );
 
@@ -659,6 +669,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
+        [101, "Mind"],
+        [102, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -690,6 +702,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
+          [101, "Mind"],
+          [102, "MindRuntimeIntegrity"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -845,6 +859,38 @@ managedAttachmentsIdempotencyLayer("managed attachment migration idempotency", (
       yield* runMigrations();
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
+    }),
+  );
+});
+
+const mindMigrationLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+mindMigrationLayer("Mind migration", (it) => {
+  it.effect("appends after 97 and 98 and preserves text-free journal evidence after delete", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 98 });
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [99, "InvalidateProjectionThreadsCursor"],
+        [101, "Mind"],
+        [102, "MindRuntimeIntegrity"],
+      ]);
+      yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO mind_journal (project_id, memory_id, op, actor, created_at) VALUES ('p1', 'm1', 'forget', 'user:ui', '2026-09-01T00:00:00.000Z')`;
+      yield* sql`DELETE FROM mind_memories WHERE id = 'm1'`;
+      const journal = yield* sql<{
+        readonly memory_id: string;
+        readonly op: string;
+      }>`SELECT memory_id, op FROM mind_journal`;
+      assert.deepStrictEqual(journal, [{ memory_id: "m1", op: "forget" }]);
+      const columns = yield* sql<{
+        readonly name: string;
+      }>`SELECT name FROM pragma_table_info('mind_journal')`;
+      assert.notInclude(
+        columns.map(({ name }) => name),
+        "text",
+      );
     }),
   );
 });
