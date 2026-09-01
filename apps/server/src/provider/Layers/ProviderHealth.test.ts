@@ -2292,7 +2292,10 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it.effect("returns ready with auth guidance when no Devin API key is set", () =>
       Effect.gen(function* () {
-        const status = yield* checkDevinProviderStatus;
+        // Read no stored credentials so the assertion holds on machines where
+        // `devin auth login` has saved real ones; only the env-key absence is
+        // under test here.
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => undefined);
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "unknown");
