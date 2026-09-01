@@ -2,11 +2,13 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import type { McpConsumerBinding } from "../consumerBinding.ts";
 import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
-import type {
-  OutboundMcpCredentialRecord,
-  OutboundMcpCredentialsShape,
+import {
+  OutboundMcpCredentialsError,
+  type OutboundMcpCredentialRecord,
+  type OutboundMcpCredentialsShape,
 } from "../Services/OutboundMcpCredentials.ts";
 import type {
   OutboundMcpConnectionRecord,
@@ -27,10 +29,15 @@ const NOW = "2026-09-01T08:00:00.000Z";
 
 function makeMemoryRepository(): OutboundMcpRepositoryShape & {
   readonly records: Map<string, OutboundMcpConnectionRecord>;
+  failSetStatus: boolean;
 } {
   const records = new Map<string, OutboundMcpConnectionRecord>();
-  return {
+  const repository: OutboundMcpRepositoryShape & {
+    readonly records: Map<string, OutboundMcpConnectionRecord>;
+    failSetStatus: boolean;
+  } = {
     records,
+    failSetStatus: false,
     list: () => Effect.succeed([...records.values()]),
     get: (connectionId) => Effect.succeed(records.get(connectionId) ?? null),
     upsertMetadata: (record) =>
@@ -42,38 +49,62 @@ function makeMemoryRepository(): OutboundMcpRepositoryShape & {
         });
       }),
     setStatus: (input) =>
-      Effect.sync(() => {
-        const current = records.get(input.connectionId);
-        if (current === undefined) return;
-        records.set(input.connectionId, {
-          ...current,
-          status: input.status,
-          errorCategory: input.errorCategory,
-          catalogFingerprint:
-            input.catalogFingerprint === undefined
-              ? current.catalogFingerprint
-              : input.catalogFingerprint,
-          lastValidatedAt:
-            input.lastValidatedAt === undefined ? current.lastValidatedAt : input.lastValidatedAt,
-          updatedAt: input.updatedAt,
-        });
-      }),
+      repository.failSetStatus
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "outbound-mcp-status",
+              detail: "synthetic status failure",
+            }),
+          )
+        : Effect.sync(() => {
+            const current = records.get(input.connectionId);
+            if (current === undefined) return;
+            records.set(input.connectionId, {
+              ...current,
+              status: input.status,
+              errorCategory: input.errorCategory,
+              catalogFingerprint:
+                input.catalogFingerprint === undefined
+                  ? current.catalogFingerprint
+                  : input.catalogFingerprint,
+              lastValidatedAt:
+                input.lastValidatedAt === undefined
+                  ? current.lastValidatedAt
+                  : input.lastValidatedAt,
+              updatedAt: input.updatedAt,
+            });
+          }),
     delete: (connectionId) => Effect.sync(() => void records.delete(connectionId)),
   };
+  return repository;
 }
 
 function makeMemoryCredentials(): OutboundMcpCredentialsShape & {
   readonly records: Map<string, OutboundMcpCredentialRecord>;
+  failDelete: boolean;
 } {
   const records = new Map<string, OutboundMcpCredentialRecord>();
-  return {
+  const credentials: OutboundMcpCredentialsShape & {
+    readonly records: Map<string, OutboundMcpCredentialRecord>;
+    failDelete: boolean;
+  } = {
     records,
+    failDelete: false,
     read: (connectionId) => Effect.succeed(records.get(connectionId) ?? null),
     write: (connectionId, credentials) =>
       Effect.sync(() => void records.set(connectionId, credentials)),
-    delete: (connectionId) => Effect.sync(() => void records.delete(connectionId)),
+    delete: (connectionId) =>
+      credentials.failDelete
+        ? Effect.fail(
+            new OutboundMcpCredentialsError({
+              operation: "delete",
+              category: "filesystem",
+            }),
+          )
+        : Effect.sync(() => void records.delete(connectionId)),
     clearAttemptSecrets: () => Effect.void,
   };
+  return credentials;
 }
 
 function makeFakeOAuth(
@@ -114,22 +145,26 @@ function makeFakeToolClient(): McpToolClientShape & {
   readonly liveConnections: Set<string>;
   validateFailure: McpToolClientError | null;
   callFailure: McpToolClientError | null;
+  callAttempts: number;
 } {
   const liveConnections = new Set<string>();
   const client: McpToolClientShape & {
     readonly liveConnections: Set<string>;
     validateFailure: McpToolClientError | null;
     callFailure: McpToolClientError | null;
+    callAttempts: number;
   } = {
     liveConnections,
     validateFailure: null,
     callFailure: null,
+    callAttempts: 0,
     validate: (binding) => {
       if (client.validateFailure !== null) return Effect.fail(client.validateFailure);
       liveConnections.add("paraty");
       return Effect.succeed(`catalog-${binding.id}`);
     },
     call: (binding, tool) => {
+      client.callAttempts += 1;
       if (client.callFailure !== null) return Effect.fail(client.callFailure);
       liveConnections.add("paraty");
       const operation = Object.values(binding.operations).find(
@@ -171,12 +206,16 @@ const readBinding: McpConsumerBinding<"read"> = {
 
 function makeFixture(options?: {
   readonly bindings?: ReadonlyArray<McpConsumerBinding<string>>;
-  readonly oauth?: (credentials: OutboundMcpCredentialsShape) => McpConnectionOAuthLifecycle;
+  readonly oauth?: (
+    credentials: OutboundMcpCredentialsShape,
+    toolClient: ReturnType<typeof makeFakeToolClient>,
+    repository: ReturnType<typeof makeMemoryRepository>,
+  ) => McpConnectionOAuthLifecycle;
 }) {
   const repository = makeMemoryRepository();
   const credentials = makeMemoryCredentials();
   const toolClient = makeFakeToolClient();
-  const oauth = options?.oauth?.(credentials) ?? makeFakeOAuth(credentials);
+  const oauth = options?.oauth?.(credentials, toolClient, repository) ?? makeFakeOAuth(credentials);
   const preset = {
     ...PARATY_MCP_PRESET,
     consumers: options?.bindings ?? [],
@@ -446,6 +485,88 @@ describe("McpConnectionService", () => {
     ).resolves.toBeUndefined();
     expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toBeNull();
     expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
+  });
+
+  it("durably fences and closes the live client before remote revocation", async () => {
+    let statusDuringRevocation: string | undefined;
+    let liveDuringRevocation: boolean | undefined;
+    const fixture = makeFixture({
+      oauth: (credentials, toolClient, repository) =>
+        makeFakeOAuth(credentials, {
+          revoke: () =>
+            Effect.sync(() => {
+              statusDuringRevocation = repository.records.get("paraty")?.status;
+              liveDuringRevocation = toolClient.liveConnections.has("paraty");
+            }),
+        }),
+    });
+    const { state } = await authorize(fixture);
+    await Effect.runPromise(fixture.service.completeAuthorization({ state, code: "code-1" }));
+    fixture.toolClient.liveConnections.add("paraty");
+
+    await Effect.runPromise(fixture.service.disconnect({ connectionId: "paraty" }));
+
+    expect(statusDuringRevocation).toBe("reconnect-required");
+    expect(liveDuringRevocation).toBe(false);
+    expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("disconnected");
+  });
+
+  it("fences residual credentials and withholds disconnected when credential deletion fails", async () => {
+    const fixture = makeFixture();
+    const events: Array<{ readonly connectionId: string; readonly type: string }> = [];
+    await Effect.runPromise(fixture.service.subscribe((event) => events.push(event)));
+    const { state } = await authorize(fixture);
+    await Effect.runPromise(fixture.service.completeAuthorization({ state, code: "code-1" }));
+    fixture.toolClient.liveConnections.add("paraty");
+    fixture.credentials.failDelete = true;
+
+    const error = await Effect.runPromise(
+      Effect.flip(fixture.service.disconnect({ connectionId: "paraty" })),
+    );
+
+    expect(error).toMatchObject({ category: "credential-cleanup" });
+    expect(JSON.stringify(error)).not.toContain("synthetic");
+    expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toMatchObject({
+      tokens: { access_token: "synthetic-access-token" },
+    });
+    expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
+    expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
+      status: "reconnect-required",
+      errorCategory: "credential-cleanup",
+    });
+    expect(events.map((event) => event.type)).toEqual(["connected"]);
+
+    const attemptsBeforeInvoke = fixture.toolClient.callAttempts;
+    await expect(
+      Effect.runPromise(fixture.service.invoke(readBinding, "read", { id: 1 })),
+    ).rejects.toMatchObject({ category: "reconnect-required" });
+    expect(fixture.toolClient.callAttempts).toBe(attemptsBeforeInvoke);
+  });
+
+  it("keeps an in-memory invocation fence when cleanup status persistence also fails", async () => {
+    const fixture = makeFixture();
+    const events: Array<{ readonly connectionId: string; readonly type: string }> = [];
+    await Effect.runPromise(fixture.service.subscribe((event) => events.push(event)));
+    const { state } = await authorize(fixture);
+    await Effect.runPromise(fixture.service.completeAuthorization({ state, code: "code-1" }));
+    fixture.toolClient.liveConnections.add("paraty");
+    fixture.credentials.failDelete = true;
+    fixture.repository.failSetStatus = true;
+
+    const error = await Effect.runPromise(
+      Effect.flip(fixture.service.disconnect({ connectionId: "paraty" })),
+    );
+
+    expect(error).toMatchObject({ category: "credential-cleanup" });
+    expect(JSON.stringify(error)).not.toContain("synthetic status failure");
+    expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
+    expect(fixture.repository.records.get("paraty")?.status).toBe("connected");
+    expect(events.map((event) => event.type)).toEqual(["connected"]);
+    const attemptsBeforeInvoke = fixture.toolClient.callAttempts;
+    await expect(
+      Effect.runPromise(fixture.service.invoke(readBinding, "read", { id: 1 })),
+    ).rejects.toMatchObject({ category: "reconnect-required" });
+    expect(fixture.toolClient.callAttempts).toBe(attemptsBeforeInvoke);
   });
 
   it.each([

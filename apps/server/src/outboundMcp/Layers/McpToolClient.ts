@@ -620,6 +620,9 @@ export function makeLiveMcpToolClient(options: {
         throw clientError({ category: "connection-selection", consumerId: binding.id });
       }
       const record = matching[0]!;
+      if (record.status !== "connected") {
+        throw clientError({ category: "connection-status", consumerId: binding.id });
+      }
       const credentialRecord = await Effect.runPromise(
         options.credentials.read(record.connectionId),
       );

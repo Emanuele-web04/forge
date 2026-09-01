@@ -5,7 +5,16 @@ import { describe, expect, it } from "vitest";
 
 import { OutboundMcpDecodeError, type McpConsumerBinding } from "../consumerBinding.ts";
 import { makeSingleFlightRefreshFetch } from "../networkPolicy.ts";
+import type {
+  OutboundMcpCredentialRecord,
+  OutboundMcpCredentialsShape,
+} from "../Services/OutboundMcpCredentials.ts";
+import type {
+  OutboundMcpConnectionRecord,
+  OutboundMcpRepositoryShape,
+} from "../Services/OutboundMcpRepository.ts";
 import {
+  makeLiveMcpToolClient,
   makeMcpSdkRequestFetchContext,
   makeMcpToolClient,
   type McpToolSession,
@@ -70,6 +79,67 @@ async function eventually(assertion: () => void, attempts = 100): Promise<void> 
 }
 
 describe("McpToolClient", () => {
+  it.each([
+    "disconnected",
+    "reconnect-required",
+    "temporarily-unavailable",
+    "incompatible",
+    "authorizing",
+  ] as const)("fences residual credentials while connection status is %s", async (status) => {
+    const record: OutboundMcpConnectionRecord = {
+      connectionId: "fixture",
+      presetId: "fixture",
+      displayName: "Fixture MCP",
+      endpoint: "https://mcp.example.test/mcp",
+      status,
+      errorCategory: null,
+      catalogFingerprint: null,
+      lastValidatedAt: null,
+      createdAt: "2026-09-01T08:00:00.000Z",
+      updatedAt: "2026-09-01T08:00:00.000Z",
+    };
+    const repository: OutboundMcpRepositoryShape = {
+      list: () => Effect.succeed([record]),
+      get: () => Effect.succeed(record),
+      upsertMetadata: () => Effect.void,
+      setStatus: () => Effect.void,
+      delete: () => Effect.void,
+    };
+    const residualCredentials: OutboundMcpCredentialRecord = {
+      clientInformation: { client_id: "fixture-public-client" },
+      tokens: { access_token: "synthetic-residual-token", token_type: "Bearer" },
+      authorizationServerUrl: "https://auth.example.test/",
+    };
+    let credentialReads = 0;
+    const credentials: OutboundMcpCredentialsShape = {
+      read: () =>
+        Effect.sync(() => {
+          credentialReads += 1;
+          return residualCredentials;
+        }),
+      write: () => Effect.void,
+      delete: () => Effect.void,
+      clearAttemptSecrets: () => Effect.void,
+    };
+    let networkRequests = 0;
+    const client = makeLiveMcpToolClient({
+      repository,
+      credentials,
+      fetch: async () => {
+        networkRequests += 1;
+        return new Response(null, { status: 500 });
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        client.call(fixtureBinding, "fixture_read", {}, new AbortController().signal),
+      ),
+    ).rejects.toMatchObject({ category: "connection-status" });
+    expect(credentialReads).toBe(0);
+    expect(networkRequests).toBe(0);
+  });
+
   it("aborts only the caller's live SDK HTTP request through the custom fetch boundary", async () => {
     const firstController = new AbortController();
     const secondController = new AbortController();

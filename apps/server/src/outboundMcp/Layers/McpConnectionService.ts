@@ -536,6 +536,7 @@ export function makeMcpConnectionService(
     { readonly attemptId: string; readonly connectionId: string }
   >();
   const pendingStateByConnectionId = new Map<string, string>();
+  const locallyFencedConnectionIds = new Set<string>();
   const now = options.now ?? (() => new Date().toISOString());
 
   const publish = (event: McpConnectionEvent): void => {
@@ -594,8 +595,14 @@ export function makeMcpConnectionService(
     pendingStateByConnectionId.delete(connectionId);
   };
 
+  const fenceConnection = (connectionId: string) =>
+    Effect.sync(() => {
+      locallyFencedConnectionIds.add(connectionId);
+    }).pipe(Effect.andThen(options.toolClient.invalidate(connectionId)));
+
   const invalidateCredentials = (connectionId: string) =>
     Effect.gen(function* () {
+      yield* fenceConnection(connectionId);
       let deleteFailed = false;
       yield* options.credentials.delete(connectionId).pipe(
         Effect.catch(() =>
@@ -604,7 +611,6 @@ export function makeMcpConnectionService(
           }),
         ),
       );
-      yield* options.toolClient.invalidate(connectionId);
       yield* setStatus({
         connectionId,
         status: "reconnect-required",
@@ -647,6 +653,7 @@ export function makeMcpConnectionService(
       const preset = yield* presetOrFail(input.presetId);
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
+      yield* fenceConnection(preset.id);
       const attempt = options.attempts.create(preset.id, options.callbackUrl);
       const authorizationUrl = yield* options.oauth
         .begin({ preset, attempt, credentials: options.credentials })
@@ -755,6 +762,13 @@ export function makeMcpConnectionService(
         return failure.result;
       }
 
+      yield* setStatus({
+        connectionId: preset.id,
+        status: "connected",
+        errorCategory: null,
+        catalogFingerprint: null,
+        lastValidatedAt: null,
+      });
       const fingerprints: string[] = [];
       for (const binding of preset.consumers) {
         const validation = yield* options.toolClient.validate(binding).pipe(
@@ -788,6 +802,7 @@ export function makeMcpConnectionService(
         catalogFingerprint: fingerprints[0] ?? null,
         lastValidatedAt: validatedAt,
       });
+      locallyFencedConnectionIds.delete(preset.id);
       publish({ connectionId: preset.id, type: "connected" });
       return { ok: true } as const;
     });
@@ -797,6 +812,14 @@ export function makeMcpConnectionService(
       const preset = yield* presetOrFail(input.connectionId);
       yield* ensureMetadata(preset);
       cancelPendingAuthorization(preset.id);
+      yield* fenceConnection(preset.id);
+      yield* setStatus({
+        connectionId: preset.id,
+        status: "reconnect-required",
+        errorCategory: "credential-cleanup",
+        catalogFingerprint: null,
+        lastValidatedAt: null,
+      }).pipe(Effect.catch(() => Effect.void));
       yield* options.oauth
         .revoke({ preset, credentials: options.credentials })
         .pipe(Effect.catch(() => Effect.void));
@@ -809,7 +832,14 @@ export function makeMcpConnectionService(
           }),
         ),
       );
-      yield* options.toolClient.invalidate(preset.id);
+      if (deleteFailed) {
+        yield* setStatus({
+          connectionId: preset.id,
+          status: "reconnect-required",
+          errorCategory: "credential-cleanup",
+        }).pipe(Effect.catch(() => Effect.void));
+        return yield* Effect.fail(serviceError("credential-cleanup"));
+      }
       yield* setStatus({
         connectionId: preset.id,
         status: "disconnected",
@@ -818,7 +848,6 @@ export function makeMcpConnectionService(
         lastValidatedAt: null,
       });
       publish({ connectionId: preset.id, type: "disconnected" });
-      if (deleteFailed) return yield* Effect.fail(serviceError("credential-cleanup"));
     });
 
   const invoke: McpConnectionServiceShape["invoke"] = (
@@ -829,6 +858,9 @@ export function makeMcpConnectionService(
   ) => {
     const descriptor = binding.operations[operation];
     if (descriptor === undefined) return Effect.fail(serviceError("invalid-operation"));
+    if ([...binding.presetIds].some((presetId) => locallyFencedConnectionIds.has(presetId))) {
+      return Effect.fail(serviceError("reconnect-required"));
+    }
     return options.toolClient.call(binding, descriptor.tool, args, signal).pipe(
       Effect.catch((error) => {
         if (error instanceof McpToolClientError && error.category === "authentication") {
