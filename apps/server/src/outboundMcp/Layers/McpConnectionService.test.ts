@@ -1,6 +1,6 @@
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { McpConsumerBinding } from "../consumerBinding.ts";
 import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
@@ -281,6 +281,77 @@ describe("McpConnectionService", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("keeps only the newest pending authorization attempt for a connection", async () => {
+    const fixture = makeFixture();
+    const first = await authorize(fixture);
+    const second = await authorize(fixture);
+
+    await expect(
+      Effect.runPromise(
+        fixture.service.completeAuthorization({ state: first.state, code: "stale-code" }),
+      ),
+    ).resolves.toEqual({ ok: false, category: "invalid-authorization-attempt" });
+    expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("authorizing");
+    await expect(
+      Effect.runPromise(
+        fixture.service.completeAuthorization({ state: second.state, code: "current-code" }),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("moves a recognized expired attempt out of authorizing", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(NOW));
+      const fixture = makeFixture();
+      const { state } = await authorize(fixture);
+      vi.advanceTimersByTime(60_000);
+
+      await expect(
+        Effect.runPromise(fixture.service.completeAuthorization({ state, code: "expired-code" })),
+      ).resolves.toEqual({ ok: false, category: "invalid-authorization-attempt" });
+      expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
+        status: "disconnected",
+        errorCategory: "authorization-expired",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires authorizing status during ordinary connection polling", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(NOW));
+      const fixture = makeFixture();
+      const { state } = await authorize(fixture);
+      vi.advanceTimersByTime(60_000);
+
+      expect((await Effect.runPromise(fixture.service.list()))[0]).toMatchObject({
+        status: "disconnected",
+        errorCategory: "authorization-expired",
+      });
+      await expect(
+        Effect.runPromise(fixture.service.completeAuthorization({ state, code: "expired-code" })),
+      ).resolves.toEqual({ ok: false, category: "invalid-authorization-attempt" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates a pending callback when explicitly disconnected", async () => {
+    const fixture = makeFixture();
+    const { state } = await authorize(fixture);
+
+    await Effect.runPromise(fixture.service.disconnect({ connectionId: "paraty" }));
+
+    await expect(
+      Effect.runPromise(fixture.service.completeAuthorization({ state, code: "late-code" })),
+    ).resolves.toEqual({ ok: false, category: "invalid-authorization-attempt" });
+    expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toBeNull();
+    expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("disconnected");
+  });
+
   it("marks a connection incompatible when a registered consumer is missing a tool", async () => {
     const fixture = makeFixture({ bindings: [readBinding] });
     fixture.toolClient.validateFailure = new McpToolClientError({
@@ -376,9 +447,156 @@ describe("McpConnectionService", () => {
     expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toBeNull();
     expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
   });
+
+  it.each([
+    ["absent", undefined],
+    ["different", "https://auth-a.example.test/"],
+  ] as const)(
+    "skips a newly discovered revocation authority when stored authority is %s and still cleans up locally",
+    async (_case, storedAuthority) => {
+      const requests: string[] = [];
+      const fixture = makeFixture({
+        oauth: () =>
+          makeSdkMcpConnectionOAuthLifecycle({
+            discoverServerInfo: async () => ({
+              authorizationServerUrl: "https://auth-b.example.test/",
+              authorizationServerMetadata: {
+                issuer: "https://auth-b.example.test/",
+                authorization_endpoint: "https://auth-b.example.test/authorize",
+                token_endpoint: "https://auth-b.example.test/token",
+                revocation_endpoint: "https://auth-b.example.test/revoke",
+                revocation_endpoint_auth_methods_supported: ["none"],
+                response_types_supported: ["code"],
+              },
+            }),
+            fetch: async (input) => {
+              requests.push(String(input));
+              return new Response(null, { status: 200 });
+            },
+          }),
+      });
+      await Effect.runPromise(
+        fixture.credentials.write("paraty", {
+          clientInformation: { client_id: "public-client" },
+          tokens: {
+            access_token: "synthetic-access-token",
+            refresh_token: "synthetic-refresh-token",
+            token_type: "Bearer",
+          },
+          ...(storedAuthority === undefined ? {} : { authorizationServerUrl: storedAuthority }),
+        }),
+      );
+      fixture.toolClient.liveConnections.add("paraty");
+
+      await Effect.runPromise(fixture.service.disconnect({ connectionId: "paraty" }));
+
+      expect(requests).toEqual([]);
+      expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toBeNull();
+      expect(fixture.toolClient.liveConnections.has("paraty")).toBe(false);
+      expect((await Effect.runPromise(fixture.service.list()))[0]?.status).toBe("disconnected");
+    },
+  );
 });
 
 describe("SDK OAuth lifecycle", () => {
+  it("fails before token exchange when callback discovery selects a different authorization server", async () => {
+    const credentials = makeMemoryCredentials();
+    const discoveries = [
+      {
+        authorizationServerUrl: "https://auth-a.example.test/",
+        authorizationServerMetadata: {
+          issuer: "https://auth-a.example.test/",
+          authorization_endpoint: "https://auth-a.example.test/authorize",
+          token_endpoint: "https://auth-a.example.test/token",
+          registration_endpoint: "https://auth-a.example.test/register",
+          response_types_supported: ["code"],
+        },
+      },
+      {
+        authorizationServerUrl: "https://auth-b.example.test/",
+        authorizationServerMetadata: {
+          issuer: "https://auth-b.example.test/",
+          authorization_endpoint: "https://auth-b.example.test/authorize",
+          token_endpoint: "https://auth-b.example.test/token",
+          registration_endpoint: "https://auth-b.example.test/register",
+          response_types_supported: ["code"],
+        },
+      },
+    ] as const;
+    let discoveryIndex = 0;
+    let tokenExchanges = 0;
+    const oauth = makeSdkMcpConnectionOAuthLifecycle({
+      discoverServerInfo: async () => discoveries[discoveryIndex++]!,
+      authorize: async (provider, options) => {
+        if (options.authorizationCode !== undefined) {
+          tokenExchanges += 1;
+          await provider.saveTokens({
+            access_token: "synthetic-access-token",
+            token_type: "Bearer",
+          });
+          return "AUTHORIZED";
+        }
+        await provider.saveClientInformation?.({ client_id: "registered-client" });
+        await provider.saveCodeVerifier("synthetic-verifier");
+        await provider.redirectToAuthorization(
+          new URL(`https://auth-a.example.test/authorize?state=${await provider.state?.()}`),
+        );
+        return "REDIRECT";
+      },
+    });
+    const attempt = makeAuthorizationAttemptRegistry({ ttlMs: 60_000 }).create(
+      "paraty",
+      CALLBACK_URL,
+    );
+
+    await Effect.runPromise(oauth.begin({ preset: PARATY_MCP_PRESET, attempt, credentials }));
+    await expect(
+      Effect.runPromise(
+        oauth.finish({
+          preset: PARATY_MCP_PRESET,
+          attempt,
+          code: "synthetic-code",
+          credentials,
+        }),
+      ),
+    ).rejects.toMatchObject({ category: "authorization-server-mismatch" });
+    expect(tokenExchanges).toBe(0);
+  });
+
+  it("rejects a captured HTTP authorization URL with a category-only error", async () => {
+    const credentials = makeMemoryCredentials();
+    const oauth = makeSdkMcpConnectionOAuthLifecycle({
+      discoverServerInfo: async () => ({
+        authorizationServerUrl: "https://auth.example.test/",
+        authorizationServerMetadata: {
+          issuer: "https://auth.example.test/",
+          authorization_endpoint: "http://auth.example.test/authorize",
+          token_endpoint: "https://auth.example.test/token",
+          registration_endpoint: "https://auth.example.test/register",
+          response_types_supported: ["code"],
+        },
+      }),
+      authorize: async (provider) => {
+        await provider.saveClientInformation?.({ client_id: "registered-client" });
+        await provider.saveCodeVerifier("synthetic-verifier");
+        await provider.redirectToAuthorization(
+          new URL(`http://auth.example.test/authorize?state=${await provider.state?.()}`),
+        );
+        return "REDIRECT";
+      },
+    });
+    const attempt = makeAuthorizationAttemptRegistry({ ttlMs: 60_000 }).create(
+      "paraty",
+      CALLBACK_URL,
+    );
+
+    const error = await Effect.runPromise(
+      Effect.flip(oauth.begin({ preset: PARATY_MCP_PRESET, attempt, credentials })),
+    );
+    expect(error).toMatchObject({ category: "temporarily-unavailable" });
+    expect(JSON.stringify(error)).not.toContain("auth.example.test");
+  });
+
   it("reports incompatible before authorization when discovery advertises no DCR and no public client exists", async () => {
     const credentials = makeMemoryCredentials();
     let authorizeCalled = false;
@@ -495,6 +713,7 @@ describe("SDK OAuth lifecycle", () => {
           refresh_token: "synthetic-refresh-token",
           token_type: "Bearer",
         },
+        authorizationServerUrl: "https://auth.example.test/",
       }),
     );
     const requests: Array<{ readonly url: string; readonly body: string }> = [];
@@ -517,11 +736,11 @@ describe("SDK OAuth lifecycle", () => {
     });
 
     await Effect.runPromise(oauth.revoke({ preset: PARATY_MCP_PRESET, credentials }));
-    expect(requests).toEqual([
-      {
-        url: "https://auth.example.test/revoke",
-        body: "token=synthetic-refresh-token&token_type_hint=refresh_token&client_id=public-client",
-      },
-    ]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("https://auth.example.test/revoke");
+    const body = new URLSearchParams(requests[0]?.body);
+    expect(body.has("token")).toBe(true);
+    expect(body.get("token_type_hint")).toBe("refresh_token");
+    expect(body.get("client_id")).toBe("public-client");
   });
 });

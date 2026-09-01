@@ -1,5 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+
 export type AuthorizationAttempt = {
   readonly id: string;
   readonly connectionId: string;
@@ -7,12 +9,14 @@ export type AuthorizationAttempt = {
   readonly redirectUrl: URL;
   readonly createdAt: number;
   codeVerifier: string | null;
+  oauthDiscoveryState: OAuthDiscoveryState | null;
 };
 
 export type AuthorizationAttemptRegistry = {
   readonly create: (connectionId: string, redirectUrl: URL) => AuthorizationAttempt;
   readonly saveVerifier: (attemptId: string, verifier: string) => void;
   readonly consume: (attemptId: string, state: string) => AuthorizationAttempt | null;
+  readonly expire: (attemptId: string) => boolean;
   readonly cancel: (attemptId: string) => void;
 };
 
@@ -24,8 +28,7 @@ function statesMatch(expected: string, received: string): boolean {
   const expectedBytes = Buffer.from(expected, "utf8");
   const receivedBytes = Buffer.from(received, "utf8");
   return (
-    expectedBytes.length === receivedBytes.length &&
-    timingSafeEqual(expectedBytes, receivedBytes)
+    expectedBytes.length === receivedBytes.length && timingSafeEqual(expectedBytes, receivedBytes)
   );
 }
 
@@ -54,6 +57,7 @@ export function makeAuthorizationAttemptRegistry(options: {
         redirectUrl: new URL(redirectUrl),
         createdAt: Date.now(),
         codeVerifier: null,
+        oauthDiscoveryState: null,
       };
       attempts.set(attempt.id, attempt);
       return attempt;
@@ -73,6 +77,12 @@ export function makeAuthorizationAttemptRegistry(options: {
       attempts.delete(attemptId);
       if (expired(attempt) || !statesMatch(attempt.state, state)) return null;
       return attempt;
+    },
+    expire: (attemptId) => {
+      const attempt = attempts.get(attemptId);
+      if (attempt === undefined || !expired(attempt)) return false;
+      attempts.delete(attemptId);
+      return true;
     },
     cancel: (attemptId) => {
       attempts.delete(attemptId);

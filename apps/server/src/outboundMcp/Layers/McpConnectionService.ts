@@ -135,6 +135,14 @@ function clientSupportsAuthorization(
   return serverInfo.authorizationServerMetadata?.registration_endpoint !== undefined;
 }
 
+function authorizationServerHref(value: string): string {
+  return validateOutboundMcpUrl(new URL(value), "authorization").href;
+}
+
+function authorizationServersMatch(left: string, right: string): boolean {
+  return authorizationServerHref(left) === authorizationServerHref(right);
+}
+
 type ProviderState = {
   readonly provider: OAuthClientProvider;
   readonly authorizationUrl: () => URL | null;
@@ -234,7 +242,14 @@ async function makeAttemptProvider(input: {
     ...providerBase,
     discoveryState: () => input.serverInfo,
     saveDiscoveryState: async (state) => {
-      validateOutboundMcpUrl(new URL(state.authorizationServerUrl), "authorization");
+      const expected = input.attempt.oauthDiscoveryState?.authorizationServerUrl;
+      if (
+        expected === undefined ||
+        !authorizationServersMatch(expected, state.authorizationServerUrl)
+      ) {
+        throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
+      }
+      input.attempt.oauthDiscoveryState = state;
       await persist({ ...current, authorizationServerUrl: state.authorizationServerUrl });
     },
   };
@@ -297,6 +312,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         if (!clientSupportsAuthorization(input.preset, initial, serverInfo)) {
           throw new McpConnectionOAuthError({ category: "incompatible-client" });
         }
+        input.attempt.oauthDiscoveryState = serverInfo;
         const state = await makeAttemptProvider({
           preset: input.preset,
           attempt: input.attempt,
@@ -315,7 +331,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         if (result !== "REDIRECT" || authorizationUrl === null) {
           throw new McpConnectionOAuthError({ category: "authorization-not-started" });
         }
-        return authorizationUrl;
+        return validateOutboundMcpUrl(authorizationUrl, "authorization");
       },
       catch: oauthError,
     });
@@ -327,8 +343,27 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           throw new McpConnectionOAuthError({ category: "invalid-authorization-attempt" });
         }
         const initial = (await Effect.runPromise(input.credentials.read(input.preset.id))) ?? {};
-        const serverInfo = await discoveryFor(input.preset, discoveryDependencies);
-        if (!clientSupportsAuthorization(input.preset, initial, serverInfo)) {
+        const boundServerInfo = input.attempt.oauthDiscoveryState;
+        if (
+          boundServerInfo === null ||
+          initial.authorizationServerUrl === undefined ||
+          !authorizationServersMatch(
+            boundServerInfo.authorizationServerUrl,
+            initial.authorizationServerUrl,
+          )
+        ) {
+          throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
+        }
+        const currentServerInfo = await discoveryFor(input.preset, discoveryDependencies);
+        if (
+          !authorizationServersMatch(
+            boundServerInfo.authorizationServerUrl,
+            currentServerInfo.authorizationServerUrl,
+          )
+        ) {
+          throw new McpConnectionOAuthError({ category: "authorization-server-mismatch" });
+        }
+        if (!clientSupportsAuthorization(input.preset, initial, boundServerInfo)) {
           throw new McpConnectionOAuthError({ category: "incompatible-client" });
         }
         const state = await makeAttemptProvider({
@@ -336,7 +371,7 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           attempt: input.attempt,
           credentialStore: input.credentials,
           initial,
-          serverInfo,
+          serverInfo: boundServerInfo,
         });
         const result = await authorize(state.provider, {
           serverUrl: input.preset.endpoint,
@@ -359,9 +394,25 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         const stored = await Effect.runPromise(input.credentials.read(input.preset.id));
         const token = stored?.tokens?.refresh_token ?? stored?.tokens?.access_token;
         const client = stored?.clientInformation;
-        if (stored === null || token === undefined || client === undefined) return;
+        const storedAuthorizationServerUrl = stored?.authorizationServerUrl;
+        if (
+          stored === null ||
+          token === undefined ||
+          client === undefined ||
+          storedAuthorizationServerUrl === undefined
+        ) {
+          return;
+        }
 
         const serverInfo = await discoveryFor(input.preset, discoveryDependencies);
+        if (
+          !authorizationServersMatch(
+            storedAuthorizationServerUrl,
+            serverInfo.authorizationServerUrl,
+          )
+        ) {
+          return;
+        }
         const metadata = serverInfo.authorizationServerMetadata;
         if (metadata?.revocation_endpoint === undefined) return;
 
@@ -495,7 +546,11 @@ export function makeMcpConnectionService(
   options: McpConnectionServiceOptions,
 ): McpConnectionServiceShape {
   const listeners = new Set<(event: McpConnectionEvent) => void>();
-  const attemptIdByState = new Map<string, string>();
+  const pendingByState = new Map<
+    string,
+    { readonly attemptId: string; readonly connectionId: string }
+  >();
+  const pendingStateByConnectionId = new Map<string, string>();
   const now = options.now ?? (() => new Date().toISOString());
 
   const publish = (event: McpConnectionEvent): void => {
@@ -545,6 +600,15 @@ export function makeMcpConnectionService(
       .setStatus({ ...input, updatedAt: now() })
       .pipe(Effect.mapError(() => serviceError("persistence")));
 
+  const cancelPendingAuthorization = (connectionId: string): void => {
+    const state = pendingStateByConnectionId.get(connectionId);
+    if (state === undefined) return;
+    const pending = pendingByState.get(state);
+    if (pending !== undefined) options.attempts.cancel(pending.attemptId);
+    pendingByState.delete(state);
+    pendingStateByConnectionId.delete(connectionId);
+  };
+
   const invalidateCredentials = (connectionId: string) =>
     Effect.gen(function* () {
       let deleteFailed = false;
@@ -565,17 +629,39 @@ export function makeMcpConnectionService(
       if (deleteFailed) return yield* Effect.fail(serviceError("credential-cleanup"));
     });
 
+  const expirePendingAuthorizations = Effect.gen(function* () {
+    for (const [state, pending] of pendingByState) {
+      if (!options.attempts.expire(pending.attemptId)) continue;
+      pendingByState.delete(state);
+      if (pendingStateByConnectionId.get(pending.connectionId) === state) {
+        pendingStateByConnectionId.delete(pending.connectionId);
+      }
+      yield* options.credentials
+        .clearAttemptSecrets(pending.connectionId)
+        .pipe(Effect.catch(() => Effect.void));
+      yield* setStatus({
+        connectionId: pending.connectionId,
+        status: "disconnected",
+        errorCategory: "authorization-expired",
+      });
+    }
+  });
+
   const list: McpConnectionServiceShape["list"] = () =>
-    Effect.forEach(options.presets.all(), (preset) =>
-      options.repository
-        .get(preset.id)
-        .pipe(Effect.map((stored) => publicConnection(preset, stored))),
-    ).pipe(Effect.mapError(() => serviceError("persistence")));
+    Effect.gen(function* () {
+      yield* expirePendingAuthorizations;
+      return yield* Effect.forEach(options.presets.all(), (preset) =>
+        options.repository
+          .get(preset.id)
+          .pipe(Effect.map((stored) => publicConnection(preset, stored))),
+      ).pipe(Effect.mapError(() => serviceError("persistence")));
+    });
 
   const beginAuthorization: McpConnectionServiceShape["beginAuthorization"] = (input) =>
     Effect.gen(function* () {
       const preset = yield* presetOrFail(input.presetId);
       yield* ensureMetadata(preset);
+      cancelPendingAuthorization(preset.id);
       const attempt = options.attempts.create(preset.id, options.callbackUrl);
       const authorizationUrl = yield* options.oauth
         .begin({ preset, attempt, credentials: options.credentials })
@@ -600,20 +686,35 @@ export function makeMcpConnectionService(
         connectionId: preset.id,
         status: "authorizing",
         errorCategory: null,
+      }).pipe(Effect.tapError(() => Effect.sync(() => options.attempts.cancel(attempt.id))));
+      pendingByState.set(attempt.state, {
+        attemptId: attempt.id,
+        connectionId: preset.id,
       });
-      attemptIdByState.set(attempt.state, attempt.id);
+      pendingStateByConnectionId.set(preset.id, attempt.state);
       return { attemptId: attempt.id, authorizationUrl: authorizationUrl.href };
     });
 
   const completeAuthorization: McpConnectionServiceShape["completeAuthorization"] = (input) =>
     Effect.gen(function* () {
-      const attemptId = attemptIdByState.get(input.state);
-      if (attemptId === undefined) {
+      const pending = pendingByState.get(input.state);
+      if (pending === undefined) {
         return { ok: false, category: "invalid-authorization-attempt" } as const;
       }
-      attemptIdByState.delete(input.state);
-      const attempt = options.attempts.consume(attemptId, input.state);
+      pendingByState.delete(input.state);
+      if (pendingStateByConnectionId.get(pending.connectionId) === input.state) {
+        pendingStateByConnectionId.delete(pending.connectionId);
+      }
+      const attempt = options.attempts.consume(pending.attemptId, input.state);
       if (attempt === null) {
+        yield* options.credentials
+          .clearAttemptSecrets(pending.connectionId)
+          .pipe(Effect.catch(() => Effect.void));
+        yield* setStatus({
+          connectionId: pending.connectionId,
+          status: "disconnected",
+          errorCategory: "authorization-expired",
+        });
         return { ok: false, category: "invalid-authorization-attempt" } as const;
       }
       const preset = options.presets.get(attempt.connectionId);
@@ -710,6 +811,7 @@ export function makeMcpConnectionService(
     Effect.gen(function* () {
       const preset = yield* presetOrFail(input.connectionId);
       yield* ensureMetadata(preset);
+      cancelPendingAuthorization(preset.id);
       yield* options.oauth
         .revoke({ preset, credentials: options.credentials })
         .pipe(Effect.catch(() => Effect.void));

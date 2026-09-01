@@ -36,10 +36,7 @@ describe("AuthorizationAttemptRegistry", () => {
     try {
       vi.setSystemTime(new Date("2026-09-01T08:00:00.000Z"));
       const attempts = makeAuthorizationAttemptRegistry({ ttlMs: 1_000 });
-      const created = attempts.create(
-        "paraty",
-        new URL("http://127.0.0.1:58090/oauth/callback"),
-      );
+      const created = attempts.create("paraty", new URL("http://127.0.0.1:58090/oauth/callback"));
       vi.advanceTimersByTime(1_000);
 
       expect(attempts.consume(created.id, created.state)).toBeNull();
@@ -49,12 +46,26 @@ describe("AuthorizationAttemptRegistry", () => {
     }
   });
 
+  it("prunes an expired attempt without consuming a live one", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-01T08:00:00.000Z"));
+      const attempts = makeAuthorizationAttemptRegistry({ ttlMs: 1_000 });
+      const created = attempts.create("paraty", new URL("http://127.0.0.1:58090/oauth/callback"));
+
+      expect(attempts.expire(created.id)).toBe(false);
+      vi.advanceTimersByTime(1_000);
+      expect(attempts.expire(created.id)).toBe(true);
+      expect(attempts.expire(created.id)).toBe(false);
+      expect(attempts.consume(created.id, created.state)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not restore unfinished authorization attempts in a new registry", () => {
     const firstProcess = makeAuthorizationAttemptRegistry({ ttlMs: 10 * 60 * 1000 });
-    const created = firstProcess.create(
-      "paraty",
-      new URL("http://127.0.0.1:58090/oauth/callback"),
-    );
+    const created = firstProcess.create("paraty", new URL("http://127.0.0.1:58090/oauth/callback"));
     firstProcess.saveVerifier(created.id, "pkce-verifier");
 
     const restartedProcess = makeAuthorizationAttemptRegistry({ ttlMs: 10 * 60 * 1000 });
@@ -63,14 +74,8 @@ describe("AuthorizationAttemptRegistry", () => {
 
   it("cancels an attempt without affecting another attempt", () => {
     const attempts = makeAuthorizationAttemptRegistry({ ttlMs: 10 * 60 * 1000 });
-    const cancelled = attempts.create(
-      "paraty",
-      new URL("http://127.0.0.1:58090/oauth/callback"),
-    );
-    const retained = attempts.create(
-      "other",
-      new URL("http://127.0.0.1:58090/oauth/callback"),
-    );
+    const cancelled = attempts.create("paraty", new URL("http://127.0.0.1:58090/oauth/callback"));
+    const retained = attempts.create("other", new URL("http://127.0.0.1:58090/oauth/callback"));
 
     attempts.cancel(cancelled.id);
 
