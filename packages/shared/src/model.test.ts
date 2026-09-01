@@ -205,6 +205,12 @@ describe("resolveModelSlug", () => {
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
     expect(resolveModelSlugForProvider("claudeAgent", "sonnet")).toBe("claude-sonnet-5");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5.1")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5")).toBe("claude-fable-5");
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
@@ -1160,6 +1166,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-fable-5-1")).toBe(false);
     expect(has("claude-fable-5")).toBe(false);
     expect(has("claude-opus-5")).toBe(false);
     expect(has("claude-opus-4-8")).toBe(true);

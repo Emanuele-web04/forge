@@ -497,6 +497,8 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   contextWindowTokens: 1_000_000,
 };
 
+// Fable 5 and 5.1 share the ladder: thinking is always on (no toggle, no
+// ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
 // Opus 5 keeps the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
@@ -601,6 +603,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   claudeAgent: [
+    {
+      slug: "claude-fable-5-1",
+      name: "Claude Fable 5.1",
+      capabilities: CLAUDE_FABLE_CAPABILITIES,
+    },
     {
       slug: "claude-fable-5",
       name: "Claude Fable 5",
@@ -1153,8 +1160,12 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   claudeAgent: {
-    fable: "claude-fable-5",
+    fable: "claude-fable-5-1",
+    "fable-5.1": "claude-fable-5-1",
+    "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5-1": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
+    "claude-fable-5": "claude-fable-5",
     opus: "claude-opus-5",
     "opus-5": "claude-opus-5",
     "claude-opus-5": "claude-opus-5",
