@@ -54,8 +54,7 @@ export interface ProcessChildrenSnapshotObserver {
   dispose(): void;
 }
 
-export interface TeardownProcessChildrenSnapshotObserver
-  extends ProcessChildrenSnapshotObserver {
+export interface TeardownProcessChildrenSnapshotObserver extends ProcessChildrenSnapshotObserver {
   captureWithin(timeoutMs: number): Promise<ProcessChildrenMap | null>;
 }
 
