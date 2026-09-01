@@ -553,7 +553,13 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
 }
 
 function appendManagedCodexConfigSection(config: string, section: string): string {
-  let overlayConfig = config;
+  // A development/Canary Synara can be launched from a terminal managed by
+  // another Synara instance. In that case CODEX_HOME points at the parent
+  // instance's overlay, whose managed block contains the parent's MCP port.
+  // Drop that complete block before rebuilding this instance's overlay;
+  // otherwise appendCodexConfigSection sees the old marker and keeps the
+  // stale endpoint instead of appending the replacement.
+  let overlayConfig = removeManagedCodexConfigSections(config);
   const managedMcpTableName = normalizeTomlTableHeaderName(SYNARA_MANAGED_MCP_TABLE_HEADER);
   const tables: string[] = [];
 
@@ -582,6 +588,28 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
     overlayConfig,
     `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
+}
+
+function removeManagedCodexConfigSections(config: string): string {
+  let output = config;
+  while (true) {
+    const begin = output.indexOf(SYNARA_MANAGED_CODEX_CONFIG_BEGIN);
+    if (begin === -1) return output;
+
+    const markerEnd = output.indexOf(
+      SYNARA_MANAGED_CODEX_CONFIG_END,
+      begin + SYNARA_MANAGED_CODEX_CONFIG_BEGIN.length,
+    );
+    if (markerEnd === -1) {
+      // Do not discard user config after an incomplete marker.
+      return output;
+    }
+
+    let end = markerEnd + SYNARA_MANAGED_CODEX_CONFIG_END.length;
+    if (output.slice(end, end + 2) === "\r\n") end += 2;
+    else if (output[end] === "\n") end += 1;
+    output = `${output.slice(0, begin)}${output.slice(end)}`;
+  }
 }
 
 async function serializeCodexOverlayPreparation<A>(
