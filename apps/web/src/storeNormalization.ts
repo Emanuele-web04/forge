@@ -380,7 +380,9 @@ export function normalizeProject(
     rememberedUiState.projectOrderCount === 0 &&
     (rememberedUiState.expandedProjectCount > 0 || rememberedUiState.isLegacyExpansionPayload);
   const expanded =
-    previous?.expanded ??
+    (previous && projectCwdKey(previous.cwd) === workspaceRootKey
+      ? previous.expanded
+      : undefined) ??
     (persistedProjectOrderIndex !== undefined || hasKnownLegacyExpansion
       ? rememberedUiState.isProjectExpanded(workspaceRootKey)
       : true);
@@ -1901,10 +1903,7 @@ export function mapProjects(
     .map((project) => {
       const previousWithSameId = previousById.get(project.id);
       const existing =
-        previousWithSameId &&
-        projectCwdKey(previousWithSameId.cwd) === projectCwdKey(project.workspaceRoot)
-          ? previousWithSameId
-          : previousByCwd.get(projectCwdKey(project.workspaceRoot));
+        previousWithSameId ?? previousByCwd.get(projectCwdKey(project.workspaceRoot));
       return normalizeProject(project, existing);
     })
     .map((project, incomingIndex) => {

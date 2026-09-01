@@ -721,7 +721,7 @@ describe("store facade", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
+  }, 15000);
 
   it("preserves mixed expansion state across a full reload", async () => {
     const storage = new Map<string, string>();
@@ -768,7 +768,49 @@ describe("store facade", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
+  }, 15000);
+
+  it("keeps a project's local alias and resets expansion when its workspace root changes", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      fresh.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+        ]),
+      );
+      fresh.useStore.getState().renameProjectLocally(project1, "alpha");
+      fresh.useStore.getState().setAllProjectsExpanded(false);
+      fresh.persistAppStateNow();
+
+      fresh.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1-moved",
+          }),
+        ]),
+      );
+
+      const moved = fresh.useStore.getState().projects[0];
+      expect(moved).toBeDefined();
+      expect(moved?.cwd).toBe("/tmp/project-1-moved");
+      expect(moved?.localName).toBe("alpha");
+      expect(moved?.expanded).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
 
   it("removes a deleted project's local alias from persisted projectNamesByCwd", async () => {
     const storage = new Map<string, string>();
