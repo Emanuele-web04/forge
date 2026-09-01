@@ -585,6 +585,14 @@ function normalizePersistedWorkItemDraft(value: unknown): PersistedWorkItemDraft
   if (!kind || !Number.isFinite(number) || number <= 0 || title.length === 0 || !state) {
     return null;
   }
+  if (
+    url.length === 0 ||
+    bodyExcerpt.length > 500 ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    Number.isNaN(Date.parse(updatedAt))
+  ) {
+    return null;
+  }
   return { id, kind, number, title, state, url, bodyExcerpt, createdAt, updatedAt };
 }
 

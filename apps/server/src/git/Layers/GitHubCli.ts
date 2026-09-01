@@ -1537,6 +1537,8 @@ const makeGitHubCli = Effect.sync(() => {
         input.repository,
         "--state",
         "open",
+        "--sort",
+        "updated",
         "--limit",
         String(limit),
         "--json",

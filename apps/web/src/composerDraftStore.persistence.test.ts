@@ -1029,6 +1029,20 @@ describe("composerDraftStore work item persistence", () => {
     const draftWorkItems = persistedState.draftsByThreadId?.[threadId]?.workItems ?? [];
     draftWorkItems.push({ kind: "issue", number: -1, title: "Bad number" });
     draftWorkItems.push({ kind: "discussion", number: 8, title: "Bad kind" });
+    draftWorkItems.push({
+      kind: "issue",
+      number: 9,
+      title: "Overlong excerpt",
+      url: "https://github.com/owner/repo/issues/9",
+      bodyExcerpt: "x".repeat(501),
+    });
+    draftWorkItems.push({
+      kind: "issue",
+      number: 10,
+      title: "Empty url",
+      url: "   ",
+      bodyExcerpt: "ok",
+    });
 
     const persistApi = useComposerDraftStore.persist as unknown as {
       getOptions: () => {
