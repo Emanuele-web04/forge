@@ -1539,9 +1539,7 @@ const makeWsRpcHandlersLayer = () =>
             // Repository resolution fails outside a git work tree (and on
             // transient git errors). Either way the attach affordance cannot
             // search a repository, so hide the item; the next probe retries.
-            Effect.catch(() =>
-              Effect.succeed({ status: "no-repository" as const, hint: null }),
-            ),
+            Effect.catch(() => Effect.succeed({ status: "no-repository" as const, hint: null })),
           ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),

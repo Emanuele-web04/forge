@@ -1001,15 +1001,13 @@ describe("isDefinitivePullRequestNotFound", () => {
                 query: "",
                 limit: 20,
               }),
-              Effect.flatMap(
-                Effect.yieldNow,
-                () =>
-                  service.searchWorkItems({
-                    cwd: "/tmp/work-items",
-                    repository: "acme/shared",
-                    query: "",
-                    limit: 20,
-                  }),
+              Effect.flatMap(Effect.yieldNow, () =>
+                service.searchWorkItems({
+                  cwd: "/tmp/work-items",
+                  repository: "acme/shared",
+                  query: "",
+                  limit: 20,
+                }),
               ),
               service.searchWorkItems({
                 cwd: "/tmp/work-items",

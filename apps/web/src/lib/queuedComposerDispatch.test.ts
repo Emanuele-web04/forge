@@ -1,7 +1,8 @@
 import { ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { QueuedComposerTurn } from "../composerDraftStore";
+import type { QueuedComposerTurn } from "../composerDraftDomain";
+import type { QueuedComposerChatTurn } from "../composerDraftDomain";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
@@ -9,7 +10,7 @@ import { makeState, makeThread } from "../storeTestFixtures";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 
 const nativeApiMocks = vi.hoisted(() => ({
-  dispatchCommand: vi.fn(async () => undefined),
+  dispatchCommand: vi.fn(async (_command: unknown) => undefined),
 }));
 
 vi.mock("../nativeApi", () => ({
@@ -22,7 +23,7 @@ vi.mock("../nativeApi", () => ({
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 
-function makeQueuedChatTurn(): QueuedComposerTurn {
+function makeQueuedChatTurn(): QueuedComposerChatTurn {
   return {
     id: "queued-chat-1",
     kind: "chat",
@@ -111,13 +112,15 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
   });
 
   it("serializes queued work items identically to the live send path", async () => {
-    const queuedTurn = {
+    const queuedTurn: QueuedComposerTurn = {
       ...makeQueuedChatTurn(),
       pastedTexts: [
         {
           id: "pasted-1",
           createdAt: "2026-03-13T12:00:00.000Z",
           text: "pasted log line",
+          lineCount: 1,
+          charCount: "pasted log line".length,
         },
       ],
       workItems: [

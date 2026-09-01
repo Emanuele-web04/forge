@@ -598,26 +598,25 @@ export const makePullRequestService = (
 
     const workItemsAuthStatus: PullRequestServiceShape["workItemsAuthStatus"] = (input) =>
       viewerCache
-        .get(
-          "viewer",
-          withGitHubRead(dependencies.github.getViewerLogin({ cwd: input.cwd })),
-        )
+        .get("viewer", withGitHubRead(dependencies.github.getViewerLogin({ cwd: input.cwd })))
         .pipe(
           Effect.map(() => ({ status: "ready" as const, hint: null })),
           Effect.catch((error: unknown) =>
-            Effect.succeed(((): WorkItemAuthStatus => {
-              if (error instanceof GitHubCliError) {
-                if (error.reason === "not-installed") {
-                  return { status: "gh-not-installed", hint: error.detail };
+            Effect.succeed(
+              ((): WorkItemAuthStatus => {
+                if (error instanceof GitHubCliError) {
+                  if (error.reason === "not-installed") {
+                    return { status: "gh-not-installed", hint: error.detail };
+                  }
+                  if (error.reason === "not-authenticated") {
+                    return { status: "gh-not-authenticated", hint: error.detail };
+                  }
                 }
-                if (error.reason === "not-authenticated") {
-                  return { status: "gh-not-authenticated", hint: error.detail };
-                }
-              }
-              // Unclassifiable probe failures must not hide the menu item: the
-              // search dialog surfaces the real error with a retry when it runs.
-              return { status: "ready", hint: null };
-            })()),
+                // Unclassifiable probe failures must not hide the menu item: the
+                // search dialog surfaces the real error with a retry when it runs.
+                return { status: "ready", hint: null };
+              })(),
+            ),
           ),
         );
 

@@ -126,7 +126,12 @@ import {
   PullRequestsListResult,
   PullRequestsUnavailableError,
 } from "./pullRequests";
-import { WorkItemAvailabilityInput, WorkItemSearchInput, WorkItemSearchResult, WorkItemAvailabilityResult } from "./workItems";
+import {
+  WorkItemAvailabilityInput,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
+  WorkItemAvailabilityResult,
+} from "./workItems";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,

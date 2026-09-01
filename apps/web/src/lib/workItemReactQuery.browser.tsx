@@ -9,9 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WORK_ITEMS_SEARCH_DEBOUNCE_MS, useDebouncedWorkItemsSearch } from "./workItemReactQuery";
 
-const searchCalls = vi.hoisted(() =>
-  [] as Array<{ at: number; query: string }>,
-);
+const searchCalls = vi.hoisted(() => [] as Array<{ at: number; query: string }>);
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({

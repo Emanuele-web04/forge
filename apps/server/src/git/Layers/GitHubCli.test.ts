@@ -1862,9 +1862,7 @@ layer("GitHubCliLive", (it) => {
         limit: 20,
       });
 
-      const optionss = mockedRunProcess.mock.calls.map(
-        (call) => call[2] as { timeoutMs: number },
-      );
+      const optionss = mockedRunProcess.mock.calls.map((call) => call[2] as { timeoutMs: number });
       assert.equal(optionss.length, 2);
       for (const options of optionss) {
         assert.equal(options.timeoutMs, 10_000);

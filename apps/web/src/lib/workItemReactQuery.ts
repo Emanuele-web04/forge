@@ -4,7 +4,7 @@
 import { useQuery, queryOptions } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import type { WorkItemAvailabilityInput, WorkItemSearchInput } from "@synara/contracts";
+import type { WorkItemSearchInput } from "@synara/contracts";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const WORK_ITEMS_SEARCH_DEBOUNCE_MS = 300;

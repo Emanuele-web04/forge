@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { appendBrowserAnnotationsToPrompt, extractTrailingBrowserAnnotations, type BrowserAnnotationDraft } from "./browserAnnotations";
+import {
+  appendBrowserAnnotationsToPrompt,
+  extractTrailingBrowserAnnotations,
+  type BrowserAnnotationDraft,
+} from "./browserAnnotations";
 import { appendPastedTextsToPrompt, extractTrailingPastedTexts } from "./composerPastedText";
 import {
   appendWorkItemsToPrompt,
