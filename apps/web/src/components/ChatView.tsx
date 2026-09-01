@@ -413,6 +413,7 @@ import {
   type PastedTextDraft,
 } from "../lib/composerPastedText";
 import { appendWorkItemsToPrompt, type WorkItemDraft } from "../lib/composerWorkItems";
+import { workItemsAvailabilityQueryOptions } from "../lib/workItemReactQuery";
 import {
   appendAssistantSelectionsToPrompt,
   formatAssistantSelectionQueuePreview,
@@ -517,7 +518,7 @@ import {
   type ComposerLocalDirectoryMenuHandle,
 } from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
-import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
+import { ComposerExtrasMenu, type ComposerWorkItemAttachStatus } from "./chat/ComposerExtrasMenu";
 import { WorkItemPickerDialog } from "./chat/WorkItemPickerDialog";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
@@ -4648,6 +4649,10 @@ export default function ChatView({
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );
+  // Composer attach affordance availability: one cheap probe per workspace cwd,
+  // cached server-side, so the plus-menu can hide the item without a GitHub
+  // remote and disable it with the exact hint when gh is missing/unauthenticated.
+  const workItemAvailabilityQuery = useQuery(workItemsAvailabilityQueryOptions(threadWorkspaceCwd));
   const threadRecap = useThreadRecap({
     thread: activeThread,
     cwd: threadWorkspaceCwd,
@@ -11247,6 +11252,29 @@ export default function ChatView({
   // the branch-toolbar row below the input instead of getting clipped; the
   // relocated variant is icon-only since relocation means space is minimal.
   const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
+  // While the availability probe is in flight the item stays enabled: a missing
+  // remote resolves within a local git call, and the dialog itself surfaces any
+  // gh failure with a retry.
+  const composerWorkItemAttach: ComposerWorkItemAttachStatus = (() => {
+    if (!threadWorkspaceCwd) return { status: "hidden" };
+    const availability = workItemAvailabilityQuery.data;
+    if (!availability) return { status: "enabled" };
+    if (availability.status === "no-repository") return { status: "hidden" };
+    if (
+      availability.status === "gh-not-installed" ||
+      availability.status === "gh-not-authenticated"
+    ) {
+      return {
+        status: "disabled",
+        tooltip:
+          availability.hint ??
+          (availability.status === "gh-not-installed"
+            ? "GitHub CLI (`gh`) is required but not available on PATH."
+            : "GitHub CLI is not authenticated. Run `gh auth login` and retry."),
+      };
+    }
+    return { status: "enabled" };
+  })();
   const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
     <>
       <ComposerExtrasMenu
@@ -11254,6 +11282,7 @@ export default function ChatView({
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
+        workItemAttach={composerWorkItemAttach}
         onAttachWorkItem={() => setWorkItemPickerOpen(true)}
         onToggleFastMode={toggleFastMode}
         onInteractionModeChange={handleInteractionModeChange}

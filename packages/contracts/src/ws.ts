@@ -150,7 +150,7 @@ import {
   PullRequestSetPinnedInput,
   PullRequestsListInput,
 } from "./pullRequests";
-import { WorkItemSearchInput } from "./workItems";
+import { WorkItemAvailabilityInput, WorkItemSearchInput } from "./workItems";
 import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpRefreshPairingInput,
@@ -228,6 +228,7 @@ export const WS_METHODS = {
 
   // Work item methods
   workItemsSearch: "workItems.search",
+  workItemsAvailability: "workItems.availability",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -441,6 +442,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Work items
   tagRequestBody(WS_METHODS.workItemsSearch, WorkItemSearchInput),
+  tagRequestBody(WS_METHODS.workItemsAvailability, WorkItemAvailabilityInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

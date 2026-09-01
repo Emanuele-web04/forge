@@ -37,3 +37,25 @@ export const WorkItemSearchResult = Schema.Struct({
   items: Schema.Array(WorkItemAttachment),
 });
 export type WorkItemSearchResult = typeof WorkItemSearchResult.Type;
+
+export const WorkItemAvailabilityInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type WorkItemAvailabilityInput = typeof WorkItemAvailabilityInput.Type;
+
+/**
+ * Menu-level availability for the composer attach affordance. `no-repository`
+ * hides the item; the two gh failure states disable it with the server-provided
+ * hint as the exact tooltip text.
+ */
+export const WorkItemAuthStatus = Schema.Struct({
+  status: Schema.Literals(["ready", "gh-not-installed", "gh-not-authenticated"]),
+  hint: Schema.NullOr(Schema.String),
+});
+export type WorkItemAuthStatus = typeof WorkItemAuthStatus.Type;
+
+export const WorkItemAvailabilityResult = Schema.Struct({
+  status: Schema.Literals(["ready", "no-repository", "gh-not-installed", "gh-not-authenticated"]),
+  hint: Schema.NullOr(Schema.String),
+});
+export type WorkItemAvailabilityResult = typeof WorkItemAvailabilityResult.Type;

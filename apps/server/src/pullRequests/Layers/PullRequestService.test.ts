@@ -953,4 +953,171 @@ describe("isDefinitivePullRequestNotFound", () => {
     expect(result.errorHint).toBeNull();
     expect(result.items).toEqual([workItem]);
   });
+
+  it("caches identical work item searches for the TTL and joins concurrent ones", async () => {
+    const project = makeProject("project-work-items-cache", "Work items cache", "/tmp/work-items");
+    const workItem = {
+      kind: "pull-request" as const,
+      number: 7,
+      title: "PR seven",
+      state: "open" as const,
+      url: "https://github.com/acme/shared/pull/7",
+      bodyExcerpt: "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    const { service: base, ghCalls } = createGitHubCliWithFakeGh({ workItems: [workItem] });
+    let searchReads = 0;
+    const github: GitHubCliShape = {
+      ...base,
+      searchWorkItems: (input) =>
+        Effect.suspend(() => {
+          searchReads += 1;
+          return base.searchWorkItems(input);
+        }),
+    };
+
+    const results = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map([[project.id, "acme/shared"]]),
+              github,
+            }),
+          );
+          const [first, secondConcurrent, thirdAfter, differentQuery] = yield* Effect.all(
+            [
+              service.searchWorkItems({
+                cwd: "/tmp/work-items",
+                repository: "acme/shared",
+                query: "",
+                limit: 20,
+              }),
+              service.searchWorkItems({
+                cwd: "/tmp/work-items",
+                repository: "acme/shared",
+                query: "",
+                limit: 20,
+              }),
+              Effect.flatMap(
+                Effect.yieldNow,
+                () =>
+                  service.searchWorkItems({
+                    cwd: "/tmp/work-items",
+                    repository: "acme/shared",
+                    query: "",
+                    limit: 20,
+                  }),
+              ),
+              service.searchWorkItems({
+                cwd: "/tmp/work-items",
+                repository: "acme/shared",
+                query: "race",
+                limit: 20,
+              }),
+            ],
+            { concurrency: "unbounded" },
+          );
+          return { first, secondConcurrent, thirdAfter, differentQuery } as const;
+        }),
+      ),
+    );
+
+    // The two concurrent identical searches join one gh round trip; the third
+    // reuses the 30s cache entry; the different query misses the cache.
+    expect(searchReads).toBe(2);
+    expect(results.first.items).toEqual([workItem]);
+    expect(results.secondConcurrent.items).toEqual([workItem]);
+    expect(results.thirdAfter.items).toEqual([workItem]);
+    expect(results.differentQuery.items).toEqual([workItem]);
+    expect(ghCalls.filter((call) => call.startsWith("workItem search"))).toHaveLength(2);
+  });
+
+  it("maps gh availability for the composer attach affordance", async () => {
+    const project = makeProject("project-work-items-auth", "Work items auth", "/tmp/work-items");
+    const base = createGitHubCliWithFakeGh().service;
+    let viewerLookup = 0;
+
+    const readyGithub: GitHubCliShape = {
+      ...base,
+      getViewerLogin: () =>
+        Effect.sync(() => {
+          viewerLookup += 1;
+          return "viewer";
+        }),
+    };
+    const notInstalledGithub: GitHubCliShape = {
+      ...base,
+      getViewerLogin: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "getViewerLogin",
+            detail: "GitHub CLI (`gh`) is required but not available on PATH.",
+            reason: "not-installed",
+          }),
+        ),
+    };
+    const notAuthenticatedGithub: GitHubCliShape = {
+      ...base,
+      getViewerLogin: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "getViewerLogin",
+            detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+            reason: "not-authenticated",
+          }),
+        ),
+    };
+    const otherFailureGithub: GitHubCliShape = {
+      ...base,
+      getViewerLogin: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "getViewerLogin",
+            detail: "network unreachable",
+            reason: "other",
+          }),
+        ),
+    };
+
+    const results = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const build = (github: GitHubCliShape) =>
+            Effect.flatMap(
+              makePullRequestService(
+                makeDependencies({
+                  projects: [project],
+                  repositories: new Map([[project.id, "acme/shared"]]),
+                  github,
+                }),
+              ),
+              (service) => service.workItemsAuthStatus({ cwd: "/tmp/work-items" }),
+            );
+          return [
+            yield* build(readyGithub),
+            yield* build(notInstalledGithub),
+            yield* build(notAuthenticatedGithub),
+            yield* build(otherFailureGithub),
+          ] as const;
+        }),
+      ),
+    );
+
+    expect(results[0]).toEqual({ status: "ready", hint: null });
+    expect(results[1]).toEqual({
+      status: "gh-not-installed",
+      hint: "GitHub CLI (`gh`) is required but not available on PATH.",
+    });
+    expect(results[2]).toEqual({
+      status: "gh-not-authenticated",
+      hint: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+    });
+    // Unclassifiable probe failures keep the item enabled; the search dialog
+    // surfaces the real error with a retry.
+    expect(results[3]).toEqual({ status: "ready", hint: null });
+    expect(viewerLookup).toBe(1);
+  });
 });

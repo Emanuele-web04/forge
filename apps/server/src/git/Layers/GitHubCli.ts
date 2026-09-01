@@ -1460,6 +1460,9 @@ const makeGitHubCli = Effect.sync(() => {
     });
 
   const WORK_ITEM_JSON_FIELDS = "number,title,url,state,body,updatedAt,createdAt";
+  // Interactive composer search: both per-kind gh calls share this explicit
+  // ceiling so a hung request degrades instead of blocking the dialog.
+  const WORK_ITEM_SEARCH_TIMEOUT_MS = 10_000;
 
   function normalizeWorkItemState(state: string): "open" | "closed" | "merged" | null {
     const upper = state.toUpperCase();
@@ -1565,6 +1568,9 @@ const makeGitHubCli = Effect.sync(() => {
     return execute({
       cwd: input.cwd,
       args: buildWorkItemSearchArgs(kind, input),
+      // Composer search is interactive: a hung gh call must fail fast into the
+      // degraded path instead of holding the dialog for the full default 30s.
+      timeoutMs: WORK_ITEM_SEARCH_TIMEOUT_MS,
     }).pipe(
       Effect.map((result) => ({ items: parseWorkItemList(result.stdout, kind), degraded: false })),
       Effect.catch((error) => {

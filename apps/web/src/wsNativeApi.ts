@@ -632,6 +632,7 @@ export function createWsNativeApi(): NativeApi {
     },
     workItems: {
       search: (input) => transport.request(WS_METHODS.workItemsSearch, input),
+      availability: (input) => transport.request(WS_METHODS.workItemsAvailability, input),
     },
     contextMenu: {
       show: async <T extends string>(

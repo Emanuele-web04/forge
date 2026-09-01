@@ -11,6 +11,7 @@ import type {
   PullRequestSetPinnedResult,
   PullRequestsListInput,
   PullRequestsListResult,
+  WorkItemAuthStatus,
   WorkItemSearchInput,
   WorkItemSearchResult,
 } from "@synara/contracts";
@@ -39,6 +40,13 @@ export interface PullRequestServiceShape {
   readonly searchWorkItems: (
     input: WorkItemSearchInput & { repository: string },
   ) => Effect.Effect<WorkItemSearchResult, unknown>;
+  /**
+   * Cheap probe for the composer attach affordance: reports whether gh is
+   * installed and authenticated. Repository resolution stays with the caller.
+   */
+  readonly workItemsAuthStatus: (input: {
+    cwd: string;
+  }) => Effect.Effect<WorkItemAuthStatus, unknown>;
 }
 
 export class PullRequestService extends ServiceMap.Service<

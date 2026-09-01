@@ -4,14 +4,16 @@
 import { useQuery, queryOptions } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import type { WorkItemSearchInput } from "@synara/contracts";
+import type { WorkItemAvailabilityInput, WorkItemSearchInput } from "@synara/contracts";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const WORK_ITEMS_SEARCH_DEBOUNCE_MS = 300;
+export const WORK_ITEMS_AVAILABILITY_STALE_TIME_MS = 30_000;
 
 export const workItemQueryKeys = {
   search: (input: WorkItemSearchInput | null) =>
     ["work-items", "search", input?.cwd ?? "", input?.query ?? "", input?.limit ?? 20] as const,
+  availability: (cwd: string | null) => ["work-items", "availability", cwd] as const,
 };
 
 export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null, enabled = true) {
@@ -31,6 +33,25 @@ export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null, e
 
 export function useWorkItemsSearch(input: WorkItemSearchInput | null, enabled = true) {
   return useQuery(workItemsSearchQueryOptions(input, enabled));
+}
+
+export function workItemsAvailabilityQueryOptions(cwd: string | null) {
+  return queryOptions({
+    queryKey: workItemQueryKeys.availability(cwd),
+    queryFn: async () => {
+      if (!cwd) {
+        return { status: "no-repository" as const, hint: null };
+      }
+      return ensureNativeApi().workItems.availability({ cwd });
+    },
+    enabled: cwd !== null,
+    staleTime: WORK_ITEMS_AVAILABILITY_STALE_TIME_MS,
+    gcTime: 10 * 60_000,
+  });
+}
+
+export function useWorkItemsAvailability(cwd: string | null) {
+  return useQuery(workItemsAvailabilityQueryOptions(cwd));
 }
 
 export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, enabled: boolean) {

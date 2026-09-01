@@ -1837,6 +1837,41 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("bounds work item gh calls with the explicit 10s timeout", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      const optionss = mockedRunProcess.mock.calls.map(
+        (call) => call[2] as { timeoutMs: number },
+      );
+      assert.equal(optionss.length, 2);
+      for (const options of optionss) {
+        assert.equal(options.timeoutMs, 10_000);
+      }
+    }),
+  );
+
   it.effect("merges kinds by recency, caps excerpts, and drops malformed rows", () =>
     Effect.gen(function* () {
       const longBody = "x".repeat(600);

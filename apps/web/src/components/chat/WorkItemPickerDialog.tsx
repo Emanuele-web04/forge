@@ -87,12 +87,18 @@ export function WorkItemPickerDialog({
               <div className="flex h-24 items-center justify-center">
                 <Spinner className="size-4" />
               </div>
-            ) : search.error ? (
-              <p className="text-sm text-destructive">Could not search work items.</p>
-            ) : search.data?.available === false ? (
-              <p className="text-sm text-muted-foreground">
-                {search.data.errorHint ?? "GitHub search is not available for this project."}
-              </p>
+            ) : search.error || search.data?.available === false ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  {search.error instanceof Error
+                    ? search.error.message
+                    : (search.data?.errorHint ??
+                      "GitHub search is not available for this project.")}
+                </p>
+                <Button variant="secondary" size="sm" onClick={() => void search.refetch()}>
+                  Retry
+                </Button>
+              </div>
             ) : search.data?.items.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {query.length === 0

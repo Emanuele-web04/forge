@@ -104,7 +104,12 @@ import type {
   PullRequestsListInput,
   PullRequestsListResult,
 } from "./pullRequests";
-import type { WorkItemSearchInput, WorkItemSearchResult } from "./workItems";
+import type {
+  WorkItemAvailabilityInput,
+  WorkItemAvailabilityResult,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
+} from "./workItems";
 import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
@@ -782,6 +787,7 @@ export interface NativeApi {
   };
   workItems: {
     search: (input: WorkItemSearchInput) => Promise<WorkItemSearchResult>;
+    availability: (input: WorkItemAvailabilityInput) => Promise<WorkItemAvailabilityResult>;
   };
   contextMenu: {
     show: <T extends string>(

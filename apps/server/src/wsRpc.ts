@@ -1514,6 +1514,32 @@ const makeWsRpcHandlersLayer = () =>
               });
             }),
           ),
+        [WS_METHODS.workItemsAvailability]: (input) =>
+          Effect.gen(function* () {
+            // Same trust boundary as workItemsSearch: validate the client-supplied
+            // cwd before running git/gh inside it.
+            const candidateCwd = input.cwd.replace(/[\\/]+$/, "") || input.cwd;
+            const resolvedCwd = path.resolve(candidateCwd);
+            if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
+              return { status: "no-repository" as const, hint: "Invalid workspace path." };
+            }
+            const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
+              Effect.map((info) => info.type === "Directory"),
+              Effect.orElseSucceed(() => false),
+            );
+            if (!cwdExistsAndIsDirectory) {
+              return { status: "no-repository" as const, hint: "Workspace does not exist." };
+            }
+            const resolved = yield* resolveGitHubRepository(git, resolvedCwd);
+            if (!resolved.repository) {
+              return { status: "no-repository" as const, hint: null };
+            }
+            return yield* pullRequests.workItemsAuthStatus({ cwd: resolvedCwd });
+          }).pipe(
+            Effect.catch(() =>
+              Effect.succeed({ status: "ready" as const, hint: null }),
+            ),
+          ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>

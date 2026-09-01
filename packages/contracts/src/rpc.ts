@@ -126,7 +126,7 @@ import {
   PullRequestsListResult,
   PullRequestsUnavailableError,
 } from "./pullRequests";
-import { WorkItemSearchInput, WorkItemSearchResult } from "./workItems";
+import { WorkItemAvailabilityInput, WorkItemSearchInput, WorkItemSearchResult, WorkItemAvailabilityResult } from "./workItems";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
@@ -787,6 +787,12 @@ export const WsWorkItemsSearchRpc = Rpc.make(WS_METHODS.workItemsSearch, {
   error: WsRpcError,
 });
 
+export const WsWorkItemsAvailabilityRpc = Rpc.make(WS_METHODS.workItemsAvailability, {
+  payload: WorkItemAvailabilityInput,
+  success: WorkItemAvailabilityResult,
+  error: WsRpcError,
+});
+
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
   payload: GitListBranchesInput,
   success: GitListBranchesResult,
@@ -1291,6 +1297,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsCommentRpc,
   WsPullRequestsSetPinnedRpc,
   WsWorkItemsSearchRpc,
+  WsWorkItemsAvailabilityRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,

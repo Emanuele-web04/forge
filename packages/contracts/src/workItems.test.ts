@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   WorkItemAttachment,
+  WorkItemAvailabilityResult,
   WorkItemKind,
   WorkItemSearchInput,
   WorkItemSearchResult,
@@ -93,5 +94,21 @@ describe("WorkItem schemas", () => {
     expect(() => Schema.decodeUnknownSync(WorkItemKind)("issue")).not.toThrow();
     expect(() => Schema.decodeUnknownSync(WorkItemKind)("pull-request")).not.toThrow();
     expect(() => Schema.decodeUnknownSync(WorkItemKind)("discussion")).toThrow();
+  });
+
+  it("decodes availability results and rejects unknown statuses", () => {
+    for (const status of [
+      "ready",
+      "no-repository",
+      "gh-not-installed",
+      "gh-not-authenticated",
+    ] as const) {
+      expect(() =>
+        Schema.decodeUnknownSync(WorkItemAvailabilityResult)({ status, hint: null }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAvailabilityResult)({ status: "offline", hint: null }),
+    ).toThrow();
   });
 });

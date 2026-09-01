@@ -26,12 +26,25 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
+/**
+ * Availability of the composer work-item attach affordance, resolved by the
+ * caller from the server's `workItems.availability` probe. `hidden` removes the
+ * item (no GitHub remote); `disabled` keeps it visible but inert with the
+ * server's hint as the exact tooltip.
+ */
+export type ComposerWorkItemAttachStatus =
+  | { status: "hidden" }
+  | { status: "enabled" }
+  | { status: "disabled"; tooltip: string };
 
 export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   interactionMode: ProviderInteractionMode;
   supportsFastMode: boolean;
   fastModeEnabled: boolean;
   onAddAttachments: (files: File[]) => void;
+  workItemAttach: ComposerWorkItemAttachStatus;
   onAttachWorkItem: () => void;
   onToggleFastMode: () => void;
   onInteractionModeChange: (mode: ProviderInteractionMode) => void;
@@ -81,10 +94,31 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             <PaperclipIcon className="size-4 shrink-0" />
             Add files
           </MenuItem>
-          <MenuItem onClick={props.onAttachWorkItem}>
-            <GitPullRequestIcon className="size-4 shrink-0" />
-            Attach issue or PR
-          </MenuItem>
+          {props.workItemAttach.status === "disabled" ? (
+            // aria-disabled (not the `disabled` prop): the item must stay
+            // hoverable so the tooltip with the exact gh hint can appear, while
+            // remaining inert — no onClick, so activation does nothing.
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuItem aria-disabled="true" className="opacity-55">
+                    <GitPullRequestIcon className="size-4 shrink-0" />
+                    Attach issue or PR
+                  </MenuItem>
+                }
+              />
+              <TooltipPopup side="right" sideOffset={8}>
+                <span className="inline-flex max-w-64 items-center gap-1 px-0.5 py-0.5">
+                  <span>{props.workItemAttach.tooltip}</span>
+                </span>
+              </TooltipPopup>
+            </Tooltip>
+          ) : props.workItemAttach.status === "enabled" ? (
+            <MenuItem onClick={props.onAttachWorkItem}>
+              <GitPullRequestIcon className="size-4 shrink-0" />
+              Attach issue or PR
+            </MenuItem>
+          ) : null}
 
           <MenuSeparator />
           <MenuSub>
