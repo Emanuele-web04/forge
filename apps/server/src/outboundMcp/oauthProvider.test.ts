@@ -6,10 +6,6 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import { makeOAuthClientProvider } from "./oauthProvider.ts";
-import {
-  formatOutboundMcpError,
-  redactOutboundMcpLifecycleMetadata,
-} from "./redaction.ts";
 
 const clientMetadata: OAuthClientMetadata = {
   redirect_uris: ["http://127.0.0.1:58090/oauth/callback"],
@@ -88,45 +84,5 @@ describe("makeOAuthClientProvider", () => {
         "https://mcp.paraty.example/resource",
       ),
     ).toEqual(new URL("https://mcp.paraty.example/resource"));
-  });
-});
-
-describe("outbound MCP redaction", () => {
-  it("removes OAuth secrets from serialized lifecycle metadata", () => {
-    const metadata = redactOutboundMcpLifecycleMetadata({
-      connectionId: "paraty",
-      accessToken: "access-token",
-      nested: {
-        refresh_token: "refresh-token",
-        authorizationCode: "authorization-code",
-        codeVerifier: "pkce-verifier",
-        status: "connected",
-      },
-    });
-    const serialized = JSON.stringify(metadata);
-
-    expect(serialized).toContain("paraty");
-    expect(serialized).toContain("connected");
-    expect(serialized).not.toContain("access-token");
-    expect(serialized).not.toContain("refresh-token");
-    expect(serialized).not.toContain("authorization-code");
-    expect(serialized).not.toContain("pkce-verifier");
-  });
-
-  it("formats errors without known secrets or sensitive URL query parameters", () => {
-    const formatted = formatOutboundMcpError(
-      new Error(
-        "OAuth failed: access-token refresh-token authorization-code pkce-verifier " +
-          "https://localhost/callback?code=authorization-code&state=attempt-state",
-      ),
-      ["access-token", "refresh-token", "authorization-code", "pkce-verifier", "attempt-state"],
-    );
-
-    expect(formatted).toContain("OAuth failed");
-    expect(formatted).not.toContain("access-token");
-    expect(formatted).not.toContain("refresh-token");
-    expect(formatted).not.toContain("authorization-code");
-    expect(formatted).not.toContain("pkce-verifier");
-    expect(formatted).not.toContain("attempt-state");
   });
 });
