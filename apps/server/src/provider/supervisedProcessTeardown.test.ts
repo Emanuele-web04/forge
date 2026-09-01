@@ -21,7 +21,49 @@ function deterministicClock() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 describe("teardownProviderProcessTree", () => {
+  it("does not signal a root that exited during the initial snapshot", async () => {
+    const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
+    const captureStarted = deferred<void>();
+    const capturedTree = deferred<CapturedProcessTree>();
+    const rootExit = deferred<void>();
+    const signals: Array<{ signal: TerminalKillSignal; includeRootTree: boolean | undefined }> = [];
+    const clock = deterministicClock();
+
+    const teardown = teardownProviderProcessTree(
+      { rootPid: 91, rootExited: rootExit.promise, termGraceMs: 5, forceExitMs: 5, pollMs: 1 },
+      {
+        platform: "win32",
+        captureProcessTree: async () => {
+          captureStarted.resolve(undefined);
+          return capturedTree.promise;
+        },
+        inspectProcessTree: async () => ({ verified: true, survivors: [] }),
+        processTreeKiller: {
+          capture: () => tree,
+          signal: ({ signal, includeRootTree }) => signals.push({ signal, includeRootTree }),
+        },
+        ...clock,
+      },
+    );
+
+    await captureStarted.promise;
+    rootExit.resolve(undefined);
+    await Promise.resolve();
+    capturedTree.resolve(tree);
+
+    await expect(teardown).resolves.toEqual({ escalated: false, signalErrors: [] });
+    expect(signals).toEqual([{ signal: "SIGTERM", includeRootTree: false }]);
+  });
+
   it("escalates ignored TERM and returns only after root and descendants prove exit", async () => {
     const tree: CapturedProcessTree = {
       descendants: [{ pid: 102, command: "provider-worker" }],
@@ -196,7 +238,7 @@ describe("teardownProviderProcessTree", () => {
       remainingDescendantPids: null,
     });
     expect(signals).toEqual([
-      { signal: "SIGTERM", includeRootTree: true },
+      { signal: "SIGTERM", includeRootTree: false },
       { signal: "SIGKILL", includeRootTree: false },
     ]);
   });
@@ -326,5 +368,44 @@ describe("teardownProviderProcessTree", () => {
     // The root exits immediately, so every poll used to trigger its own `ps`.
     expect(sleepCalls).toBeGreaterThan(60);
     expect(inspectCalls).toBeLessThanOrEqual(sleepCalls / 4);
+  });
+
+  it("rechecks descendants after the final wait before reporting failure", async () => {
+    const descendant = { pid: 902, command: "provider-worker" };
+    const tree: CapturedProcessTree = {
+      descendants: [descendant],
+      captureComplete: true,
+    };
+    let descendantRunning = true;
+    const signals: TerminalKillSignal[] = [];
+    let now = 0;
+
+    await expect(
+      teardownProviderProcessTree(
+        {
+          rootPid: 901,
+          rootExited: Promise.resolve(),
+          termGraceMs: 5,
+          forceExitMs: 5,
+          pollMs: 5,
+        },
+        {
+          processTreeKiller: {
+            capture: () => tree,
+            inspect: () => ({
+              verified: true,
+              survivors: descendantRunning ? [descendant] : [],
+            }),
+            signal: ({ signal }) => signals.push(signal),
+          },
+          now: () => now,
+          sleep: async (milliseconds) => {
+            descendantRunning = false;
+            now += milliseconds;
+          },
+        },
+      ),
+    ).resolves.toEqual({ escalated: false, signalErrors: [] });
+    expect(signals).toEqual(["SIGTERM"]);
   });
 });

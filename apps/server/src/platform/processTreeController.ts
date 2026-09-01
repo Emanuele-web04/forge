@@ -11,7 +11,6 @@ const PROCESS_TREE_SCAN_TIMEOUT_MS = 1_000;
 const PROCESS_TREE_CAPTURE_ATTEMPTS = 2;
 const PROCESS_TREE_SCAN_MAX_BUFFER_BYTES = 8_388_608;
 const PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES = 8_388_608;
-const POSIX_TREE_WALK_MAX_VISITED = 256;
 
 export type ProcessChildrenMap = Map<number, Array<CapturedProcess>>;
 export type ProcessCommandMap = Map<number, string>;
@@ -112,7 +111,7 @@ export function collectDescendantProcesses(
   const stack = [...(childrenByParentPid.get(parentPid) ?? [])].reverse();
   const visited = new Set<number>([parentPid]);
 
-  while (stack.length > 0 && descendants.length < POSIX_TREE_WALK_MAX_VISITED) {
+  while (stack.length > 0) {
     const child = stack.pop();
     if (!child || visited.has(child.pid)) continue;
     visited.add(child.pid);

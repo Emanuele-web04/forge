@@ -21,6 +21,7 @@ const DEFAULT_FORCE_EXIT_MS = 1_500;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_INSPECT_INTERVAL_MS = 250;
 const DEFAULT_WINDOWS_INITIAL_CAPTURE_MS = 3_000;
+const FINAL_PROOF_INSPECTION_MAX_MS = 25;
 
 export interface SupervisedProcessTeardownInput {
   readonly rootPid: number;
@@ -192,18 +193,19 @@ export async function teardownProviderProcessTree(
     dependencies.sleep ??
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
+  let rootExited = false;
+  void input.rootExited.then(
+    () => {
+      rootExited = true;
+    },
+    () => {
+      // A rejected watcher is not evidence that the owned process exited.
+    },
+  );
+
   try {
     const tree = await captureTree(input.rootPid);
     const signalErrors: Error[] = [];
-    let rootExited = false;
-    void input.rootExited.then(
-      () => {
-        rootExited = true;
-      },
-      () => {
-        // A rejected watcher is not evidence that the owned process exited.
-      },
-    );
 
     const signal = (
       killSignal: TerminalKillSignal,
@@ -254,10 +256,19 @@ export async function teardownProviderProcessTree(
         if (remainingMs <= 0) break;
         await sleep(Math.min(positiveDuration(input.pollMs, DEFAULT_POLL_MS), remainingMs));
       } while (now() <= deadline);
+
+      if (rootExited) {
+        remainingDescendants = await inspectDescendants(
+          Math.min(positiveDuration(input.pollMs, DEFAULT_POLL_MS), FINAL_PROOF_INSPECTION_MAX_MS),
+        );
+        if (remainingDescendants !== null && remainingDescendants.length === 0) {
+          return { proven: true as const, remainingDescendants };
+        }
+      }
       return { proven: false as const, remainingDescendants };
     };
 
-    signal("SIGTERM", true);
+    signal("SIGTERM", !rootExited);
     const graceful = await waitForExitProof(
       positiveDuration(input.termGraceMs, DEFAULT_TERM_GRACE_MS),
     );

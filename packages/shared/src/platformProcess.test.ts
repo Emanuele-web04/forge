@@ -50,6 +50,27 @@ describe("prepareProcess", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "uses the native POSIX search path when PATH is absent",
+    () => {
+      expect(
+        prepareProcess("sh", [], {
+          platform: "linux",
+          env: {},
+          requireExecutable: true,
+        }).resolvedCommand,
+      ).toMatch(/\/sh$/);
+
+      expect(() =>
+        prepareProcess("sh", [], {
+          platform: "linux",
+          env: { PATH: "" },
+          requireExecutable: true,
+        }),
+      ).toThrow(ExecutableNotFoundError);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "resolves a qualified relative command against the launch cwd, not the server cwd",
     () => {
       const binDir = path.join(root, "bin");
@@ -161,6 +182,24 @@ describe("prepareProcess", () => {
       command: executable,
       args: ["", "two words", "日本語"],
       resolvedCommand: executable,
+    });
+  });
+
+  it("accepts an explicit Windows executable independently of PATHEXT", () => {
+    const executable = path.join(root, "Tools", "provider.exe");
+    mkdirSync(path.dirname(executable), { recursive: true });
+    writeFileSync(executable, "native");
+
+    expect(
+      prepareProcess(executable, [], {
+        platform: "win32",
+        env: { ...windowsEnv(), PATHEXT: ".COM;.CMD" },
+        requireExecutable: true,
+      }),
+    ).toMatchObject({
+      command: executable,
+      resolvedCommand: executable,
+      executionBackend: "native",
     });
   });
 

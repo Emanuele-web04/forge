@@ -34,6 +34,8 @@ export interface ExecutableCandidate {
 
 /** Windows' default PATHEXT prefix in native precedence order. */
 const DEFAULT_WINDOWS_PATH_EXTENSIONS: readonly string[] = [".COM", ".EXE", ".BAT", ".CMD"];
+const DEFAULT_POSIX_PATH_ENTRIES: readonly string[] = ["/usr/bin", "/bin"];
+const WINDOWS_DIRECT_LAUNCH_EXTENSIONS = new Set(DEFAULT_WINDOWS_PATH_EXTENSIONS);
 
 /** Windows exposes PATH under any capitalization; the first key present is the live one. */
 export function envPathKeyFor(env: NodeJS.ProcessEnv): "PATH" | "Path" | "path" {
@@ -61,7 +63,10 @@ export function windowsPathExtensions(env: NodeJS.ProcessEnv): readonly string[]
 
 /** PATH split into directories, in search order. */
 export function pathEntries(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
-  const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
+  const pathValue = env.PATH ?? env.Path ?? env.path;
+  if (pathValue === undefined) {
+    return platform === "win32" ? [] : [...DEFAULT_POSIX_PATH_ENTRIES];
+  }
   if (pathValue.length === 0) return [];
   return pathValue
     .split(platform === "win32" ? ";" : ":")
@@ -82,7 +87,11 @@ export function executableNameCandidates(
   const extension = extname(command);
   const normalizedExtension = extension.toUpperCase();
 
-  if (extension.length > 0 && pathExtensions.includes(normalizedExtension)) {
+  if (
+    extension.length > 0 &&
+    (pathExtensions.includes(normalizedExtension) ||
+      WINDOWS_DIRECT_LAUNCH_EXTENSIONS.has(normalizedExtension))
+  ) {
     const stem = command.slice(0, -extension.length);
     return [
       ...new Set([
@@ -182,7 +191,11 @@ function isExecutableFileIn(filePath: string, context: ExecutableLookupContext):
     if (!statSync(statPath).isFile()) return false;
     if (context.platform === "win32") {
       const extension = extname(filePath).toUpperCase();
-      return extension.length > 0 && context.pathExtensions.includes(extension);
+      return (
+        extension.length > 0 &&
+        (context.pathExtensions.includes(extension) ||
+          WINDOWS_DIRECT_LAUNCH_EXTENSIONS.has(extension))
+      );
     }
     accessSync(statPath, constants.X_OK);
     return true;

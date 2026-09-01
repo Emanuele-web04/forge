@@ -36,6 +36,22 @@ describe("Windows process-tree controller", () => {
     });
   });
 
+  it("captures process trees larger than the former traversal cap", async () => {
+    const childrenByParentPid: ProcessChildrenMap = new Map();
+    for (let pid = 100; pid < 400; pid += 1) {
+      childrenByParentPid.set(pid, [{ pid: pid + 1, command: `worker-${pid + 1}` }]);
+    }
+
+    const captured = await captureProcessTree(100, {
+      platform: "win32",
+      captureWindowsChildren: async () => childrenByParentPid,
+    });
+
+    expect(captured.captureComplete).toBe(true);
+    expect(captured.descendants).toHaveLength(300);
+    expect(captured.descendants.at(-1)).toEqual({ pid: 400, command: "worker-400" });
+  });
+
   it("treats a failed Windows snapshot as unknown, never an empty proven tree", async () => {
     const captured = await captureProcessTree(100, {
       platform: "win32",
