@@ -20,7 +20,11 @@ import {
 } from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { GatewayCreationContext } from "./creationCoordinator.ts";
-import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
+import {
+  mcpToolResultError,
+  mcpToolResultJson,
+  type McpToolCallResult,
+} from "./protocol.ts";
 import {
   buildModelSelection,
   decodeCreateThreadsInput,
@@ -28,7 +32,11 @@ import {
   readStringArg,
   ToolInputError,
 } from "./toolInput.ts";
-import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry, type ToolContext } from "./toolRuntime.ts";
+import {
+  READ_ONLY_TOOL_ANNOTATIONS,
+  type ToolEntry,
+  type ToolContext,
+} from "./toolRuntime.ts";
 import { summarizeThreadShell } from "./threadSummary.ts";
 
 /**
@@ -153,7 +161,9 @@ export interface KanbanToolsInput {
   readonly now?: () => number;
 }
 
-export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyArray<ToolEntry> {
+export function makeAgentGatewayKanbanTools(
+  input: KanbanToolsInput,
+): ReadonlyArray<ToolEntry> {
   const { snapshotQuery, workspacePaths, helpers } = input;
   const now = input.now ?? (() => Date.now());
   const {
@@ -164,6 +174,85 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     interruptTurn,
   } = helpers;
 
+  const MAX_CONCURRENT_KANBAN_WRITES_PER_CALLER = 4;
+  const inFlightWrites = new Map<string, number>();
+
+  /**
+   * Audit every kanban tool call: structured log with the tool name, the
+   * calling session, and the outcome (error vs. success). On success it also
+   * surfaces a couple of operationally-useful signals pulled from the MCP
+   * result text (board truncation, dispatched column) so board saturation and
+   * move patterns are observable without parsing JSON-RPC traffic by hand.
+   * The result is returned unchanged.
+   */
+  function withKanbanToolAudit(
+    toolName: string,
+    run: (
+      args: Record<string, unknown>,
+      context: ToolContext,
+    ) => Effect.Effect<McpToolCallResult>,
+  ): (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ) => Effect.Effect<McpToolCallResult> {
+    return (args, context) =>
+      run(args, context).pipe(
+        Effect.tap((result) => {
+          const textContent = result.content[0];
+          const payload = textContent?.type === "text" ? textContent.text : "";
+          const truncated = payload.includes('"truncated":true');
+          const outcome = result.isError
+            ? "error"
+            : truncated
+              ? "truncated"
+              : "ok";
+          return Effect.logInfo("agent_gateway.kanban_tool", {
+            tool: toolName,
+            callerSessionKey: context.callerSessionKey,
+            callerThreadId: context.callerThreadId,
+            outcome,
+          });
+        }),
+      );
+  }
+
+  /**
+   * Bound concurrent kanban write dispatches per caller. Acquires a slot
+   * before the write runs and releases it on success, failure, or interrupt.
+   * Over the cap the call fails fast with a tool error instead of dispatching
+   * more provider work.
+   */
+  function withKanbanWriteConcurrencyGuard(
+    run: (
+      args: Record<string, unknown>,
+      context: ToolContext,
+    ) => Effect.Effect<McpToolCallResult>,
+  ): (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ) => Effect.Effect<McpToolCallResult> {
+    return (args, context) =>
+      Effect.gen(function* () {
+        const sessionKey = context.callerSessionKey;
+        const active = inFlightWrites.get(sessionKey) ?? 0;
+        if (active >= MAX_CONCURRENT_KANBAN_WRITES_PER_CALLER) {
+          return mcpToolResultError(
+            `Too many concurrent kanban write calls (${active}) from this session; wait for in-flight create/move calls to settle.`,
+          );
+        }
+        inFlightWrites.set(sessionKey, active + 1);
+        return yield* run(args, context).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              const next = (inFlightWrites.get(sessionKey) ?? 1) - 1;
+              if (next <= 0) inFlightWrites.delete(sessionKey);
+              else inFlightWrites.set(sessionKey, next);
+            }),
+          ),
+        );
+      });
+  }
+
   const readBoard: ToolEntry = {
     requiredCapability: "thread:read",
     definition: {
@@ -173,20 +262,31 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       inputSchema: {
         type: "object",
         properties: {
-          projectId: { type: "string", description: "Only this project (any by default)." },
+          projectId: {
+            type: "string",
+            description: "Only this project (any by default).",
+          },
         },
         additionalProperties: false,
       },
-      annotations: { title: "Read the Synara kanban board", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: {
+        title: "Read the Synara kanban board",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
-    handler: (args, context) =>
+    handler: withKanbanToolAudit("synara_read_kanban_board", (args, context) =>
       Effect.gen(function* () {
-        const callerShell = yield* requireThreadShell(context.callerThreadId).pipe(
+        const callerShell = yield* requireThreadShell(
+          context.callerThreadId,
+        ).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
         );
         const requestedProjectId = readStringArg(args, "projectId");
         const callerProjectId = String(callerShell.projectId);
-        if (requestedProjectId !== undefined && requestedProjectId !== callerProjectId) {
+        if (
+          requestedProjectId !== undefined &&
+          requestedProjectId !== callerProjectId
+        ) {
           return yield* Effect.fail(
             new ToolInputError(
               `Cannot read board for project "${requestedProjectId}"; use the caller's project "${callerProjectId}".`,
@@ -196,7 +296,9 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         const projectId = requestedProjectId ?? callerProjectId;
         const snapshot = yield* snapshotQuery
           .getShellSnapshot()
-          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+          .pipe(
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          );
         const at = now();
         let emittedCardCount = 0;
         let truncated = false;
@@ -213,7 +315,11 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         const projects: Array<{
           projectId: string;
           name: string;
-          columns: Array<{ key: KanbanColumnV2Key; label: string; cards: ReadKanbanCard[] }>;
+          columns: Array<{
+            key: KanbanColumnV2Key;
+            label: string;
+            cards: ReadKanbanCard[];
+          }>;
         }> = [];
         for (const project of visibleProjects) {
           const cardsBeforeProject = emittedCardCount;
@@ -228,7 +334,11 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             done: [],
           };
           for (const thread of snapshot.threads) {
-            if (thread.projectId !== project.id || (thread.archivedAt ?? null) !== null) continue;
+            if (
+              thread.projectId !== project.id ||
+              (thread.archivedAt ?? null) !== null
+            )
+              continue;
             if (emittedCardCount >= MAX_CARDS_PER_BOARD) {
               truncated = true;
               break;
@@ -241,12 +351,16 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           // drop the would-be empty row instead of reporting ghost columns.
           if (truncated && emittedCardCount === cardsBeforeProject) break;
           for (const bucket of Object.values(columnBuckets)) {
-            bucket.sort((a, b) => (a.summary.updatedAt < b.summary.updatedAt ? 1 : -1));
+            bucket.sort((a, b) =>
+              a.summary.updatedAt < b.summary.updatedAt ? 1 : -1,
+            );
           }
           projects.push({
             projectId: project.id,
             name: project.title,
-            columns: (["draft", "inProgress", "awaitingYou", "done"] as const).map((key) => ({
+            columns: (
+              ["draft", "inProgress", "awaitingYou", "done"] as const
+            ).map((key) => ({
               key,
               label: KANBAN_COLUMN_V2_LABELS[key],
               cards: columnBuckets[key],
@@ -264,7 +378,12 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               }
             : {}),
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed(mcpToolResultError(errorText(error))),
+        ),
+      ),
+    ),
   };
 
   const readCard: ToolEntry = {
@@ -276,17 +395,25 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       inputSchema: {
         type: "object",
         properties: {
-          threadId: { type: "string", description: "Thread id of the card to read." },
+          threadId: {
+            type: "string",
+            description: "Thread id of the card to read.",
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
       },
-      annotations: { title: "Read a Synara kanban card", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: {
+        title: "Read a Synara kanban card",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
-    handler: (args, context) =>
+    handler: withKanbanToolAudit("synara_read_kanban_card", (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        const callerShell = yield* requireThreadShell(context.callerThreadId).pipe(
+        const callerShell = yield* requireThreadShell(
+          context.callerThreadId,
+        ).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
         );
         const thread = yield* requireThreadShell(threadId).pipe(
@@ -301,7 +428,9 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         }
         if ((thread.archivedAt ?? null) !== null) {
           return yield* Effect.fail(
-            new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
+            new ToolInputError(
+              `Thread "${threadId}" is archived and has no board card.`,
+            ),
           );
         }
         const card = deriveCard(thread, now(), context.callerThreadId);
@@ -310,7 +439,12 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           asOf: new Date(now()).toISOString(),
           callerThreadId: context.callerThreadId,
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed(mcpToolResultError(errorText(error))),
+        ),
+      ),
+    ),
   };
 
   const createTask: ToolEntry = {
@@ -326,11 +460,22 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           title: { type: "string", description: "Task title." },
           description: {
             type: "string",
-            description: "Optional task description; used as the first-turn prompt.",
+            description:
+              "Optional task description; used as the first-turn prompt.",
           },
-          projectId: { type: "string", description: "Project to attach the task to." },
-          model: { type: "string", description: "Model slug override (defaults to caller)." },
-          requestId: { type: "string", maxLength: 256, description: "Idempotency key." },
+          projectId: {
+            type: "string",
+            description: "Project to attach the task to.",
+          },
+          model: {
+            type: "string",
+            description: "Model slug override (defaults to caller).",
+          },
+          requestId: {
+            type: "string",
+            maxLength: 256,
+            description: "Idempotency key.",
+          },
         },
         required: ["title", "requestId"],
         additionalProperties: false,
@@ -343,135 +488,183 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: true,
       },
     },
-    handler: (args, context) =>
-      Effect.suspend(() =>
-        Effect.gen(function* () {
-          const caller = context.callerThreadId;
-          const title = readStringArg(args, "title", { required: true })!;
-          const description = readStringArg(args, "description");
-          const projectId = readStringArg(args, "projectId");
-          const model = readStringArg(args, "model");
-          const requestId = readStringArg(args, "requestId", { required: true })!;
-          const callerShell = yield* requireThreadShell(caller).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
-          // Provider sessions may only create tasks in their own project.
-          if (projectId !== undefined && projectId !== String(callerShell.projectId)) {
-            return yield* Effect.fail(
-              new ToolInputError(
-                `Cannot create a task in project "${projectId}"; use the caller's own project "${callerShell.projectId}".`,
-              ),
+    handler: withKanbanToolAudit(
+      "synara_create_kanban_task",
+      withKanbanWriteConcurrencyGuard((args, context) =>
+        Effect.suspend(() =>
+          Effect.gen(function* () {
+            const caller = context.callerThreadId;
+            const title = readStringArg(args, "title", { required: true })!;
+            const description = readStringArg(args, "description");
+            const projectId = readStringArg(args, "projectId");
+            const model = readStringArg(args, "model");
+            const requestId = readStringArg(args, "requestId", {
+              required: true,
+            })!;
+            const callerShell = yield* requireThreadShell(caller).pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
             );
-          }
-          // Default the provider/model to the caller's own so an agent never
-          // spawns a task on a provider it cannot reason about.
-          const spec: Record<string, unknown> = {
-            title,
-            prompt: description ?? title,
-            target: buildModelSelection(context.callerProvider, model),
-            projectId: String(callerShell.projectId),
-          };
-          const result = yield* runCreateThreads(
-            decodeCreateThreadsInput({ requestId, threads: [spec] }),
-            {
-              kind: "provider-session",
-              callerThreadId: caller,
-              callerTurnId: context.callerTurnId,
-              assertAuthority: context.assertCallerTurnActive,
-            },
-          );
-          if (result.isError) return result;
-          const content = result.content[0];
-          const batch = (() => {
-            if (content?.type !== "text") {
-              return null;
-            }
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(content.text);
-            } catch {
-              return null;
-            }
-            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-              return null;
-            }
-            const record = parsed as Record<string, unknown>;
-            if (record.operationId !== undefined && typeof record.operationId !== "string") {
-              return null;
-            }
-            const threads = Array.isArray(record.threads) ? record.threads : undefined;
-            if (record.threads !== undefined && threads === undefined) {
-              return null;
-            }
-            const threadIds = Array.isArray(record.threadIds) ? record.threadIds : undefined;
-            if (record.threadIds !== undefined && threadIds === undefined) {
-              return null;
-            }
-            const firstThread =
-              threads !== undefined && threads.length > 0 ? threads[0] : undefined;
+            // Provider sessions may only create tasks in their own project.
             if (
-              firstThread !== undefined &&
-              (typeof firstThread !== "object" ||
-                firstThread === null ||
-                Array.isArray(firstThread))
+              projectId !== undefined &&
+              projectId !== String(callerShell.projectId)
             ) {
-              return null;
+              return yield* Effect.fail(
+                new ToolInputError(
+                  `Cannot create a task in project "${projectId}"; use the caller's own project "${callerShell.projectId}".`,
+                ),
+              );
             }
-            const fromThreadsThreadId =
-              typeof firstThread === "object" && firstThread !== null
-                ? (firstThread as Record<string, unknown>).threadId
-                : undefined;
-            if (fromThreadsThreadId !== undefined && typeof fromThreadsThreadId !== "string") {
-              return null;
-            }
-            if (Array.isArray(threadIds) && threadIds.some((id) => typeof id !== "string")) {
-              return null;
-            }
-            const fromThreadIds = Array.isArray(threadIds) ? threadIds[0] : undefined;
-            return {
-              operationId: typeof record.operationId === "string" ? record.operationId : undefined,
-              createdThreadId:
-                typeof fromThreadsThreadId === "string"
-                  ? fromThreadsThreadId
-                  : typeof fromThreadIds === "string"
-                    ? fromThreadIds
-                    : undefined,
+            // Default the provider/model to the caller's own so an agent never
+            // spawns a task on a provider it cannot reason about.
+            const spec: Record<string, unknown> = {
+              title,
+              prompt: description ?? title,
+              target: buildModelSelection(context.callerProvider, model),
+              projectId: String(callerShell.projectId),
             };
-          })();
-          // The creation saga returns `threadIds` / per-thread `threads`, never a
-          // top-level `threadId`; read the first created thread so the create →
-          // read → move loop works against the real contract shape. The card
-          // view is decoration: a projection that has not caught up yet must not
-          // turn an already-successful creation into a tool error.
-          const createdThreadId = batch?.createdThreadId;
-          if (!createdThreadId) return result;
-          const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
-          const createdCard = Option.isSome(threadShell)
-            ? (() => {
-                const thread = threadShell.value;
-                const cardView = deriveCard(thread, now(), context.callerThreadId);
-                return {
-                  threadId: thread.id,
-                  title: thread.title,
-                  column: cardView.column,
-                  attention: cardView.attention,
+            const result = yield* runCreateThreads(
+              decodeCreateThreadsInput({ requestId, threads: [spec] }),
+              {
+                kind: "provider-session",
+                callerThreadId: caller,
+                callerTurnId: context.callerTurnId,
+                assertAuthority: context.assertCallerTurnActive,
+              },
+            );
+            if (result.isError) return result;
+            const content = result.content[0];
+            const batch = (() => {
+              if (content?.type !== "text") {
+                return null;
+              }
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(content.text);
+              } catch {
+                return null;
+              }
+              if (
+                typeof parsed !== "object" ||
+                parsed === null ||
+                Array.isArray(parsed)
+              ) {
+                return null;
+              }
+              const record = parsed as Record<string, unknown>;
+              if (
+                record.operationId !== undefined &&
+                typeof record.operationId !== "string"
+              ) {
+                return null;
+              }
+              const threads = Array.isArray(record.threads)
+                ? record.threads
+                : undefined;
+              if (record.threads !== undefined && threads === undefined) {
+                return null;
+              }
+              const threadIds = Array.isArray(record.threadIds)
+                ? record.threadIds
+                : undefined;
+              if (record.threadIds !== undefined && threadIds === undefined) {
+                return null;
+              }
+              const firstThread =
+                threads !== undefined && threads.length > 0
+                  ? threads[0]
+                  : undefined;
+              if (
+                firstThread !== undefined &&
+                (typeof firstThread !== "object" ||
+                  firstThread === null ||
+                  Array.isArray(firstThread))
+              ) {
+                return null;
+              }
+              const fromThreadsThreadId =
+                typeof firstThread === "object" && firstThread !== null
+                  ? (firstThread as Record<string, unknown>).threadId
+                  : undefined;
+              if (
+                fromThreadsThreadId !== undefined &&
+                typeof fromThreadsThreadId !== "string"
+              ) {
+                return null;
+              }
+              if (
+                Array.isArray(threadIds) &&
+                threadIds.some((id) => typeof id !== "string")
+              ) {
+                return null;
+              }
+              const fromThreadIds = Array.isArray(threadIds)
+                ? threadIds[0]
+                : undefined;
+              return {
+                operationId:
+                  typeof record.operationId === "string"
+                    ? record.operationId
+                    : undefined,
+                createdThreadId:
+                  typeof fromThreadsThreadId === "string"
+                    ? fromThreadsThreadId
+                    : typeof fromThreadIds === "string"
+                      ? fromThreadIds
+                      : undefined,
+              };
+            })();
+            // The creation saga returns `threadIds` / per-thread `threads`, never a
+            // top-level `threadId`; read the first created thread so the create →
+            // read → move loop works against the real contract shape. The card
+            // view is decoration: a projection that has not caught up yet must not
+            // turn an already-successful creation into a tool error.
+            const createdThreadId = batch?.createdThreadId;
+            if (!createdThreadId) return result;
+            const threadShell = yield* requireThreadShell(createdThreadId).pipe(
+              Effect.option,
+            );
+            const createdCard = Option.isSome(threadShell)
+              ? (() => {
+                  const thread = threadShell.value;
+                  const cardView = deriveCard(
+                    thread,
+                    now(),
+                    context.callerThreadId,
+                  );
+                  return {
+                    threadId: thread.id,
+                    title: thread.title,
+                    column: cardView.column,
+                    attention: cardView.attention,
+                  };
+                })()
+              : {
+                  threadId: createdThreadId,
+                  title,
+                  column: "inProgress" as const,
+                  attention: [],
                 };
-              })()
-            : { threadId: createdThreadId, title, column: "inProgress" as const, attention: [] };
-          return mcpToolResultJson({
-            operationId: batch?.operationId,
-            threadId: createdThreadId,
-            title: createdCard.title,
-            status: "task_dispatched",
-            card: {
-              threadId: createdCard.threadId,
+            return mcpToolResultJson({
+              operationId: batch?.operationId,
+              threadId: createdThreadId,
               title: createdCard.title,
-              column: createdCard.column,
-              attention: createdCard.attention,
-            },
-          });
-        }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+              status: "task_dispatched",
+              card: {
+                threadId: createdCard.threadId,
+                title: createdCard.title,
+                column: createdCard.column,
+                attention: createdCard.attention,
+              },
+            });
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.succeed(mcpToolResultError(errorText(error))),
+            ),
+          ),
+        ),
       ),
+    ),
   };
 
   const moveCard: ToolEntry = {
@@ -484,7 +677,10 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       inputSchema: {
         type: "object",
         properties: {
-          threadId: { type: "string", description: "Thread id of the card to move." },
+          threadId: {
+            type: "string",
+            description: "Thread id of the card to move.",
+          },
           target: { type: "string", enum: ["inProgress", "done"] },
           message: {
             type: "string",
@@ -503,107 +699,132 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         openWorldHint: false,
       },
     },
-    handler: (args, context) =>
-      Effect.suspend(() =>
-        Effect.gen(function* () {
-          const threadId = readStringArg(args, "threadId", { required: true })!;
-          const target = readStringArg(args, "target", { required: true })!;
-          if (target !== "inProgress" && target !== "done") {
-            return yield* Effect.fail(
-              new ToolInputError(`Argument "target" must be "inProgress" or "done".`),
-            );
-          }
-          const message = readStringArg(args, "message") ?? null;
-          const caller = yield* requireThreadShell(context.callerThreadId).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
-          const card = yield* requireThreadShell(threadId).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
-          if (card.projectId !== caller.projectId) {
-            return yield* Effect.fail(
-              new ToolInputError(
-                `Thread "${threadId}" is in a different project. Only your own project "${caller.projectId}" can be driven.`,
-              ),
-            );
-          }
-          yield* assertCallerMayDriveThread(caller, card);
-          if ((card.archivedAt ?? null) !== null) {
-            return yield* Effect.fail(
-              new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
-            );
-          }
-          const at = now();
-          const cardView = deriveCard(card, at, context.callerThreadId);
-          const currentColumn = cardView.column;
-          const cardPayload = (column: string) => ({
-            threadId,
-            column,
-            attention: cardView.attention,
-          });
-          if (target === "inProgress") {
-            if (currentColumn === "inProgress" || currentColumn === "awaitingYou") {
-              // No new dispatch; attention flags show a targeting caller why an
-              // awaiting-you card stayed put.
-              return mcpToolResultJson({
-                threadId,
-                target,
-                alreadyInProgress: true,
-                awaitingYou: currentColumn === "awaitingYou",
-                card: cardPayload(currentColumn),
-              });
-            }
-            const requiredMessage = message ?? (card.latestTurn ? null : "Continue this task.");
-            if (!requiredMessage) {
+    handler: withKanbanToolAudit(
+      "synara_move_kanban_card",
+      withKanbanWriteConcurrencyGuard((args, context) =>
+        Effect.suspend(() =>
+          Effect.gen(function* () {
+            const threadId = readStringArg(args, "threadId", {
+              required: true,
+            })!;
+            const target = readStringArg(args, "target", { required: true })!;
+            if (target !== "inProgress" && target !== "done") {
               return yield* Effect.fail(
                 new ToolInputError(
-                  'Argument "message" is required to restart a settled thread into a new turn.',
+                  `Argument "target" must be "inProgress" or "done".`,
                 ),
               );
             }
-            yield* startTurn({
-              threadId,
-              message: requiredMessage,
-              dispatchMode: "queue",
-              runtimeMode: card.runtimeMode,
-              interactionMode: card.interactionMode,
-            }).pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-            return mcpToolResultJson({
-              threadId,
-              target,
-              turnStarted: true,
-              card: cardPayload("inProgress"),
-            });
-          }
-          // target === "done"
-          if (currentColumn === "awaitingYou") {
-            return yield* Effect.fail(
-              new ToolInputError(
-                'Awaiting-you cards cannot be force-moved. Use a human response or target "inProgress".',
-              ),
+            const message = readStringArg(args, "message") ?? null;
+            const caller = yield* requireThreadShell(
+              context.callerThreadId,
+            ).pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
             );
-          }
-          const alreadyDone = !threadHasInFlightTurn(card) || currentColumn !== "inProgress";
-          if (alreadyDone) {
+            const card = yield* requireThreadShell(threadId).pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
+            );
+            if (card.projectId !== caller.projectId) {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  `Thread "${threadId}" is in a different project. Only your own project "${caller.projectId}" can be driven.`,
+                ),
+              );
+            }
+            yield* assertCallerMayDriveThread(caller, card);
+            if ((card.archivedAt ?? null) !== null) {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  `Thread "${threadId}" is archived and has no board card.`,
+                ),
+              );
+            }
+            const at = now();
+            const cardView = deriveCard(card, at, context.callerThreadId);
+            const currentColumn = cardView.column;
+            const cardPayload = (column: string) => ({
+              threadId,
+              column,
+              attention: cardView.attention,
+            });
+            if (target === "inProgress") {
+              if (
+                currentColumn === "inProgress" ||
+                currentColumn === "awaitingYou"
+              ) {
+                // No new dispatch; attention flags show a targeting caller why an
+                // awaiting-you card stayed put.
+                return mcpToolResultJson({
+                  threadId,
+                  target,
+                  alreadyInProgress: true,
+                  awaitingYou: currentColumn === "awaitingYou",
+                  card: cardPayload(currentColumn),
+                });
+              }
+              const requiredMessage =
+                message ?? (card.latestTurn ? null : "Continue this task.");
+              if (!requiredMessage) {
+                return yield* Effect.fail(
+                  new ToolInputError(
+                    'Argument "message" is required to restart a settled thread into a new turn.',
+                  ),
+                );
+              }
+              yield* startTurn({
+                threadId,
+                message: requiredMessage,
+                dispatchMode: "queue",
+                runtimeMode: card.runtimeMode,
+                interactionMode: card.interactionMode,
+              }).pipe(
+                Effect.mapError(
+                  (error) => new ToolInputError(errorText(error)),
+                ),
+              );
+              return mcpToolResultJson({
+                threadId,
+                target,
+                turnStarted: true,
+                card: cardPayload("inProgress"),
+              });
+            }
+            // target === "done"
+            if (currentColumn === "awaitingYou") {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  'Awaiting-you cards cannot be force-moved. Use a human response or target "inProgress".',
+                ),
+              );
+            }
+            const alreadyDone =
+              !threadHasInFlightTurn(card) || currentColumn !== "inProgress";
+            if (alreadyDone) {
+              return mcpToolResultJson({
+                threadId,
+                target,
+                alreadyDone: true,
+                card: cardPayload(currentColumn),
+              });
+            }
+            const dispatched = yield* interruptTurn({ threadId }).pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
+            );
             return mcpToolResultJson({
               threadId,
               target,
-              alreadyDone: true,
+              interruptRequested: true,
+              eventSequence: dispatched.sequence,
               card: cardPayload(currentColumn),
             });
-          }
-          const dispatched = yield* interruptTurn({ threadId }).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
-          return mcpToolResultJson({
-            threadId,
-            target,
-            interruptRequested: true,
-            eventSequence: dispatched.sequence,
-            card: cardPayload(currentColumn),
-          });
-        }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.succeed(mcpToolResultError(errorText(error))),
+            ),
+          ),
+        ),
       ),
+    ),
   };
 
   return [readBoard, readCard, createTask, moveCard];
