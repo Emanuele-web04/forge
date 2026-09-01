@@ -26,25 +26,28 @@ function windowsEnv(pathValue = root): NodeJS.ProcessEnv {
 }
 
 describe("prepareProcess", () => {
-  it("keeps the POSIX path shell-free and resolves through the supplied environment", () => {
-    const executable = path.join(root, "tool");
-    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+  it.skipIf(process.platform === "win32")(
+    "keeps the POSIX path shell-free and resolves through the supplied environment",
+    () => {
+      const executable = path.join(root, "tool");
+      writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
 
-    expect(
-      prepareProcess("tool", ["one", "two"], {
-        platform: "linux",
-        env: { PATH: root },
-        requireExecutable: true,
-      }),
-    ).toMatchObject({
-      command: executable,
-      args: ["one", "two"],
-      shell: false,
-      requestedCommand: "tool",
-      resolvedCommand: executable,
-      executionBackend: "native",
-    });
-  });
+      expect(
+        prepareProcess("tool", ["one", "two"], {
+          platform: "linux",
+          env: { PATH: root },
+          requireExecutable: true,
+        }),
+      ).toMatchObject({
+        command: executable,
+        args: ["one", "two"],
+        shell: false,
+        requestedCommand: "tool",
+        resolvedCommand: executable,
+        executionBackend: "native",
+      });
+    },
+  );
 
   it("uses PATHEXT precedence consistently for Windows discovery and launch", () => {
     const executable = path.join(root, "foo.EXE");
