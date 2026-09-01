@@ -1,0 +1,39 @@
+# Delegation plan
+Units: 4
+
+| # | Unit | Files (mine) | Worker (subagent) | Acceptance | Status |
+|---|---|---|---|---|---|
+| 1 | Reconcile Plan 04 production scope | `apps/web/src/storePersistence.ts`, `apps/web/src/storeNormalization.ts`, `apps/web/src/store.ts`, `apps/web/src/storeProjection.ts` | inherited implementation, parent verifies | Exact v8 boundary; hydrated-only writes; local toggles win; invalid cwd entries do not revive; no rate-limit, animation, or transcript work | pending |
+| 2 | Reconcile focused persistence tests | `apps/web/src/storePersistence.test.ts`, `apps/web/src/store.test.ts`, `apps/web/src/storeTestFixtures.ts` | inherited implementation, parent verifies | Binary matrix covers restart, reconnect/hydration, rename/reorder, missing/deleted, corrupt/legacy, multi-change, stale-write race | pending |
+| 3 | Live isolated verification | `/tmp/pr861-live/**` | parent | Real WebSocket instance proves restart/reconnect persistence with no sidebar flicker or route/selection regression | pending |
+| 4 | Independent review and merge readiness | read-only full diff; GitHub PR 861 | fresh reviewer, parent fixes/verifies | Correctness, races, corruption, scope, performance, maintainability pass; tested SHA pushed normally; GitHub CLEAN/MERGEABLE and green | pending |
+
+## Acceptance matrix
+
+| ID | Case | Expected | Check |
+|---|---|---|---|
+| A1 | Collapse all, persist, full restart | All known projects remain collapsed | Focused restart test plus live restart artifact |
+| A2 | Mixed expansion, persist, restart | Exact per-project values survive | Focused restart test plus live restart artifact |
+| A3 | Fresh profile or missing key | Every project defaults expanded | Boundary test |
+| A4 | Corrupt or malformed old data | No throw; safe expanded defaults; valid fields only | Boundary tests |
+| A5 | Legacy expanded-only payload | Legacy members expanded and other known projects collapsed | Boundary test |
+| A6 | Unknown/new cwd beside collapsed known projects | Unknown project expands | Boundary and store tests |
+| A7 | Snapshot hydration or reconnect after local toggle | Existing local toggle wins | Store projection tests plus live reconnect |
+| A8 | Rename or cwd change | New cwd is new identity and expands | Focused store test |
+| A9 | Reorder | Persisted order changes without corrupting expansion | Focused store test |
+| A10 | Missing project briefly returns in session | Remembered expansion returns | Existing focused store test |
+| A11 | Deleted project and stale persisted cwd | Removed cwd is pruned and cannot revive | Boundary and deletion tests |
+| A12 | Multiple project toggles/changes | Last in-memory state is persisted after hydration | Focused store test |
+| A13 | Pre-hydration persist and unload | No storage write | Boundary and facade tests |
+| A14 | Storage write failure | App state remains usable and no throw | Boundary test |
+| A15 | Persistence boundary | Only normalized cwd, order, expansion, and local names in v8; no runtime state | Diff inspection and payload assertion |
+| A16 | UI regression | No flicker; route and selection unchanged; shared motion untouched | Live browser artifact and zero diff check |
+| A17 | Scope | No `rateLimits.ts`, transcript lifecycle, Sidebar, disclosure motion, or Plan 05+ diff | Authoritative git diff |
+| A18 | Full gate | Full tests, browser tests, build, fmt, lint, and typecheck pass | Required commands and GitHub checks |
+
+## Throughput checkpoint
+
+- Blocking first steps. Read the plan, recon, inherited trail, branch, and old CI before accepting code.
+- Independent workstreams. Production/test reconciliation precedes live verification; final review runs after runtime proof.
+- Shared mutable state. One writer owns the existing worktree. Reviewers are read-only.
+- Smallest safe decomposition. Keep one writer because persistence and normalization share one state invariant; split verification by unit.
