@@ -29,37 +29,54 @@ type TlsMaterial = {
   readonly privateKey: string;
 };
 
-let sharedTlsMaterial: Promise<TlsMaterial> | null = null;
+const sharedTlsMaterial = new Map<string, Promise<TlsMaterial>>();
 
-async function generateTlsMaterial(): Promise<TlsMaterial> {
+async function generateTlsMaterial(opensslExecutable: string): Promise<TlsMaterial> {
+  try {
+    await execFileAsync(opensslExecutable, ["version"], {
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  } catch {
+    throw new FakeMcpAuthorityError({ category: "tls-tool-unavailable" });
+  }
+
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-fake-mcp-tls-"));
   const certificatePath = path.join(directory, "certificate.pem");
   const privateKeyPath = path.join(directory, "private-key.pem");
   try {
-    await execFileAsync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-sha256",
-        "-days",
-        "1",
-        "-set_serial",
-        "1",
-        "-subj",
-        "/CN=127.0.0.1",
-        "-addext",
-        "subjectAltName=IP:127.0.0.1",
-        "-keyout",
-        privateKeyPath,
-        "-out",
-        certificatePath,
-      ],
-      { timeout: 10_000, windowsHide: true },
-    );
+    if (process.platform !== "win32") await fs.chmod(directory, 0o700);
+    try {
+      await execFileAsync(
+        opensslExecutable,
+        [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-nodes",
+          "-sha256",
+          "-days",
+          "1",
+          "-set_serial",
+          "1",
+          "-subj",
+          "/CN=127.0.0.1",
+          "-addext",
+          "subjectAltName=IP:127.0.0.1",
+          "-keyout",
+          privateKeyPath,
+          "-out",
+          certificatePath,
+        ],
+        { timeout: 10_000, windowsHide: true },
+      );
+    } catch {
+      throw new FakeMcpAuthorityError({ category: "tls-generation" });
+    }
+    if (process.platform !== "win32") {
+      await Promise.all([fs.chmod(certificatePath, 0o600), fs.chmod(privateKeyPath, 0o600)]);
+    }
     const [certificate, privateKey] = await Promise.all([
       fs.readFile(certificatePath, "utf8"),
       fs.readFile(privateKeyPath, "utf8"),
@@ -70,12 +87,15 @@ async function generateTlsMaterial(): Promise<TlsMaterial> {
   }
 }
 
-function getTlsMaterial(): Promise<TlsMaterial> {
-  if (sharedTlsMaterial !== null) return sharedTlsMaterial;
-  const pending = generateTlsMaterial();
-  sharedTlsMaterial = pending;
+function getTlsMaterial(opensslExecutable: string): Promise<TlsMaterial> {
+  const current = sharedTlsMaterial.get(opensslExecutable);
+  if (current !== undefined) return current;
+  const pending = generateTlsMaterial(opensslExecutable);
+  sharedTlsMaterial.set(opensslExecutable, pending);
   void pending.catch(() => {
-    if (sharedTlsMaterial === pending) sharedTlsMaterial = null;
+    if (sharedTlsMaterial.get(opensslExecutable) === pending) {
+      sharedTlsMaterial.delete(opensslExecutable);
+    }
   });
   return pending;
 }
@@ -101,6 +121,12 @@ export type FakeMcpAuthorityOptions = {
   readonly tools: ReadonlyArray<FakeMcpTool>;
   readonly catalogPageSize?: number;
   readonly accessTokenTtlMs?: number;
+  /**
+   * Supported where Node can launch an OpenSSL-compatible executable. The fixture fails closed
+   * when it is unavailable; it never skips HTTPS or relaxes certificate verification. POSIX
+   * certificate files use owner-only modes; Windows uses the temporary directory's native ACLs.
+   */
+  readonly opensslExecutable?: string;
 };
 
 export type FakeMcpRequestRecord = {
@@ -132,6 +158,8 @@ export type FakeMcpAuthority = {
   ) => Effect.Effect<void, FakeMcpAuthorityError>;
   readonly callbackParameters: () => { readonly state: string; readonly code: string };
   readonly expireAccessTokens: () => Effect.Effect<void>;
+  readonly attemptCrossClientRefresh: () => Effect.Effect<number, FakeMcpAuthorityError>;
+  readonly attemptCrossClientRevocation: () => Effect.Effect<number, FakeMcpAuthorityError>;
   readonly matchesCurrentCredentials: (credentials: OutboundMcpCredentialRecord | null) => boolean;
   readonly metrics: () => FakeMcpAuthorityMetrics;
   readonly requestLog: () => ReadonlyArray<FakeMcpRequestRecord>;
@@ -150,12 +178,14 @@ type AuthorizationCodeRecord = {
 };
 
 type AccessTokenRecord = {
+  readonly clientId: string;
   readonly expiresAt: number;
   readonly refreshToken: string;
 };
 
 type RefreshTokenRecord = {
   readonly accessToken: string;
+  readonly clientId: string;
 };
 
 type McpSession = {
@@ -278,7 +308,7 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
     throw new FakeMcpAuthorityError({ category: "invalid-options" });
   }
 
-  const tls = await getTlsMaterial();
+  const tls = await getTlsMaterial(options.opensslExecutable ?? "openssl");
   const requestRecords: FakeMcpRequestRecord[] = [];
   const catalogCursors: Array<string | null> = [];
   const clients = new Map<string, RegisteredClient>();
@@ -314,7 +344,9 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
     if (family !== undefined) accessTokens.delete(family.accessToken);
   };
 
-  const issueTokens = (): {
+  const issueTokens = (
+    clientId: string,
+  ): {
     readonly access_token: string;
     readonly refresh_token: string;
     readonly token_type: "Bearer";
@@ -323,8 +355,12 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
   } => {
     const accessToken = nextValue("access");
     const refreshToken = nextValue("refresh");
-    accessTokens.set(accessToken, { expiresAt: fakeNow + accessTokenTtlMs, refreshToken });
-    refreshTokens.set(refreshToken, { accessToken });
+    accessTokens.set(accessToken, {
+      clientId,
+      expiresAt: fakeNow + accessTokenTtlMs,
+      refreshToken,
+    });
+    refreshTokens.set(refreshToken, { accessToken, clientId });
     return {
       access_token: accessToken,
       refresh_token: refreshToken,
@@ -581,15 +617,24 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
         }
         authorizationCodeExchanges += 1;
         pkceVerifications += 1;
-        writeJson(response, 200, issueTokens());
+        writeJson(response, 200, issueTokens(record.clientId));
         return;
       }
       if (grantType === "refresh_token") {
         const refreshToken = params.get("refresh_token");
+        const clientId = params.get("client_id");
+        if (clientId === null || !clients.has(clientId)) {
+          writeJson(response, 401, { error: "invalid_client" });
+          return;
+        }
+        const current = refreshToken === null ? undefined : refreshTokens.get(refreshToken);
+        if (current !== undefined && current.clientId !== clientId) {
+          writeJson(response, 401, { error: "invalid_client" });
+          return;
+        }
         if (
           refreshToken === null ||
-          !refreshTokens.has(refreshToken) ||
-          !clients.has(params.get("client_id") ?? "") ||
+          current === undefined ||
           params.get("resource") !== new URL("/mcp", origin).href
         ) {
           writeJson(response, 400, { error: "invalid_grant" });
@@ -597,7 +642,7 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
         }
         removeTokenFamily(refreshToken);
         refreshRotations += 1;
-        writeJson(response, 200, issueTokens());
+        writeJson(response, 200, issueTokens(current.clientId));
         return;
       }
       writeJson(response, 400, { error: "unsupported_grant_type" });
@@ -606,11 +651,25 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
     if (request.method === "POST" && requestUrl.pathname === "/oauth/revoke") {
       const params = new URLSearchParams(String(await readRequestBody(request)));
       const token = params.get("token");
-      if (token !== null) {
-        if (refreshTokens.has(token)) removeTokenFamily(token);
-        else accessTokens.delete(token);
+      const clientId = params.get("client_id");
+      if (clientId === null || !clients.has(clientId)) {
+        writeJson(response, 401, { error: "invalid_client" });
+        return;
       }
-      revocations += 1;
+      const refreshRecord = token === null ? undefined : refreshTokens.get(token);
+      const accessRecord = token === null ? undefined : accessTokens.get(token);
+      const ownerClientId = refreshRecord?.clientId ?? accessRecord?.clientId;
+      if (ownerClientId !== undefined && ownerClientId !== clientId) {
+        writeJson(response, 401, { error: "invalid_client" });
+        return;
+      }
+      if (refreshRecord !== undefined && token !== null) {
+        removeTokenFamily(token);
+        revocations += 1;
+      } else if (accessRecord !== undefined) {
+        removeTokenFamily(accessRecord.refreshToken);
+        revocations += 1;
+      }
       writeJson(response, 200, {});
       return;
     }
@@ -669,6 +728,61 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
     return trustedHttpsFetch(input, init, tls.certificate);
   };
 
+  let competingClientId: string | null = null;
+  const getCompetingClientId = async (): Promise<string> => {
+    if (competingClientId !== null) return competingClientId;
+    const response = await fixtureFetch(new URL("/oauth/register", origin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Synara fixture adversarial client",
+        redirect_uris: ["http://127.0.0.1/callback"],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    });
+    if (response.status !== 201) {
+      await response.body?.cancel();
+      throw new FakeMcpAuthorityError({ category: "cross-client-probe" });
+    }
+    const metadata = (await response.json()) as { readonly client_id?: unknown };
+    if (typeof metadata.client_id !== "string") {
+      throw new FakeMcpAuthorityError({ category: "cross-client-probe" });
+    }
+    competingClientId = metadata.client_id;
+    return competingClientId;
+  };
+
+  const crossClientRequest = (pathname: "/oauth/token" | "/oauth/revoke") =>
+    Effect.tryPromise({
+      try: async () => {
+        const refreshToken = refreshTokens.keys().next().value;
+        if (typeof refreshToken !== "string") {
+          throw new FakeMcpAuthorityError({ category: "cross-client-probe" });
+        }
+        const clientId = await getCompetingClientId();
+        const params =
+          pathname === "/oauth/token"
+            ? new URLSearchParams({
+                grant_type: "refresh_token",
+                refresh_token: refreshToken,
+                client_id: clientId,
+                resource: new URL("/mcp", origin).href,
+              })
+            : new URLSearchParams({ token: refreshToken, client_id: clientId });
+        const response = await fixtureFetch(new URL(pathname, origin), {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: params,
+        });
+        const status = response.status;
+        await response.body?.cancel();
+        return status;
+      },
+      catch: () => new FakeMcpAuthorityError({ category: "cross-client-probe" }),
+    });
+
   const close = async (): Promise<void> => {
     if (closing) return;
     closing = true;
@@ -726,14 +840,22 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
       Effect.sync(() => {
         fakeNow += accessTokenTtlMs;
       }),
+    attemptCrossClientRefresh: () => crossClientRequest("/oauth/token"),
+    attemptCrossClientRevocation: () => crossClientRequest("/oauth/revoke"),
     matchesCurrentCredentials: (credentials) => {
       const accessToken = credentials?.tokens?.access_token;
       const refreshToken = credentials?.tokens?.refresh_token;
+      const accessRecord = accessToken === undefined ? undefined : accessTokens.get(accessToken);
+      const refreshRecord =
+        refreshToken === undefined ? undefined : refreshTokens.get(refreshToken);
       return (
         accessToken !== undefined &&
         refreshToken !== undefined &&
-        accessTokens.has(accessToken) &&
-        refreshTokens.has(refreshToken)
+        accessRecord !== undefined &&
+        refreshRecord !== undefined &&
+        accessRecord.refreshToken === refreshToken &&
+        refreshRecord.accessToken === accessToken &&
+        accessRecord.clientId === refreshRecord.clientId
       );
     },
     metrics: () => ({
@@ -766,7 +888,10 @@ export function makeFakeMcpAuthority(
   return Effect.acquireRelease(
     Effect.tryPromise({
       try: () => startFakeMcpAuthority(options),
-      catch: () => new FakeMcpAuthorityError({ category: "startup" }),
+      catch: (cause) =>
+        cause instanceof FakeMcpAuthorityError
+          ? cause
+          : new FakeMcpAuthorityError({ category: "startup" }),
     }),
     (authority) => Effect.promise(() => authority.close()),
   );

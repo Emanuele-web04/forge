@@ -243,7 +243,7 @@ describe("outbound MCP foundation integration", () => {
             );
 
             yield* connections.disconnect({ connectionId: "fixture" });
-            expect(yield* credentials.read("fixture")).toBeNull();
+            expect((yield* credentials.read("fixture")) === null).toBe(true);
             expect((yield* connections.list())[0]?.status).toBe("disconnected");
             expect(authority.metrics().revocations).toBe(1);
             expect(authority.metrics().activeCredentials).toBe(0);
@@ -255,13 +255,82 @@ describe("outbound MCP foundation integration", () => {
             expect(requestLog.some(({ headers }) => headers.authorization === "[redacted]")).toBe(
               true,
             );
-            expect(JSON.stringify(requestLog)).not.toMatch(
-              /fixture-(?:access|refresh|authorization-code)|Bearer\s+/,
-            );
+            expect(
+              /fixture-(?:access|refresh|authorization-code)|Bearer\s+/.test(
+                JSON.stringify(requestLog),
+              ),
+            ).toBe(false);
           }),
       );
     },
   );
+
+  it(
+    "binds refresh and revocation to the public client that owns the token family",
+    { timeout: 20_000 },
+    async () => {
+      const binding = makeFixtureBinding();
+      await runFixture(
+        { tools: [fixtureTool("fixture_read")] },
+        binding,
+        ({ authority, connections, credentials }) =>
+          Effect.gen(function* () {
+            expect(
+              (yield* authorizeAndComplete({ authority, binding, connections, credentials })).ok,
+            ).toBe(true);
+            const originalCredentials = yield* credentials.read("fixture");
+
+            const refreshStatus = yield* authority.attemptCrossClientRefresh();
+            expect(refreshStatus).toBe(401);
+            expect(authority.metrics().registrations).toBe(2);
+            expect(authority.matchesCurrentCredentials(originalCredentials)).toBe(true);
+            const revocationStatus = yield* authority.attemptCrossClientRevocation();
+            expect(revocationStatus).toBe(401);
+            expect(authority.matchesCurrentCredentials(originalCredentials)).toBe(true);
+            expect(authority.metrics().refreshRotations).toBe(0);
+            expect(authority.metrics().revocations).toBe(0);
+
+            yield* authority.expireAccessTokens();
+            expect(yield* connections.invoke(binding, "read", {})).toBe("ok");
+            const rotatedCredentials = yield* credentials.read("fixture");
+            expect(authority.matchesCurrentCredentials(rotatedCredentials)).toBe(true);
+
+            const rotatedRefreshStatus = yield* authority.attemptCrossClientRefresh();
+            expect(rotatedRefreshStatus).toBe(401);
+            const rotatedRevocationStatus = yield* authority.attemptCrossClientRevocation();
+            expect(rotatedRevocationStatus).toBe(401);
+            expect(authority.matchesCurrentCredentials(rotatedCredentials)).toBe(true);
+            expect(authority.metrics().refreshRotations).toBe(1);
+            expect(authority.metrics().revocations).toBe(0);
+
+            const requestLogContainsSecret =
+              /fixture-(?:access|refresh|authorization-code)|Bearer\s+/.test(
+                JSON.stringify(authority.requestLog()),
+              );
+            expect(requestLogContainsSecret).toBe(false);
+          }),
+      );
+    },
+  );
+
+  it("fails safely when the required TLS generator is unavailable", async () => {
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        makeFakeMcpAuthority({
+          tools: [fixtureTool("fixture_read")],
+          opensslExecutable: "synara-intentionally-missing-openssl",
+        }).pipe(
+          Effect.match({
+            onFailure: (error) => ({ ok: false as const, category: error.category }),
+            onSuccess: () => ({ ok: true as const }),
+          }),
+        ),
+      ),
+    );
+
+    expect(result).toEqual({ ok: false, category: "tls-tool-unavailable" });
+    expect(JSON.stringify(result).includes("synara-intentionally-missing-openssl")).toBe(false);
+  });
 
   it(
     "follows stable live SDK catalog cursors and rejects duplicate names across pages",
