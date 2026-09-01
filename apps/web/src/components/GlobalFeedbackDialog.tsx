@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { buildFeedbackSubmission } from "../feedback";
 import type { FeedbackThreadContext } from "../feedback";
 import { buildBugReportDiagnostics, buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
@@ -5,6 +6,8 @@ import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { appendComposerPromptText } from "../lib/chatReferences";
+import { isOrdinarySpaceProject } from "../lib/spaces";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { FeedbackDialog } from "./FeedbackDialog";
 import { toastManager } from "./ui/toast";
 
@@ -16,7 +19,20 @@ export function GlobalFeedbackDialog() {
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
 
   const { handleNewThread, projects } = useHandleNewThread();
-  const hasProjects = projects.length > 0;
+  // The agent draft path targets a real user project, so the always-present Home and
+  // Studio containers must not count: with zero ordinary projects there is no project
+  // to draft the bug-report thread in and the path stays hidden.
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
+  const ordinaryProjects = useMemo(
+    () =>
+      projects.filter((project) =>
+        isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+      ),
+    [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
+  const hasProjects = ordinaryProjects.length > 0;
 
   const context: FeedbackThreadContext = requestedContext ?? {
     provider: activeThread?.modelSelection.provider ?? null,
@@ -35,7 +51,7 @@ export function GlobalFeedbackDialog() {
   };
 
   const onDraftGithubIssue = async (details: string) => {
-    const projectId = activeProjectId ?? projects[0]?.id ?? null;
+    const projectId = activeProjectId ?? ordinaryProjects[0]?.id ?? null;
     if (!projectId) {
       throw new Error("No project available.");
     }
