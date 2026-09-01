@@ -1128,6 +1128,21 @@ export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
+/**
+ * Providers with a dedicated Git text-generation backend. Keep the Settings
+ * picker in sync with this list — do not add chat-only agents (Claude, Grok,
+ * Antigravity, Pi, Devin). Those CLIs have no one-shot git-writing path, and
+ * driving them as coding agents for commit/PR text can run with write access
+ * or violate provider terms.
+ */
+export const GIT_TEXT_GENERATION_PROVIDERS = [
+  "codex",
+  "cursor",
+  "opencode",
+  "droid",
+] as const satisfies readonly ProviderKind[];
+export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[number];
+
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
     "5.5": "gpt-5.5",

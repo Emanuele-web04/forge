@@ -12,8 +12,10 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
+  GIT_TEXT_GENERATION_PROVIDERS,
   TrimmedNonEmptyString,
   ProviderKind,
+  type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -1085,10 +1087,8 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "droid" | "opencode";
-
 export function mapCatalogModelOptionsToAppModelOptions(
-  provider: GitTextGenerationDiscoveredProvider,
+  provider: GitTextGenerationProvider,
   options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
 ): AppModelOption[] {
   return options.map((option) => ({
@@ -1099,28 +1099,20 @@ export function mapCatalogModelOptionsToAppModelOptions(
 }
 
 export function getGitTextGenerationModelOptions(
-  settings: Pick<
-    AppSettings,
-    "customCodexModels" | "customOpenCodeModels" | "textGenerationModel" | "textGenerationProvider"
-  >,
+  settings: Pick<AppSettings, "textGenerationModel" | "textGenerationProvider"> &
+    Partial<Pick<AppSettings, CustomModelSettingsKey>>,
   discoveredOptionsByProvider?: Partial<
-    Record<
-      GitTextGenerationDiscoveredProvider,
-      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
-    >
+    Record<GitTextGenerationProvider, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
   >,
 ): AppModelOption[] {
-  const options = [
-    ...(discoveredOptionsByProvider?.codex
-      ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
-      : getAppModelOptions("codex", settings.customCodexModels)),
-    ...(discoveredOptionsByProvider?.opencode
-      ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
-      : getAppModelOptions("opencode", settings.customOpenCodeModels)),
-    ...(discoveredOptionsByProvider?.droid
-      ? mapCatalogModelOptionsToAppModelOptions("droid", discoveredOptionsByProvider.droid)
-      : getAppModelOptions("droid", [])),
-  ];
+  const options = GIT_TEXT_GENERATION_PROVIDERS.flatMap((provider) => {
+    const discovered = discoveredOptionsByProvider?.[provider];
+    if (discovered !== undefined) {
+      return mapCatalogModelOptionsToAppModelOptions(provider, discovered);
+    }
+    const customModels = settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
+    return getAppModelOptions(provider, customModels);
+  });
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();
 

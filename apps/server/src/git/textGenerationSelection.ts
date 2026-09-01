@@ -1,17 +1,15 @@
-import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara/contracts";
+import {
+  GIT_TEXT_GENERATION_PROVIDERS,
+  type GitTextGenerationProvider,
+  type ModelSelection,
+  type ProviderKind,
+  type ProviderStartOptions,
+} from "@synara/contracts";
 
-export const GIT_TEXT_GENERATION_PROVIDER_ORDER = [
-  "codex",
-  "cursor",
-  "opencode",
-  "droid",
-] as const satisfies readonly ProviderKind[];
+export const GIT_TEXT_GENERATION_PROVIDER_ORDER = GIT_TEXT_GENERATION_PROVIDERS;
+export type { GitTextGenerationProvider };
 
-export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDER_ORDER)[number];
-
-const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>([
-  ...GIT_TEXT_GENERATION_PROVIDER_ORDER,
-]);
+const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>(GIT_TEXT_GENERATION_PROVIDERS);
 
 export interface TextGenerationProviderInput {
   readonly modelSelection: ModelSelection;

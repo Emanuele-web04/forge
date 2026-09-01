@@ -338,7 +338,7 @@ describe("getGitTextGenerationModelOptions", () => {
     });
   });
 
-  it("offers built-in Droid models to a user currently on Codex", () => {
+  it("offers built-in Droid and Cursor models to a user currently on Codex", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customOpenCodeModels: [],
@@ -349,7 +349,43 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.provider === "droid" && option.slug === "auto")).toBe(
       true,
     );
+    expect(
+      options.some((option) => option.provider === "cursor" && option.slug === "composer-2.5"),
+    ).toBe(true);
     expect(options.some((option) => option.provider === "codex")).toBe(true);
+  });
+
+  it("includes custom Cursor models in the git writing picker", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customCursorModels: ["cursor/custom-composer"],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(
+      options.some(
+        (option) => option.provider === "cursor" && option.slug === "cursor/custom-composer",
+      ),
+    ).toBe(true);
+  });
+
+  it("omits chat-only providers that have no Git text-generation backend", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customClaudeModels: ["claude-opus-4-8"],
+      customGrokModels: ["grok-4.6"],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "claudeAgent")).toBe(false);
+    expect(options.some((option) => option.provider === "grok")).toBe(false);
+    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
+    expect(options.some((option) => option.provider === "pi")).toBe(false);
+    expect(options.some((option) => option.provider === "devin")).toBe(false);
   });
 });
 
