@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -844,7 +844,7 @@ const projectPullRequestPinProvidersLayer = it.layer(
 );
 
 projectPullRequestPinProvidersLayer("project pull request pin provider migration", (it) => {
-  it.effect("preserves legacy pins as GitHub rows", () =>
+  it.effect("rebuilds the exact provider-aware schema without losing legacy pins", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 98 });
@@ -875,6 +875,125 @@ projectPullRequestPinProvidersLayer("project pull request pin provider migration
           number: 7,
         },
       ]);
+
+      const tables = yield* sql<{
+        readonly name: string;
+        readonly strict: number;
+      }>`
+        SELECT name, strict
+        FROM pragma_table_list
+        WHERE schema = 'main'
+          AND name = 'project_pull_request_pins'
+      `;
+      assert.deepStrictEqual(tables, [{ name: "project_pull_request_pins", strict: 1 }]);
+
+      const columns = yield* sql<{
+        readonly name: string;
+        readonly type: string;
+        readonly notNull: number;
+        readonly defaultValue: string | null;
+        readonly primaryKeyOrder: number;
+      }>`
+        SELECT
+          name,
+          type,
+          "notnull" AS "notNull",
+          dflt_value AS "defaultValue",
+          pk AS "primaryKeyOrder"
+        FROM pragma_table_info('project_pull_request_pins')
+        ORDER BY cid
+      `;
+      assert.deepStrictEqual(columns, [
+        {
+          name: "project_id",
+          type: "TEXT",
+          notNull: 1,
+          defaultValue: null,
+          primaryKeyOrder: 1,
+        },
+        {
+          name: "provider",
+          type: "TEXT",
+          notNull: 1,
+          defaultValue: "'github'",
+          primaryKeyOrder: 2,
+        },
+        {
+          name: "repository_key",
+          type: "TEXT",
+          notNull: 1,
+          defaultValue: null,
+          primaryKeyOrder: 3,
+        },
+        {
+          name: "pull_request_number",
+          type: "INTEGER",
+          notNull: 1,
+          defaultValue: null,
+          primaryKeyOrder: 4,
+        },
+      ]);
+
+      const triggers = yield* sql<{ readonly name: string }>`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'trigger'
+          AND tbl_name = 'project_pull_request_pins'
+        ORDER BY name
+      `;
+      assert.deepStrictEqual(triggers, [{ name: "trg_project_pull_request_pins_limit" }]);
+
+      yield* sql`
+        INSERT INTO project_pull_request_pins (
+          project_id,
+          repository_key,
+          pull_request_number
+        ) VALUES ('project-default-provider', 'owner/defaulted', 8)
+      `;
+      const defaulted = yield* sql<{ readonly provider: string }>`
+        SELECT provider
+        FROM project_pull_request_pins
+        WHERE project_id = 'project-default-provider'
+          AND repository_key = 'owner/defaulted'
+          AND pull_request_number = 8
+      `;
+      assert.deepStrictEqual(defaulted, [{ provider: "github" }]);
+
+      const cappedProject = "project-provider-trigger-cap";
+      for (let number = 1; number <= 20; number += 1) {
+        yield* sql`
+          INSERT INTO project_pull_request_pins (
+            project_id,
+            provider,
+            repository_key,
+            pull_request_number
+          ) VALUES (
+            ${cappedProject},
+            ${number % 2 === 0 ? "bitbucket" : "github"},
+            'owner/capped',
+            ${number}
+          )
+        `;
+      }
+
+      // GitHub owner/capped#1 exists. Bitbucket owner/capped#1 is a distinct identity, so the
+      // provider-aware trigger must treat this as a 21st pin and reject it at the shared cap.
+      const overflow = yield* Effect.exit(sql`
+        INSERT INTO project_pull_request_pins (
+          project_id,
+          provider,
+          repository_key,
+          pull_request_number
+        ) VALUES (${cappedProject}, 'bitbucket', 'owner/capped', 1)
+      `);
+      assert.isTrue(Exit.isFailure(overflow));
+
+      const cappedCount = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM project_pull_request_pins
+        WHERE project_id = ${cappedProject}
+      `;
+      assert.deepStrictEqual(cappedCount, [{ count: 20 }]);
     }),
   );
 });
