@@ -1,42 +1,61 @@
 import type { OrchestrationProject, ProjectId, PullRequestsListResult } from "@synara/contracts";
+import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 
 import type {
   ProjectPullRequestPin,
   ProjectPullRequestPinsShape,
 } from "../persistence/Services/ProjectPullRequestPins";
-import type { GitHubRepositoryInventory, GitHubRepositoryLink } from "./repositoryResolution";
+import type { GitHubRepositoryLink } from "./repositoryResolution";
 
-export type ProjectRepositoryResolution = {
-  readonly project: OrchestrationProject;
-  readonly error: unknown | null;
-  readonly inventory: GitHubRepositoryInventory;
+type RepositoryLink = GitHubRepositoryLink | RemoteRepositoryRef;
+
+type RepositoryInventory<TRepository extends RepositoryLink> = {
+  readonly repositories: ReadonlyArray<TRepository>;
+  readonly authoritative: boolean;
 };
 
-export type ProjectRepositoryIndex = {
+export type ProjectRepositoryResolution<TRepository extends RepositoryLink = GitHubRepositoryLink> =
+  {
+    readonly project: OrchestrationProject;
+    readonly error: unknown | null;
+    readonly inventory: RepositoryInventory<TRepository>;
+  };
+
+export type ProjectRepositoryIndex<TRepository extends RepositoryLink = GitHubRepositoryLink> = {
   readonly errors: PullRequestsListResult["errors"];
   readonly repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   readonly uniqueRepositories: ReadonlyMap<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    { repository: TRepository; projects: OrchestrationProject[] }
   >;
 };
 
-export function resolveProjectRepositoryInventories(input: {
+function repositoryIdentityKey(repository: RepositoryLink): string {
+  return "identityKey" in repository
+    ? repository.identityKey
+    : repository.nameWithOwner.toLowerCase();
+}
+
+export function resolveProjectRepositoryInventories<
+  TRepository extends RepositoryLink = GitHubRepositoryLink,
+>(input: {
   projects: ReadonlyArray<OrchestrationProject>;
-  resolve: (project: OrchestrationProject) => Effect.Effect<GitHubRepositoryInventory, unknown>;
+  resolve: (
+    project: OrchestrationProject,
+  ) => Effect.Effect<RepositoryInventory<TRepository>, unknown>;
 }) {
   return Effect.forEach(
     input.projects,
     (project) =>
       input.resolve(project).pipe(
         Effect.match({
-          onFailure: (error): ProjectRepositoryResolution => ({
+          onFailure: (error): ProjectRepositoryResolution<TRepository> => ({
             project,
             error,
             inventory: { repositories: [], authoritative: false },
           }),
-          onSuccess: (inventory): ProjectRepositoryResolution => ({
+          onSuccess: (inventory): ProjectRepositoryResolution<TRepository> => ({
             project,
             error: null,
             inventory,
@@ -47,9 +66,9 @@ export function resolveProjectRepositoryInventories(input: {
   );
 }
 
-export function indexProjectRepositoryInventories(
-  resolved: ReadonlyArray<ProjectRepositoryResolution>,
-): ProjectRepositoryIndex {
+export function indexProjectRepositoryInventories<TRepository extends RepositoryLink>(
+  resolved: ReadonlyArray<ProjectRepositoryResolution<TRepository>>,
+): ProjectRepositoryIndex<TRepository> {
   const errors = resolved.flatMap(({ project, error }) =>
     error
       ? [
@@ -63,19 +82,17 @@ export function indexProjectRepositoryInventories(
   );
   const uniqueRepositories = new Map<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    { repository: TRepository; projects: OrchestrationProject[] }
   >();
   const repositoryKeysByProject = new Map<ProjectId, Set<string>>();
 
   for (const item of resolved) {
     repositoryKeysByProject.set(
       item.project.id,
-      new Set(
-        item.inventory.repositories.map((repository) => repository.nameWithOwner.toLowerCase()),
-      ),
+      new Set(item.inventory.repositories.map(repositoryIdentityKey)),
     );
     for (const repository of item.inventory.repositories) {
-      const key = repository.nameWithOwner.toLowerCase();
+      const key = repositoryIdentityKey(repository);
       const existing = uniqueRepositories.get(key);
       if (existing) {
         if (!existing.projects.some((project) => project.id === item.project.id)) {

@@ -24,6 +24,10 @@
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
     },
+    "./remoteRepository": {
+      "types": "./src/remoteRepository.ts",
+      "import": "./src/remoteRepository.ts"
+    },
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
