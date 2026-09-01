@@ -124,9 +124,9 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "integrations",
     group: "integrations",
     label: "MCP connections",
-    description: "Give Codex, Claude, and other local agents scoped access to Synara tasks.",
+    description: "Connect services to Synara and give coding agents scoped access.",
     icon: "plugin-1",
-    eyebrow: "External agents",
+    eyebrow: "MCP access",
   },
   {
     id: "providers",

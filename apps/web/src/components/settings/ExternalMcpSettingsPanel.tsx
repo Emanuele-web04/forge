@@ -57,7 +57,7 @@ function copyWithToast(value: string, title: string): void {
   );
 }
 
-export function ExternalMcpSettingsPanel(props: { active: boolean }) {
+export function ExternalMcpSettingsPanel(props: { active: boolean; embedded?: boolean }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState<string>(DEFAULT_NAME);
   const [allProjects, setAllProjects] = useState(true);

@@ -416,11 +416,18 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Rebuild local project indexes without clearing existing chats when the local state gets out of sync.",
   },
   {
-    id: "integrations:external-mcp",
+    id: "integrations:paraty-mcp",
     section: "integrations",
-    title: "External MCP integrations",
+    title: "Paraty MCP",
     keywords:
-      "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
+      "Connect Synara to Paraty MCP for read-only Bitbucket pull requests in supported Paraty repositories. outbound services",
+  },
+  {
+    id: "integrations:external-agent-mcp-connections",
+    section: "integrations",
+    title: "External agent MCP connections",
+    keywords:
+      "Pair Codex Claude and other local MCP clients with scoped project access. inbound agents revoke credential task create wait read worktree approval",
   },
   {
     id: "advanced:version",
