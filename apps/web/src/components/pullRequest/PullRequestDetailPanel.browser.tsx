@@ -142,6 +142,7 @@ describe("PullRequestDetailPanel capabilities", () => {
     expect(page.getByRole("heading", { name: "Read-only provider" })).toBeVisible();
     expect(page.getByText("Read content remains visible.")).toBeVisible();
     expect(page.getByText("Review content remains visible.")).toBeVisible();
+    expect(visibleButtonLabels()).not.toContain("Reply");
     expect(visibleButtonLabels()).not.toContain("Merge");
     expect(document.querySelector('textarea[aria-label="Leave a comment"]')).toBeNull();
     expect(document.querySelector('button[title="Post comment"]')).toBeNull();
@@ -181,6 +182,26 @@ describe("PullRequestDetailPanel capabilities", () => {
     expect(visibleButtonLabels()).not.toContain("Reopen pull request");
   });
 
+  it("uses Bitbucket copy for incomplete comments without GitHub wording", async () => {
+    await renderDetail(detailFixture({ commentsIncomplete: true }));
+
+    expect(page.getByText("Review content remains visible.")).toBeVisible();
+    expect(document.body.textContent).toContain(
+      "Some unresolved review comments could not be loaded. Check Bitbucket for the complete review.",
+    );
+    expect(document.body.textContent).not.toContain("GitHub");
+  });
+
+  it("uses Bitbucket copy for truncated comments without GitHub wording", async () => {
+    await renderDetail(detailFixture({ commentsTruncated: true }));
+
+    expect(page.getByText("Review content remains visible.")).toBeVisible();
+    expect(document.body.textContent).toContain(
+      "More unresolved review comments may be available on Bitbucket.",
+    );
+    expect(document.body.textContent).not.toContain("GitHub");
+  });
+
   it("preserves GitHub write controls when capabilities allow them", async () => {
     await renderDetail(
       detailFixture({
@@ -192,6 +213,7 @@ describe("PullRequestDetailPanel capabilities", () => {
     );
 
     expect(visibleButtonLabels()).toContain("Merge");
+    expect(visibleButtonLabels()).toContain("Reply");
     expect(document.querySelector('textarea[aria-label="Leave a comment"]')).not.toBeNull();
 
     await page.getByRole("button", { name: "More actions" }).click();

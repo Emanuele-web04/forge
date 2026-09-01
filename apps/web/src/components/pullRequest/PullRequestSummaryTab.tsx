@@ -71,6 +71,21 @@ function MetaRow({
   );
 }
 
+function pullRequestProviderLabel(provider: PullRequestDetail["provider"]): string {
+  return provider === "bitbucket" ? "Bitbucket" : "GitHub";
+}
+
+function commentsAvailabilityWarning(detail: PullRequestDetail): string | null {
+  const providerLabel = pullRequestProviderLabel(detail.provider);
+  if (detail.commentsIncomplete) {
+    return `Some unresolved review comments could not be loaded. Check ${providerLabel} for the complete review.`;
+  }
+  if (detail.commentsTruncated) {
+    return `More unresolved review comments may be available on ${providerLabel}.`;
+  }
+  return null;
+}
+
 function DisclosureSection({
   label,
   count,
@@ -111,6 +126,7 @@ function DisclosureSection({
 
 export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
   const checks = detail.checks ?? [];
+  const commentsWarning = commentsAvailabilityWarning(detail);
   return (
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
@@ -222,12 +238,8 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
       {/* Open by default so the comment composer is immediately reachable. */}
       <DisclosureSection label="Comments" count={detail.comments.length}>
         <div className="space-y-2">
-          {detail.commentsTruncated || detail.commentsIncomplete ? (
-            <PullRequestWarningNote>
-              {detail.commentsIncomplete
-                ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
-                : "More unresolved review comments may be available on GitHub."}
-            </PullRequestWarningNote>
+          {commentsWarning ? (
+            <PullRequestWarningNote>{commentsWarning}</PullRequestWarningNote>
           ) : null}
           {detail.comments.length === 0 ? (
             <p className={cn(PR_BODY_TEXT_CLASS_NAME, "py-4 text-center text-muted-foreground")}>
@@ -241,6 +253,7 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
                   comment={comment}
                   prUrl={detail.url}
                   workspaceRoot={detail.workspaceRoot}
+                  canReply={detail.capabilities.comment}
                   defaultOpen={index >= detail.comments.length - 2}
                 />
               ))}
