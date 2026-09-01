@@ -4,13 +4,19 @@
 // Depends on: node:fs and node:path only.
 
 import { accessSync, constants, statSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname, join, posix, win32 } from "node:path";
 
 export interface ExecutableLookupOptions {
   /** Defaults to `process.platform`. Injectable for cross-platform tests. */
   readonly platform?: NodeJS.Platform;
   /** Defaults to `process.env`. Callers should pass the already-hydrated runtime environment. */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Working directory the launch will use. Qualified relative commands such as
+   * `./bin/tool` resolve against it, matching what the spawned child sees.
+   * Defaults to `process.cwd()`.
+   */
+  readonly cwd?: string;
   /**
    * win32 only: also yield the command with no extension appended.
    *
@@ -105,6 +111,7 @@ function directoryOf(commandPath: string): string {
 interface ExecutableLookupContext {
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
+  readonly cwd: string | undefined;
   readonly pathExtensions: readonly string[];
 }
 
@@ -114,8 +121,21 @@ function resolveLookupContext(options: ExecutableLookupOptions): ExecutableLooku
   return {
     platform,
     env,
+    cwd: options.cwd,
     pathExtensions: platform === "win32" ? windowsPathExtensions(env) : [],
   };
+}
+
+/**
+ * The filesystem location a candidate is checked at. Candidates keep their
+ * launch-facing form (a relative `./bin/tool` stays relative so the child
+ * resolves it itself), but existence is checked against the launch cwd, not
+ * wherever the server happens to be running.
+ */
+function candidateStatPath(filePath: string, context: ExecutableLookupContext): string {
+  const pathModule = context.platform === "win32" ? win32 : posix;
+  if (pathModule.isAbsolute(filePath)) return filePath;
+  return pathModule.resolve(context.cwd ?? process.cwd(), filePath);
 }
 
 function* candidatesIn(
@@ -157,13 +177,14 @@ export function executableCandidates(
 }
 
 function isExecutableFileIn(filePath: string, context: ExecutableLookupContext): boolean {
+  const statPath = candidateStatPath(filePath, context);
   try {
-    if (!statSync(filePath).isFile()) return false;
+    if (!statSync(statPath).isFile()) return false;
     if (context.platform === "win32") {
       const extension = extname(filePath).toUpperCase();
       return extension.length > 0 && context.pathExtensions.includes(extension);
     }
-    accessSync(filePath, constants.X_OK);
+    accessSync(statPath, constants.X_OK);
     return true;
   } catch {
     return false;

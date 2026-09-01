@@ -1347,7 +1347,6 @@ const makeAcpSessionRuntime = (
     const child = yield* spawner
       .spawn(
         makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
-          requireExecutable: true,
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
         }),

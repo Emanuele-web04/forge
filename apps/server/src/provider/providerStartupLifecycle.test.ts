@@ -1,124 +1,100 @@
-import { describe, expect, it, vi } from "vitest";
+import { Effect, Fiber, Option } from "effect";
+import { describe, expect, it } from "vitest";
 
 import { ExecutableNotFoundError } from "@synara/shared/platformProcess";
 import {
-  ProviderStartupError,
+  classifyProviderStartupFailure,
+  observeProviderStartup,
   ProviderStartupLifecycle,
-  superviseProviderStartup,
 } from "./providerStartupLifecycle";
 
+function handshakingLifecycle(): ProviderStartupLifecycle {
+  const lifecycle = new ProviderStartupLifecycle({ now: () => 1 });
+  lifecycle.transition("starting");
+  lifecycle.transition("handshaking");
+  return lifecycle;
+}
+
 describe("ProviderStartupLifecycle", () => {
-  it("records deterministic startup and ready transitions", async () => {
-    const lifecycle = new ProviderStartupLifecycle({ now: () => 1 });
-
-    await expect(
-      superviseProviderStartup({
-        lifecycle,
-        timeoutMs: 100,
-        cleanup: async () => undefined,
-        start: async ({ markHandshaking, markAuthenticating }) => {
-          markHandshaking();
-          markAuthenticating();
-          return "ready";
-        },
-      }),
-    ).resolves.toBe("ready");
-
-    expect(lifecycle.snapshot()).toMatchObject({
-      phase: "ready",
-      transitions: [
-        { phase: "discovering" },
-        { phase: "starting" },
-        { phase: "handshaking" },
-        { phase: "authenticating" },
-        { phase: "ready" },
-      ],
-    });
+  it("records deterministic transitions and rejects illegal ones", () => {
+    const lifecycle = handshakingLifecycle();
+    lifecycle.transition("ready");
+    lifecycle.transition("running");
+    expect(lifecycle.snapshot().transitions.map((entry) => entry.phase)).toEqual([
+      "discovering",
+      "starting",
+      "handshaking",
+      "ready",
+      "running",
+    ]);
+    expect(() => lifecycle.transition("starting")).toThrow(/Invalid provider startup transition/);
   });
 
-  it("turns a missing executable into an immediate explicit failure", async () => {
-    const cleanup = vi.fn(async () => undefined);
-    const lifecycle = new ProviderStartupLifecycle();
-
-    const failure = await superviseProviderStartup({
-      lifecycle,
-      timeoutMs: 100,
-      cleanup,
-      start: async () => {
-        throw new ExecutableNotFoundError("provider");
-      },
-    }).catch((cause: unknown) => cause);
-
-    expect(failure).toBeInstanceOf(ProviderStartupError);
-    expect(failure).toMatchObject({ reason: "ExecutableNotFound" });
-    expect(lifecycle.snapshot()).toMatchObject({
-      phase: "failed",
-      failureReason: "ExecutableNotFound",
-    });
-    expect(cleanup).toHaveBeenCalledOnce();
+  it("keeps the first terminal outcome", () => {
+    const lifecycle = handshakingLifecycle();
+    lifecycle.stop("Cancelled");
+    lifecycle.fail("HandshakeTimeout");
+    expect(lifecycle.snapshot()).toMatchObject({ phase: "stopped", failureReason: "Cancelled" });
   });
 
-  it("times out a process that starts but never handshakes and cleans it up", async () => {
-    const cleanup = vi.fn(async () => undefined);
-    const lifecycle = new ProviderStartupLifecycle();
+  it("classifies a missing executable ahead of message heuristics", () => {
+    expect(classifyProviderStartupFailure(new ExecutableNotFoundError("provider"))).toBe(
+      "ExecutableNotFound",
+    );
+    expect(classifyProviderStartupFailure(new Error("provider exited during startup"))).toBe(
+      "ExitedDuringStartup",
+    );
+  });
+});
 
-    const failure = await superviseProviderStartup({
-      lifecycle,
-      timeoutMs: 5,
-      cleanup,
-      start: async ({ markHandshaking }) => {
-        markHandshaking();
-        return new Promise<never>(() => undefined);
-      },
-    }).catch((cause: unknown) => cause);
+describe("observeProviderStartup", () => {
+  it("passes a ready session through without touching the lifecycle", async () => {
+    const lifecycle = handshakingLifecycle();
+    const started = await Effect.runPromise(
+      observeProviderStartup(Effect.succeed("session"), { lifecycle, timeout: "1 second" }),
+    );
+    expect(started).toEqual(Option.some("session"));
+    expect(lifecycle.phase).toBe("handshaking");
+  });
 
-    expect(failure).toBeInstanceOf(ProviderStartupError);
-    expect(failure).toMatchObject({ reason: "HandshakeTimeout", phase: "handshaking" });
+  it("records an expired deadline as HandshakeTimeout, not as a cancellation", async () => {
+    const lifecycle = handshakingLifecycle();
+    const started = await Effect.runPromise(
+      observeProviderStartup(Effect.never, { lifecycle, timeout: "10 millis" }),
+    );
+    expect(Option.isNone(started)).toBe(true);
     expect(lifecycle.snapshot()).toMatchObject({
       phase: "failed",
       failureReason: "HandshakeTimeout",
     });
-    expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("reports a startup crash instead of leaving the lifecycle connecting", async () => {
-    const cleanup = vi.fn(async () => undefined);
-
-    const failure = await superviseProviderStartup({
-      timeoutMs: 100,
-      cleanup,
-      start: async ({ markHandshaking }) => {
-        markHandshaking();
-        throw new Error("provider exited during startup");
-      },
-    }).catch((cause: unknown) => cause);
-
-    expect(failure).toMatchObject({ reason: "ExitedDuringStartup" });
-    expect(cleanup).toHaveBeenCalledOnce();
-  });
-
-  it("cancels while handshaking, performs cleanup once, and stops", async () => {
-    const controller = new AbortController();
-    const cleanup = vi.fn(async () => undefined);
-    const lifecycle = new ProviderStartupLifecycle();
-
-    const result = superviseProviderStartup({
-      lifecycle,
-      signal: controller.signal,
-      timeoutMs: 1_000,
-      cleanup,
-      start: async ({ markHandshaking }) => {
-        markHandshaking();
-        return new Promise<never>(() => undefined);
-      },
-    }).catch((cause: unknown) => cause);
-    controller.abort();
-
-    await expect(result).resolves.toMatchObject({ reason: "Cancelled" });
+  it("records a start failure with its classified reason", async () => {
+    const lifecycle = handshakingLifecycle();
+    const failure = await Effect.runPromise(
+      observeProviderStartup(Effect.fail(new ExecutableNotFoundError("provider")), {
+        lifecycle,
+        timeout: "1 second",
+      }).pipe(Effect.flip),
+    );
+    expect(failure).toBeInstanceOf(ExecutableNotFoundError);
     expect(lifecycle.snapshot()).toMatchObject({
-      phase: "stopped",
-      failureReason: "Cancelled",
+      phase: "failed",
+      failureReason: "ExecutableNotFound",
     });
-    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("records an external interruption as Cancelled", async () => {
+    const lifecycle = handshakingLifecycle();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          observeProviderStartup(Effect.never, { lifecycle, timeout: "1 minute" }),
+        );
+        yield* Effect.sleep("1 millis");
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+    expect(lifecycle.snapshot()).toMatchObject({ phase: "stopped", failureReason: "Cancelled" });
   });
 });

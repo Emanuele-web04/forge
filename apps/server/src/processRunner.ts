@@ -1,8 +1,9 @@
 import type { ChildProcess as ChildProcessHandle } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { isCommandNotFoundExit } from "@synara/shared/platformProcess";
 import { spawnProcess } from "@synara/shared/processRuntime";
 
-import { signalProcessTree } from "./platform/processTreeController.ts";
+import { signalOwnedChildProcess } from "./platform/processTreeController.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -49,6 +50,10 @@ function normalizeExitError(
   args: readonly string[],
   result: ProcessRunResult,
 ): Error {
+  if (isCommandNotFoundExit({ code: result.code, stderr: result.stderr })) {
+    return new Error(`Command not found: ${command}`);
+  }
+
   const reason = result.timedOut
     ? "timed out"
     : `failed (code=${result.code ?? "null"}, signal=${result.signal ?? "null"})`;
@@ -83,13 +88,11 @@ function processAbortError(): Error {
   return error;
 }
 
-// Process-tree signaling is platform-owned; application code never invokes OS tree commands.
+// The platform boundary decides whether a kill needs tree traversal (Windows
+// batch shims) or Node's direct signal (POSIX); application code never invokes
+// OS tree commands itself.
 function killChild(child: ChildProcessHandle, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
-  if (child.pid === undefined) {
-    child.kill(signal);
-    return;
-  }
-  signalProcessTree({ rootPid: child.pid, signal });
+  signalOwnedChildProcess(child, signal);
 }
 
 function appendChunkWithinLimit(

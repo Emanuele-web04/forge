@@ -639,7 +639,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           const child = yield* commandSpawner
             .spawn(
               makeEffectProcessCommand("git", commandInput.args, {
-                requireExecutable: true,
                 cwd: commandInput.cwd,
                 env: {
                   ...process.env,

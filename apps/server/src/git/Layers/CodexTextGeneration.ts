@@ -343,7 +343,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           "-",
         ];
         const command = makeEffectProcessCommand(codexBinaryPath, args, {
-          requireExecutable: true,
           cwd,
           env,
           stdin: {

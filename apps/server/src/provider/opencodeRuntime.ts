@@ -869,7 +869,6 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         const childEnv = buildOpenCodeServerProcessEnv({});
         const child = yield* spawner.spawn(
           makeEffectProcessCommand(input.binaryPath, input.args, {
-            requireExecutable: true,
             ...(input.cwd ? { cwd: input.cwd } : {}),
             env: childEnv,
           }),
@@ -935,7 +934,6 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         const child = yield* spawner
           .spawn(
             makeEffectProcessCommand(input.binaryPath, args, {
-              requireExecutable: true,
               env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,

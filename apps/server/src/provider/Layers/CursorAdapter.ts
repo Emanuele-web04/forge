@@ -1638,7 +1638,6 @@ export function makeCursorAdapter(
         const env = buildCursorAgentHeadlessEnv();
         const child = yield* childProcessSpawner.spawn(
           makeEffectProcessCommand(command.command, command.args, {
-            requireExecutable: true,
             env,
           }),
         );

@@ -3,6 +3,7 @@
 // Layer: Provider runtime infrastructure
 
 import { ExecutableNotFoundError } from "@synara/shared/platformProcess";
+import { Duration, Effect, Option } from "effect";
 
 export type ProviderStartupPhase =
   | "discovering"
@@ -49,24 +50,6 @@ const ALLOWED_TRANSITIONS: Readonly<
   failed: new Set(),
   stopped: new Set(),
 };
-
-export class ProviderStartupError extends Error {
-  readonly _tag = "ProviderStartupError";
-  readonly reason: ProviderStartupFailureReason;
-  readonly phase: ProviderStartupPhase;
-
-  constructor(
-    reason: ProviderStartupFailureReason,
-    phase: ProviderStartupPhase,
-    message: string,
-    cause?: unknown,
-  ) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = "ProviderStartupError";
-    this.reason = reason;
-    this.phase = phase;
-  }
-}
 
 export class ProviderStartupLifecycle {
   readonly #now: () => number;
@@ -141,7 +124,6 @@ function errnoCode(cause: unknown): string | undefined {
 }
 
 export function classifyProviderStartupFailure(cause: unknown): ProviderStartupFailureReason {
-  if (cause instanceof ProviderStartupError) return cause.reason;
   if (cause instanceof ExecutableNotFoundError || errnoCode(cause) === "ENOENT") {
     return "ExecutableNotFound";
   }
@@ -155,82 +137,28 @@ export function classifyProviderStartupFailure(cause: unknown): ProviderStartupF
   return "ProtocolFailure";
 }
 
-export interface ProviderStartupControl {
-  readonly lifecycle: ProviderStartupLifecycle;
-  markHandshaking(): void;
-  markAuthenticating(): void;
-}
-
-export async function superviseProviderStartup<A>(input: {
-  readonly start: (control: ProviderStartupControl) => Promise<A>;
-  readonly cleanup: () => Promise<unknown>;
-  readonly timeoutMs: number;
-  readonly signal?: AbortSignal;
-  readonly lifecycle?: ProviderStartupLifecycle;
-}): Promise<A> {
-  const lifecycle = input.lifecycle ?? new ProviderStartupLifecycle();
-  lifecycle.transition("starting");
-
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  let cleanupStarted = false;
-  const cleanup = async (): Promise<void> => {
-    if (cleanupStarted) return;
-    cleanupStarted = true;
-    await input.cleanup().then(
-      () => undefined,
-      () => undefined,
-    );
-  };
-
-  const control: ProviderStartupControl = {
-    lifecycle,
-    markHandshaking: () => lifecycle.transition("handshaking"),
-    markAuthenticating: () => lifecycle.transition("authenticating"),
-  };
-
-  const terminal = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      reject(
-        new ProviderStartupError(
-          "HandshakeTimeout",
-          lifecycle.phase,
-          `Provider startup timed out after ${input.timeoutMs}ms.`,
-        ),
-      );
-    }, input.timeoutMs);
-    timeout.unref?.();
-
-    if (input.signal) {
-      abortListener = () => {
-        reject(
-          new ProviderStartupError("Cancelled", lifecycle.phase, "Provider startup was cancelled."),
-        );
-      };
-      input.signal.addEventListener("abort", abortListener, { once: true });
-      if (input.signal.aborted) abortListener();
-    }
-  });
-
-  try {
-    const result = await Promise.race([input.start(control), terminal]);
-    lifecycle.transition("ready");
-    return result;
-  } catch (cause) {
-    const reason = classifyProviderStartupFailure(cause);
-    const failedPhase = lifecycle.phase;
-    await cleanup();
-    if (reason === "Cancelled") lifecycle.stop("Cancelled");
-    else lifecycle.fail(reason);
-    if (cause instanceof ProviderStartupError) throw cause;
-    throw new ProviderStartupError(
-      reason,
-      failedPhase,
-      cause instanceof Error ? cause.message : String(cause),
-      cause,
-    );
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    if (input.signal && abortListener) input.signal.removeEventListener("abort", abortListener);
-  }
-}
+/**
+ * Bounds an adapter start with the orchestration deadline and records the outcome
+ * on the lifecycle. The deadline is applied *inside* the interruption hook so an
+ * expired timeout is recorded as `HandshakeTimeout`, and only an external
+ * interruption of the start itself is recorded as `Cancelled`.
+ */
+export const observeProviderStartup = <A, E, R>(
+  start: Effect.Effect<A, E, R>,
+  input: {
+    readonly lifecycle: ProviderStartupLifecycle;
+    readonly timeout: Duration.Input;
+  },
+): Effect.Effect<Option.Option<A>, E, R> =>
+  start.pipe(
+    Effect.timeoutOption(input.timeout),
+    Effect.tap((started) =>
+      Effect.sync(() => {
+        if (Option.isNone(started)) input.lifecycle.fail("HandshakeTimeout");
+      }),
+    ),
+    Effect.tapError((cause) =>
+      Effect.sync(() => input.lifecycle.fail(classifyProviderStartupFailure(cause))),
+    ),
+    Effect.onInterrupt(() => Effect.sync(() => input.lifecycle.stop("Cancelled"))),
+  );

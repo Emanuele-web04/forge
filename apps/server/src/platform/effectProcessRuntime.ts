@@ -5,7 +5,7 @@
 import { prepareProcess, type ProcessLaunchInput } from "@synara/shared/platformProcess";
 import { ChildProcess } from "effect/unstable/process";
 
-type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExecutable">;
+type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform">;
 
 export type EffectProcessRuntimeOptions = Omit<
   ChildProcess.CommandOptions,
@@ -16,13 +16,17 @@ export type EffectProcessRuntimeOptions = Omit<
 /**
  * Creates an Effect command without leaking `.cmd`, `cmd.exe`, WSL, or
  * windowsVerbatimArguments decisions into provider/application code.
+ *
+ * Unlike the Node runtime there is deliberately no `requireExecutable`: the
+ * Effect spawner is injectable, so a missing executable surfaces as the
+ * spawner's own ENOENT error in the owning domain rather than a pre-spawn throw.
  */
 export function makeEffectProcessCommand(
   command: string,
   args: ReadonlyArray<string>,
   options: EffectProcessRuntimeOptions = {},
 ): ReturnType<typeof ChildProcess.make> {
-  const { platform, requireExecutable: _requireExecutable, ...commandOptions } = options;
+  const { platform, ...commandOptions } = options;
   const effectivePlatform = platform ?? process.platform;
 
   // Effect's ChildProcessSpawner is injectable. Keep executable existence and

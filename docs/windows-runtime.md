@@ -28,9 +28,12 @@ Use `prepareProcess` from `@synara/shared/platformProcess` when a launch plan mu
 - `.cmd` and `.bat` routing through a shell-free `cmd.exe` plan;
 - Windows argument serialization and `windowsVerbatimArguments`;
 - WSL UNC detection and `wsl.exe` dispatch;
-- fail-fast `ExecutableNotFoundError` when `requireExecutable` is enabled.
+- fail-fast `ExecutableNotFoundError` when `requireExecutable` is enabled (Node runtime only);
+- qualified relative commands such as `./bin/tool` resolved against the launch `cwd`, exactly as the child would see them.
 
-Node callers should normally use `spawnProcess`, `spawnProcessSync`, or `execProcessFile` from `@synara/shared/processRuntime`. Effect callers use `makeEffectProcessCommand` from `apps/server/src/platform/effectProcessRuntime.ts`.
+Node callers should normally use `spawnProcess`, `spawnProcessSync`, or `execProcessFile` from `@synara/shared/processRuntime`. Effect callers use `makeEffectProcessCommand` from `apps/server/src/platform/effectProcessRuntime.ts`; it has no `requireExecutable` because the Effect spawner is injectable and a missing executable surfaces as the spawner's own ENOENT error.
+
+Bounded one-shot helpers (`processRunner`, provider probes) stop their child with `signalOwnedChildProcess`: Node's direct `child.kill` on POSIX, `taskkill /T` through the tree boundary on Windows where a `.cmd` shim hides the real command behind cmd.exe.
 
 Application and provider code must not set `shell`, `windowsHide`, or `windowsVerbatimArguments`, and must not invoke `cmd.exe`, `where.exe`, or `taskkill` directly.
 
@@ -60,6 +63,8 @@ Use `teardownChildProcessTree`, `teardownEffectProcessTree`, or `teardownProvide
 2. every captured descendant identity disappeared.
 
 Windows process snapshots include CIM creation identity so delayed escalation does not target a reused PID. Snapshot failure is `unknown`, never an empty successful capture, and produces `ProviderProcessExitUnprovenError` when exit cannot be proven.
+
+On Windows every supervised teardown therefore depends on `powershell.exe` and `Get-CimInstance Win32_Process` being available and answering within the observer's probe timeout. Where PowerShell is blocked by policy the stop fails closed instead of reporting a false success.
 
 The current boundary deliberately fails closed but does not yet establish creation-time Windows Job Object ownership. A Job Object backend can be added behind the same controller without changing provider code.
 

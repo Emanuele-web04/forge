@@ -49,6 +49,33 @@ describe("prepareProcess", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "resolves a qualified relative command against the launch cwd, not the server cwd",
+    () => {
+      const binDir = path.join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      const executable = path.join(binDir, "tool");
+      writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+
+      expect(
+        prepareProcess("./bin/tool", [], {
+          platform: "linux",
+          cwd: root,
+          env: { PATH: "/nonexistent" },
+          requireExecutable: true,
+        }),
+      ).toMatchObject({ command: "./bin/tool", resolvedCommand: "./bin/tool" });
+
+      expect(() =>
+        prepareProcess("./bin/tool", [], {
+          platform: "linux",
+          env: { PATH: "/nonexistent" },
+          requireExecutable: true,
+        }),
+      ).toThrow(ExecutableNotFoundError);
+    },
+  );
+
   it("uses PATHEXT precedence consistently for Windows discovery and launch", () => {
     const executable = path.join(root, "foo.EXE");
     const batch = path.join(root, "foo.CMD");

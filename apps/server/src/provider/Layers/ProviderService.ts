@@ -76,10 +76,7 @@ import {
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
-import {
-  classifyProviderStartupFailure,
-  ProviderStartupLifecycle,
-} from "../providerStartupLifecycle.ts";
+import { observeProviderStartup, ProviderStartupLifecycle } from "../providerStartupLifecycle.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
@@ -1754,32 +1751,29 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // with text the caller can surface as a session error.
               startupLifecycle.transition("starting");
               startupLifecycle.transition("handshaking");
-              const started = yield* adapter.startSession(resolvedAdapterStartInput).pipe(
+              // The lifecycle is updated inside observeProviderStartup; these taps
+              // only log the already-recorded outcome.
+              const started = yield* observeProviderStartup(
+                adapter.startSession(resolvedAdapterStartInput),
+                { lifecycle: startupLifecycle, timeout: PROVIDER_START_SESSION_TIMEOUT },
+              ).pipe(
                 Effect.tapError((cause) =>
-                  Effect.gen(function* () {
-                    startupLifecycle.fail(classifyProviderStartupFailure(cause));
-                    yield* Effect.logError("provider.session.start_failed", {
-                      threadId,
-                      provider: input.provider,
-                      startup: startupLifecycle.snapshot(),
-                      cause: cause instanceof Error ? cause.message : String(cause),
-                    });
+                  Effect.logError("provider.session.start_failed", {
+                    threadId,
+                    provider: input.provider,
+                    startup: startupLifecycle.snapshot(),
+                    cause: cause instanceof Error ? cause.message : String(cause),
                   }),
                 ),
                 Effect.onInterrupt(() =>
-                  Effect.gen(function* () {
-                    startupLifecycle.stop("Cancelled");
-                    yield* Effect.logInfo("provider.session.start_cancelled", {
-                      threadId,
-                      provider: input.provider,
-                      startup: startupLifecycle.snapshot(),
-                    });
+                  Effect.logInfo("provider.session.start_cancelled", {
+                    threadId,
+                    provider: input.provider,
+                    startup: startupLifecycle.snapshot(),
                   }),
                 ),
-                Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT),
               );
               if (Option.isNone(started)) {
-                startupLifecycle.fail("HandshakeTimeout");
                 yield* Effect.logError("provider session start exceeded its deadline", {
                   threadId,
                   provider: input.provider,

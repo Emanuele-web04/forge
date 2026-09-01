@@ -67,6 +67,7 @@ import {
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
+import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
@@ -397,15 +398,11 @@ export async function runAntigravityHelperProcess(
       env: buildProviderChildEnvironment({ provider: PROVIDER }),
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
-      ownProcessGroup: true,
     }) as AntigravityChildProcess;
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timedOut = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
-    const timeoutError = () =>
-      new Error(`Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`);
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
@@ -413,30 +410,23 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      timedOut = true;
-      void teardownChildProcessTree(child).then(
-        () => finish(() => reject(timeoutError())),
-        (cause) =>
-          finish(() =>
-            reject(
-              new AggregateError(
-                [cause],
-                `${timeoutError().message} Process-tree exit could not be proven.`,
-              ),
-            ),
+      // A bounded helper probe fails fast: force the (Windows: tree) kill and
+      // reject with the timeout, exactly as before the runtime migration.
+      signalOwnedChildProcess(child, "SIGKILL");
+      finish(() =>
+        reject(
+          new Error(
+            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
           ),
+        ),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
     child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => {
-      if (!timedOut) finish(() => reject(cause));
-    });
-    child.once("close", (code) => {
-      if (!timedOut) finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
-    });
+    child.once("error", (cause) => finish(() => reject(cause)));
+    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
   });
 }
 
@@ -2177,7 +2167,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               spawnPlatformProcess(command, spawnArgs, {
                 ...options,
                 requireExecutable: true,
-                ownProcessGroup: true,
               }) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
             cwd: context.session.cwd ?? serverConfig.cwd,

@@ -365,4 +365,23 @@ export function signalProcessTree(input: {
   });
 }
 
+/**
+ * Signal one owned child the way the host platform can honor it. POSIX callers
+ * keep Node's direct, synchronous `child.kill` (a stopped git or CLI must not
+ * depend on `ps`/`pgrep` being installed); Windows routes through the tree
+ * boundary because a `.cmd` shim runs under cmd.exe and only `taskkill /T`
+ * reaches the real command behind it.
+ */
+export function signalOwnedChildProcess(
+  child: { readonly pid?: number | undefined; kill(signal?: NodeJS.Signals): unknown },
+  signal: TerminalKillSignal,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32" && child.pid !== undefined) {
+    signalProcessTree({ rootPid: child.pid, signal });
+    return;
+  }
+  child.kill(signal);
+}
+
 export const defaultProcessTreeKiller: ProcessTreeKiller = createProcessTreeKiller();

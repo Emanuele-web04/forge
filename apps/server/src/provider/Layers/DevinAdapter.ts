@@ -1206,7 +1206,6 @@ export function makeDevinAdapter(
           const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models", "list", "--format", "json"], {
-              requireExecutable: true,
               env: childEnv,
             }),
           );

@@ -3,6 +3,7 @@
 // Layer: Shared platform runtime
 
 import { statSync } from "node:fs";
+import { win32 } from "node:path";
 
 import { hasPathSeparator, resolveExecutable } from "./executable";
 import { resolveWindowsPowerShellExecutable } from "./platformEnvironment";
@@ -39,12 +40,37 @@ export class ExecutableNotFoundError extends Error {
   }
 }
 
-function explicitPowerShellScript(command: string, platform: NodeJS.Platform): string | null {
+const WINDOWS_COMMAND_NOT_FOUND_EXIT_CODE = 9009;
+const WINDOWS_COMMAND_NOT_FOUND_PATTERN = /is not recognized as an internal or external command/iu;
+
+/**
+ * True when a finished process reported "command not found" through its exit
+ * rather than a spawn error. cmd.exe does this for a `.cmd` shim whose target
+ * is missing, so a batch-wrapped launch can only be diagnosed after exit.
+ */
+export function isCommandNotFoundExit(input: {
+  readonly code: number | null;
+  readonly stderr: string;
+  readonly platform?: NodeJS.Platform;
+}): boolean {
+  if ((input.platform ?? process.platform) !== "win32") return false;
+  if (input.code === WINDOWS_COMMAND_NOT_FOUND_EXIT_CODE) return true;
+  return WINDOWS_COMMAND_NOT_FOUND_PATTERN.test(input.stderr);
+}
+
+function explicitPowerShellScript(
+  command: string,
+  platform: NodeJS.Platform,
+  cwd: string | undefined,
+): string | null {
   if (platform !== "win32" || !hasPathSeparator(command) || !/\.ps1$/iu.test(command)) {
     return null;
   }
+  const scriptPath = win32.isAbsolute(command)
+    ? command
+    : win32.resolve(cwd ?? process.cwd(), command);
   try {
-    return statSync(command).isFile() ? command : null;
+    return statSync(scriptPath).isFile() ? command : null;
   } catch {
     return null;
   }
@@ -54,9 +80,11 @@ function nativeExecutable(
   command: string,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
+  cwd: string | undefined,
 ): string | null {
   return (
-    explicitPowerShellScript(command, platform) ?? resolveExecutable(command, { platform, env })
+    explicitPowerShellScript(command, platform, cwd) ??
+    resolveExecutable(command, { platform, env, ...(cwd !== undefined ? { cwd } : {}) })
   );
 }
 
@@ -88,7 +116,7 @@ export function prepareProcess(
     };
   }
 
-  const resolved = nativeExecutable(command, platform, env);
+  const resolved = nativeExecutable(command, platform, env, input.cwd);
   if (input.requireExecutable && resolved === null) {
     throw new ExecutableNotFoundError(command);
   }

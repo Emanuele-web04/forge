@@ -2396,7 +2396,6 @@ export function makeGrokAdapter(
           const childEnv = buildProviderChildEnvironment({ provider: "grok" });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models"], {
-              requireExecutable: true,
               env: childEnv,
             }),
           );
