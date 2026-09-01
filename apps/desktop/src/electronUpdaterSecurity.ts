@@ -41,6 +41,8 @@ interface PowerShellExecOptions {
   readonly encoding: "utf8";
   readonly env?: NodeJS.ProcessEnv;
   readonly timeout?: number;
+  readonly shell: false;
+  readonly windowsHide: true;
 }
 
 type ExecFileLike = (
@@ -89,7 +91,9 @@ function buildPowerShellExecOptions(
   return {
     env: { ...env, PSModulePath: "" },
     encoding: "utf8",
+    shell: false,
     timeout,
+    windowsHide: true,
   };
 }
 
@@ -103,10 +107,11 @@ function runPowerShell(
     const execFileImpl: ExecFileLike =
       options.execFile ??
       ((file, args, execOptions, callback) => {
+        const { shell: _shell, windowsHide: _windowsHide, ...runtimeOptions } = execOptions;
         execProcessFile(
           file,
           args,
-          { ...execOptions, platform: "win32", requireExecutable: true },
+          { ...runtimeOptions, platform: "win32", requireExecutable: true },
           (error, stdout, stderr) => {
             callback(error, String(stdout), String(stderr));
           },
@@ -282,7 +287,6 @@ export function hardenElectronUpdater(
         env: mergedEnv,
         encoding: "utf8",
         platform: "win32",
-        requireExecutable: true,
       });
       const { error, status, stdout, stderr } = response;
       if (error) {
