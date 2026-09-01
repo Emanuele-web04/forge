@@ -77,6 +77,9 @@ interface TestFixture {
 let fixture: TestFixture;
 let shellStreamRequestId: string | null = null;
 let shellStreamClient: EffectRpcWebSocketClient | null = null;
+let serverLifecycleRequestId: string | null = null;
+let serverLifecycleClient: EffectRpcWebSocketClient | null = null;
+let suppressNextShellSnapshot = false;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
@@ -271,6 +274,10 @@ const worker = setupWorker(
         subscribeShellRequestCount += 1;
         shellStreamRequestId = request.id;
         shellStreamClient = client;
+        if (suppressNextShellSnapshot) {
+          suppressNextShellSnapshot = false;
+          return;
+        }
         sendEffectRpcChunk(client, request.id, {
           kind: "snapshot",
           snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
@@ -278,6 +285,8 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerLifecycle) {
+        serverLifecycleRequestId = request.id;
+        serverLifecycleClient = client;
         sendEffectRpcChunk(client, request.id, {
           type: "welcome",
           payload: fixture.welcome,
@@ -446,6 +455,16 @@ function sendShellEventPush(event: OrchestrationShellStreamItem) {
   sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, event);
 }
 
+function sendServerWelcomePush() {
+  if (!serverLifecycleRequestId || !serverLifecycleClient) {
+    throw new Error("Server lifecycle stream is not connected");
+  }
+  sendEffectRpcChunk(serverLifecycleClient, serverLifecycleRequestId, {
+    type: "welcome",
+    payload: fixture.welcome,
+  });
+}
+
 describe("EventRouter scoped orchestration sync", () => {
   beforeAll(async () => {
     fixture = buildFixture();
@@ -468,6 +487,9 @@ describe("EventRouter scoped orchestration sync", () => {
     document.body.innerHTML = "";
     shellStreamRequestId = null;
     shellStreamClient = null;
+    serverLifecycleRequestId = null;
+    serverLifecycleClient = null;
+    suppressNextShellSnapshot = false;
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
@@ -532,6 +554,22 @@ describe("EventRouter scoped orchestration sync", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 2_000));
       expect(useStore.getState().spaces).toEqual([]);
       expect(getShellSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("re-arms the shell fallback when a reconnect snapshot does not arrive", async () => {
+    const mounted = await mountApp();
+
+    try {
+      suppressNextShellSnapshot = true;
+      sendServerWelcomePush();
+
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      await vi.waitFor(() => expect(getShellSnapshotRequestCount).toBe(1), {
+        timeout: 3_000,
+      });
     } finally {
       await mounted.cleanup();
     }

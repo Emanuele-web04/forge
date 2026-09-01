@@ -1128,7 +1128,8 @@ function EventRouter() {
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
-    let hasAppliedBootstrapShellSnapshot = false;
+    let shellSubscriptionGeneration = 0;
+    let shellSnapshotReceivedGeneration = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
@@ -1458,7 +1459,6 @@ function EventRouter() {
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
-      hasAppliedBootstrapShellSnapshot = true;
       const promotedDraftThreadIds = collectSubscribedDraftsInShell(snapshot.threads);
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
@@ -1469,32 +1469,36 @@ function EventRouter() {
     };
 
     // The live shell stream normally delivers the bootstrap snapshot. Only
-    // fall back until either the stream or a query has applied one. Collection
+    // fall back until either the stream or a query has returned one. Collection
     // emptiness is valid user state, so it cannot indicate whether bootstrap
     // succeeded. Every extra request recomputes and ships the whole sidebar
     // (about 1 MB per 600 threads) and queues behind the thread-detail snapshot
     // on the server's single SQLite connection.
-    const needsBootstrapShellSnapshot = () => !hasAppliedBootstrapShellSnapshot;
+    const needsBootstrapShellSnapshot = (generation: number) =>
+      shellSnapshotReceivedGeneration < generation;
 
-    const loadBootstrapShellSnapshotIfMissing = async () => {
-      if (disposed || !needsBootstrapShellSnapshot()) return;
+    const loadBootstrapShellSnapshotIfMissing = async (generation: number) => {
+      if (
+        disposed ||
+        generation !== shellSubscriptionGeneration ||
+        !needsBootstrapShellSnapshot(generation)
+      ) {
+        return;
+      }
       const snapshot = await api.orchestration.getShellSnapshot();
-      if (disposed) return;
+      if (disposed || generation !== shellSubscriptionGeneration) return;
+      shellSnapshotReceivedGeneration = generation;
       applyQueriedShellSnapshot(snapshot);
     };
 
-    // Arms the one-shot fallback query if it is not already pending. Deferring
-    // it gives the shell stream's own snapshot time to land first, so a healthy
-    // connect never issues the query at all; not re-arming keeps a fast
-    // reconnect loop from postponing the fallback indefinitely.
+    // Each subscription generation owns one fallback timer. Deferring it gives
+    // the shell stream's snapshot time to land first, while replacing an older
+    // generation's timer keeps reconnect recovery tied to the current stream.
     let shellSnapshotFallbackTimer: number | null = null;
-    const scheduleShellSnapshotFallback = () => {
-      if (shellSnapshotFallbackTimer !== null) {
-        return;
-      }
+    const scheduleShellSnapshotFallback = (generation: number) => {
       shellSnapshotFallbackTimer = window.setTimeout(() => {
         shellSnapshotFallbackTimer = null;
-        void loadBootstrapShellSnapshotIfMissing().catch(() => undefined);
+        void loadBootstrapShellSnapshotIfMissing(generation).catch(() => undefined);
       }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     };
 
@@ -1513,10 +1517,19 @@ function EventRouter() {
       if (scopedSubscriptionRefresh) {
         return scopedSubscriptionRefresh;
       }
+      shellSubscriptionGeneration += 1;
+      const generation = shellSubscriptionGeneration;
+      if (shellSnapshotFallbackTimer !== null) {
+        window.clearTimeout(shellSnapshotFallbackTimer);
+        shellSnapshotFallbackTimer = null;
+      }
+      scheduleShellSnapshotFallback(generation);
       const refresh = (async () => {
         shellSnapshotSequence = -1;
         pendingShellEvents = [];
-        await api.orchestration.subscribeShell().catch(() => loadBootstrapShellSnapshotIfMissing());
+        await api.orchestration
+          .subscribeShell()
+          .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
           pendingThreadEventsById.clear();
@@ -1859,7 +1872,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
-        hasAppliedBootstrapShellSnapshot = true;
+        shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
         syncServerShellSnapshot(item.snapshot);
@@ -2096,7 +2109,6 @@ function EventRouter() {
         if (disposed) {
           return;
         }
-        scheduleShellSnapshotFallback();
 
         if (!payload.bootstrapProjectId || !payload.bootstrapThreadId) {
           return;
@@ -2211,9 +2223,6 @@ function EventRouter() {
     });
     subscribed = true;
     void ensureScopedSubscriptions();
-    // The shell stream normally delivers the sidebar snapshot. If it fails before
-    // the first event, use the same lightweight query instead of the full history.
-    scheduleShellSnapshotFallback();
     const threadDetailCatchupInterval = window.setInterval(() => {
       const now = Date.now();
       let availableProjectionReconcileSlots = Math.max(
