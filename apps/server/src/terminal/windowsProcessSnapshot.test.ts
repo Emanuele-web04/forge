@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ProcessChildrenMap } from "./processTreeKiller";
 import {
-  captureWindowsProcessChildrenMapForTeardown,
   createWindowsProcessSnapshotObserver,
+  createWindowsTeardownProcessSnapshotObserver,
   parseWindowsProcessSnapshotLine,
   type ProcessChildrenSnapshotWorker,
 } from "./windowsProcessSnapshot";
@@ -159,19 +159,28 @@ describe("Windows process snapshots", () => {
     observer.dispose();
   });
 
-  it("bypasses observer backoff when teardown needs a fresh snapshot", async () => {
-    const fallbackSnapshot = snapshot([{ ppid: 400, pid: 401, command: "provider.exe" }]);
-    const observer = {
-      capture: vi.fn().mockResolvedValue(null),
-      retryDelayMs: vi.fn().mockReturnValue(2_000),
+  it("retries teardown snapshots within the process-exit proof window", async () => {
+    let now = 10_000;
+    const recoveredSnapshot = snapshot([{ ppid: 400, pid: 401, command: "provider.exe" }]);
+    const failedWorker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockRejectedValue(new Error("CIM unavailable")),
       dispose: vi.fn(),
     };
-    const fallback = vi.fn().mockResolvedValue(fallbackSnapshot);
+    const recoveredWorker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockResolvedValue(recoveredSnapshot),
+      dispose: vi.fn(),
+    };
+    const workers = [failedWorker, recoveredWorker];
+    const observer = createWindowsTeardownProcessSnapshotObserver({
+      createWorker: () => workers.shift() ?? recoveredWorker,
+      now: () => now,
+    });
 
-    await expect(captureWindowsProcessChildrenMapForTeardown(observer, fallback)).resolves.toBe(
-      fallbackSnapshot,
-    );
-    expect(observer.capture).toHaveBeenCalledTimes(1);
-    expect(fallback).toHaveBeenCalledTimes(1);
+    await expect(observer.capture()).resolves.toBeNull();
+    expect(observer.retryDelayMs()).toBe(100);
+
+    now += 100;
+    await expect(observer.capture()).resolves.toBe(recoveredSnapshot);
+    observer.dispose();
   });
 });

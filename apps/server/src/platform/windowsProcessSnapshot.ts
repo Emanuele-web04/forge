@@ -13,6 +13,8 @@ import type { ProcessChildrenMap } from "./processTreeController";
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
 const DEFAULT_RETRY_BACKOFF_BASE_MS = 2_000;
 const DEFAULT_RETRY_BACKOFF_MAX_MS = 30_000;
+const TEARDOWN_RETRY_BACKOFF_BASE_MS = 100;
+const TEARDOWN_RETRY_BACKOFF_MAX_MS = 250;
 const MAX_SNAPSHOT_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 const SNAPSHOT_START_MARKER = "@snapshot";
@@ -71,6 +73,11 @@ export interface WindowsProcessSnapshotObserverOptions {
   retryBackoffBaseMs?: number;
   retryBackoffMaxMs?: number;
 }
+
+type WindowsTeardownProcessSnapshotObserverOptions = Omit<
+  WindowsProcessSnapshotObserverOptions,
+  "retryBackoffBaseMs" | "retryBackoffMaxMs"
+>;
 
 function powershellExecutablePath(): string {
   return path.win32.join(
@@ -347,18 +354,18 @@ export function createWindowsProcessSnapshotObserver(
   };
 }
 
-/**
- * Reuses the shared worker while it is healthy, but bypasses its retry backoff
- * when a teardown needs a current process-table proof before its deadline.
- */
-export async function captureWindowsProcessChildrenMapForTeardown(
-  observer: ProcessChildrenSnapshotObserver,
-  fallback: () => Promise<ProcessChildrenMap | null> = captureWindowsProcessChildrenMap,
-): Promise<ProcessChildrenMap | null> {
-  return (await observer.capture()) ?? fallback();
+/** Keeps teardown recovery inside its short proof windows without spawning fallback probes. */
+export function createWindowsTeardownProcessSnapshotObserver(
+  options: WindowsTeardownProcessSnapshotObserverOptions = {},
+): ProcessChildrenSnapshotObserver {
+  return createWindowsProcessSnapshotObserver({
+    ...options,
+    retryBackoffBaseMs: TEARDOWN_RETRY_BACKOFF_BASE_MS,
+    retryBackoffMaxMs: TEARDOWN_RETRY_BACKOFF_MAX_MS,
+  });
 }
 
-/** One-shot fallback for teardown owners; terminal manager uses a shared observer. */
+/** One-shot fallback for callers that do not own a shared observer. */
 export async function captureWindowsProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   const observer = createWindowsProcessSnapshotObserver();
   try {

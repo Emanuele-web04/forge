@@ -14,10 +14,7 @@ import {
   type ProcessTreeKiller,
   type TerminalKillSignal,
 } from "./processTreeController";
-import {
-  captureWindowsProcessChildrenMapForTeardown,
-  createWindowsProcessSnapshotObserver,
-} from "./windowsProcessSnapshot";
+import { createWindowsTeardownProcessSnapshotObserver } from "./windowsProcessSnapshot";
 
 const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
@@ -153,11 +150,8 @@ export async function teardownProviderProcessTree(
     dependencies.captureProcessTree === undefined &&
     dependencies.inspectProcessTree === undefined &&
     dependencies.processTreeKiller === undefined
-      ? createWindowsProcessSnapshotObserver()
+      ? createWindowsTeardownProcessSnapshotObserver()
       : null;
-  const captureWindowsChildren = windowsObserver
-    ? () => captureWindowsProcessChildrenMapForTeardown(windowsObserver)
-    : undefined;
   const captureTree =
     dependencies.captureProcessTree ??
     (dependencies.processTreeKiller
@@ -165,7 +159,7 @@ export async function teardownProviderProcessTree(
       : async (rootPid: number) =>
           captureProcessTree(rootPid, {
             platform,
-            ...(captureWindowsChildren ? { captureWindowsChildren } : {}),
+            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
           }));
   const inspectTree =
     dependencies.inspectProcessTree ??
@@ -178,7 +172,7 @@ export async function teardownProviderProcessTree(
       : async (tree: CapturedProcessTree) =>
           inspectProcessTree(tree, {
             platform,
-            ...(captureWindowsChildren ? { captureWindowsChildren } : {}),
+            ...(windowsObserver ? { captureWindowsChildren: windowsObserver.capture } : {}),
           }));
   const now = dependencies.now ?? Date.now;
   const sleep =
