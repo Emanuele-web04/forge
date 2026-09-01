@@ -6291,9 +6291,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         window.requestAnimationFrame = originalRequestAnimationFrame;
       }
 
-      // The list virtualizer may legitimately schedule a few measurement frames
-      // after a project reset; this assertion guards against runaway rAF loops.
-      expect(frameRequestCount).toBeLessThanOrEqual(3);
+      expect(frameRequestCount).toBe(0);
       expect(document.activeElement).toBe(composerEditor);
       await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();

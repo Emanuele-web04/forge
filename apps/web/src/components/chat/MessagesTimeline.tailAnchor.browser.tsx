@@ -23,7 +23,7 @@ const VIEWPORT_HEIGHT_PX = 420;
 const BASE_BOTTOM_INSET_PX = 64;
 // maintainScrollAtEnd re-sticks within its threshold rather than to the exact
 // pixel bottom; anything within this tolerance counts as following the tail.
-const AUTO_FOLLOW_TOLERANCE_PX = 120;
+const AUTO_FOLLOW_TOLERANCE_PX = 96;
 const FIRST_SENT_MESSAGE_ID = "sent-user-message";
 const SECOND_SENT_MESSAGE_ID = "sent-user-message-2";
 const FIRST_STREAMING_MESSAGE_ID = "streaming-assistant-message";
