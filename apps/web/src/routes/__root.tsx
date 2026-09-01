@@ -1449,15 +1449,12 @@ function EventRouter() {
       }
     }
 
-    const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (disposed) return;
+    const applyAuthoritativeShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
+      if (disposed) return false;
       // A query can resolve after the live shell stream has already moved
       // forward. Never roll the store back behind the EventRouter fence.
       if (shellSnapshotSequence >= 0 && snapshot.snapshotSequence < shellSnapshotSequence) {
-        return;
-      }
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return;
+        return false;
       }
       const promotedDraftThreadIds = collectSubscribedDraftsInShell(snapshot.threads);
       shellSnapshotSequence = snapshot.snapshotSequence;
@@ -1466,6 +1463,14 @@ function EventRouter() {
       removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
+      return true;
+    };
+
+    const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
+      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
+        return false;
+      }
+      return applyAuthoritativeShellSnapshot(snapshot);
     };
 
     // The live shell stream normally delivers the bootstrap snapshot. Only
@@ -1486,9 +1491,16 @@ function EventRouter() {
         return;
       }
       const snapshot = await api.orchestration.getShellSnapshot();
-      if (disposed || generation !== shellSubscriptionGeneration) return;
-      shellSnapshotReceivedGeneration = generation;
-      applyQueriedShellSnapshot(snapshot);
+      if (
+        disposed ||
+        generation !== shellSubscriptionGeneration ||
+        !needsBootstrapShellSnapshot(generation)
+      ) {
+        return;
+      }
+      if (applyAuthoritativeShellSnapshot(snapshot)) {
+        shellSnapshotReceivedGeneration = generation;
+      }
     };
 
     // Each subscription generation owns one fallback timer. Deferring it gives

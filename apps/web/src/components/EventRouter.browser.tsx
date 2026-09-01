@@ -559,10 +559,18 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("re-arms the shell fallback when a reconnect snapshot does not arrive", async () => {
+  it("applies the shell fallback when a reconnect snapshot does not arrive", async () => {
     const mounted = await mountApp();
 
     try {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: fixture.snapshot.threads.map((thread) => ({
+          ...thread,
+          title: "Updated after reconnect",
+        })),
+      };
       suppressNextShellSnapshot = true;
       sendServerWelcomePush();
 
@@ -570,6 +578,11 @@ describe("EventRouter scoped orchestration sync", () => {
       await vi.waitFor(() => expect(getShellSnapshotRequestCount).toBe(1), {
         timeout: 3_000,
       });
+      await vi.waitFor(() =>
+        expect(getThreadFromState(useStore.getState(), THREAD_ID)?.title).toBe(
+          "Updated after reconnect",
+        ),
+      );
     } finally {
       await mounted.cleanup();
     }
