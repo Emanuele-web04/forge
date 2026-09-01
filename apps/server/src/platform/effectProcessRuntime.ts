@@ -22,14 +22,27 @@ export function makeEffectProcessCommand(
   args: ReadonlyArray<string>,
   options: EffectProcessRuntimeOptions = {},
 ): ReturnType<typeof ChildProcess.make> {
-  const { platform, requireExecutable, ...commandOptions } = options;
+  const { platform, requireExecutable: _requireExecutable, ...commandOptions } = options;
+  const effectivePlatform = platform ?? process.platform;
+
+  // Effect's ChildProcessSpawner is injectable. Keep executable existence and
+  // POSIX PATH resolution behind that seam so test/runtime spawners receive the
+  // logical command and can translate spawn failures in their owning domain.
+  // Windows still needs centralized launch planning for PATHEXT, batch shims,
+  // PowerShell scripts, and WSL dispatch before the spawner receives the command.
+  if (effectivePlatform !== "win32") {
+    return ChildProcess.make(command, [...args], {
+      ...commandOptions,
+      shell: false,
+    });
+  }
+
   const cwd = typeof commandOptions.cwd === "string" ? commandOptions.cwd : undefined;
   const env = commandOptions.env as NodeJS.ProcessEnv | undefined;
   const plan = prepareProcess(command, args, {
-    ...(platform !== undefined ? { platform } : {}),
+    platform: effectivePlatform,
     ...(cwd !== undefined ? { cwd } : {}),
     ...(env !== undefined ? { env } : {}),
-    ...(requireExecutable !== undefined ? { requireExecutable } : {}),
   });
 
   return ChildProcess.make(plan.command, plan.args, {
