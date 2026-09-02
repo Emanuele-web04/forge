@@ -476,17 +476,28 @@ describe("synara_read_kanban_card", () => {
 });
 
 describe("synara_create_kanban_task", () => {
+  /** A creation-saga payload that satisfies the SynaraCreateThreadsResult contract. */
   const createOk = (threadIds: string[]) =>
     Effect.succeed(
       mcpOk({
         operationId: "op-1",
+        requestId: "req-1",
         requestedCount: threadIds.length,
         createdCount: threadIds.length,
         threadIds,
-        threads: threadIds.map((threadId) => ({
-          index: 0,
+        threads: threadIds.map((threadId, index) => ({
+          index,
           threadId,
+          projectId: "project-a",
           title: "created",
+          target: { provider: "claudeAgent", model: "sonnet-5" },
+          provider: "claudeAgent",
+          model: "sonnet-5",
+          runtimeMode: "approval-required",
+          environment: "local",
+          branch: null,
+          worktreePath: null,
+          status: "task_dispatched",
         })),
       }),
     );
@@ -623,7 +634,7 @@ describe("synara_create_kanban_task", () => {
     await Promise.allSettled(heldResults);
   });
 
-  it("falls back to the raw saga result when its payload is not valid JSON", async () => {
+  it("fails explicitly when the saga result is not valid JSON", async () => {
     const sagaContent = [{ type: "text" as const, text: "{not json" }];
     const { tools } = makeTools({
       threads: [],
@@ -634,8 +645,10 @@ describe("synara_create_kanban_task", () => {
       title: "Fix bug",
       requestId: "req-malformed-json",
     });
-    expect(result.isError).toBe(false);
-    expect(result.content).toEqual(sagaContent);
+    expect(result.isError).toBe(true);
+    expect((jsonText(result) as { __errorText?: string }).__errorText).toContain(
+      "could not decode the creation saga result",
+    );
   });
 
   it.each([
@@ -664,7 +677,7 @@ describe("synara_create_kanban_task", () => {
       payload: { operationId: 7, threadIds: ["thread-x"] },
     },
   ])(
-    "falls back to the raw saga result for valid JSON with a wrong-shaped $label",
+    "fails explicitly when the saga result is valid JSON with a wrong-shaped $label",
     async ({ payload }) => {
       const sagaText = JSON.stringify(payload);
       const sagaContent = [{ type: "text" as const, text: sagaText }];
@@ -677,8 +690,10 @@ describe("synara_create_kanban_task", () => {
         title: "Fix bug",
         requestId: "req-wrong-shape",
       });
-      expect(result.isError).toBe(false);
-      expect(result.content).toEqual(sagaContent);
+      expect(result.isError).toBe(true);
+      expect((jsonText(result) as { __errorText?: string }).__errorText).toContain(
+        "could not decode the creation saga result",
+      );
     },
   );
 });

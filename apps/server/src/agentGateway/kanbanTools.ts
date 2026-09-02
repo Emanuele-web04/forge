@@ -1,7 +1,8 @@
 import {
   type OrchestrationThreadShell,
   type TurnDispatchMode,
-  type SynaraCreateThreadsInput,
+  SynaraCreateThreadsInput,
+  SynaraCreateThreadsResult,
 } from "@synara/contracts";
 import {
   deriveKanbanColumnV2,
@@ -11,7 +12,7 @@ import {
   type KanbanColumnV2Key,
   type KanbanThreadDerivationInput,
 } from "@synara/shared/kanban";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import {
   isOrdinaryProjectRow,
@@ -538,69 +539,33 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             );
             if (result.isError) return result;
             const content = result.content[0];
-            const batch = (() => {
-              if (content?.type !== "text") {
-                return null;
-              }
-              let parsed: unknown;
-              try {
-                parsed = JSON.parse(content.text);
-              } catch {
-                return null;
-              }
-              if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-                return null;
-              }
-              const record = parsed as Record<string, unknown>;
-              if (record.operationId !== undefined && typeof record.operationId !== "string") {
-                return null;
-              }
-              const threads = Array.isArray(record.threads) ? record.threads : undefined;
-              if (record.threads !== undefined && threads === undefined) {
-                return null;
-              }
-              const threadIds = Array.isArray(record.threadIds) ? record.threadIds : undefined;
-              if (record.threadIds !== undefined && threadIds === undefined) {
-                return null;
-              }
-              const firstThread =
-                threads !== undefined && threads.length > 0 ? threads[0] : undefined;
-              if (
-                firstThread !== undefined &&
-                (typeof firstThread !== "object" ||
-                  firstThread === null ||
-                  Array.isArray(firstThread))
-              ) {
-                return null;
-              }
-              const fromThreadsThreadId =
-                typeof firstThread === "object" && firstThread !== null
-                  ? (firstThread as Record<string, unknown>).threadId
-                  : undefined;
-              if (fromThreadsThreadId !== undefined && typeof fromThreadsThreadId !== "string") {
-                return null;
-              }
-              if (Array.isArray(threadIds) && threadIds.some((id) => typeof id !== "string")) {
-                return null;
-              }
-              const fromThreadIds = Array.isArray(threadIds) ? threadIds[0] : undefined;
-              return {
-                operationId:
-                  typeof record.operationId === "string" ? record.operationId : undefined,
-                createdThreadId:
-                  typeof fromThreadsThreadId === "string"
-                    ? fromThreadsThreadId
-                    : typeof fromThreadIds === "string"
-                      ? fromThreadIds
-                      : undefined,
-              };
-            })();
-            // The creation saga returns `threadIds` / per-thread `threads`, never a
-            // top-level `threadId`; read the first created thread so the create →
-            // read → move loop works against the real contract shape. The card
-            // view is decoration: a projection that has not caught up yet must not
-            // turn an already-successful creation into a tool error.
-            const createdThreadId = batch?.createdThreadId;
+            if (content?.type !== "text") {
+              return yield* Effect.fail(
+                new GatewayToolError(
+                  "operation_failed",
+                  "synara_create_kanban_task received no JSON payload from the creation saga; the operation may have succeeded — retry with the same requestId (it replays exactly-once) or check the board.",
+                ),
+              );
+            }
+            // The creation saga returns a SynaraCreateThreadsResult (`threadIds`
+            // / per-thread `threads`, never a top-level `threadId`). Decode it
+            // against the shared contract so shape drift fails loudly instead of
+            // degrading into an unparseable card view.
+            const batch = yield* Effect.try({
+              try: () =>
+                Schema.decodeUnknownSync(SynaraCreateThreadsResult)(JSON.parse(content.text)),
+              catch: (error) =>
+                new GatewayToolError(
+                  "operation_failed",
+                  "synara_create_kanban_task could not decode the creation saga result as SynaraCreateThreadsResult; the operation may have succeeded — retry with the same requestId (it replays exactly-once) or check the board.",
+                  { reason: errorText(error) },
+                ),
+            });
+            // Read the first created thread so the create → read → move loop
+            // works against the real contract shape. The card view is
+            // decoration: a projection that has not caught up yet must not turn
+            // an already-successful creation into a tool error.
+            const createdThreadId = batch.threads[0]?.threadId ?? batch.threadIds[0];
             if (!createdThreadId) return result;
             const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
             const createdCard = Option.isSome(threadShell)
@@ -621,7 +586,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                   attention: [],
                 };
             return mcpToolResultJson({
-              operationId: batch?.operationId,
+              operationId: batch.operationId,
               threadId: createdThreadId,
               title: createdCard.title,
               status: "task_dispatched",
