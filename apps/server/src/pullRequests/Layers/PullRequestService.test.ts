@@ -1,5 +1,5 @@
 import { ProjectId } from "@synara/contracts";
-import type { OrchestrationProject } from "@synara/contracts";
+import type { OrchestrationProject, WorkItemSearchResult } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -1031,6 +1031,79 @@ describe("isDefinitivePullRequestNotFound", () => {
     expect(results.thirdAfter.items).toEqual([workItem]);
     expect(results.differentQuery.items).toEqual([workItem]);
     expect(ghCalls.filter((call) => call.startsWith("workItem search"))).toHaveLength(2);
+  });
+
+  it("does not cache unavailable or degraded work item searches", async () => {
+    const project = makeProject(
+      "project-work-items-uncached",
+      "Work items uncached",
+      "/tmp/work-items",
+    );
+    const workItem = {
+      kind: "issue" as const,
+      number: 5,
+      title: "Issue five",
+      state: "open" as const,
+      url: "https://github.com/acme/shared/issues/5",
+      bodyExcerpt: "body",
+      createdAt: now,
+      updatedAt: now,
+    };
+    const base = createGitHubCliWithFakeGh().service;
+    const responses: WorkItemSearchResult[] = [
+      { available: false, errorHint: "gh is not installed.", items: [] },
+      {
+        available: true,
+        errorHint: "Some GitHub results may be missing because a search request failed.",
+        items: [],
+      },
+      { available: true, errorHint: null, items: [workItem] },
+    ];
+    let searchReads = 0;
+    const github: GitHubCliShape = {
+      ...base,
+      searchWorkItems: () =>
+        Effect.sync(() => {
+          const response = responses[Math.min(searchReads, responses.length - 1)]!;
+          searchReads += 1;
+          return response;
+        }),
+    };
+
+    const results = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [project],
+              repositories: new Map([[project.id, "acme/shared"]]),
+              github,
+            }),
+          );
+          const search = () =>
+            service.searchWorkItems({
+              cwd: "/tmp/work-items",
+              repository: "acme/shared",
+              query: "",
+              limit: 20,
+            });
+          const first = yield* search();
+          const second = yield* search();
+          const third = yield* search();
+          const fourth = yield* Effect.flatMap(Effect.yieldNow, search);
+          return { first, second, third, fourth } as const;
+        }),
+      ),
+    );
+
+    // first is unavailable and second is degraded, so both must hit gh fresh;
+    // third is healthy and fourth reuses its cache entry.
+    expect(searchReads).toBe(3);
+    expect(results.first.available).toBe(false);
+    expect(results.second.errorHint).not.toBeNull();
+    expect(results.third.errorHint).toBeNull();
+    expect(results.third.items).toEqual([workItem]);
+    expect(results.fourth.items).toEqual([workItem]);
   });
 
   it("maps gh availability for the composer attach affordance", async () => {

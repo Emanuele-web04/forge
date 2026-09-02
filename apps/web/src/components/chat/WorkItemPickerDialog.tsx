@@ -87,7 +87,11 @@ export function WorkItemPickerDialog({
               <div className="flex h-24 items-center justify-center">
                 <Spinner className="size-4" />
               </div>
-            ) : search.error || search.data?.available === false ? (
+            ) : search.error ||
+              search.data?.available === false ||
+              // Degraded all-empty results carry a hint; without this check they
+              // would be indistinguishable from a genuinely empty repository.
+              (search.data?.items.length === 0 && search.data?.errorHint != null) ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
                 <p className="text-sm text-muted-foreground">
                   {search.error instanceof Error

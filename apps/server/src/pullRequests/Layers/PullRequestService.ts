@@ -159,7 +159,15 @@ export const makePullRequestService = (
     const workItemSearchCache = yield* makeKeyedSingleFlightCache<
       WorkItemSearchResult,
       GitHubCliError
-    >({ maxEntries: WORK_ITEM_SEARCH_CACHE_MAX_ENTRIES, ttlMs: 30_000 });
+    >({
+      maxEntries: WORK_ITEM_SEARCH_CACHE_MAX_ENTRIES,
+      // Unavailable and degraded results must not pin the failure for the full
+      // TTL: a user who runs `gh auth login` mid-session would otherwise keep
+      // seeing the cached unavailable state. TTL 0 still lets concurrent
+      // identical searches join one gh round trip, but the next request
+      // immediately hits gh fresh.
+      ttlMs: (result) => (result.available && result.errorHint === null ? 30_000 : 0),
+    });
 
     const pullRequestMutationCacheFinalizer = (
       repository: string,

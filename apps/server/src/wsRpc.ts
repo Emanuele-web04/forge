@@ -868,6 +868,31 @@ const makeWsRpcHandlersLayer = () =>
         }
       });
 
+      // Shared trust boundary for the work item RPCs: the client sends a cwd,
+      // but it must be an absolute, normalized, real directory before git/gh
+      // run inside it. Trailing separators are tolerated: path.resolve drops
+      // them while path.normalize keeps them, so compare on the stripped form.
+      // Any absolute directory is accepted deliberately: these RPCs are strictly
+      // read-only (the GitHub repository is resolved from the directory's own
+      // git remote and only `gh search`/`gh api` reads run there), and the rest
+      // of this RPC surface (git status, branches, PR lists, ...) already
+      // accepts a client-supplied cwd, so restricting work items to registered
+      // project roots would not shrink real access. Returns the resolved cwd,
+      // or null when the path fails validation.
+      const resolveValidatedWorkItemCwd = (rawCwd: string) =>
+        Effect.gen(function* () {
+          const candidateCwd = rawCwd.replace(/[\\/]+$/, "") || rawCwd;
+          const resolvedCwd = path.resolve(candidateCwd);
+          if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
+            return null;
+          }
+          const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
+            Effect.map((info) => info.type === "Directory"),
+            Effect.orElseSucceed(() => false),
+          );
+          return cwdExistsAndIsDirectory ? resolvedCwd : null;
+        });
+
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
@@ -1462,31 +1487,15 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.workItemsSearch]: (input) =>
           Effect.gen(function* () {
-            // Trust boundary: the client sends a cwd, but we must verify it is an
-            // absolute, normalized, real directory before running git/gh inside it.
-            // Trailing separators are tolerated: path.resolve drops them while
-            // path.normalize keeps them, so compare on the stripped form.
-            const candidateCwd = input.cwd.replace(/[\\/]+$/, "") || input.cwd;
-            const resolvedCwd = path.resolve(candidateCwd);
-            if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
+            const validatedCwd = yield* resolveValidatedWorkItemCwd(input.cwd);
+            if (validatedCwd === null) {
               return {
                 available: false,
                 errorHint: "Invalid workspace path.",
                 items: [],
               };
             }
-            const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
-              Effect.map((info) => info.type === "Directory"),
-              Effect.orElseSucceed(() => false),
-            );
-            if (!cwdExistsAndIsDirectory) {
-              return {
-                available: false,
-                errorHint: "Workspace does not exist.",
-                items: [],
-              };
-            }
-            const resolved = yield* resolveGitHubRepository(git, resolvedCwd);
+            const resolved = yield* resolveGitHubRepository(git, validatedCwd);
             if (!resolved.repository) {
               return {
                 available: false,
@@ -1496,7 +1505,7 @@ const makeWsRpcHandlersLayer = () =>
             }
             return yield* pullRequests.searchWorkItems({
               ...input,
-              cwd: resolvedCwd,
+              cwd: validatedCwd,
               repository: resolved.repository.nameWithOwner,
             });
           }).pipe(
@@ -1516,25 +1525,15 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.workItemsAvailability]: (input) =>
           Effect.gen(function* () {
-            // Same trust boundary as workItemsSearch: validate the client-supplied
-            // cwd before running git/gh inside it.
-            const candidateCwd = input.cwd.replace(/[\\/]+$/, "") || input.cwd;
-            const resolvedCwd = path.resolve(candidateCwd);
-            if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
+            const validatedCwd = yield* resolveValidatedWorkItemCwd(input.cwd);
+            if (validatedCwd === null) {
               return { status: "no-repository" as const, hint: "Invalid workspace path." };
             }
-            const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
-              Effect.map((info) => info.type === "Directory"),
-              Effect.orElseSucceed(() => false),
-            );
-            if (!cwdExistsAndIsDirectory) {
-              return { status: "no-repository" as const, hint: "Workspace does not exist." };
-            }
-            const resolved = yield* resolveGitHubRepository(git, resolvedCwd);
+            const resolved = yield* resolveGitHubRepository(git, validatedCwd);
             if (!resolved.repository) {
               return { status: "no-repository" as const, hint: null };
             }
-            return yield* pullRequests.workItemsAuthStatus({ cwd: resolvedCwd });
+            return yield* pullRequests.workItemsAuthStatus({ cwd: validatedCwd });
           }).pipe(
             // Repository resolution fails outside a git work tree (and on
             // transient git errors). Either way the attach affordance cannot

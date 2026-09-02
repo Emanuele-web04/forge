@@ -13,7 +13,12 @@ export const WorkItemAttachment = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   state: WorkItemState,
-  url: TrimmedNonEmptyString,
+  // Attachments are rendered as clickable GitHub links, so a relative or
+  // arbitrary string must not decode: require an http/https URL.
+  url: Schema.Union([
+    TrimmedNonEmptyString.check(Schema.isStartsWith("https://")),
+    TrimmedNonEmptyString.check(Schema.isStartsWith("http://")),
+  ]),
   bodyExcerpt: Schema.String.check(Schema.isMaxLength(500)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

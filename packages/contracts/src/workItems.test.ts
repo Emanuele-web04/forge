@@ -57,6 +57,27 @@ describe("WorkItem schemas", () => {
     expect(result).toEqual(pr);
   });
 
+  it("requires attachment urls to be http/https", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({
+        ...validAttachment,
+        url: "https://github.com/owner/repo/issues/123",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, url: "http://x" }),
+    ).not.toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, url: "ftp://x" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, url: "/issues/123" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(WorkItemAttachment)({ ...validAttachment, url: "" }),
+    ).toThrow();
+  });
+
   it("decodes a search input with defaults", () => {
     const result = Schema.decodeUnknownSync(WorkItemSearchInput)({ cwd: "/repo" });
     expect(result).toEqual({ cwd: "/repo", query: "", limit: 20 });
