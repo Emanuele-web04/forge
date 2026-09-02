@@ -173,12 +173,19 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
    * surfaces a couple of operationally-useful signals pulled from the MCP
    * result text (board truncation, dispatched column) so board saturation and
    * move patterns are observable without parsing JSON-RPC traffic by hand.
-   * The result is returned unchanged.
+   * Normalized non-secret arguments (threadId, target column, projectId,
+   * requestId) are logged alongside so the log answers "who moved what where"
+   * without the prompt bodies. The result is returned unchanged.
    */
   function withKanbanToolAudit(
     toolName: string,
     run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
   ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
+    /** Trimmed string arg for the audit log; undefined when absent/non-string. */
+    const auditArg = (args: Record<string, unknown>, key: string): string | undefined => {
+      const value = args[key];
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+    };
     return (args, context) =>
       run(args, context).pipe(
         Effect.tap((result) => {
@@ -186,11 +193,19 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           const payload = textContent?.type === "text" ? textContent.text : "";
           const truncated = payload.includes('"truncated":true');
           const outcome = result.isError ? "error" : truncated ? "truncated" : "ok";
+          const threadId = auditArg(args, "threadId");
+          const target = auditArg(args, "target");
+          const projectId = auditArg(args, "projectId");
+          const requestId = auditArg(args, "requestId");
           return Effect.logInfo("agent_gateway.kanban_tool", {
             tool: toolName,
             callerSessionKey: context.callerSessionKey,
             callerThreadId: context.callerThreadId,
             outcome,
+            ...(threadId !== undefined ? { threadId } : {}),
+            ...(target !== undefined ? { target } : {}),
+            ...(projectId !== undefined ? { projectId } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
           });
         }),
       );
