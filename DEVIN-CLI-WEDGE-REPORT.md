@@ -42,3 +42,17 @@ Investigate `toolbox::tools::exec::session_manager` for (a) the `sandbox_manager
 ## Reproduction hints
 
 Rapid alternating exec calls with short-lived sessions (the incidents had ~5s gaps between exec calls, with the prior session's stop still in flight). A stress harness that fires N short exec calls back-to-back through `devin acp` may reproduce; both observed wedges happened within 42 minutes of each other on the same workload.
+
+## Synthetic ACP validation (2026-09-02)
+
+Because the live SWE 1.7 ACP sessions exhausted their daily usage quota, a dependency-free mock ACP child was built to exercise Synara's real adapter/runtime recovery.
+
+- Mock: `/tmp/synara-pr912/mock/acp-devin-wedge-mock.mjs`.
+- Mock acceptance harness: 41/41 checks, covering `stall-watch`, `spawn-stall`, healthy `none`, `unwedge` (progress clears spawn stall), and wire logging.
+- Integration script: `/tmp/synara-pr912/integration/run-adapter-recovery.mjs`.
+- Integration result (real timers, real `DevinAdapter`, real `makeDevinAcpRuntime`):
+  - `stall-watch`: wedged turn cancelled → session restarted with `session/resume` → `"continue"` turn completed, warning emitted.
+  - `spawn-stall`: same cancellation/resume/continue flow completed.
+  - Exit code 0, `recovery success: true`, session `ready` after recovery.
+- One synthetic race was mitigated in the fixture: the mock emits `affogato::stall_watch` ~1 ms after progress events, and the adapter's notification loop clears stall state on turn progress. The real Devin stall warning is emitted only after 30 s of silence, so this ordering does not occur in production; the fixture delays stderr by 0.4 s to preserve the natural "progress first, warning later" ordering.
+- Live SWE 1.7 stress: three clean sequential iterations (180 exec sessions, no wedge signatures) and four useful parallel iterations before the daily quota (`-32011 resource_exhausted`) halted further reproduction. The original deadlock was not reproduced.
