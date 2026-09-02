@@ -223,12 +223,23 @@ async function ensureCodexOverlaySymlink(input: {
   await linkOrCopyCodexOverlayEntry(input);
 }
 
+function isExactConfigLine(line: string, expected: string): boolean {
+  // Match whole lines only. The expected text can legitimately appear inside
+  // a TOML string value (for example in a multiline instruction) and must not
+  // be mistaken for a structural line there.
+  return (line.endsWith("\r") ? line.slice(0, -1) : line) === expected;
+}
+
+function configHasExactLine(config: string, expected: string): boolean {
+  return config.split("\n").some((line) => isExactConfigLine(line, expected));
+}
+
 export function appendCodexConfigSection(config: string, section: string): string {
   const trimmedSection = section.trim();
   if (!trimmedSection) {
     return config;
   }
-  if (config.includes(trimmedSection.split("\n")[0] ?? trimmedSection)) {
+  if (configHasExactLine(config, trimmedSection.split("\n")[0] ?? trimmedSection)) {
     return config;
   }
   const base = config.trimEnd();
@@ -239,16 +250,23 @@ export const SYNARA_MANAGED_CODEX_CONFIG_BEGIN = "# >>> synara managed config >>
 export const SYNARA_MANAGED_CODEX_CONFIG_END = "# <<< synara managed config <<<";
 
 export function extractManagedCodexConfigSection(config: string): string | undefined {
-  const begin = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_BEGIN);
+  const lines = config.split("\n");
+  const begin = lines.findIndex((line) =>
+    isExactConfigLine(line, SYNARA_MANAGED_CODEX_CONFIG_BEGIN),
+  );
   if (begin === -1) {
     return undefined;
   }
-  const contentStart = begin + SYNARA_MANAGED_CODEX_CONFIG_BEGIN.length;
-  const end = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_END, contentStart);
+  const end = lines.findIndex(
+    (line, index) => index > begin && isExactConfigLine(line, SYNARA_MANAGED_CODEX_CONFIG_END),
+  );
   if (end === -1) {
     return undefined;
   }
-  const content = config.slice(contentStart, end).trim();
+  const content = lines
+    .slice(begin + 1, end)
+    .join("\n")
+    .trim();
   return content.length > 0 ? content : undefined;
 }
 
@@ -553,7 +571,13 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
 }
 
 function appendManagedCodexConfigSection(config: string, section: string): string {
-  let overlayConfig = config;
+  // A development/Canary Synara can be launched from a terminal managed by
+  // another Synara instance. In that case CODEX_HOME points at the parent
+  // instance's overlay, whose managed block contains the parent's MCP port.
+  // Drop that complete block before rebuilding this instance's overlay;
+  // otherwise appendCodexConfigSection sees the old marker and keeps the
+  // stale endpoint instead of appending the replacement.
+  let overlayConfig = removeManagedCodexConfigSections(config);
   const managedMcpTableName = normalizeTomlTableHeaderName(SYNARA_MANAGED_MCP_TABLE_HEADER);
   const tables: string[] = [];
 
@@ -582,6 +606,34 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
     overlayConfig,
     `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
+}
+
+function removeManagedCodexConfigSections(config: string): string {
+  const lines = config.split("\n");
+  const kept: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (!isExactConfigLine(line, SYNARA_MANAGED_CODEX_CONFIG_BEGIN)) {
+      kept.push(line);
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (
+      end < lines.length &&
+      !isExactConfigLine(lines[end] ?? "", SYNARA_MANAGED_CODEX_CONFIG_END)
+    ) {
+      end += 1;
+    }
+    if (end === lines.length) {
+      // Do not discard user config after an incomplete marker.
+      kept.push(...lines.slice(index));
+      break;
+    }
+    index = end + 1;
+  }
+  return kept.join("\n");
 }
 
 async function serializeCodexOverlayPreparation<A>(

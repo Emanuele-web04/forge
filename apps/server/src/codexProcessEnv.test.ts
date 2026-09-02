@@ -184,4 +184,91 @@ describe("buildCodexProcessEnv", () => {
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
+
+  it("replaces the managed MCP endpoint inherited from another Synara overlay", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-parent-overlay-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-child-runtime-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+      "",
+      "[shell_environment_policy]",
+      'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: [
+          "[mcp_servers.synara]",
+          'url = "http://127.0.0.1:64449/mcp"',
+          'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+          "",
+          "[shell_environment_policy]",
+          'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+        ].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores managed marker text embedded in TOML string values", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-text-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-runtime-"));
+    const sourceConfig = [
+      'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      'guide = """',
+      "  # >>> synara managed config >>>",
+      "  keep this indented text intact",
+      "  # <<< synara managed config <<<",
+      '"""',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain(
+        'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      );
+      expect(overlayConfig).toContain("  keep this indented text intact");
+      expect(overlayConfig).toContain("  # >>> synara managed config >>>");
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
 });
