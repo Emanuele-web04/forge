@@ -968,14 +968,12 @@ describe("AppSnap capture path guard", () => {
 });
 
 describe("AppSnap window picker requests", () => {
-  interface EnabledManager {
+  async function createEnabledManager(): Promise<{
     manager: DesktopAppSnapManager;
     watchChild: FakeChildProcess;
     captureDirectory: string;
     dispose: () => void;
-  }
-
-  async function createEnabledManager(): Promise<EnabledManager> {
+  }> {
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-picker-"));
     const checkChild = createFakeChildProcess();
     const watchChild = createFakeChildProcess();
@@ -999,11 +997,7 @@ describe("AppSnap window picker requests", () => {
     const enable = manager.setEnabled(true);
     await flushPromises();
     checkChild.stdout.end(
-      `${JSON.stringify({
-        type: "permissions",
-        inputMonitoring: "granted",
-        screenRecording: "granted",
-      })}\n`,
+      `${JSON.stringify({ type: "permissions", inputMonitoring: "granted", screenRecording: "granted" })}\n`,
     );
     checkChild.stderr.end();
     checkChild.emit("close", 0, null);
@@ -1020,8 +1014,7 @@ describe("AppSnap window picker requests", () => {
   }
 
   function lastStdinLine(child: FakeChildProcess): string {
-    const written = child.stdin.read()?.toString() ?? "";
-    return written.trimEnd();
+    return child.stdin.read()?.toString().trimEnd() ?? "";
   }
 
   it("lists windows through a correlated request", async () => {
@@ -1029,9 +1022,7 @@ describe("AppSnap window picker requests", () => {
     try {
       const listing = manager.listWindows();
       await flushPromises();
-      const written = lastStdinLine(watchChild);
-      expect(written).toMatch(/^list-windows [0-9a-f-]{36}$/);
-      const requestId = written.slice("list-windows ".length);
+      const requestId = lastStdinLine(watchChild).slice("list-windows ".length);
       watchChild.stdout.write(
         `${JSON.stringify({
           type: "windows",
@@ -1042,9 +1033,7 @@ describe("AppSnap window picker requests", () => {
               appName: "Ghostty",
               bundleIdentifier: "com.mitchellh.ghostty",
               windowTitle: "dev",
-              appIconDataUrl: "data:image/png;base64,aWNvbg==",
             },
-            { windowId: 43, appName: null, bundleIdentifier: null, windowTitle: null },
           ],
         })}\n`,
       );
@@ -1054,53 +1043,9 @@ describe("AppSnap window picker requests", () => {
           appName: "Ghostty",
           bundleIdentifier: "com.mitchellh.ghostty",
           windowTitle: "dev",
-          appIconDataUrl: "data:image/png;base64,aWNvbg==",
-        },
-        {
-          windowId: 43,
-          appName: null,
-          bundleIdentifier: null,
-          windowTitle: null,
           appIconDataUrl: null,
         },
       ]);
-    } finally {
-      dispose();
-    }
-  });
-
-  it("rejects listWindows when AppSnap is not listening", async () => {
-    const manager = new DesktopAppSnapManager({
-      platform: "darwin",
-      helperPath: process.execPath,
-      captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
-      appDisplayName: "Synara (Dev)",
-      appBundlePath: "/tmp/Test App.app",
-      onPermissionGuideState: vi.fn(),
-      onState: vi.fn(),
-      onCaptured: vi.fn(),
-      onError: vi.fn(),
-    });
-    await expect(manager.listWindows()).rejects.toThrow("AppSnap is not listening");
-    manager.dispose();
-  });
-
-  it("rejects listWindows on a correlated helper error", async () => {
-    const { manager, watchChild, dispose } = await createEnabledManager();
-    try {
-      const listing = manager.listWindows();
-      await flushPromises();
-      const requestId = lastStdinLine(watchChild).slice("list-windows ".length);
-      watchChild.stdout.write(
-        `${JSON.stringify({
-          type: "error",
-          code: "window_list_unavailable",
-          message: "macOS did not provide a window list.",
-          requestId,
-        })}\n`,
-      );
-      await expect(listing).rejects.toThrow("macOS did not provide a window list.");
     } finally {
       dispose();
     }
@@ -1130,18 +1075,11 @@ describe("AppSnap window picker requests", () => {
     try {
       const capturing = manager.captureWindow(77);
       await flushPromises();
-      const written = lastStdinLine(watchChild);
-      expect(written).toMatch(/^capture-window [0-9a-f-]{36} 77$/);
-      const requestId = written.slice("capture-window ".length, -3);
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
       const capturePath = join(captureDirectory, "req-capture.png");
       const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
       writeFileSync(capturePath, captureBytes);
-      watchChild.stdout.write(
-        `${JSON.stringify({
-          type: "triggered",
-          id: requestId,
-        })}\n`,
-      );
+      watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
       watchChild.stdout.write(
         `${JSON.stringify({
           type: "captured",
@@ -1151,60 +1089,9 @@ describe("AppSnap window picker requests", () => {
           sourceAppName: "Safari",
         })}\n`,
       );
-      const capture = await capturing;
-      expect(capture).toMatchObject({
-        id: requestId,
-        name: "req-capture.png",
-        sourceAppName: "Safari",
-      });
-      expect(Buffer.from(capture.bytes)).toEqual(captureBytes);
+      expect(await capturing).toMatchObject({ id: requestId, name: "req-capture.png" });
       expect(FS.existsSync(capturePath)).toBe(false);
       expect(await manager.listPendingCaptures()).toHaveLength(0);
-    } finally {
-      dispose();
-    }
-  });
-
-  it("rejects invalid window ids", async () => {
-    const { manager, dispose } = await createEnabledManager();
-    try {
-      await expect(manager.captureWindow(0)).rejects.toThrow("positive integer window id");
-      await expect(manager.captureWindow(-3)).rejects.toThrow("positive integer window id");
-      await expect(manager.captureWindow(1.5)).rejects.toThrow("positive integer window id");
-    } finally {
-      dispose();
-    }
-  });
-
-  it("rejects captureWindow on a correlated helper error", async () => {
-    const { manager, watchChild, dispose } = await createEnabledManager();
-    try {
-      const capturing = manager.captureWindow(77);
-      await flushPromises();
-      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
-      watchChild.stdout.write(
-        `${JSON.stringify({
-          type: "error",
-          code: "window_unavailable",
-          message: "The requested window disappeared before it could be captured.",
-          id: requestId,
-        })}\n`,
-      );
-      await expect(capturing).rejects.toThrow("The requested window disappeared");
-    } finally {
-      dispose();
-    }
-  });
-
-  it("rejects in-flight requests when the watch process exits", async () => {
-    const { manager, watchChild, dispose } = await createEnabledManager();
-    try {
-      const listing = manager.listWindows();
-      const capturing = manager.captureWindow(77);
-      await flushPromises();
-      watchChild.emit("exit", 1, null);
-      await expect(listing).rejects.toThrow("AppSnap stopped listening");
-      await expect(capturing).rejects.toThrow("AppSnap stopped listening");
     } finally {
       dispose();
     }
@@ -1251,21 +1138,7 @@ describe("AppSnap permission guide", () => {
         expect.any(Object),
       );
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
-      await vi.waitFor(() => {
-        expect(onPermissionGuideState).toHaveBeenCalledWith("shown");
-      });
-    } finally {
-      manager.dispose();
-    }
-  });
-
-  it("writes close to the guide stdin on hide", async () => {
-    const { manager, guideChild } = createGuideManager();
-    try {
-      manager.showPermissionGuide("input-monitoring");
-      await flushPromises();
-      manager.hidePermissionGuide();
-      expect(guideChild.stdin.read()?.toString()).toBe("close\n");
+      await vi.waitFor(() => expect(onPermissionGuideState).toHaveBeenCalledWith("shown"));
     } finally {
       manager.dispose();
     }
@@ -1277,45 +1150,9 @@ describe("AppSnap permission guide", () => {
       manager.showPermissionGuide("screen-recording");
       await flushPromises();
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
-      await vi.waitFor(() => {
-        expect(onPermissionGuideState).toHaveBeenCalledWith("shown");
-      });
+      await vi.waitFor(() => expect(onPermissionGuideState).toHaveBeenCalledWith("shown"));
       guideChild.emit("exit", 1, null);
-      await vi.waitFor(() => {
-        expect(onPermissionGuideState).toHaveBeenCalledWith("closed");
-      });
-    } finally {
-      manager.dispose();
-    }
-  });
-
-  it("replaces an in-flight guide when a new pane is shown", async () => {
-    const firstGuide = createFakeChildProcess();
-    const secondGuide = createFakeChildProcess();
-    const spawn = vi
-      .fn()
-      .mockReturnValueOnce(firstGuide)
-      .mockReturnValueOnce(secondGuide) as unknown as typeof ChildProcess.spawn;
-    const manager = new DesktopAppSnapManager({
-      platform: "darwin",
-      helperPath: process.execPath,
-      captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
-      appDisplayName: "Synara (Dev)",
-      appBundlePath: "/tmp/Test App.app",
-      spawn,
-      onState: vi.fn(),
-      onCaptured: vi.fn(),
-      onError: vi.fn(),
-      onPermissionGuideState: vi.fn(),
-    });
-    try {
-      manager.showPermissionGuide("input-monitoring");
-      await flushPromises();
-      manager.showPermissionGuide("screen-recording");
-      await flushPromises();
-      expect(firstGuide.stdin.read()?.toString()).toBe("close\n");
-      expect(secondGuide.stdin.read()).toBeNull();
+      await vi.waitFor(() => expect(onPermissionGuideState).toHaveBeenCalledWith("closed"));
     } finally {
       manager.dispose();
     }

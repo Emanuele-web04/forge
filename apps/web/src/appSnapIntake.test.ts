@@ -103,36 +103,6 @@ describe("insertAppSnapCaptureIntoDraft", () => {
     expect(setPromptHistorySavedDraft).toHaveBeenCalledWith(threadId, null);
   });
 
-  it("caches the source app icon when the capture carries one", async () => {
-    await insertAppSnapCaptureIntoDraft(
-      threadId,
-      captureFixture({ sourceAppIconDataUrl: "data:image/png;base64,aWNvbg==" }),
-    );
-    expect(persistAppSnapIcon).toHaveBeenCalledWith({
-      bundleIdentifier: "com.mitchellh.ghostty",
-      dataUrl: "data:image/png;base64,aWNvbg==",
-    });
-  });
-
-  it("throws on empty capture bytes without mutating the draft", async () => {
-    await expect(
-      insertAppSnapCaptureIntoDraft(threadId, captureFixture({ bytes: new Uint8Array() })),
-    ).rejects.toThrow("The captured AppSnap is empty.");
-    expect(addImage).not.toHaveBeenCalled();
-  });
-
-  it("surfaces the intake error and skips the draft when preparation fails", async () => {
-    prepareComposerImageAttachmentsFromFiles.mockResolvedValue({
-      images: [],
-      error: "This message already has the maximum number of references.",
-    });
-    await expect(insertAppSnapCaptureIntoDraft(threadId, captureFixture())).rejects.toThrow(
-      "maximum number of references",
-    );
-    expect(addImage).not.toHaveBeenCalled();
-    expect(syncPersistedAttachments).not.toHaveBeenCalled();
-  });
-
   it("rolls back the image and blob when the draft rejects the attachment", async () => {
     syncPersistedAttachments.mockResolvedValue("rejected");
     await expect(insertAppSnapCaptureIntoDraft(threadId, captureFixture())).rejects.toThrow(

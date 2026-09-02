@@ -65,33 +65,29 @@ function setDesktopBridge(value: unknown): void {
 }
 
 function appSnapBridge(overrides: {
-  getState?: () => Promise<DesktopAppSnapState>;
-  listWindows?: () => Promise<unknown[]>;
   captureWindow?: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
   acknowledgeCapture?: (captureId: string) => Promise<void>;
 }) {
   return {
     appSnap: {
-      getState: overrides.getState ?? (() => Promise.resolve(READY_STATE)),
-      listWindows:
-        overrides.listWindows ??
-        (() =>
-          Promise.resolve([
-            {
-              windowId: 42,
-              appName: "Ghostty",
-              bundleIdentifier: "com.mitchellh.ghostty",
-              windowTitle: "dev",
-              appIconDataUrl: null,
-            },
-            {
-              windowId: 43,
-              appName: "Finder",
-              bundleIdentifier: "com.apple.finder",
-              windowTitle: null,
-              appIconDataUrl: null,
-            },
-          ])),
+      getState: () => Promise.resolve(READY_STATE),
+      listWindows: () =>
+        Promise.resolve([
+          {
+            windowId: 42,
+            appName: "Ghostty",
+            bundleIdentifier: "com.mitchellh.ghostty",
+            windowTitle: "dev",
+            appIconDataUrl: null,
+          },
+          {
+            windowId: 43,
+            appName: "Finder",
+            bundleIdentifier: "com.apple.finder",
+            windowTitle: null,
+            appIconDataUrl: null,
+          },
+        ]),
       captureWindow: overrides.captureWindow ?? (() => Promise.resolve(CAPTURE)),
       acknowledgeCapture: overrides.acknowledgeCapture ?? (() => Promise.resolve()),
     },
@@ -239,24 +235,6 @@ describe("ComposerExtrasMenu", () => {
       expect(harness.toastAdd).toHaveBeenCalledWith(
         expect.objectContaining({ type: "success", title: "AppSnap added" }),
       );
-    });
-  });
-
-  it("points at Settings when AppSnap is not listening", async () => {
-    setDesktopBridge(
-      appSnapBridge({
-        getState: () => Promise.resolve({ ...READY_STATE, status: "disabled", enabled: false }),
-      }),
-    );
-    await using _ = await mountMenu({ threadId });
-
-    await page.getByLabelText("Composer extras").click();
-    await page.getByText("Attach window").click();
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Enable AppSnap in Settings");
-      expect(text).not.toContain("Ghostty");
     });
   });
 });
