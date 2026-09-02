@@ -12,6 +12,8 @@ export type SidebarUiState = {
   chatSectionExpanded: boolean;
   chatThreadListExtraPages: number;
   projectThreadListExtraPagesByCwd: Record<string, number>;
+  /** Paging keyed by stable project id; preferred over the legacy cwd map. */
+  projectThreadListExtraPagesById: Record<string, number>;
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
   lastThreadRoute: LastThreadRoute | null;
   /** Swaps the Projects surface for the flat task-feed Activity view. */
@@ -22,6 +24,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   chatSectionExpanded: false,
   chatThreadListExtraPages: 0,
   projectThreadListExtraPagesByCwd: {},
+  projectThreadListExtraPagesById: {},
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
   activityViewEnabled: false,
@@ -40,6 +43,54 @@ function sanitizeThreadListExtraPages(value: unknown): number {
     return 0;
   }
   return Math.min(Math.max(0, Math.floor(value)), MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES);
+}
+
+function sanitizeProjectThreadListExtraPagesById(
+  value: Record<string, unknown> | undefined,
+): Record<string, number> {
+  const extraPagesById: Record<string, number> = {};
+  for (const [projectId, rawExtraPages] of Object.entries(value ?? {})) {
+    if (projectId.length === 0) {
+      continue;
+    }
+    const extraPages = sanitizeThreadListExtraPages(rawExtraPages);
+    if (extraPages <= 0) {
+      continue;
+    }
+    extraPagesById[projectId] = Math.max(extraPagesById[projectId] ?? 0, extraPages);
+  }
+  return extraPagesById;
+}
+
+/**
+ * Paging lookup that survives project rename/move: the stable project id wins,
+ * and pre-migration entries persisted by normalized cwd still apply as fallback.
+ */
+function isExtraPagesMap(
+  value: Readonly<Record<string, number>> | ReadonlyMap<string, number>,
+): value is ReadonlyMap<string, number> {
+  return value instanceof Map;
+}
+
+export function resolveProjectThreadListExtraPages(input: {
+  extraPagesById: Readonly<Record<string, number>> | ReadonlyMap<string, number>;
+  legacyExtraPagesByCwd: Readonly<Record<string, number>> | ReadonlyMap<string, number>;
+  projectId: string;
+  projectCwd: string;
+}): number {
+  const byId = isExtraPagesMap(input.extraPagesById)
+    ? (input.extraPagesById.get(input.projectId) ?? 0)
+    : (input.extraPagesById[input.projectId] ?? 0);
+  if (byId > 0) {
+    return byId;
+  }
+  const normalizedCwd = normalizeSidebarProjectThreadListCwd(input.projectCwd);
+  if (normalizedCwd.length === 0) {
+    return 0;
+  }
+  return isExtraPagesMap(input.legacyExtraPagesByCwd)
+    ? (input.legacyExtraPagesByCwd.get(normalizedCwd) ?? 0)
+    : (input.legacyExtraPagesByCwd[normalizedCwd] ?? 0);
 }
 
 function sanitizeProjectThreadListExtraPagesByCwd(
@@ -76,6 +127,7 @@ export function readSidebarUiState(): SidebarUiState {
       chatSectionExpanded?: boolean;
       chatThreadListExtraPages?: number;
       projectThreadListExtraPagesByCwd?: Record<string, unknown>;
+      projectThreadListExtraPagesById?: Record<string, unknown>;
       /** Legacy (pre-paging) all-or-nothing "Show more" flags, migrated to one extra page. */
       chatThreadListExpanded?: boolean;
       expandedProjectThreadListCwds?: string[];
@@ -122,6 +174,9 @@ export function readSidebarUiState(): SidebarUiState {
           ? 1
           : sanitizeThreadListExtraPages(parsed.chatThreadListExtraPages),
       projectThreadListExtraPagesByCwd,
+      projectThreadListExtraPagesById: sanitizeProjectThreadListExtraPagesById(
+        parsed.projectThreadListExtraPagesById,
+      ),
       dismissedThreadStatusKeyByThreadId: Object.fromEntries(
         Object.entries(parsed.dismissedThreadStatusKeyByThreadId ?? {}).filter(
           ([threadId, statusKey]) =>
@@ -170,6 +225,9 @@ export function persistSidebarUiState(input: SidebarUiState): void {
         chatThreadListExtraPages: sanitizeThreadListExtraPages(input.chatThreadListExtraPages),
         projectThreadListExtraPagesByCwd: sanitizeProjectThreadListExtraPagesByCwd(
           input.projectThreadListExtraPagesByCwd,
+        ),
+        projectThreadListExtraPagesById: sanitizeProjectThreadListExtraPagesById(
+          input.projectThreadListExtraPagesById,
         ),
         dismissedThreadStatusKeyByThreadId: Object.fromEntries(
           Object.entries(input.dismissedThreadStatusKeyByThreadId).filter(
