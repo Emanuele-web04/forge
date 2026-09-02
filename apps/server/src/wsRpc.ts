@@ -112,6 +112,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
@@ -367,6 +368,7 @@ const makeWsRpcHandlersLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const keepAwake = yield* KeepAwakeService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -2002,6 +2004,20 @@ const makeWsRpcHandlersLayer = () =>
               }).pipe(Stream.map((settings) => ({ settings }))),
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
+        [WS_METHODS.subscribeServerKeepAwake]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.keep-awake" },
+            Stream.concat(
+              Stream.fromEffect(keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state })))),
+              bufferLiveUiStream(keepAwake.streamChanges, {
+                label: "server.keep-awake",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((state) => ({ keepAwake: state }))),
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Server keep-awake stream failed")),
             ),
           ),
 

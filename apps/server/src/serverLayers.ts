@@ -38,6 +38,7 @@ import { ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
+import { KeepAwakeLive } from "./keepAwake";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
@@ -224,6 +225,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const keepAwakeLayer = KeepAwakeLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
+  );
 
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
@@ -253,6 +258,7 @@ export function makeServerRuntimeServicesLayer(
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,
+    keepAwakeLayer,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     authServicesLayer,
