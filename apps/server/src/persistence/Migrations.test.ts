@@ -14,6 +14,7 @@ import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurablePro
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
+import MindRuntimeIntegrityMigration from "./Migrations/100_MindRuntimeIntegrity.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -912,29 +913,56 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
       }),
   );
 
-  it.effect("creates constrained provenance and project-scoped durable receipts", () =>
+  it.effect(
+    "creates constrained provenance and durable receipts that survive projection deletes",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        for (const projectId of ["p1", "p2"]) {
+          yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${`receipt-${projectId}`}, ${projectId}, ${`/${projectId}`}, '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+        }
+        const invalidProvenance = yield* Effect.flip(
+          sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, provenance_kind) VALUES ('bad', 'p1', 'bad provenance', 'semantic', 'bad-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'system')`,
+        );
+        assert.isDefined(invalidProvenance);
+
+        const invalidOp = yield* Effect.flip(
+          sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'bad-op', 'explode', '{}', '2026-09-01T00:00:00.000Z')`,
+        );
+        assert.isDefined(invalidOp);
+
+        yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{"id":"one"}', '2026-09-01T00:00:00.000Z')`;
+        yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p2', 'same-op', 'remember', '{"id":"two"}', '2026-09-01T00:00:00.000Z')`;
+        const duplicate = yield* Effect.flip(
+          sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{}', '2026-09-01T00:00:00.000Z')`,
+        );
+        assert.isDefined(duplicate);
+        // Projection repair deletes and reinserts projection_projects; receipts
+        // must survive that cycle instead of being cascade-wiped.
+        yield* sql`DELETE FROM projection_projects WHERE project_id = 'receipt-p1'`;
+        const receipts = yield* sql<{
+          readonly projectId: string;
+        }>`SELECT project_id AS "projectId" FROM mind_operation_receipts ORDER BY project_id`;
+        assert.deepStrictEqual(receipts, [
+          { projectId: "receipt-p1" },
+          { projectId: "receipt-p2" },
+        ]);
+      }),
+  );
+
+  it.effect("re-backfills provenance when the migration body replays after the column exists", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations();
-      for (const projectId of ["p1", "p2"]) {
-        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${`receipt-${projectId}`}, ${projectId}, ${`/${projectId}`}, '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
-      }
-      const invalidProvenance = yield* Effect.flip(
-        sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, provenance_kind) VALUES ('bad', 'p1', 'bad provenance', 'semantic', 'bad-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'system')`,
-      );
-      assert.isDefined(invalidProvenance);
+      yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id, source_provider) VALUES ('replay-agent', 'p1', 'replay agent memory', 'semantic', 'replay-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-1', 'codex')`;
 
-      yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{"id":"one"}', '2026-09-01T00:00:00.000Z')`;
-      yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p2', 'same-op', 'remember', '{"id":"two"}', '2026-09-01T00:00:00.000Z')`;
-      const duplicate = yield* Effect.flip(
-        sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{}', '2026-09-01T00:00:00.000Z')`,
-      );
-      assert.isDefined(duplicate);
-      yield* sql`DELETE FROM projection_projects WHERE project_id = 'receipt-p1'`;
-      const receipts = yield* sql<{
-        readonly projectId: string;
-      }>`SELECT project_id AS "projectId" FROM mind_operation_receipts ORDER BY project_id`;
-      assert.deepStrictEqual(receipts, [{ projectId: "receipt-p2" }]);
+      yield* MindRuntimeIntegrityMigration;
+
+      const rows = yield* sql<{
+        readonly provenanceKind: string;
+      }>`SELECT provenance_kind AS "provenanceKind" FROM mind_memories WHERE id = 'replay-agent'`;
+      assert.deepStrictEqual(rows, [{ provenanceKind: "agent" }]);
     }),
   );
 
