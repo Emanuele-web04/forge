@@ -9,7 +9,11 @@ import {
 
 describe("keepAwake copy helpers", () => {
   it("exposes the three modes in On / Agent / Off order", () => {
-    expect(KEEP_AWAKE_MODE_OPTIONS.map((option) => option.value)).toEqual(["always", "agent", "off"]);
+    expect(KEEP_AWAKE_MODE_OPTIONS.map((option) => option.value)).toEqual([
+      "always",
+      "agent",
+      "off",
+    ]);
     expect(KEEP_AWAKE_MODE_OPTIONS.map((option) => option.label)).toEqual(["On", "Agent", "Off"]);
     for (const option of KEEP_AWAKE_MODE_OPTIONS) {
       expect(option.description.length).toBeGreaterThan(0);

@@ -251,7 +251,12 @@ describe("KeepAwakeService", () => {
         expect((yield* keepAwake.getState).active).toBe(false);
         yield* PubSub.publish(
           eventsPubSub,
-          sessionSetEvent({ threadId: "t1", status: "running", activeTurnId: "turn-1", sequence: 1 }),
+          sessionSetEvent({
+            threadId: "t1",
+            status: "running",
+            activeTurnId: "turn-1",
+            sequence: 1,
+          }),
         );
         yield* waitFor(keepAwake.getState, (state) => state.active);
         expect(harness.spawned).toHaveLength(1);

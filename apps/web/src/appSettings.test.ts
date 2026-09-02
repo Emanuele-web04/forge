@@ -1068,8 +1068,8 @@ describe("keepAwakeMode mapping", () => {
     expect(appSettingsPatchToServerSettingsPatch({ keepAwakeMode: "agent" })).toEqual({
       keepAwakeMode: "agent",
     });
-    expect(appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true })).not.toHaveProperty(
-      "keepAwakeMode",
-    );
+    expect(
+      appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
+    ).not.toHaveProperty("keepAwakeMode");
   });
 });

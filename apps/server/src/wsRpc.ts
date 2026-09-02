@@ -2011,7 +2011,9 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: "server.keep-awake" },
             Stream.concat(
-              Stream.fromEffect(keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state })))),
+              Stream.fromEffect(
+                keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state }))),
+              ),
               bufferLiveUiStream(keepAwake.streamChanges, {
                 label: "server.keep-awake",
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,

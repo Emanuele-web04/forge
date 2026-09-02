@@ -125,7 +125,9 @@ interface ProcessState {
 }
 
 function sameState(a: ServerKeepAwakeState, b: ServerKeepAwakeState): boolean {
-  return a.available === b.available && a.mode === b.mode && a.active === b.active && a.error === b.error;
+  return (
+    a.available === b.available && a.mode === b.mode && a.active === b.active && a.error === b.error
+  );
 }
 
 export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
@@ -183,7 +185,11 @@ export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
         });
         return;
       }
-      yield* Effect.logWarning("caffeinate exited unexpectedly; restarting", { code, signal, restarts });
+      yield* Effect.logWarning("caffeinate exited unexpectedly; restarting", {
+        code,
+        signal,
+        restarts,
+      });
       yield* Effect.sleep(runtime.restartDelay(restarts));
       yield* reconcile;
     });
@@ -244,8 +250,7 @@ export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
     const initialMode: KeepAwakeMode = initialSettings?.keepAwakeMode ?? "off";
     yield* Ref.set(modeRef, initialMode);
 
-    const available =
-      runtime.platform === "darwin" && (yield* runtime.isBinaryAvailable);
+    const available = runtime.platform === "darwin" && (yield* runtime.isBinaryAvailable);
     yield* publish({ available, mode: initialMode });
 
     // Register the domain-event subscriber before seeding so no session

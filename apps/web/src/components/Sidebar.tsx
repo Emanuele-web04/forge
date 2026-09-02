@@ -683,8 +683,13 @@ type ThreadMetaChip = {
 export function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-    | "creationSource" | "sourceThreadId"
+    | "forkSourceThreadId"
+    | "sidechatSourceThreadId"
+    | "envMode"
+    | "worktreePath"
+    | "handoff"
+    | "creationSource"
+    | "sourceThreadId"
   >;
   includeHandoffBadge: boolean;
   /**
@@ -891,7 +896,10 @@ function SidebarKeepAwakeMenu({
         icon={CoffeeIcon}
         label={KEEP_AWAKE_ROW_TITLE}
         tooltip={keepAwakeTooltip(state)}
-        iconClassName={cn(sidebarGlyphClass("chrome"), KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME[indicator])}
+        iconClassName={cn(
+          sidebarGlyphClass("chrome"),
+          KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME[indicator],
+        )}
         data-testid="sidebar-keep-awake-button"
       />
       <ComposerPickerMenuPopup align="end" side="top" className="w-72 min-w-72">

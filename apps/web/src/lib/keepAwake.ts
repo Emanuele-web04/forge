@@ -16,7 +16,11 @@ export const KEEP_AWAKE_ROW_TITLE = "Keep computer awake";
 
 export const KEEP_AWAKE_MODE_OPTIONS: readonly KeepAwakeModeOption[] = [
   { value: "always", label: "On", description: "Keep this computer awake at all times." },
-  { value: "agent", label: "Agent", description: "Keep this computer awake while an agent is working." },
+  {
+    value: "agent",
+    label: "Agent",
+    description: "Keep this computer awake while an agent is working.",
+  },
   { value: "off", label: "Off", description: "Let the system sleep normally." },
 ];
 
