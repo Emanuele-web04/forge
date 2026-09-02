@@ -6,7 +6,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+import { PersistedProviderKind } from "./orchestration";
 
 export const MIND_MEMORY_TEXT_MAX_CHARS = 500;
 export const MIND_RECALL_QUERY_MAX_CHARS = 200;
@@ -37,7 +37,11 @@ export const MindMemory = Schema.Struct({
   createdAt: IsoDateTime,
   lastAccessedAt: IsoDateTime,
   provenance: Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("agent"), threadId: ThreadId, provider: ProviderKind }),
+    Schema.Struct({
+      kind: Schema.Literal("agent"),
+      threadId: ThreadId,
+      provider: PersistedProviderKind,
+    }),
     Schema.Struct({ kind: Schema.Literal("user") }),
   ]),
 });
@@ -74,7 +78,7 @@ export const MindJournalEntry = Schema.Struct({
   projectId: ProjectId,
   op: MindJournalOp,
   actor: Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("agent"), provider: ProviderKind }),
+    Schema.Struct({ kind: Schema.Literal("agent"), provider: PersistedProviderKind }),
     Schema.Struct({ kind: Schema.Literal("user") }),
   ]),
   threadId: Schema.NullOr(ThreadId),
