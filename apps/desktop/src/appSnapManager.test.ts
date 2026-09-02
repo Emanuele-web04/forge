@@ -1070,7 +1070,7 @@ describe("AppSnap window picker requests", () => {
     }
   });
 
-  it("captures a specific window without touching the pending queue", async () => {
+  it("captures a specific window and keeps a pending record until acknowledged", async () => {
     const { manager, watchChild, captureDirectory, dispose } = await createEnabledManager();
     try {
       const capturing = manager.captureWindow(77);
@@ -1089,11 +1089,116 @@ describe("AppSnap window picker requests", () => {
           sourceAppName: "Safari",
         })}\n`,
       );
-      expect(await capturing).toMatchObject({ id: requestId, name: "req-capture.png" });
+      const capture = await capturing;
+      expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
       expect(FS.existsSync(capturePath)).toBe(false);
+      expect(await manager.listPendingCaptures()).toHaveLength(1);
+      await manager.acknowledgeCapture(capture.id);
       expect(await manager.listPendingCaptures()).toHaveLength(0);
     } finally {
       dispose();
+    }
+  });
+
+  it("recovers an unacknowledged request-driven capture after a manager restart", async () => {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-request-restart-"));
+    const firstCheckChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(firstCheckChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const firstManager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara (Dev)",
+      appBundlePath: "/tmp/Test App.app",
+      onPermissionGuideState: vi.fn(),
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    try {
+      const enable = firstManager.setEnabled(true);
+      await flushPromises();
+      firstCheckChild.stdout.end(
+        `${JSON.stringify({
+          type: "permissions",
+          inputMonitoring: "granted",
+          screenRecording: "granted",
+        })}\n`,
+      );
+      firstCheckChild.stderr.end();
+      firstCheckChild.emit("close", 0, null);
+      await enable;
+
+      const capturing = firstManager.captureWindow(77);
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+      const capturePath = join(captureDirectory, "req-capture.png");
+      const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+      writeFileSync(capturePath, captureBytes);
+      watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "captured",
+          id: requestId,
+          path: capturePath,
+          name: "req-capture.png",
+          sourceAppName: "Safari",
+        })}\n`,
+      );
+      const capture = await capturing;
+      firstManager.dispose();
+
+      const restoredManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        appDisplayName: "Synara (Dev)",
+        appBundlePath: "/tmp/Test App.app",
+        onPermissionGuideState: vi.fn(),
+        spawn,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+      });
+      const restored = await restoredManager.listPendingCaptures();
+      expect(restored).toHaveLength(1);
+      expect(restored[0]).toMatchObject({
+        id: requestId,
+        name: "req-capture.png",
+        sourceAppName: "Safari",
+      });
+      expect(Buffer.from(restored[0]!.bytes)).toEqual(captureBytes);
+
+      await restoredManager.acknowledgeCapture(capture.id);
+      expect(await restoredManager.listPendingCaptures()).toHaveLength(0);
+      restoredManager.dispose();
+
+      const finalManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        appDisplayName: "Synara (Dev)",
+        appBundlePath: "/tmp/Test App.app",
+        onPermissionGuideState: vi.fn(),
+        spawn,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+      });
+      expect(await finalManager.listPendingCaptures()).toHaveLength(0);
+      finalManager.dispose();
+    } finally {
+      firstManager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
     }
   });
 });

@@ -891,6 +891,27 @@ export class DesktopAppSnapManager {
     });
   }
 
+  async #recordPendingCapture(pendingRecord: PendingAppSnapCaptureRecord): Promise<void> {
+    const nextPendingCaptures = [
+      ...this.#pendingCaptures.filter((entry) => entry.capture.id !== pendingRecord.capture.id),
+      pendingRecord,
+    ];
+    const discardedRecord =
+      nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
+    this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
+    if (discardedRecord) {
+      await this.#deletePendingCaptureFiles(discardedRecord).catch((error) =>
+        console.warn("[desktop-appsnap] Could not delete an overflow pending capture", error),
+      );
+      this.#emitCaptureError(
+        "pending-capture-overflow",
+        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
+        discardedRecord.capture.capturedAt,
+        false,
+      );
+    }
+  }
+
   #emitState(): void {
     this.#options.onState(this.getState());
   }
@@ -1317,24 +1338,7 @@ export class DesktopAppSnapManager {
     // owns the capture; deleting it earlier would destroy the only on-disk
     // copy when persistence fails transiently.
     await FS.promises.unlink(capturePath).catch(() => undefined);
-    const nextPendingCaptures = [
-      ...this.#pendingCaptures.filter((entry) => entry.capture.id !== capture.id),
-      pendingRecord,
-    ];
-    const discardedRecord =
-      nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
-    this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
-    if (discardedRecord) {
-      await this.#deletePendingCaptureFiles(discardedRecord).catch((error) =>
-        console.warn("[desktop-appsnap] Could not delete an overflow pending capture", error),
-      );
-      this.#emitCaptureError(
-        "pending-capture-overflow",
-        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
-        discardedRecord.capture.capturedAt,
-        false,
-      );
-    }
+    await this.#recordPendingCapture(pendingRecord);
     this.#options.onCaptured(capture);
   }
 
@@ -1342,10 +1346,13 @@ export class DesktopAppSnapManager {
     message: Extract<AppSnapHelperMessage, { type: "captured" }>,
   ): Promise<void> {
     const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
-    // Request-driven captures are synchronous: the caller receives the bytes
-    // directly, so the temporary file is deleted immediately and nothing is
-    // written to the pending queue for replay.
+    await this.#ensurePendingCapturesLoaded();
+    const pendingRecord = await this.#persistPendingCapture(capture);
+    // Keep a durable pending copy even for request-driven captures: a renderer
+    // crash before the capture is acknowledged would otherwise lose the
+    // screenshot when the helper's temporary file is deleted.
     await FS.promises.unlink(capturePath).catch(() => undefined);
+    await this.#recordPendingCapture(pendingRecord);
     this.#settleCaptureRequest(capture.id, capture);
   }
 

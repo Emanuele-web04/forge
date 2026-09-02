@@ -61,7 +61,7 @@ do {
     case let .permissionGuide(pane, appPath, appName):
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 
-        let coach: GrantCoach = MainActor.assumeIsolated {
+        let (coach, parentProcessMonitor): (GrantCoach, ParentProcessMonitor) = MainActor.assumeIsolated {
             let coach = GrantCoach(
                 appName: appName,
                 appPath: appPath,
@@ -80,7 +80,7 @@ do {
                 }
             )
             emitter.emitPermissionGuide(state: "shown")
-            return coach
+            return (coach, parentProcessMonitor)
         }
 
         // The parent closes the guide by writing a `close` line to stdin.
@@ -102,7 +102,7 @@ do {
 
         // NSApplication.run() is what pumps NSEvents; a bare RunLoop.main.run()
         // never dispatches mouse events, which left the drag chip dead.
-        withExtendedLifetime(coach) {
+        withExtendedLifetime((coach, parentProcessMonitor)) {
             NSApplication.shared.run()
         }
     }
