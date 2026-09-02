@@ -9,6 +9,7 @@ import {
   ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
+  CoffeeIcon,
   CopyIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
@@ -75,7 +76,9 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AutomationDefinition,
   type AutomationListResult,
+  type KeepAwakeMode,
   MAX_PINNED_PROJECTS,
+  type ServerKeepAwakeState,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
@@ -97,6 +100,14 @@ import {
   type SidebarThreadSortOrder,
   useAppSettings,
 } from "../appSettings";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import {
+  KEEP_AWAKE_MODE_OPTIONS,
+  KEEP_AWAKE_ROW_TITLE,
+  keepAwakeIndicatorState,
+  keepAwakeStatusLabel,
+  keepAwakeTooltip,
+} from "../lib/keepAwake";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -856,6 +867,69 @@ const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).sl
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
+const KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME = {
+  dimmed: "opacity-40",
+  default: "",
+  highlighted: "text-primary",
+  error: "text-destructive",
+} as const satisfies Record<ReturnType<typeof keepAwakeIndicatorState>, string>;
+
+// Footer keep-awake (caffeinate) indicator; sits left of the help menu and is
+// hidden entirely while the server reports keep-awake as unavailable.
+function SidebarKeepAwakeMenu({
+  state,
+  onSelectMode,
+}: {
+  state: ServerKeepAwakeState;
+  onSelectMode: (mode: KeepAwakeMode) => void;
+}) {
+  const indicator = keepAwakeIndicatorState(state.mode, state.active, state.error);
+  return (
+    <Menu>
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={CoffeeIcon}
+        label={KEEP_AWAKE_ROW_TITLE}
+        tooltip={keepAwakeTooltip(state)}
+        iconClassName={cn(sidebarGlyphClass("chrome"), KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME[indicator])}
+        data-testid="sidebar-keep-awake-button"
+      />
+      <ComposerPickerMenuPopup align="end" side="top" className="w-72 min-w-72">
+        <MenuGroup>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+            {KEEP_AWAKE_ROW_TITLE}
+          </div>
+          <div
+            className={cn(
+              "px-2 pb-1 text-[11px]",
+              state.error ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {state.error ?? keepAwakeStatusLabel(state)}
+          </div>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuRadioGroup
+          value={state.mode}
+          onValueChange={(value) => onSelectMode(value as KeepAwakeMode)}
+        >
+          {KEEP_AWAKE_MODE_OPTIONS.map((option) => (
+            <MenuRadioItem
+              key={option.value}
+              value={option.value}
+              className={cn(SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME, "min-h-7 py-1 sm:text-xs")}
+            >
+              <span className="flex min-w-0 flex-col">
+                <span>{option.label}</span>
+                <span className="text-[11px] text-muted-foreground">{option.description}</span>
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
 function SidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
@@ -1414,6 +1488,7 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
+  const keepAwakeState = useKeepAwakeState();
   // Projects is always available; Studio and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -6987,6 +7062,12 @@ export default function Sidebar() {
                     <span>Settings</span>
                   </SidebarMenuButton>
                 )}
+                {keepAwakeState?.available ? (
+                  <SidebarKeepAwakeMenu
+                    state={keepAwakeState}
+                    onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+                  />
+                ) : null}
                 {showDesktopUpdateButton ? (
                   <Tooltip>
                     <TooltipTrigger
