@@ -8,6 +8,7 @@ import { useState } from "react";
 import { StarFilledIcon, StarIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
+  DISCOVERY_OWNED_MODEL_PROVIDERS,
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   providerModelCostMultiplierLabel,
@@ -16,6 +17,7 @@ import {
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
 import type { ProviderKind } from "@synara/contracts";
+import type { FavoriteModelProvider } from "../../lib/modelFavorites";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
@@ -25,8 +27,6 @@ import {
   COMPOSER_PICKER_RADIUS_CLASS_NAME,
 } from "./composerPickerStyles";
 
-type FavoriteModelProvider = "cursor" | "opencode" | "pi";
-
 type ProviderModelOptionGroupListProps = {
   groupedOptions: ReadonlyArray<ProviderModelOptionGroup>;
   provider: ProviderKind;
@@ -35,7 +35,6 @@ type ProviderModelOptionGroupListProps = {
   favoriteProvider: FavoriteModelProvider | null;
   favoriteModelSlugSet: ReadonlySet<string> | undefined;
   onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
-  onAfterSelection?: () => void;
 };
 
 function ProviderModelRadioItem(
@@ -46,18 +45,10 @@ function ProviderModelRadioItem(
     isFavorite: boolean;
     showProvenance: boolean;
     onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
-    onAfterSelection?: () => void;
   }>,
 ) {
-  const {
-    provider,
-    modelOption,
-    favoriteProvider,
-    isFavorite,
-    showProvenance,
-    onToggleFavorite,
-    onAfterSelection,
-  } = props;
+  const { provider, modelOption, favoriteProvider, isFavorite, showProvenance, onToggleFavorite } =
+    props;
   const supportsFavorites = favoriteProvider !== null;
   const costMultiplierLabel =
     provider === "droid" ? providerModelCostMultiplierLabel(modelOption.description) : null;
@@ -65,15 +56,33 @@ function ProviderModelRadioItem(
   const provenanceLabel = showProvenance
     ? providerModelOptionProvenanceLabel({ provider, option: modelOption })
     : null;
-  const accessibleModelName = provenanceLabel
-    ? `${modelOption.name} — ${provenanceLabel}`
-    : modelOption.name;
+  const showUnavailableBadge =
+    modelOption.isSelectionHint === true && DISCOVERY_OWNED_MODEL_PROVIDERS.has(provider);
+
+  const accessibleModelName = [
+    modelOption.name,
+    showUnavailableBadge ? "Unavailable?" : null,
+    provenanceLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" — ");
+
+  const nameWithBadge = (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="block min-w-0 truncate">{modelOption.name}</span>
+      {showUnavailableBadge ? (
+        <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground/70">
+          Unavailable?
+        </span>
+      ) : null}
+    </span>
+  );
 
   return (
     <MenuRadioItem
       key={`${provider}:${modelOption.slug}`}
       value={modelOption.slug}
-      {...(provenanceLabel ? { "aria-label": accessibleModelName } : {})}
+      {...(provenanceLabel || showUnavailableBadge ? { "aria-label": accessibleModelName } : {})}
       preserveChildLayout={preserveChildLayout}
       className={costMultiplierLabel ? "grid-cols-[minmax(0,1fr)_auto]" : undefined}
       trailing={
@@ -115,9 +124,6 @@ function ProviderModelRadioItem(
           </span>
         ) : null
       }
-      onClick={() => {
-        onAfterSelection?.();
-      }}
     >
       {preserveChildLayout ? (
         <span
@@ -126,7 +132,7 @@ function ProviderModelRadioItem(
             supportsFavorites && COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
           )}
         >
-          <span className="block min-w-0 truncate">{modelOption.name}</span>
+          {nameWithBadge}
           {provenanceLabel ? (
             <span
               aria-hidden="true"
@@ -137,7 +143,7 @@ function ProviderModelRadioItem(
           ) : null}
         </span>
       ) : (
-        modelOption.name
+        nameWithBadge
       )}
     </MenuRadioItem>
   );
@@ -191,7 +197,6 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
             isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}
             showProvenance={group.key === "__favorites__"}
             onToggleFavorite={props.onToggleFavorite}
-            {...(props.onAfterSelection ? { onAfterSelection: props.onAfterSelection } : {})}
           />
         ));
 

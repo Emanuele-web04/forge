@@ -6788,6 +6788,121 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses a saved global Devin default for a fresh chat and first send", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ defaultProvider: "devin" }));
+    useComposerDraftStore.setState({
+      stickyModelSelectionByProvider: {
+        codex: { provider: "codex", model: "gpt-5.5" },
+      },
+      stickyActiveProvider: "codex",
+    });
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-global-devin-default-test" as MessageId,
+      targetText: "global Devin default test",
+    });
+    const project = snapshot.projects[0];
+    if (!project) {
+      throw new Error("Expected the test snapshot to contain a project.");
+    }
+    const snapshotWithoutProjectDefault = {
+      ...snapshot,
+      projects: snapshot.projects.map((item) =>
+        item.id === project.id ? { ...item, defaultModelSelection: null } : item,
+      ),
+    };
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: snapshotWithoutProjectDefault,
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: [
+            ...nextFixture.serverConfig.providers,
+            {
+              provider: "devin",
+              status: "ready",
+              available: true,
+              authStatus: "authenticated",
+              supportsAutoRuntimeMode: false,
+              checkedAt: NOW_ISO,
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await page.getByTestId("new-thread-button").click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should change to a Devin draft thread.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+          ).toBe(newThreadId);
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          expect(mounted.router.state.status).toBe("idle");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
+        modelSelectionByProvider: {
+          devin: { provider: "devin", model: "adaptive" },
+        },
+        activeProvider: "devin",
+      });
+      await expect.element(page.getByText("Adaptive", { exact: true })).toBeInTheDocument();
+
+      useComposerDraftStore.getState().setPrompt(newThreadId, "Use the saved Devin default");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(() =>
+        expect(composerEditor.textContent ?? "").toContain("Use the saved Devin default"),
+      );
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      const composerForm = document.querySelector<HTMLFormElement>(
+        'form[data-chat-composer-form="true"]',
+      );
+      expect(composerForm).not.toBeNull();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      composerForm!.requestSubmit();
+
+      await vi.waitFor(() => {
+        const commands = wsRequests
+          .map(readDispatchedCommand)
+          .filter((command) => command !== null);
+        expect(commands).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "thread.create",
+              threadId: newThreadId,
+              modelSelection: expect.objectContaining({ provider: "devin", model: "adaptive" }),
+            }),
+            expect.objectContaining({
+              type: "thread.turn.start",
+              threadId: newThreadId,
+              modelSelection: expect.objectContaining({ provider: "devin", model: "adaptive" }),
+            }),
+          ]),
+        );
+        expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+        expect(document.body.textContent).toContain("Use the saved Devin default");
+      });
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
   it("applies the project model over sticky codex settings on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {

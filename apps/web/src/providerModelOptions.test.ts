@@ -9,6 +9,7 @@ import {
   buildModelSelection,
   buildNextProviderOptions,
   buildProviderOptionPatch,
+  DISCOVERY_OWNED_MODEL_PROVIDERS,
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -41,6 +42,17 @@ describe("Claude model selections", () => {
       provider: "claudeAgent",
       model: "claude-haiku-4-5",
       supportsAutoMode: false,
+    });
+  });
+
+  it("never adds supportsAutoMode to selections of providers that do not declare it", () => {
+    expect(buildModelSelection("codex", "gpt-5.6-sol", undefined, true)).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-sol",
+    });
+    expect(buildModelSelection("droid", "gpt-5.6-luna", undefined, false)).toEqual({
+      provider: "droid",
+      model: "gpt-5.6-luna",
     });
   });
 });
@@ -255,6 +267,72 @@ describe("mergeDynamicModelOptions", () => {
       { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
     ]);
   });
+
+  it("treats the live OpenCode catalog as authoritative and preserves custom hints", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "opencode",
+        staticOptions: [
+          { slug: "openai/gpt-5", name: "GPT-5" },
+          { slug: "opencode-go/kimi", name: "Kimi" },
+          {
+            slug: "openai/gpt-5",
+            name: "GPT-5",
+            isCustom: true,
+            isSelectionHint: true,
+          },
+        ],
+        dynamicModels: [{ slug: "opencode-go/kimi", name: "Kimi" }],
+      }),
+    ).toEqual([
+      { slug: "opencode-go/kimi", name: "Kimi" },
+      {
+        slug: "openai/gpt-5",
+        name: "GPT-5",
+        isCustom: true,
+        isSelectionHint: true,
+      },
+    ]);
+  });
+
+  it("treats the live OpenCode catalog as authoritative", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "opencode",
+        staticOptions: [
+          { slug: "openai/gpt-5", name: "GPT-5" },
+          { slug: "opencode/internal", name: "OpenCode Internal" },
+        ],
+        dynamicModels: [{ slug: "opencode/internal", name: "OpenCode Internal" }],
+      }),
+    ).toEqual([{ slug: "opencode/internal", name: "OpenCode Internal" }]);
+  });
+
+  it("preserves isSelectionHint on custom-only entries missing from discovery", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "opencode",
+      staticOptions: [
+        { slug: "openai/gpt-5", name: "GPT-5" },
+        {
+          slug: "custom/hint",
+          name: "Custom hint",
+          isCustom: true,
+          isSelectionHint: true,
+        },
+      ],
+      dynamicModels: [{ slug: "opencode-go/kimi", name: "Kimi" }],
+    });
+
+    expect(options).toEqual([
+      { slug: "opencode-go/kimi", name: "Kimi" },
+      {
+        slug: "custom/hint",
+        name: "Custom hint",
+        isCustom: true,
+        isSelectionHint: true,
+      },
+    ]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {
@@ -368,6 +446,41 @@ describe("groupProviderModelOptionsWithFavorites", () => {
     expect(groupedOptions.flatMap((group) => group.options.map((option) => option.slug))).toEqual([
       "openai/gpt-5",
       "anthropic/claude-sonnet",
+    ]);
+  });
+
+  it("always emits non-favourite groups below the favourites group", () => {
+    const options = [
+      {
+        slug: "openai/gpt-5",
+        name: "GPT-5",
+        upstreamProviderId: "openai",
+        upstreamProviderName: "OpenAI",
+      },
+      {
+        slug: "anthropic/claude-sonnet",
+        name: "Claude Sonnet",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+      },
+      {
+        slug: "opencode-go/kimi",
+        name: "Kimi",
+        upstreamProviderId: "opencode-go",
+        upstreamProviderName: "OpenCode Go",
+      },
+    ] satisfies ProviderModelOption[];
+
+    const groupedOptions = groupProviderModelOptionsWithFavorites({
+      options,
+      favoriteSlugs: new Set(["openai/gpt-5", "anthropic/claude-sonnet"]),
+    });
+
+    expect(groupedOptions.map((group) => group.label)).toEqual(["Favourites", "OpenCode Go"]);
+    expect(groupedOptions.flatMap((group) => group.options.map((option) => option.slug))).toEqual([
+      "openai/gpt-5",
+      "anthropic/claude-sonnet",
+      "opencode-go/kimi",
     ]);
   });
 });

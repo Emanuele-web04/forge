@@ -18,6 +18,7 @@ import { useState } from "react";
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ProviderModelOption } from "../../providerModelOptions";
+import type { ProviderModelDiscoveryState } from "../../hooks/useProviderModelCatalog";
 import { Button } from "../ui/button";
 import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
@@ -49,8 +50,7 @@ type ComposerModelEffortPickerProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
-  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
-  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
+  modelDiscoveryByProvider?: Record<ProviderKind, ProviderModelDiscoveryState>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   compact?: boolean;
@@ -253,11 +253,8 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
               lockedProvider={props.lockedProvider}
               {...(props.providers ? { providers: props.providers } : {})}
               modelOptionsByProvider={props.modelOptionsByProvider}
-              {...(props.loadingModelProviders
-                ? { loadingModelProviders: props.loadingModelProviders }
-                : {})}
-              {...(props.discoveryErrorsByProvider
-                ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
+              {...(props.modelDiscoveryByProvider
+                ? { modelDiscoveryByProvider: props.modelDiscoveryByProvider }
                 : {})}
               {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
               {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}

@@ -244,6 +244,7 @@ describe("getAppModelOptions", () => {
       name: "custom/selected-model",
       provider: "codex",
       isCustom: true,
+      isSelectionHint: true,
     });
   });
 

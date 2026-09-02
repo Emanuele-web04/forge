@@ -1081,6 +1081,7 @@ export function getAppModelOptions(
       slug: normalizedSelectedModel,
       name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
       isCustom: true,
+      isSelectionHint: true,
     });
   }
 

@@ -12,7 +12,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProviderModelCatalog } from "./useProviderModelCatalog";
-import { useProviderModelCatalog } from "./useProviderModelCatalog";
+import {
+  deriveProviderModelDiscoveryState,
+  useProviderModelCatalog,
+} from "./useProviderModelCatalog";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
@@ -38,19 +41,23 @@ interface QueryResultLike {
   readonly data?: {
     readonly agents?: ReadonlyArray<{ name: string; displayName: string }>;
     readonly cached?: boolean;
-    readonly error?: string;
     readonly models?: ReadonlyArray<ProviderModelDescriptor>;
     readonly source?: string;
   };
+  readonly dataUpdatedAt?: number;
   readonly isFetching: boolean;
   readonly isLoading: boolean;
   readonly isPlaceholderData: boolean;
+  readonly status?: "error" | "pending" | "success";
 }
 
 const EMPTY_QUERY: QueryResultLike = {
+  data: { models: [], source: "empty", cached: false },
+  dataUpdatedAt: 0,
   isFetching: false,
   isLoading: false,
   isPlaceholderData: false,
+  status: "pending",
 };
 const modelQueries = new Map<ProviderKind, QueryResultLike>();
 const agentQueries = new Map<ProviderKind, QueryResultLike>();
@@ -64,10 +71,12 @@ const SETTINGS = {
   customCodexModels: [],
   customCursorModels: ["cursor-custom"],
   customDroidModels: [],
+  customDevinModels: [],
   customGrokModels: [],
   customOpenCodeModels: [],
   customPiModels: [],
   droidBinaryPath: "",
+  devinBinaryPath: "",
   grokBinaryPath: "",
   hiddenProviders: [],
   openCodeBinaryPath: "",
@@ -139,7 +148,7 @@ describe("useProviderModelCatalog", () => {
     expect(second).toBe(first);
     expect(second?.customModelsByProvider).toBe(first?.customModelsByProvider);
     expect(second?.modelOptionsByProvider).toBe(first?.modelOptionsByProvider);
-    expect(second?.loadingModelProviders).toBe(first?.loadingModelProviders);
+    expect(second?.modelDiscoveryByProvider).toBe(first?.modelDiscoveryByProvider);
     expect(second?.runtimeModelsByProvider).toBe(first?.runtimeModelsByProvider);
     expect(second?.selectedRuntimeAgents).toBe(first?.selectedRuntimeAgents);
   });
@@ -242,27 +251,17 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("antigravity")).toBe(false);
   });
 
-  it("warms droid discovery only when a surface explicitly prefetches it", () => {
+  it("prefetches Droid discovery when a prefetch surface requests it", () => {
+    // The git-writing settings panel passes GIT_TEXT_GENERATION_PROVIDERS, which
+    // includes Droid; its ACP-session cost is bounded by the query's retry=0,
+    // 5-minute staleTime, and disabled focus refetch.
     readCatalogRenders({
       selectedProvider: "codex",
       discoveryEnabled: true,
-      prefetchProviders: ["codex", "droid", "opencode"],
+      prefetchProviders: ["codex", "droid"],
     });
+
     expect(readModelQueryEnabled("droid")).toBe(true);
-
-    mocks.useQuery.mockClear();
-    readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
-    expect(readModelQueryEnabled("droid")).toBe(false);
-  });
-
-  it("keeps droid cold when the surface is inactive even if it prefetches droid", () => {
-    readCatalogRenders({
-      selectedProvider: "opencode",
-      discoveryEnabled: false,
-      prefetchProviders: ["codex", "droid", "opencode"],
-    });
-
-    expect(readModelQueryEnabled("droid")).toBe(false);
   });
 
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
@@ -272,9 +271,11 @@ describe("useProviderModelCatalog", () => {
         source: "cursor.cli",
         cached: false,
       },
+      dataUpdatedAt: 1_000,
       isFetching: true,
       isLoading: false,
-      isPlaceholderData: true,
+      isPlaceholderData: false,
+      status: "success",
     });
 
     const catalog = readCatalogRenders({
@@ -287,31 +288,262 @@ describe("useProviderModelCatalog", () => {
       "composer-2",
       "cursor-custom",
     ]);
-    expect(catalog?.loadingModelProviders.cursor).toBe(false);
-    expect(catalog?.selectedProviderModelsLoading).toBe(false);
+    expect(catalog?.selectedProviderRuntimeModelDiscoveryPending).toBe(false);
     expect(catalog?.runtimeModelsByProvider.cursor).toEqual([
       { slug: "composer-2", name: "Composer 2" },
     ]);
   });
 
-  it("surfaces devin discovery errors even when the result falls back to devin.static", () => {
+  it("treats a selected GLM model as an unavailable hint after Devin discovery", () => {
     modelQueries.set("devin", {
       data: {
-        models: [],
-        source: "devin.static",
+        models: [
+          { slug: "adaptive", name: "Adaptive" },
+          { slug: "swe-1.7", name: "SWE 1.7" },
+        ],
+        source: "devin-acp",
         cached: false,
-        error: "Devin CLI failed",
       },
+      dataUpdatedAt: 1_000,
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
+      status: "success",
     });
 
     const catalog = readCatalogRenders({
-      selectedProvider: "codex",
+      selectedProvider: "devin",
+      discoveryEnabled: true,
+      modelHintByProvider: { devin: "glm-5.3" },
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.devin).toEqual([
+      expect.objectContaining({ slug: "adaptive" }),
+      expect.objectContaining({ slug: "swe-1-7" }),
+      expect.objectContaining({ slug: "glm-5.3", isSelectionHint: true }),
+    ]);
+    expect(catalog?.modelDiscoveryByProvider.devin).toMatchObject({
+      status: "success",
+      hasDynamicList: true,
+    });
+  });
+
+  it("exposes a truthful per-provider discovery state table", () => {
+    const now = 1_000_000;
+    modelQueries.set("opencode", {
+      data: {
+        models: [{ slug: "openai/gpt-5", name: "GPT-5" }],
+        source: "opencode",
+        cached: false,
+      },
+      dataUpdatedAt: now,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "success",
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "opencode",
       discoveryEnabled: true,
     }).at(-1);
 
-    expect(catalog?.discoveryErrorsByProvider.devin).toBe("Devin CLI failed");
+    expect(catalog?.modelDiscoveryByProvider.opencode).toMatchObject({
+      status: "success",
+      hasDynamicList: true,
+      refreshing: false,
+      fetchedAt: now,
+    });
+    // Non-discovery-owned providers stay in static-success so the picker falls through.
+    expect(catalog?.modelDiscoveryByProvider.codex).toEqual({
+      status: "success",
+      hasDynamicList: false,
+      refreshing: false,
+    });
+  });
+});
+
+describe("deriveProviderModelDiscoveryState", () => {
+  const emptyResult = {
+    models: [] as ProviderModelDescriptor[],
+    source: "empty" as const,
+    cached: false as const,
+  };
+  const realResult = {
+    models: [{ slug: "x", name: "X" }] as ProviderModelDescriptor[],
+    source: "opencode" as const,
+    cached: false as const,
+  };
+
+  it("returns never-loaded when discovery has not run", () => {
+    expect(
+      deriveProviderModelDiscoveryState({
+        data: undefined,
+        isFetching: false,
+        isLoading: false,
+        isPlaceholderData: false,
+        status: "pending",
+      }),
+    ).toEqual({ status: "never-loaded", hasDynamicList: false, refreshing: false });
+  });
+
+  it("returns loading for the initial fetch with no usable list", () => {
+    expect(
+      deriveProviderModelDiscoveryState({
+        data: emptyResult,
+        isFetching: true,
+        isLoading: true,
+        isPlaceholderData: true,
+        status: "pending",
+      }),
+    ).toEqual({ status: "loading", hasDynamicList: false, refreshing: false });
+  });
+
+  it("keeps the failed row refreshing while a no-cache retry is in flight", () => {
+    expect(
+      deriveProviderModelDiscoveryState({
+        data: emptyResult,
+        errorUpdatedAt: 5_000,
+        isFetching: true,
+        isLoading: false,
+        isPlaceholderData: true,
+        status: "pending",
+      }),
+    ).toEqual({ status: "failed", hasDynamicList: false, refreshing: true });
+  });
+
+  it("returns success with a real dynamic list", () => {
+    const state = deriveProviderModelDiscoveryState({
+      data: realResult,
+      dataUpdatedAt: 1234,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "success",
+    });
+    expect(state).toMatchObject({
+      status: "success",
+      hasDynamicList: true,
+      refreshing: false,
+      fetchedAt: 1234,
+    });
+  });
+
+  it("propagates a background refetch as refreshing for settled states", () => {
+    const successState = deriveProviderModelDiscoveryState({
+      data: realResult,
+      dataUpdatedAt: 1234,
+      isFetching: true,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "success",
+    });
+    expect(successState).toMatchObject({ status: "success", refreshing: true, fetchedAt: 1234 });
+
+    const failedWithCacheState = deriveProviderModelDiscoveryState({
+      data: realResult,
+      dataUpdatedAt: 1234,
+      isFetching: true,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "error",
+    });
+    expect(failedWithCacheState).toMatchObject({
+      status: "failed",
+      hasDynamicList: true,
+      refreshing: true,
+    });
+  });
+
+  it("reports placeholder data carried over from a previous query key as refreshing success", () => {
+    const state = deriveProviderModelDiscoveryState({
+      data: realResult,
+      dataUpdatedAt: 0,
+      isFetching: true,
+      isLoading: false,
+      isPlaceholderData: true,
+      status: "success",
+    });
+    expect(state).toMatchObject({
+      status: "success",
+      hasDynamicList: true,
+      refreshing: true,
+      fetchedAt: undefined,
+    });
+  });
+
+  it("leaves fetchedAt undefined when the query carries no dataUpdatedAt", () => {
+    const state = deriveProviderModelDiscoveryState({
+      data: realResult,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "success",
+    });
+    expect(state).toMatchObject({ status: "success", hasDynamicList: true, fetchedAt: undefined });
+  });
+
+  it("returns empty for a real source with zero models", () => {
+    const state = deriveProviderModelDiscoveryState({
+      data: {
+        models: [] as ProviderModelDescriptor[],
+        source: "opencode" as const,
+        cached: false as const,
+      },
+      dataUpdatedAt: 1234,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "success",
+    });
+    expect(state).toMatchObject({
+      status: "empty",
+      hasDynamicList: false,
+      refreshing: false,
+      fetchedAt: 1234,
+    });
+  });
+
+  it("returns failed when there is no usable list", () => {
+    expect(
+      deriveProviderModelDiscoveryState({
+        data: undefined,
+        isFetching: false,
+        isLoading: false,
+        isPlaceholderData: false,
+        status: "error",
+      }),
+    ).toEqual({ status: "failed", hasDynamicList: false, refreshing: false });
+  });
+
+  it("returns failed-with-cache when a stale list exists", () => {
+    const state = deriveProviderModelDiscoveryState({
+      data: realResult,
+      dataUpdatedAt: 1234,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      status: "error",
+    });
+    expect(state).toMatchObject({
+      status: "failed",
+      hasDynamicList: true,
+      refreshing: false,
+      fetchedAt: 1234,
+    });
+  });
+
+  it("treats disabled/unsupported sources as never-loaded", () => {
+    for (const source of ["disabled", "unsupported"] as const) {
+      expect(
+        deriveProviderModelDiscoveryState({
+          data: { models: [] as ProviderModelDescriptor[], source, cached: false as const },
+          isFetching: false,
+          isLoading: false,
+          isPlaceholderData: false,
+          status: "success",
+        }),
+      ).toEqual({ status: "never-loaded", hasDynamicList: false, refreshing: false });
+    }
   });
 });

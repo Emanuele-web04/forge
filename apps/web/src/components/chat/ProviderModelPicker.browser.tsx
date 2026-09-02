@@ -2,10 +2,13 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@s
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
+import type { ProviderModelDiscoveryState } from "../../hooks/useProviderModelCatalog";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
+import { providerDiscoveryQueryKeys } from "../../lib/providerDiscoveryReactQuery";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -145,39 +148,66 @@ const PI_FAVORITE_SORT_MODELS = [
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const DEFAULT_MODEL_DISCOVERY: ProviderModelDiscoveryState = {
+  status: "never-loaded",
+  hasDynamicList: false,
+  refreshing: false,
+};
+
+const DEFAULT_MODEL_DISCOVERY_BY_PROVIDER: Record<ProviderKind, ProviderModelDiscoveryState> = {
+  antigravity: DEFAULT_MODEL_DISCOVERY,
+  claudeAgent: { status: "success", hasDynamicList: false, refreshing: false },
+  codex: { status: "success", hasDynamicList: false, refreshing: false },
+  cursor: DEFAULT_MODEL_DISCOVERY,
+  devin: DEFAULT_MODEL_DISCOVERY,
+  droid: DEFAULT_MODEL_DISCOVERY,
+  grok: DEFAULT_MODEL_DISCOVERY,
+  opencode: DEFAULT_MODEL_DISCOVERY,
+  pi: DEFAULT_MODEL_DISCOVERY,
+};
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
-  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  modelDiscoveryByProvider?: Partial<Record<ProviderKind, ProviderModelDiscoveryState>>;
   onSelectionCommitted?: () => void;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
   >;
+  queryClient?: QueryClient;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
   const onProviderModelChange = vi.fn();
+  const queryClient = props.queryClient ?? new QueryClient();
+  const modelDiscoveryByProvider: Record<ProviderKind, ProviderModelDiscoveryState> = {
+    ...DEFAULT_MODEL_DISCOVERY_BY_PROVIDER,
+    ...props.modelDiscoveryByProvider,
+  };
   const screen = await render(
-    <ProviderModelPicker
-      provider={props.provider}
-      model={props.model}
-      lockedProvider={props.lockedProvider}
-      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
-      {...(props.loadingModelProviders
-        ? { loadingModelProviders: props.loadingModelProviders }
-        : {})}
-      {...(props.providers ? { providers: props.providers } : {})}
-      {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
-      onProviderModelChange={onProviderModelChange}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <ProviderModelPicker
+        provider={props.provider}
+        model={props.model}
+        lockedProvider={props.lockedProvider}
+        modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+        modelDiscoveryByProvider={modelDiscoveryByProvider}
+        {...(props.providers ? { providers: props.providers } : {})}
+        {...(props.onSelectionCommitted
+          ? { onSelectionCommitted: props.onSelectionCommitted }
+          : {})}
+        onProviderModelChange={onProviderModelChange}
+      />
+    </QueryClientProvider>,
     { container: host },
   );
 
   return {
     onProviderModelChange,
+    queryClient,
     cleanup: async () => {
       await screen.unmount();
       host.remove();
@@ -598,7 +628,13 @@ describe("ProviderModelPicker", () => {
       provider: "cursor",
       model: "auto",
       lockedProvider: "cursor",
-      loadingModelProviders: { cursor: true },
+      modelDiscoveryByProvider: {
+        cursor: {
+          status: "loading",
+          hasDynamicList: false,
+          refreshing: false,
+        } satisfies ProviderModelDiscoveryState,
+      },
     });
 
     try {
@@ -717,6 +753,301 @@ describe("ProviderModelPicker", () => {
 
       await expect.element(page.getByText("Sign in")).not.toBeInTheDocument();
       await expect.element(page.getByText("Unavailable")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the selected model with a failure row when OpenCode discovery failed without a cache", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "failed",
+          hasDynamicList: false,
+          refreshing: false,
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT-5" })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Nemotron 3 Super Free" }))
+        .not.toBeInTheDocument();
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Couldn\u2019t load models");
+        expect(text).toContain("Retry");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("applies the same restricted failure row to every discovery-owned provider", async () => {
+    const mounted = await mountPicker({
+      provider: "droid",
+      model: "gpt-5.6-luna",
+      lockedProvider: "droid",
+      modelDiscoveryByProvider: {
+        droid: {
+          status: "failed",
+          hasDynamicList: false,
+          refreshing: false,
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Luna" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Custom GPT-5.6 Luna" }))
+        .not.toBeInTheDocument();
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Couldn\u2019t load models");
+        expect(text).toContain("Retry");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the cached list and a 'Couldn\u2019t refresh \u2014 Retry' footer when discovery failed with a cache", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "failed",
+          hasDynamicList: true,
+          refreshing: false,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT-5" })).toBeInTheDocument();
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Couldn\u2019t refresh");
+        expect(text).toContain("Retry");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the selected model with an empty OpenCode row without fallback models", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "empty",
+          hasDynamicList: false,
+          refreshing: false,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT-5" })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Nemotron 3 Super Free" }))
+        .not.toBeInTheDocument();
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("No models available from OpenCode");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the OpenCode list and a 'Refreshing\u2026' footer while a refresh is in flight", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "success",
+          hasDynamicList: true,
+          refreshing: true,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT-5" })).toBeInTheDocument();
+      await expect.element(page.getByText("Refreshing\u2026")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("fires a single model query refetch when the refresh footer is clicked", async () => {
+    const queryClient = new QueryClient();
+    const modelsQueryKey = providerDiscoveryQueryKeys.models("opencode", null, null, null, null);
+    // refetchQueries only refetches active queries, so the observer must be enabled.
+    const modelsObserver = new QueryObserver(queryClient, {
+      queryKey: modelsQueryKey,
+      queryFn: () =>
+        Promise.resolve({ models: [], source: "opencode" as const, cached: false as const }),
+    });
+    const unsubscribeObserver = modelsObserver.subscribe(() => undefined);
+    const modelsQuery = queryClient.getQueryCache().find({ queryKey: modelsQueryKey })!;
+    const fetchSpy = vi.spyOn(modelsQuery, "fetch").mockImplementation(() => Promise.resolve());
+    const mounted = await mountPicker({
+      queryClient,
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "success",
+          hasDynamicList: true,
+          refreshing: false,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Refresh models" }).click();
+
+      await vi.waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      unsubscribeObserver();
+      await mounted.cleanup();
+    }
+  });
+
+  it("disables the refresh action while a refetch is already in flight", async () => {
+    const queryClient = new QueryClient();
+    const mounted = await mountPicker({
+      queryClient,
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "success",
+          hasDynamicList: true,
+          refreshing: true,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      const footer = page.getByRole("button", { name: /Refresh models/ });
+      await expect.element(footer).toBeInTheDocument();
+      await expect.element(footer).toBeDisabled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows an 'Unavailable?' badge on a selection hint in a successful list", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "opencode/unknown-model",
+      lockedProvider: "opencode",
+      modelDiscoveryByProvider: {
+        opencode: {
+          status: "success",
+          hasDynamicList: true,
+          refreshing: false,
+          fetchedAt: Date.now(),
+        } satisfies ProviderModelDiscoveryState,
+      },
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: [
+          ...MODEL_OPTIONS_BY_PROVIDER.opencode,
+          {
+            slug: "opencode/unknown-model" as ModelSlug,
+            name: "Unknown Model",
+            isSelectionHint: true,
+          },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByText("Unavailable?")).toBeInTheDocument();
+      await page.getByRole("menuitemradio", { name: /Unknown Model/ }).click();
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "opencode",
+        "opencode/unknown-model",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+  it("marks a stale Devin GLM selection instead of presenting it as discovered", async () => {
+    const mounted = await mountPicker({
+      provider: "devin",
+      model: "glm-5.3",
+      lockedProvider: "devin",
+      modelDiscoveryByProvider: {
+        devin: {
+          status: "success",
+          hasDynamicList: true,
+          refreshing: false,
+          fetchedAt: Date.now(),
+        },
+      },
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        devin: [
+          { slug: "adaptive" as ModelSlug, name: "Adaptive" },
+          { slug: "swe-1-7" as ModelSlug, name: "SWE 1.7" },
+          { slug: "glm-5.3" as ModelSlug, name: "GLM 5.3", isSelectionHint: true },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GLM 5.3 — Unavailable?" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Adaptive" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "SWE 1.7" }))
+        .toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

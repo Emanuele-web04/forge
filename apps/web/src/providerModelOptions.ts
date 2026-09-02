@@ -16,8 +16,6 @@ import {
   type CursorModelSelection,
   type DroidModelOptions,
   type DroidModelSelection,
-  type DevinModelOptions,
-  type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
@@ -38,6 +36,7 @@ export interface ProviderModelOption {
   description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
+  isSelectionHint?: boolean;
 }
 
 export interface ProviderModelOptionGroup {
@@ -45,6 +44,20 @@ export interface ProviderModelOptionGroup {
   label: string | null;
   options: ProviderModelOption[];
 }
+
+/**
+ * Providers whose runtime discovery owns the catalog: when live models are
+ * returned, the static built-in list is dropped rather than mixed in.
+ */
+export const DISCOVERY_OWNED_MODEL_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
+  "antigravity",
+  "cursor",
+  "devin",
+  "droid",
+  "grok",
+  "opencode",
+  "pi",
+] as const);
 
 /**
  * Returns the provider provenance shown when a model is detached from its
@@ -130,7 +143,7 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/opencode/cursor/grok), and user-defined custom models always survive.
+ * (see `DISCOVERY_OWNED_MODEL_PROVIDERS`), and user-defined custom models always survive.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
  */
@@ -191,9 +204,15 @@ export function mergeDynamicModelOptions(input: {
 
   // Droid validates model values against its live ACP select options, so an
   // arbitrary custom slug is guaranteed to fail at session configuration.
+  // The selected-model hint (isSelectionHint) is kept so a previously selected
+  // Droid model that is not currently in the dynamic list still appears.
   const customOnlyModels =
     input.provider === "droid"
-      ? []
+      ? input.staticOptions.filter(
+          (model) =>
+            model.isSelectionHint === true &&
+            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
+        )
       : input.staticOptions.filter(
           (model) =>
             "isCustom" in model &&
@@ -203,14 +222,9 @@ export function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
+  const isDiscoveryOwned = DISCOVERY_OWNED_MODEL_PROVIDERS.has(input.provider);
   const missingStaticBuiltIns =
-    (input.provider === "antigravity" ||
-      input.provider === "opencode" ||
-      input.provider === "cursor" ||
-      input.provider === "droid" ||
-      input.provider === "grok" ||
-      input.provider === "devin") &&
-    normalizedDynamicOptions.length > 0
+    isDiscoveryOwned && normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
@@ -224,6 +238,7 @@ export function mergeDynamicModelOptions(input: {
   return [...normalizedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
+/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
 export function providerModelCostMultiplierLabel(description?: string): string | null {
   const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
   return multiplier ? `${multiplier}×` : null;
@@ -314,54 +329,12 @@ export function resolveModelGroupDefaultOpen(input: {
   return input.options.some((option) => option.slug === input.activeModel);
 }
 
-export function buildNextProviderOptions(
-  provider: ProviderKind,
-  modelOptions: ProviderOptions | null | undefined,
+export function buildNextProviderOptions<P extends ProviderKind>(
+  provider: P,
+  modelOptions: ProviderModelOptions[P] | null | undefined,
   patch: Record<string, unknown>,
-): ProviderOptions {
-  if (provider === "codex") {
-    return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
-  }
-  if (provider === "claudeAgent") {
-    return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;
-  }
-  if (provider === "cursor") {
-    return { ...(modelOptions as CursorModelOptions | undefined), ...patch } as CursorModelOptions;
-  }
-  if (provider === "antigravity") {
-    return {
-      ...(modelOptions as AntigravityModelOptions | undefined),
-      ...patch,
-    } as AntigravityModelOptions;
-  }
-  if (provider === "grok") {
-    return {
-      ...(modelOptions as GrokModelOptions | undefined),
-      ...patch,
-    } as GrokModelOptions;
-  }
-  if (provider === "droid") {
-    return {
-      ...(modelOptions as DroidModelOptions | undefined),
-      ...patch,
-    } as DroidModelOptions;
-  }
-  if (provider === "devin") {
-    return {
-      ...(modelOptions as DevinModelOptions | undefined),
-      ...patch,
-    } as DevinModelOptions;
-  }
-  if (provider === "opencode") {
-    return {
-      ...(modelOptions as OpenCodeModelOptions | undefined),
-      ...patch,
-    } as OpenCodeModelOptions;
-  }
-  return {
-    ...(modelOptions as PiModelOptions | undefined),
-    ...patch,
-  } as PiModelOptions;
+): ProviderModelOptions[P] {
+  return { ...modelOptions, ...patch } as ProviderModelOptions[P];
 }
 
 export function buildProviderOptionPatch(
@@ -414,11 +387,6 @@ export function buildModelSelection(
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
 export function buildModelSelection(
-  provider: "devin",
-  model: string,
-  options?: DevinModelOptions | null | undefined,
-): DevinModelSelection;
-export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -430,77 +398,14 @@ export function buildModelSelection(
   options?: ProviderOptions | null | undefined,
   supportsAutoMode?: boolean | undefined,
 ): ModelSelection {
-  switch (provider) {
-    case "antigravity":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as AntigravityModelOptions,
-          }
-        : { provider, model };
-    case "codex":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CodexModelOptions,
-          }
-        : { provider, model };
-    case "claudeAgent":
-      return {
-        provider,
-        model,
-        ...(options ? { options: options as ClaudeModelOptions } : {}),
-        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
-      };
-    case "cursor":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CursorModelOptions,
-          }
-        : { provider, model };
-    case "devin":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DevinModelOptions,
-          }
-        : { provider, model };
-    case "grok":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GrokModelOptions,
-          }
-        : { provider, model };
-    case "droid":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DroidModelOptions,
-          }
-        : { provider, model };
-    case "opencode":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
-    case "pi":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as PiModelOptions,
-          }
-        : { provider, model };
-  }
+  return {
+    provider,
+    model,
+    ...(options !== undefined && options !== null ? { options } : {}),
+    // Only ClaudeModelSelection declares supportsAutoMode; never leak it onto
+    // other providers' selections even when a runtime descriptor carries it.
+    ...(provider === "claudeAgent" && typeof supportsAutoMode === "boolean"
+      ? { supportsAutoMode }
+      : {}),
+  } as ModelSelection;
 }

@@ -9,7 +9,13 @@ import type {
   ProviderSkillsCatalogResult,
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
+import { DISCOVERY_OWNED_MODEL_PROVIDERS } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  buildCatalogCacheInputsKey,
+  readCatalogCacheEntry,
+  writeCatalogCache,
+} from "./providerModelCatalogCache";
 
 const EMPTY_SKILLS_RESULT: ProviderListSkillsResult = {
   skills: [],
@@ -44,6 +50,18 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
+const PROVIDER_MODEL_RETRY_COUNTS: Record<ProviderKind, number> = {
+  antigravity: 3,
+  claudeAgent: 3,
+  codex: 3,
+  cursor: 0,
+  devin: 2,
+  droid: 0,
+  grok: 3,
+  opencode: 1,
+  pi: 3,
+};
+
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   composerCapabilities: (provider: ProviderKind) =>
@@ -76,6 +94,8 @@ export const providerDiscoveryQueryKeys = {
     agentDir: string | null,
     cwd: string | null,
   ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
+  modelsForProvider: (provider: ProviderKind) =>
+    ["provider-discovery", "models", provider] as const,
   agentsForProvider: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
   agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
@@ -199,12 +219,21 @@ export function isInitialModelDiscoveryPending(query: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
-  binaryPath?: string | null;
-  apiEndpoint?: string | null;
-  agentDir?: string | null;
-  cwd?: string | null;
-  enabled?: boolean;
+  binaryPath?: string | null | undefined;
+  apiEndpoint?: string | null | undefined;
+  agentDir?: string | null | undefined;
+  cwd?: string | null | undefined;
+  enabled?: boolean | undefined;
 }) {
+  const inputsKey = buildCatalogCacheInputsKey({
+    binaryPath: input.binaryPath,
+    apiEndpoint: input.apiEndpoint,
+    agentDir: input.agentDir,
+    cwd: input.cwd,
+  });
+  const isDiscoveryOwned = DISCOVERY_OWNED_MODEL_PROVIDERS.has(input.provider);
+  const cached = isDiscoveryOwned ? readCatalogCacheEntry(input.provider, inputsKey) : undefined;
+
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.models(
       input.provider,
@@ -215,25 +244,42 @@ export function providerModelsQueryOptions(input: {
     ),
     queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
-      return api.provider.listModels({
+      const result = await api.provider.listModels({
         provider: input.provider,
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
+      // An errored result is a failed discovery for every provider — including
+      // claudeAgent/codex, whose static fallback must not masquerade as success.
+      if (result.error !== undefined) {
+        throw new Error(result.error);
+      }
+      if (isDiscoveryOwned) {
+        writeCatalogCache(input.provider, inputsKey, result);
+      }
+      return result;
     },
     enabled: input.enabled ?? true,
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
-    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
+    retry: PROVIDER_MODEL_RETRY_COUNTS[input.provider],
+    retryDelay: (attempt) => Math.min(2_000, 200 * 2 ** attempt),
+    refetchOnReconnect: true,
     staleTime: input.provider === "droid" ? 5 * 60_000 : 30_000,
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+    ...(cached
+      ? {
+          initialData: () => cached.result,
+          initialDataUpdatedAt: cached.fetchedAt,
+        }
+      : {}),
   });
 }
 

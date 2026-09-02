@@ -637,7 +637,11 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
+import {
+  DISCOVERY_OWNED_MODEL_PROVIDERS,
+  buildModelSelection,
+  buildNextProviderOptions,
+} from "../providerModelOptions";
 import {
   isDuplicateProjectCreateError,
   waitForRecoverableProjectForDuplicateCreate,
@@ -2321,7 +2325,6 @@ export default function ChatView({
   const selectedProvider = useMemo<ProviderKind>(
     () =>
       lockedProvider ??
-      // Keep an unstarted draft pinned to its explicit provider; availability is validated at send time.
       selectedProviderByThreadId ??
       resolveAvailableProviderPreference({
         preferredProvider: preferredDraftProvider,
@@ -2363,9 +2366,9 @@ export default function ChatView({
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
+      devin: resolveHint("devin"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
-      devin: resolveHint("devin"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -2380,11 +2383,9 @@ export default function ChatView({
   const {
     customModelsByProvider,
     modelOptionsByProvider,
-    loadingModelProviders,
-    discoveryErrorsByProvider,
+    modelDiscoveryByProvider,
     runtimeModelsByProvider,
     selectedRuntimeAgents: dynamicAgents,
-    selectedProviderModelsLoading,
     selectedProviderRuntimeModelDiscoveryPending,
   } = useProviderModelCatalog({
     selectedProvider,
@@ -2482,14 +2483,9 @@ export default function ChatView({
         ? activeProject.defaultModelSelection
         : null
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
-  const providerModelsLoading = selectedProviderModelsLoading;
+  const providerModelsLoading = selectedProviderRuntimeModelDiscoveryPending;
   const selectedProviderRequiresRuntimeModels =
-    selectedProvider === "cursor" ||
-    selectedProvider === "antigravity" ||
-    selectedProvider === "droid" ||
-    selectedProvider === "opencode" ||
-    selectedProvider === "pi" ||
-    selectedProvider === "devin";
+    DISCOVERY_OWNED_MODEL_PROVIDERS.has(selectedProvider);
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -7918,6 +7914,9 @@ export default function ChatView({
         getDefaultModel(selectedModelSelectionForSend.provider) ||
         DEFAULT_MODEL_BY_PROVIDER.codex,
       selectedModelSelectionForSend.options,
+      selectedModelSelectionForSend.provider === "claudeAgent"
+        ? selectedModelSelectionForSend.supportsAutoMode
+        : undefined,
     );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
@@ -9811,8 +9810,7 @@ export default function ChatView({
         lockedProvider={lockedProvider}
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
-        loadingModelProviders={loadingModelProviders}
-        discoveryErrorsByProvider={discoveryErrorsByProvider}
+        modelDiscoveryByProvider={modelDiscoveryByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={onProviderModelSelect}
@@ -9848,8 +9846,7 @@ export default function ChatView({
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
-      loadingModelProviders={loadingModelProviders}
-      discoveryErrorsByProvider={discoveryErrorsByProvider}
+      modelDiscoveryByProvider={modelDiscoveryByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
       threadId={threadId}
