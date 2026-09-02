@@ -198,6 +198,28 @@ it.effect("accepts git.actionProgress push envelopes", () =>
   }),
 );
 
+it.effect("accepts server.keepAwakeUpdated push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 4,
+      channel: WS_CHANNELS.serverKeepAwakeUpdated,
+      data: {
+        keepAwake: { available: true, mode: "agent", active: false, error: null },
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.serverKeepAwakeUpdated);
+    if (parsed.channel === WS_CHANNELS.serverKeepAwakeUpdated) {
+      assert.strictEqual(parsed.data.keepAwake.mode, "agent");
+    }
+  }),
+);
+
 it.effect("accepts git.worktreeSetupProgress push envelopes", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {
