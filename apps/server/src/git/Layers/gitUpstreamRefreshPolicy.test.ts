@@ -3,6 +3,26 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { makeStatusUpstreamRefreshCacheTimeToLive } from "./GitCore.ts";
 
+// The backoff map is keyed by the full status cache key, so every key needs
+// all four fields; same-named remotes in different repositories must not
+// share backoff state.
+function cacheKey(
+  overrides: Partial<{
+    cwd: string;
+    upstreamRef: string;
+    remoteName: string;
+    upstreamBranch: string;
+  }> = {},
+): { cwd: string; upstreamRef: string; remoteName: string; upstreamBranch: string } {
+  return {
+    cwd: "/repo",
+    upstreamRef: "origin/main",
+    remoteName: "origin",
+    upstreamBranch: "main",
+    ...overrides,
+  };
+}
+
 describe("status-upstream-refresh cache TTL (#515)", () => {
   let policy: ReturnType<typeof makeStatusUpstreamRefreshCacheTimeToLive>;
 
@@ -27,7 +47,7 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
   });
 
   it("backs off failures exponentially per remote, capping at 5 minutes", () => {
-    const key = { remoteName: "origin" };
+    const key = cacheKey();
     const failed = Exit.succeed("failed" as const);
     expect(Duration.toMillis(policy.timeToLive(failed, key))).toBe(30_000);
 
@@ -43,8 +63,12 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
   });
 
   it("resets failure backoff independently per remote", () => {
-    const originKey = { remoteName: "origin" };
-    const forkKey = { remoteName: "fork" };
+    const originKey = cacheKey();
+    const forkKey = cacheKey({
+      upstreamRef: "fork/main",
+      remoteName: "fork",
+      upstreamBranch: "main",
+    });
     const failed = Exit.succeed("failed" as const);
 
     // Push origin to the cap.
@@ -58,8 +82,28 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
     expect(Duration.toMillis(policy.timeToLive(failed, forkKey))).toBe(60_000);
   });
 
+  it("isolates backoff between repositories sharing a remote name", () => {
+    const repoAKey = cacheKey({ cwd: "/repo-a" });
+    const repoBKey = cacheKey({ cwd: "/repo-b" });
+    const failed = Exit.succeed("failed" as const);
+
+    // Push repo A's origin to the cap.
+    for (let index = 0; index < 5; index += 1) {
+      policy.timeToLive(failed, repoAKey);
+    }
+    expect(Duration.toMillis(policy.timeToLive(failed, repoAKey))).toBe(300_000);
+
+    // Repo B's origin is a different cache key: it starts from zero instead of
+    // inheriting repo A's poisoned backoff.
+    expect(Duration.toMillis(policy.timeToLive(failed, repoBKey))).toBe(30_000);
+
+    // A success in repo A only resets repo A's backoff.
+    expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), repoAKey))).toBe(15_000);
+    expect(Duration.toMillis(policy.timeToLive(failed, repoBKey))).toBe(60_000);
+  });
+
   it("resets a remote's backoff after a successful refresh", () => {
-    const key = { remoteName: "origin" };
+    const key = cacheKey();
     const failed = Exit.succeed("failed" as const);
 
     policy.timeToLive(failed, key);

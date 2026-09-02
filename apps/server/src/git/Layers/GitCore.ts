@@ -63,33 +63,50 @@ const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
+interface StatusUpstreamRefreshCacheKeyFields {
+  readonly cwd: string;
+  readonly upstreamRef: string;
+  readonly remoteName: string;
+  readonly upstreamBranch: string;
+}
+
+// NUL cannot appear in filesystem paths or git refs, so it is an unambiguous
+// separator for the composite backoff key.
+function statusUpstreamRefreshBackoffMapKey(key: StatusUpstreamRefreshCacheKeyFields): string {
+  return `${key.cwd}\u0000${key.upstreamRef}\u0000${key.remoteName}\u0000${key.upstreamBranch}`;
+}
+
 /**
- * Per-remote exponential backoff for failed `git fetch` upstream refreshes.
- * The failure count lives inside this factory so each `Cache` instance owns its
- * own state; the returned `timeToLive` updates the count on every failure and
- * resets it on the first successful refresh.
+ * Exponential backoff for failed `git fetch` upstream refreshes, keyed by the
+ * full status cache key (cwd + upstreamRef + remoteName + upstreamBranch) so a
+ * failing remote in one repository never inflates the backoff of a same-named
+ * remote in another repository. The failure count lives inside this factory so
+ * each `Cache` instance owns its own state; the returned `timeToLive` updates
+ * the count on every failure and resets it on the first successful refresh.
  */
 export function makeStatusUpstreamRefreshCacheTimeToLive() {
   const consecutiveFailures = new Map<string, number>();
 
   return {
-    getFailureCount(remoteName: string): number {
-      return consecutiveFailures.get(remoteName) ?? 0;
+    getFailureCount(key: StatusUpstreamRefreshCacheKeyFields): number {
+      return consecutiveFailures.get(statusUpstreamRefreshBackoffMapKey(key)) ?? 0;
     },
     timeToLive(
       exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
-      key?: { readonly remoteName: string },
+      key?: StatusUpstreamRefreshCacheKeyFields,
     ): Duration.Duration {
-      const remoteName = key?.remoteName;
       if (Exit.isSuccess(exit) && exit.value === "refreshed") {
-        if (remoteName !== undefined) {
-          consecutiveFailures.delete(remoteName);
+        if (key !== undefined) {
+          consecutiveFailures.delete(statusUpstreamRefreshBackoffMapKey(key));
         }
         return STATUS_UPSTREAM_REFRESH_INTERVAL;
       }
-      const failures = remoteName !== undefined ? (consecutiveFailures.get(remoteName) ?? 0) : 0;
-      if (remoteName !== undefined) {
-        consecutiveFailures.set(remoteName, failures + 1);
+      const failures =
+        key !== undefined
+          ? (consecutiveFailures.get(statusUpstreamRefreshBackoffMapKey(key)) ?? 0)
+          : 0;
+      if (key !== undefined) {
+        consecutiveFailures.set(statusUpstreamRefreshBackoffMapKey(key), failures + 1);
       }
       const backoff = Math.min(
         Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
@@ -128,12 +145,7 @@ type TraceTailState = {
   remainder: string;
 };
 
-class StatusUpstreamRefreshCacheKey extends Data.Class<{
-  cwd: string;
-  upstreamRef: string;
-  remoteName: string;
-  upstreamBranch: string;
-}> {}
+class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
 interface ExecuteGitOptions {
   timeoutMs?: number | undefined;
@@ -1056,7 +1068,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }).pipe(
           Effect.as("refreshed" as const),
           Effect.catch((cause) => {
-            const failures = upstreamRefreshPolicy.getFailureCount(cacheKey.remoteName);
+            const failures = upstreamRefreshPolicy.getFailureCount(cacheKey);
             const logFields = {
               cause,
               cwd: cacheKey.cwd,
