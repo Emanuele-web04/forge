@@ -20,8 +20,8 @@ import {
   ClaudeIcon,
   OpencodeIcon,
   CursorIcon,
+  DevinIcon,
   GrokIcon,
-  KiloCodeIcon,
   PiIcon,
   DroidIcon,
 } from "@/components/BrandIcons";
@@ -69,7 +69,7 @@ export default async function Home() {
                 <GrokIcon className="size-[18px] text-[var(--text-primary)]" />
               </div>
               <div className="inline-flex size-[38px] rotate-[3deg] items-center justify-center rounded-xl border border-black/[0.08] bg-black/[0.03] backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
-                <KiloCodeIcon className="size-[18px] text-[var(--text-primary)]" />
+                <DevinIcon className="size-[18px] text-[var(--text-primary)]" />
               </div>
               <div className="inline-flex size-[38px] -rotate-[5deg] items-center justify-center rounded-xl border border-black/[0.08] bg-black/[0.03] backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
                 <PiIcon className="size-[18px] text-[var(--text-primary)]" />

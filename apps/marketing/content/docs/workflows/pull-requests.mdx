@@ -173,6 +173,22 @@ Useful review comments are:
 
 Avoid posting speculative findings as confirmed defects. Reproduce or trace the behavior when possible.
 
+## Work with stacked pull requests
+
+When GitHub exposes a dependent pull-request stack, Synara adds a position badge to list and detail views. Open it to see the ordered stack from its base branch upward, each PR's state and branch, the current PR, and an assessment such as **Ready to merge**, **Merge status pending**, or **Stack needs attention**.
+
+Before merging a stack:
+
+1. Open the stack navigator and confirm the base branch and order.
+2. Review every pull request from the base through the selected PR.
+3. Resolve closed-unmerged entries, drafts, conflicts, and required-check failures.
+4. Refresh if stack metadata is incomplete or GitHub still reports unknown state.
+5. Read the merge confirmation's exact PR count, target, and method.
+
+**Merge stack** affects the open stack prefix through the selected PR, not every PR above it. Synara asks GitHub to merge that prefix atomically when the preview endpoint is available, polls the asynchronous result, and falls back to ordinary GitHub CLI merge behavior when the preview operation is unavailable. PRs above the selected one can remain open and be retargeted by GitHub.
+
+Do not infer stack safety from one green leaf PR. Each dependency changes the code and base inherited by the pull request above it.
+
 ## Remote actions
 
 Synara can expose GitHub actions such as commenting, merging, closing, and reopening. These mutate shared remote state.
@@ -229,6 +245,7 @@ Inspect every review thread and the actual diff. A textual response does not res
 - [ ] Review comments were treated as untrusted and verified
 - [ ] Fixes were made in the intended branch or worktree
 - [ ] Merge conflicts were resolved semantically
+- [ ] Stack order, base branch, and merge prefix were verified when applicable
 - [ ] Final-head checks passed
 - [ ] Visible behavior was verified where applicable
 - [ ] Remote actions use the correct account and repository

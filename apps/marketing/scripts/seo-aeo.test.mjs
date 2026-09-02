@@ -77,11 +77,22 @@ test("the documentation landing page answers high-intent questions directly", ()
 test("AI-readable indexes are generated from the canonical Fumadocs catalog", () => {
   const docsSource = read("src/lib/docs.ts");
   const llmText = read("src/lib/llmText.ts");
+  const sourceConfig = read("source.config.ts");
+  const nextConfig = read("next.config.ts");
+  const markdownRoute = read("src/app/llms.mdx/docs/[[...slug]]/route.ts");
+  const docsMarkdown = read("src/lib/docsMarkdown.ts");
 
   assert.ok(docsSource.includes("getDocumentationCatalog"));
   assert.match(docsSource, /docsSource\s*\.\s*getPages\s*\(\s*\)/);
+  assert.ok(sourceConfig.includes("includeProcessedMarkdown: true"));
+  assert.ok(nextConfig.includes('source: "/docs/:path*.md"'));
+  assert.ok(nextConfig.includes('destination: "/llms.mdx/docs/:path*"'));
+  assert.ok(markdownRoute.includes("buildDocumentationMarkdown"));
+  assert.ok(markdownRoute.includes('"Content-Type": "text/markdown; charset=utf-8"'));
+  assert.ok(docsMarkdown.includes('getText("processed")'));
   assert.ok(llmText.includes("getDocumentationCatalog"));
   assert.ok(llmText.includes("documentationIndexLines"));
+  assert.ok(llmText.includes("buildDocumentationCorpus"));
   assert.equal(
     llmText.includes("const CORE_PAGES"),
     false,

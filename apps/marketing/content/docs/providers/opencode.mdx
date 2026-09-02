@@ -106,6 +106,8 @@ OpenCode supports many underlying model providers. Two users with the same OpenC
 
 Synara does not currently classify OpenCode as supporting native live-turn steering. Send follow-ups according to the controls available in the active task rather than assuming Claude, Codex, and OpenCode behave identically.
 
+Synara 0.8.0 removed the retired Kilo Code provider. During the database upgrade, existing Kilo tasks and provider-session identities are migrated to OpenCode, along with saved favorite-provider and editor-tab selections. Review the migrated task's OpenCode executable, credentials, and model catalog before continuing important work.
+
 ## Configuration
 
 Keep provider credentials and model definitions in OpenCode’s supported configuration locations. Project-level configuration can intentionally differ from global configuration, so verify the catalog from the same repository Synara will open.

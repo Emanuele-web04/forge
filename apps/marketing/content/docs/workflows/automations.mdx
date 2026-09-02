@@ -45,6 +45,7 @@ Before enabling the draft, verify:
 - Exact prompt
 - Stop condition, if any
 - Whether the task may mutate files or remote systems
+- How many consecutive failures are allowed before Synara disables the automation
 
 Do not accept a generated schedule merely because the natural-language interpretation looks plausible.
 
@@ -121,6 +122,23 @@ Review:
 
 A successful scheduler dispatch does not mean the agent’s work was correct.
 
+## Choose a failure policy
+
+The **On failure** policy controls how many consecutive failed runs Synara tolerates before disabling the automation:
+
+| Policy                | Behavior                                                            |
+| --------------------- | ------------------------------------------------------------------- |
+| Stop after 1 failure  | Disable after the first failed run                                  |
+| Stop after 3 failures | Default; tolerate two consecutive failures and disable on the third |
+| Stop after 5 failures | Allow a longer transient-failure window                             |
+| Keep running          | Never auto-disable solely because of consecutive failures           |
+
+A successful run resets the consecutive-failure count. Duplicate reconciliation of the same run does not count as another failure.
+
+When the threshold is reached, Synara records the failure count and disable reason. Re-enabling is deliberate: inspect the failed runs, environment, provider state, and prompt before turning the automation back on. Choosing **Keep running** does not automatically restart an automation that was already disabled by failures.
+
+This policy is separate from maximum iterations and natural-language completion conditions. Whichever applicable stop boundary is reached first can disable future runs with its own recorded reason.
+
 ## Current and paused automations
 
 Pause an automation when:
@@ -181,7 +199,7 @@ Disable the automation, inspect the recorded reason and evidence, then rewrite t
 
 ### Runs keep failing identically
 
-Pause. Require a new diagnosis rather than consuming repeated provider turns against the same broken assumption.
+Inspect the **On failure** threshold and the recorded disable reason. Do not merely re-enable the automation: require a new diagnosis rather than consuming repeated provider turns against the same broken assumption.
 
 ### A run leaves an active process
 
@@ -195,6 +213,7 @@ Inspect the task terminal and stop dependent servers, watchers, or child process
 - [ ] The prompt states allowed and forbidden actions
 - [ ] Verification is observable
 - [ ] Stop conditions are measurable
+- [ ] Consecutive-failure tolerance is explicit and appropriate for the action's risk
 - [ ] Repeated external effects are replay-safe
 - [ ] Run history and task diffs are reviewed
 - [ ] Failed or ambiguous automations are paused before retrying

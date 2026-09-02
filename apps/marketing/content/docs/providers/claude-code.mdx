@@ -76,6 +76,8 @@ Automatic discovery should resolve `claude`. Configure a custom binary path only
 
 Confirm that the model picker shows the models and effort options exposed by your account and installed runtime.
 
+In Synara 0.8.1 and later, Claude Fable 5.1 appears as `Claude Fable 5.1` when your account can use it. The plain `fable` selection resolves to Fable 5.1; an explicit Fable 5 selection remains available for backward compatibility.
+
 </Step>
 <Step>
 
@@ -103,6 +105,12 @@ Native steering means a follow-up can be delivered to supported live Claude sess
 
 Claude capabilities change with the installed CLI and account. Treat the controls shown in your current Synara session as authoritative for that runtime.
 
+### Fable 5.1 controls and usage
+
+Synara models Fable 5.1 with always-on thinking and Low through Max effort. It does not expose a separate thinking toggle, a fast-mode lane, or the legacy ultrathink prompt option. These controls describe Synara's current integration; model access still depends on the Claude account and runtime.
+
+When Anthropic returns a model-scoped weekly allowance, Synara shows a separate **Fable** window in Claude usage directly after the general weekly window. A missing Fable row means the authenticated account response did not provide that limit; it does not by itself mean the model is unavailable.
+
 ## Updating
 
 Synara can recognize common npm, Homebrew, and native Claude installations. Depending on the installation source, update Claude Code through its package manager or:
@@ -128,7 +136,7 @@ Run `claude` directly and complete the provider’s own login flow. For enterpri
 
 ### Models or effort options are missing
 
-Update Claude Code, confirm the account exposes the expected model, and refresh provider status. Model availability is account- and runtime-dependent.
+Update Claude Code, confirm the account exposes the expected model, and refresh provider status. For Fable 5.1, start a new task after refreshing so the current model catalog and capability ladder are applied. Model availability is account- and runtime-dependent.
 
 ### A session behaves differently from the Claude terminal
 

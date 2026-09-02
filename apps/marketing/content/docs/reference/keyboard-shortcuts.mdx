@@ -7,16 +7,19 @@ description: The full default keymap, verified against the Synara source, plus J
 
 ## Navigate
 
-| Shortcut                      | Action                               |
-| ----------------------------- | ------------------------------------ |
-| `mod+k`                       | Search the sidebar                   |
-| `mod+b`                       | Toggle the sidebar                   |
-| `mod+1` … `mod+9`             | Jump to the Nth thread               |
-| `mod+shift+]` / `mod+shift+[` | Next / previous visible chat         |
-| `ctrl+tab` / `ctrl+shift+tab` | Cycle recent views                   |
-| `mod+shift+o`                 | Add a project                        |
-| `mod+i`                       | Import a thread                      |
-| `mod+o`                       | Open the favorite file in the editor |
+| Shortcut                      | Action                                             |
+| ----------------------------- | -------------------------------------------------- |
+| `mod+k`                       | Search the sidebar                                 |
+| `mod+b`                       | Toggle the sidebar                                 |
+| `mod+1` … `mod+9`             | Jump to the Nth thread                             |
+| `mod+shift+]` / `mod+shift+[` | Next / previous visible chat                       |
+| `ctrl+tab` / `ctrl+shift+tab` | Cycle recent views                                 |
+| `mod+shift+o`                 | Add a project                                      |
+| `mod+i`                       | Import a thread                                    |
+| `mod+o`                       | Open the favorite file in the editor               |
+| `mod+p`                       | Search files by name in the active project         |
+| `mod+shift+f`                 | Search matching source lines in the active project |
+| `mod+f`                       | Find text in the current conversation              |
 
 ## Create
 
@@ -50,6 +53,8 @@ description: The full default keymap, verified against the Synara source, plus J
 | `mod+shift+arrows` | Directional terminal splits                                          | Terminal focused     |
 | `mod+t` / `mod+w`  | New / close terminal tab                                             | Terminal focused     |
 | `mod+shift+b`      | Toggle the browser preview                                           | Outside the terminal |
+
+Opening a file or source match sends it to the current task's file pane. Content search requires at least two characters and shows the matching path, line number, and source excerpt. The iOS Simulator exposes a customizable `device.toggle` command but has no default shortcut; open it from the right-dock add menu or assign a key in Settings.
 
 <Callout type="info" title="Spaces (preview on main)">
   Synara `main` adds project spaces with `mod+alt+←` / `mod+alt+→` to switch spaces and

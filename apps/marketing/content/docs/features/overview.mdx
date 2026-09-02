@@ -7,7 +7,7 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 
 ## Agent runtimes and models
 
-- **Multi-provider workspace** — use Claude Code, Codex, Cursor, OpenCode, Antigravity, Grok, Kilo Code, Pi, and Factory Droid from one app, with the subscriptions you already pay for. → [Providers](/docs/getting-started/providers)
+- **Multi-provider workspace** — use Claude Code, Codex, Cursor, OpenCode, Antigravity, Grok, Devin CLI, Pi, and Factory Droid from one app, with the subscriptions you already pay for. → [Providers](/docs/getting-started/providers)
 - **Provider handoff** — hand a thread to a different provider mid-task; the new model continues with the same context, environment, and Git state. → [Handoffs](/docs/workflows/handoffs)
 - **Model quick-switching** — cycle models with `alt+]` / `alt+[`, favorite the ones you use, and drag providers into your own order. → [Customization](/docs/features/customization)
 - **Reasoning & effort control** — per-provider effort ladders up to maximum reasoning, a dedicated picker (`mod+shift+e`), and `/fast` for quick turns. → [Composer](/docs/features/composer)
@@ -18,8 +18,9 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 
 - **Git worktree isolation** — every task can run in its own worktree with its own branch, so parallel agents never collide. → [Worktrees](/docs/workflows/worktrees)
 - **Native subagents & workflows** — agents delegate to parallel child agents, shown live with phases, usage meters, and pause/stop controls. → [Parallel agents](/docs/workflows/parallel-agents)
-- **Fork & side threads** — `/fork` splits a thread into the local checkout or a fresh worktree; `/side` opens a guarded side-conversation. → [Slash commands](/docs/reference/slash-commands)
-- **Automations** — schedule recurring agent runs in plain language, with run history and evaluated stop conditions that turn them off when the job is done. → [Automations & Studio](/docs/features/automations)
+- **Thread forks** — `/fork` or **Fork from here** creates a source-linked task from the full conversation or one exact turn, using native provider forks where supported. → [Thread forks](/docs/workflows/forks)
+- **Side threads** — `/side` opens a guarded side-conversation for a narrower question without branching the main task into another full workflow. → [Slash commands](/docs/reference/slash-commands)
+- **Automations** — schedule recurring agent runs in plain language, with run history, evaluated stop conditions, and configurable consecutive-failure limits. → [Automations](/docs/workflows/automations)
 - **Studio** — a dedicated workspace for long-running, agent-led work, with outputs collected in one place instead of scattered across a transcript. → [Automations & Studio](/docs/features/automations)
 - **Project spaces** — organize threads into named spaces per project, with a switcher tab bar and `mod+alt+←/→` navigation. → [Preview features](/docs/reference/main-preview)
 
@@ -28,11 +29,14 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 - **Agent Gateway** — an app-owned MCP tool surface that lets capable agents create and steer Synara tasks under the app's project and worktree rules. → [Parallel agents](/docs/workflows/parallel-agents)
 - **External MCP integrations** — pair Codex, Claude Code, Claude Desktop, or any MCP app with a guided flow and give it a scoped, revocable Synara tool surface. → [Preview features](/docs/reference/main-preview)
 - **Plan mode** — the agent proposes before executing, and can pause to ask you multi-select questions before writing any code. → [Composer](/docs/features/composer)
+- **Debug mode** — put any supported provider into the same evidence-first observe, reproduce, investigate, fix, and verify loop without changing runtime permissions. → [Debug mode](/docs/workflows/debugging)
+- **Persistent thread goals** — attach an explicit multi-turn objective with elapsed time, pause/resume controls, achievement history, and bounded autonomous continuation. → [Thread goals](/docs/features/thread-goals)
 - **Checkpoints & revert** — roll a thread back to an earlier state, with guardrails that refuse the revert while a turn is still running. → [Composer](/docs/features/composer)
 
 ## Review and delivery
 
 - **Pull Requests workspace** — browse, search, review, comment, merge, and pin GitHub PRs across all your projects without leaving the app. → [Pull requests](/docs/workflows/pull-requests)
+- **Stacked pull requests** — see stack position and readiness, navigate the ordered stack, and merge the safe prefix through the selected PR with an explicit confirmation. → [Pull requests](/docs/workflows/pull-requests#work-with-stacked-pull-requests)
 - **Fix button** — groups every unresolved review comment into one numbered prompt, so the agent gets the whole review in a single message. → [Pull requests](/docs/workflows/pull-requests)
 - **Diff review** — a collapsible file tree, jump menu, and one-key toggle (`mod+d`) for reading exactly what changed. → [Organize & navigate](/docs/features/organize)
 - **Git actions** — commit, push, create branches, and switch safely with stash recovery and conflict checks, all from the workspace. → [Your first task](/docs/getting-started/first-task)
@@ -51,6 +55,8 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 - **Integrated terminals** — real terminals in the task's working directory: drawer, splits, tabs, and a full-width terminal workspace. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
 - **Browser preview & dev servers** — live browser preview with browser control beside the conversation, and project dev servers managed from the same panel. → [Organize & navigate](/docs/features/organize)
 - **Editor workspace** — a file tree and syntax-highlighted editor next to the chat, plus open-in launchers for VS Code, Cursor, Zed, JetBrains, Xcode, and more. → [Organize & navigate](/docs/features/organize)
+- **Workspace file and source search** — open files by name with `mod+p` or search matching source lines with `mod+shift+f`, then inspect the result in the task's file pane. → [Organize & navigate](/docs/features/organize#search-files-and-source)
+- **iOS Simulator** — on macOS, share a live simulator with the agent, inject input, inspect accessibility, and capture screenshots or recordings beside the task. → [iOS Simulator](/docs/features/ios-simulator)
 - **Split views** — keep two tasks visible side by side (`mod+\`), even across projects. → [Organize & navigate](/docs/features/organize)
 - **Thread recap** — auto-generated, cached summaries of long conversations, ready before a handoff or when you return days later. → [Organize & navigate](/docs/features/organize)
 - **Pins, markers & notes** — pin projects, threads, and messages; mark transcript moments; keep autosaving notes attached to each task. → [Organize & navigate](/docs/features/organize)
@@ -59,7 +65,7 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 
 ## Personalization and app
 
-- **Slash commands** — `/plan`, `/fork`, `/subagents`, `/export`, `/automation` and friends: thread control without leaving the keyboard. → [Slash commands](/docs/reference/slash-commands)
+- **Slash commands** — `/plan`, `/debug`, `/goal`, `/fork`, `/subagents`, `/export`, `/automation` and friends: thread control without leaving the keyboard. → [Slash commands](/docs/reference/slash-commands)
 - **Custom keybindings** — remap anything from a settings panel or an ordered JSON keymap with context-aware rules. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
 - **Theme editor & density controls** — tune the UI colors and information density directly in settings, terminals included. → [Customization](/docs/features/customization)
 - **Profile & activity stats** — a local profile of your patterns: provider and model mix, active hours, and a token heatmap. → [Customization](/docs/features/customization)

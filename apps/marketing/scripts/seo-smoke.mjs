@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOST = "127.0.0.1";
-const PORT = 3210;
+const PORT = Number(process.env.SEO_SMOKE_PORT ?? 3210);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const NEXT_CLI = path.join(ROOT, "node_modules", "next", "dist", "bin", "next");
 
@@ -45,7 +45,7 @@ async function waitForServer() {
   throw new Error(`Timed out waiting for ${ORIGIN}.\n${output}`);
 }
 
-async function readRoute(pathname, expectedContentType) {
+async function getRoute(pathname, expectedContentType) {
   const response = await fetch(`${ORIGIN}${pathname}`, {
     signal: AbortSignal.timeout(10_000),
   });
@@ -56,7 +56,12 @@ async function readRoute(pathname, expectedContentType) {
     expectedContentType,
     `${pathname} returned the wrong content type`,
   );
-  return body;
+  return { body, response };
+}
+
+async function readRoute(pathname, expectedContentType) {
+  const route = await getRoute(pathname, expectedContentType);
+  return route.body;
 }
 
 async function stopServer() {
@@ -133,6 +138,29 @@ try {
   assert.ok(docs.includes('"@type":"TechArticle"'), "docs page is missing TechArticle JSON-LD");
   assert.ok(docs.includes('"@type":"BreadcrumbList"'), "docs page is missing breadcrumb JSON-LD");
 
+  const docsIndexMarkdown = await readRoute("/docs.md", /text\/markdown/i);
+  assert.ok(docsIndexMarkdown.includes("# Synara documentation"));
+  assert.ok(docsIndexMarkdown.includes("## What is Synara?"));
+
+  const { body: docsMarkdown, response: docsMarkdownResponse } = await getRoute(
+    "/docs/providers/claude-code.md",
+    /text\/markdown/i,
+  );
+  assert.equal(docsMarkdownResponse.headers.get("x-robots-tag"), "noindex, follow");
+  assert.equal(
+    docsMarkdownResponse.headers.get("link"),
+    '<https://www.trysynara.com/docs/providers/claude-code>; rel="canonical"',
+  );
+  for (const marker of [
+    "# Claude Code",
+    "Canonical URL: https://www.trysynara.com/docs/providers/claude-code",
+    "## Install",
+    "claude --version",
+  ]) {
+    assert.ok(docsMarkdown.includes(marker), `Markdown documentation is missing ${marker}`);
+  }
+  assert.equal(docsMarkdown.includes("<html"), false);
+
   for (const pathname of [
     "/docs/providers",
     "/docs/workflows",
@@ -192,27 +220,29 @@ try {
     "## Product model",
     "One task owns one line of work",
     "## Documentation index",
-    "https://www.trysynara.com/docs/providers",
-    "https://www.trysynara.com/docs/workflows",
-    "https://www.trysynara.com/docs/troubleshooting",
+    "https://www.trysynara.com/docs/providers.md",
+    "https://www.trysynara.com/docs/workflows.md",
+    "https://www.trysynara.com/docs/troubleshooting.md",
     "robots.txt and page-level indexing directives remain authoritative",
   ]) {
     assert.ok(llms.includes(marker), `llms.txt is missing ${marker}`);
   }
 
   const llmsFull = await readRoute("/llms-full.txt", /text\/plain/i);
-  assert.ok(llmsFull.includes("## Expanded documentation map"));
-  assert.ok(llmsFull.includes("### Report a problem"));
+  assert.ok(llmsFull.includes("## Full documentation"));
+  assert.ok(llmsFull.includes("# Report a problem"));
   assert.ok(
     llmsFull.includes(
       "Canonical URL: https://www.trysynara.com/docs/troubleshooting/report-a-problem",
     ),
   );
+  assert.ok(llmsFull.includes("claude --version"));
 
   const ai = await readRoute("/ai.txt", /text\/plain/i);
   assert.ok(ai.includes("AI search and user-directed retrieval agents:"));
   assert.ok(ai.includes("Model-development controls, separate from search visibility:"));
   assert.ok(ai.includes("Supported runtimes: Claude Code, Codex, OpenCode"));
+  assert.ok(ai.includes("Markdown documentation: https://www.trysynara.com/docs.md"));
   assert.ok(
     ai.includes("This file is informational and does not grant or revoke crawler permission."),
   );

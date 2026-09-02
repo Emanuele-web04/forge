@@ -54,11 +54,11 @@ const PROVIDERS = [
     officialDomain: "docs.x.ai",
   },
   {
-    slug: "kilo-code",
-    title: "Kilo Code",
-    executable: "kilo",
-    authMarker: "/connect",
-    officialDomain: "kilo.ai",
+    slug: "devin",
+    title: "Devin CLI",
+    executable: "devin",
+    authMarker: "devin auth login",
+    officialDomain: "docs.devin.ai",
   },
   {
     slug: "pi",

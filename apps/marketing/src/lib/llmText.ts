@@ -6,6 +6,7 @@ import { FAQ_ITEMS } from "@/data/faqs";
 import { PRODUCT_CATEGORY, PRODUCT_PILLARS, SUPPORTED_PROVIDERS } from "@/data/product";
 import { getSortedReleases, toVersionSlug } from "@/lib/changelog";
 import { getDocumentationCatalog } from "@/lib/docs";
+import { buildDocumentationCorpus } from "@/lib/docsMarkdown";
 import {
   AI_DISCOVERY_NOTICE,
   AI_DISCOVERY_USER_AGENTS,
@@ -34,7 +35,7 @@ const PRIMARY_PAGES = [
 
 function documentationIndexLines() {
   return getDocumentationCatalog().map(
-    (page) => `- [${page.title}](${SITE_URL}${page.url}): ${page.description}`,
+    (page) => `- [${page.title}](${SITE_URL}${page.url}.md): ${page.description}`,
   );
 }
 
@@ -91,20 +92,16 @@ export function buildLlmsTxt() {
   ].join("\n");
 }
 
-export function buildLlmsFullTxt() {
+export async function buildLlmsFullTxt() {
   const releases = getSortedReleases();
-  const docs = getDocumentationCatalog();
+  const documentation = await buildDocumentationCorpus();
 
   return [
     buildLlmsTxt(),
     "",
-    "## Expanded documentation map",
-    ...docs.flatMap((page) => [
-      `### ${page.title}`,
-      `Canonical URL: ${SITE_URL}${page.url}`,
-      page.description,
-      "",
-    ]),
+    "## Full documentation",
+    documentation,
+    "",
     "## Homepage FAQ",
     ...FAQ_ITEMS.flatMap(({ question, answer }) => [`### ${question}`, answer, ""]),
     "## Full changelog summaries",
@@ -129,6 +126,7 @@ export function buildAiTxt() {
     "",
     "Canonical discovery resources:",
     `- ${SITE_URL}/docs`,
+    `- Markdown documentation: ${SITE_URL}/docs.md`,
     `- ${SITE_URL}/llms.txt`,
     `- ${SITE_URL}/llms-full.txt`,
     `- ${SITE_URL}/sitemap-index.xml`,

@@ -28,6 +28,18 @@ chmod +x Synara*.AppImage
   and any data directory before considering destructive cleanup.
 </Callout>
 
+## Closing while chats are still running
+
+When a desktop quit would interrupt running or connecting chats, Synara lists those chats before closing.
+
+- Choose **Cancel** to keep the app and current work open.
+- Choose **Quit** to stop the listed work and close.
+- Leave **Resume chats automatically** enabled when eligible chats should receive a continuation turn on the next launch.
+
+Automatic resume is guarded rather than unconditional. Synara skips a remembered chat when it completed, was archived or deleted, already started newer work, or no longer belongs to a live project. If the local server cannot record the resume intent within the bounded quit wait, Synara falls back to interruption and still allows the desktop app to close; do not assume that fallback work will resume automatically.
+
+The checkbox choice persists for later quits. Review it when a task must not continue without fresh supervision.
+
 ## The window is blank or unresponsive
 
 A blank window can come from the renderer, the local server, graphics state, or a process left over from an earlier launch.
@@ -40,6 +52,12 @@ A blank window can come from the renderer, the local server, graphics state, or 
 6. Capture the operating system, Synara version, and exact time before restarting again.
 
 When only one project or task triggers the problem, report that boundary. It is more useful than “the app is blank.”
+
+## Windows or Linux title bar looks wrong
+
+Open **Settings → Appearance → Use custom title bar** to switch between Synara’s frameless title bar and the operating system’s title bar. A restart is required because Electron chooses the window frame before the renderer starts; use the offered relaunch action after saving the preference.
+
+The custom title bar is supported only on Windows and Linux. Some Linux window managers integrate better with the system title bar. On Windows, the custom frame keeps Synara’s own minimize, maximize, restore, and close controls.
 
 ## The local server does not become ready
 

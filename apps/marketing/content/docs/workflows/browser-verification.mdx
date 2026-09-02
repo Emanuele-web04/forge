@@ -5,6 +5,19 @@ description: Verify visible web behavior with Synara’s shared in-app browser, 
 
 Synara’s browser is a shared Chromium page surface attached to the task. Supported agents can inspect and operate the same page, cookies, and session that you can reveal in the app. Use it to verify behavior—not as a substitute for understanding the implementation or reviewing the diff.
 
+The WebMCP tool surface is provider-neutral. A compatible provider receives the same task-owned browser tools, bounded results, timeout policy, and lifecycle cleanup rather than a provider-specific copy of the browser integration. Availability still depends on the selected runtime and the task's granted capabilities.
+
+## Choose the browser surface
+
+The same task browser can appear in two places:
+
+- **Floating over the conversation:** keeps the page visible while you read the transcript. Drag the handle to move it, resize from an edge or corner, and use the panel menu to return it to the sidebar.
+- **In the right sidebar:** gives the browser a dedicated docked column beside the conversation.
+
+These are two presentations of one task-scoped browser session, not separate browsers. Tabs, cookies, navigation, and the page an agent operates remain attached to the task when you move between them. When the floating panel owns the live native page, the hidden sidebar stays preview-only so two surfaces cannot send input to the same guest.
+
+Closing the floating panel hides that presentation; it does not prove that the task’s browser runtime or tabs were destroyed. Use the task controls or browser tools when you intend to close a tab or end the browser session.
+
 ## What browser verification is for
 
 Use the browser when correctness depends on visible or runtime behavior, including:

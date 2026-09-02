@@ -76,6 +76,20 @@ A task can retain metadata after its directory was removed outside Synara.
 
 Uncommitted files from a manually deleted directory are not restored by Git metadata.
 
+## Windows project is inside WSL
+
+Synara recognizes workspace roots opened through `\\wsl.localhost\<distribution>\...` and `\\wsl$\<distribution>\...`. Provider commands for those roots run through `wsl.exe` inside the named distribution, and ACP providers receive the equivalent Linux working directory.
+
+When a WSL-backed task fails:
+
+1. Confirm the UNC path names the intended distribution.
+2. Run `wsl.exe --list --verbose` and verify that distribution is installed and available.
+3. Open the equivalent Linux path inside that distribution and confirm the repository exists.
+4. Verify the provider CLI is installed and authenticated inside WSL, not only on the Windows host.
+5. Check that a manually configured provider binary is valid in the environment where it will execute.
+
+Local-folder mentions and project browsing also accept supported UNC and Windows home paths. Do not rewrite a WSL UNC project to a drive-letter path unless it is genuinely the same filesystem and repository.
+
 ## Git says a branch is already checked out
 
 A branch can be attached to only one worktree at a time.

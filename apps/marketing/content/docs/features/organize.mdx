@@ -13,6 +13,12 @@ Projects, threads, and individual transcript messages can be pinned. Pinned mess
 
 Mark important moments in a transcript and jump back to them later. Markers are managed from the Environment panel, so a 200-message thread stays navigable.
 
+## Find text in the current conversation
+
+Press `mod+f` to open the floating transcript search. Synara highlights matching message text, shows the active result and total count, and supports previous/next navigation without treating tool-only activity as conversation text.
+
+Close the panel to remove its temporary highlights. Transcript search does not change messages, markers, or pinned content.
+
 ## Recap long threads
 
 The thread recap panel generates an in-place summary of a long chat and caches it. Useful before a [handoff](/docs/workflows/handoffs) or when returning to a task after days away.
@@ -25,9 +31,19 @@ Drag a chat into a split pane to keep two tasks visible side by side — even ac
 
 The recent-view switcher gives keyboard-first navigation through recent chats, terminals, and workspace surfaces, with keycap hints. Combined with the [keyboard shortcuts](/docs/reference/keyboard-shortcuts), you rarely need the pointer.
 
+The primary sidebar destinations can also be dragged into your preferred order. Synara keeps that order across windows and restarts while adding newly introduced destinations to a sensible default position.
+
 ## Edit files beside the chat
 
 The editor workspace opens a file tree and syntax-highlighted editor next to the conversation, and can move file references straight into prompts. For bigger edits, open-in launchers hand the project to VS Code, Cursor, Zed, JetBrains IDEs, Xcode, Ghostty, Terminal, and others.
+
+## Search files and source
+
+Press `mod+p` to find workspace files by name. Press `mod+shift+f` for grep-style source search across the active project.
+
+File results show the basename and parent path. Source results add the matching line number and excerpt. Choosing either result opens that file in the task's right-dock file pane, so search, Markdown file links, and the Explorer lead to the same review surface.
+
+Search is scoped to the active workspace. If a result appears to come from the wrong checkout, verify the task's local or worktree environment before editing it.
 
 ## Track local dev servers
 

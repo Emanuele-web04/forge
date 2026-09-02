@@ -53,7 +53,7 @@ export const SEO_KEYWORDS = [
   "Cursor agent workspace",
   "Antigravity CLI GUI",
   "Grok Build",
-  "Kilo Code",
+  "Devin CLI workspace",
   "Pi coding agent",
   "Factory Droid",
   "Git worktrees",

@@ -3,9 +3,9 @@ import {
   AntigravityIcon,
   ClaudeIcon,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
-  KiloCodeIcon,
   OpencodeIcon,
   PiIcon,
 } from "@/components/BrandIcons";
@@ -43,8 +43,8 @@ const marks = [
     rotation: "rotate-[2deg]",
   },
   {
-    name: "Kilo Code",
-    Icon: KiloCodeIcon,
+    name: "Devin CLI",
+    Icon: DevinIcon,
     className: "text-[var(--text-primary)]",
     rotation: "rotate-[3deg]",
   },

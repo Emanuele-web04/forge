@@ -3,8 +3,8 @@
 The public website for Synara — the free, open-source command center for
 agentic development.
 
-Synara gives Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok, Kilo
-Code, Pi, and Droid one local-first operating surface for parallel sessions,
+Synara gives Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok, Devin
+CLI, Pi, and Droid one local-first operating surface for parallel sessions,
 terminals, browser previews, diffs, Git worktrees, handoffs, and pull-request
 flow.
 
@@ -19,18 +19,20 @@ flow.
 
 ## Run the website locally
 
+From the repository root:
+
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev:marketing
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:4322](http://localhost:4322).
 
 Useful checks:
 
 ```bash
-npm run lint
-npm run build
+bun run --cwd apps/marketing lint
+bun run build:marketing
 ```
 
 The site is a Next.js App Router project. Product copy is shared across the

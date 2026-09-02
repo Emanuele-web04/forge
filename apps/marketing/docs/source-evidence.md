@@ -1,6 +1,6 @@
 # Source evidence — external documentation claims
 
-Date checked: **2026-08-07**
+Date checked: **2026-09-01**
 
 This file records, per provider, the claims in `content/docs` that required source
 verification, the primary source used, and the date the source was checked.
@@ -81,12 +81,17 @@ install scripts `https://x.ai/cli/install.sh` and `https://x.ai/cli/install.ps1`
 **Primary source:** [x.ai Grok Build docs](https://docs.x.ai/build/overview) checked
 2026-08-07 (HTTP 200); [github.com/xai-org/grok-build](https://github.com/xai-org/grok-build) HTTP 200.
 
-## Kilo Code
+## Devin CLI
 
-**Claims:** Kilo Code CLI platform docs, Kilo CLI product/installation, and source repository.
+**Claims:** Devin CLI installation on macOS, Linux, WSL, and Windows; the `devin`
+executable; `devin auth login`, `devin auth status`, `devin models list --format json`,
+`devin update`, and the `devin acp` stdio server; ACP authentication through
+`WINDSURF_API_KEY` or credentials stored by `devin auth login`.
 
-**Primary source:** [Kilo docs](https://kilo.ai/docs/code-with-ai/platforms/cli) checked
-2026-08-07 (HTTP 200); `https://kilo.ai/cli` HTTP 200; [github.com/Kilo-Org/kilocode](https://github.com/Kilo-Org/kilocode) HTTP 200.
+**Primary source:** [Devin CLI quickstart](https://docs.devin.ai/cli),
+[commands and flags](https://docs.devin.ai/cli/reference/commands), and
+[configuration file reference](https://docs.devin.ai/cli/reference/configuration/config-file),
+checked 2026-09-01 (HTTP 200 with current CLI content).
 
 ## OpenCode
 
@@ -158,3 +163,117 @@ the app.
 
 **Decision — REMOVAL STANDS:** evidence source is the app's built-in command list
 (unverified in this repo) — **needs app-source confirmation, low risk**.
+
+## Synara v0.7.2 feature documentation
+
+Date checked: **2026-08-15**
+
+**Claims:** Persistent and autonomous thread goals; `/goal` controls; evidence-first Debug
+mode; full-thread and message-level forks; native fork coverage; local/worktree fork targets;
+the macOS iOS Simulator pane and device controls; workspace file and source search; stacked
+pull-request navigation and prefix merging; automation consecutive-failure policies.
+
+**Primary source:** Local Synara checkout
+`/Users/emanueledipietro/Developer/synara` at release tag `v0.7.2`, commit
+`18ff99857d5b84adab2019c2839fa4f6df761b7c`.
+
+Key source paths checked:
+
+- Goals and commands: `apps/web/src/composerSlashCommands.ts`,
+  `apps/web/src/hooks/useComposerSlashCommands.ts`,
+  `apps/web/src/components/chat/ComposerGoalHeader.tsx`, and
+  `apps/server/src/agentGateway/Layers/AgentGateway.ts`
+- Fork lifecycle: `apps/web/src/hooks/useComposerSlashCommands.ts`,
+  `apps/web/src/lib/threadEnvironment.ts`,
+  `apps/web/src/components/chat/MessagesTimeline.tsx`, and provider fork adapters
+- Debug policy: `apps/server/src/provider/debugMode.ts` and composer interaction-mode controls
+- iOS Simulator: `apps/web/src/components/DevicePanel.tsx`,
+  `apps/web/src/components/DevicePanel.logic.ts`,
+  `apps/web/src/components/device/DeviceControlRail.tsx`, and server device services/tools
+- Workspace search: `apps/web/src/components/chat/SingleChatSurface.tsx` and
+  `apps/web/src/components/WorkspaceSearchPalette.tsx`
+- Stacked PRs: `apps/web/src/components/pullRequest/PullRequestStackPopover.tsx`,
+  `pullRequestStack.logic.ts`, and `PullRequestDetailPanel.tsx`
+- Automation failures: `apps/web/src/lib/automationFailurePolicy.ts`, automation form/detail
+  controls, and `apps/server/src/automation/Layers/AutomationService.ts`
+
+**Decision:** Public documentation follows the shipped release source. The older internal
+`docs/device-pane-spec.md` was treated as historical design context only because several
+pre-implementation non-goals changed before v0.7.2 shipped.
+
+## Synara v0.7.3 feature documentation
+
+Date checked: **2026-08-21**
+
+**Claims:** Guarded desktop quit and startup continuation; a floating task-owned browser;
+usage views for every locally verifiable provider; first-class WSL UNC launching; optional
+custom title bars on Windows and Linux; the headless release tarball and `synara server
+status`; cross-provider `/side`; and provider streaming, diagnostic, workspace, and runtime
+reliability fixes.
+
+**Primary source:** Local Synara checkout
+`/Users/emanueledipietro/Developer/synara` at the v0.7.3 release commit
+`a93c47e275870f34ec7aa8cd72f2a0ff6246db7c`. The audited range from v0.7.2 contains 224
+commits, including 50 merge commits, across 321 changed files.
+
+Key source paths checked:
+
+- Quit and continuation: `apps/desktop/src/runningChatsQuitGuard.ts`,
+  `apps/web/src/components/RunningChatsQuitDialog.tsx`,
+  `apps/web/src/lib/runningChatsQuitConfirmation.ts`, and
+  `apps/server/src/orchestration/quitResume.ts`
+- Floating browser: `apps/web/src/components/chat/FloatingBrowserPanel.tsx`,
+  `FloatingBrowserPanel.browser.tsx`, and `apps/web/src/components/BrowserTabStrip.tsx`
+- Provider usage: `apps/server/src/providerUsage/`,
+  `apps/server/src/providerUsageSnapshot.ts`, and
+  `apps/web/src/lib/providerUsageSnapshot.ts`
+- WSL and desktop chrome: `packages/shared/src/windowsProcess.ts`,
+  `apps/server/src/provider/acp/AcpWslCwd.test.ts`, and
+  `apps/desktop/src/desktopCustomTitleBar.ts`
+- Headless distribution and status: `.github/workflows/release.yml`,
+  `apps/server/scripts/cli.ts`, and `apps/server/src/serverStatusCli.ts`
+- Cross-provider side chats: `apps/web/src/composerSlashCommands.ts`,
+  `apps/web/src/lib/sidechatCreation.ts`, and
+  `apps/web/src/lib/sidechatCreatorRegistry.ts`
+- Provider correctness: `apps/server/src/provider/Layers/AntigravityAdapter.ts` and
+  `apps/server/src/provider/Layers/OpenCodeAdapter.ts`
+
+**Decision:** The changelog and durable guides describe the release commit, not every
+intermediate merge. The experimental DeepSeek Harness work was reverted before v0.7.3 and
+is therefore explicitly excluded from the shipped provider list.
+
+## Synara v0.8.0 feature documentation
+
+Date checked: **2026-09-01**
+
+**Claims:** Devin CLI ACP integration; provider-neutral WebMCP browser tools; in-thread
+find; server-backed provider enablement and all-enabled-provider usage; queued follow-up
+and live-transcript reliability; source-data isolation and migration recovery; durable
+side-chat panes; sidebar navigation ordering; file actions and path/PDF handling; Kilo
+Code removal and migration to OpenCode; and the release's security and platform boundary
+fixes.
+
+**Primary source:** Local Synara checkout
+`/Users/emanueledipietro/Developer/synara` at pre-release head
+`8b428c474d49583637ad899fd9ada61cc40b18da`. The audited range from v0.7.3 contains 94
+commits, including 61 merged pull requests, across 518 changed files.
+
+Key source paths checked:
+
+- Devin: `apps/server/src/provider/Layers/DevinAdapter.ts`,
+  `apps/server/src/provider/acp/DevinAcpSupport.ts`,
+  `apps/server/src/providerUsage/providers/devin.ts`, and provider settings metadata
+- Browser tools and transcript find: `apps/server/src/agentGateway/browserTools.ts`,
+  `apps/web/src/components/chat/`, and `apps/web/src/lib/matchHighlight.ts`
+- Provider policy and context: `apps/server/src/provider/Layers/ProviderHealth.ts`,
+  `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`, and provider-usage services
+- Migration and recovery: `apps/server/src/persistence/Migrations/098_MigrateKiloToOpenCode.ts`,
+  migration runtime identity/recovery services, and desktop source-launch configuration
+- Side chats, navigation, and file actions: the side-chat lifecycle services,
+  `apps/web/src/sidebarNavOrdering.ts`, and edited-file/path/PDF helpers
+- Boundary hardening: shared path/network/payload utilities, provider credential handling,
+  updater shutdown logic, and the focused tests named in the v0.8.0 root changelog
+
+**Decision:** Current provider, feature, troubleshooting, and workflow guides now describe
+the 0.8.0 release. Historical Kilo Code references remain only inside older release notes;
+current provider navigation and marketing surfaces point to Devin CLI.

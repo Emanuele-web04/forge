@@ -8,9 +8,9 @@ import {
   AntigravityIcon,
   ClaudeIcon,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
-  KiloCodeIcon,
   OpencodeIcon,
   PiIcon,
 } from "@/components/BrandIcons";
@@ -80,11 +80,12 @@ const activeHarnesses: Harness[] = [
     status: "grok CLI",
   },
   {
-    name: "Kilo Code",
-    tagline: "Use Kilo Code with the providers, models, modes, and agents configured in Kilo.",
-    Icon: KiloCodeIcon,
+    name: "Devin CLI",
+    tagline:
+      "Run Devin locally through ACP with its account, models, commands, plan mode, and compaction.",
+    Icon: DevinIcon,
     accent: "text-[var(--text-primary)]",
-    status: "Configured models",
+    status: "ACP + account",
   },
   {
     name: "Pi",

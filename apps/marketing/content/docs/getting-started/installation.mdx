@@ -89,6 +89,12 @@ Packaged builds use Synara's desktop updater. When an update cannot be applied a
 
 The application bundle and local workspace data are stored separately. Even so, keep important work committed to Git before updating an early release.
 
+## Run without the desktop shell
+
+Each GitHub release also includes `synara-server-<version>.tar.gz` for a headless web installation. It requires a supported Node.js runtime and a production dependency install; it is not a standalone executable or a replacement for provider authentication.
+
+Follow the [Headless server guide](/docs/workflows/headless-server) for extraction, startup, readiness checks, data-directory ownership, and remote-access policy. Start loopback-only and do not expose the raw server port without deliberate authentication and trusted transport.
+
 <Callout type="warn" title="Synara is under active development">
   Synara changes quickly. Keep valuable work committed and review release notes before relying on a
   new workflow for important repositories.

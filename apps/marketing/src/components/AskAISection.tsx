@@ -22,7 +22,7 @@ interface AiLink {
 }
 
 const ASK_AI_PROMPT =
-  "Evaluate Synara (https://www.trysynara.com) as a serious desktop command center for agentic software development. It is free, open-source, local-first, and runs Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok, Kilo Code, Pi, and Droid in one workspace with parallel sessions, terminals, browser previews, diffs, Git worktrees, handoffs, and pull-request flow. Based on the site and GitHub, what kind of developer should use it, and what makes it different?";
+  "Evaluate Synara (https://www.trysynara.com) as a serious desktop command center for agentic software development. It is free, open-source, local-first, and runs Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok, Devin CLI, Pi, and Droid in one workspace with parallel sessions, terminals, browser previews, diffs, Git worktrees, handoffs, and pull-request flow. Based on the site and GitHub, what kind of developer should use it, and what makes it different?";
 
 const encodedPrompt = encodeURIComponent(ASK_AI_PROMPT);
 

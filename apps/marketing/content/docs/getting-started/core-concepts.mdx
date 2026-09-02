@@ -12,6 +12,7 @@ Synara becomes much easier to use once its ownership model is clear: **each task
 | Workspace        | The complete Synara application and the projects available in it    |
 | Project          | A local folder, preferably a Git repository                         |
 | Task             | One durable unit of work inside a project                           |
+| Goal             | An explicit persistent objective attached to one task               |
 | Turn             | One user instruction followed by the provider's work and response   |
 | Provider session | The coding-agent session attached to the task                       |
 | Environment      | The local checkout or isolated Git worktree where the task operates |
@@ -67,6 +68,10 @@ A turn is one cycle inside that task:
 5. You review the result and decide what happens next.
 
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another task when the work needs a different owner, branch, or review boundary.
+
+For work that should continue across several turns, set a deliberate [thread goal](/docs/features/thread-goals). A goal can continue after a clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules remain in control.
+
+Use a [thread fork](/docs/workflows/forks) when a new task should inherit the conversation or split from one exact turn. Use a handoff when another provider should continue the same task and ownership boundary.
 
 ## Environments
 

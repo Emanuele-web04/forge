@@ -1,5 +1,13 @@
 {
   "title": "Features",
   "defaultOpen": true,
-  "pages": ["overview", "composer", "organize", "automations", "customization"]
+  "pages": [
+    "overview",
+    "composer",
+    "thread-goals",
+    "organize",
+    "ios-simulator",
+    "automations",
+    "customization"
+  ]
 }

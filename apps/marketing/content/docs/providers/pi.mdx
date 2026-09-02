@@ -83,6 +83,8 @@ Use Pi’s own `/login`, environment variables, or supported auth file. Synara r
 
 Confirm that the model picker shows the expected provider/model combinations and the thinking levels supported by the selected model.
 
+In Synara 0.8.1 and later, the Anthropic catalog repair keeps Claude Fable 5.1 selectable even when Pi's authenticated upstream catalog predates that model entry. Fable 5.1 uses always-on thinking with Low through Max effort and no fast-mode lane.
+
 </Step>
 <Step>
 
@@ -139,6 +141,8 @@ You can also update the global npm package through the package manager that inst
 ### No models are available
 
 Run Pi directly and use `/login`, or configure a supported provider API key. Confirm `/model` shows at least one authenticated model before refreshing Synara.
+
+If Anthropic authentication works but Fable 5.1 is missing, refresh Pi in Synara and start a new task. Synara can repair the known Anthropic catalog entry, but it cannot grant model access that the configured account or provider rejects.
 
 ### The model catalog differs between projects
 
