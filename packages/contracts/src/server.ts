@@ -205,6 +205,13 @@ export const ServerLocalServerProcess = Schema.Struct({
 });
 export type ServerLocalServerProcess = typeof ServerLocalServerProcess.Type;
 
+export const ServerListLocalServersInput = Schema.Struct({
+  // When true, report every listening process (Orca-style "Puertos"), not just
+  // recognized dev servers. App-internals exclusions still apply.
+  includeAll: Schema.optional(Schema.Boolean),
+});
+export type ServerListLocalServersInput = typeof ServerListLocalServersInput.Type;
+
 export const ServerListLocalServersResult = Schema.Struct({
   generatedAt: IsoDateTime,
   servers: Schema.Array(ServerLocalServerProcess),

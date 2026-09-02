@@ -205,6 +205,8 @@ export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // local servers): the Central glyph, so it matches the other work-row icons.
 export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
 export const WebSearchIcon: LucideIcon = GlobeIcon;
+// Plug for the Ports panel (listening-port groups, Orca-style).
+export const PlugIcon: LucideIcon = centralIconWrapper("plug");
 // Handset glyph for the iOS Simulator dock pane.
 export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
 // Hardware-button glyphs for the simulator's control rail.
