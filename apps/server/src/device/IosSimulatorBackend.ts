@@ -129,6 +129,10 @@ export interface IosSimulatorBackendOptions {
   readonly now?: () => number;
   /** Overridden in tests to exercise DEVELOPER_DIR without mutating process.env. */
   readonly processEnv?: NodeJS.ProcessEnv;
+  /** Overridden in tests to simulate `/Applications` without touching the disk. */
+  readonly listApplications?: () => Promise<readonly string[]>;
+  /** Overridden alongside listApplications to control which bundles look real. */
+  readonly xcodeBundleUsable?: (developerDir: string) => Promise<boolean>;
 }
 
 interface ActiveRecording {
@@ -222,6 +226,23 @@ export function hasBootableIosRuntime(devices: readonly DeviceDescriptor[]): boo
   return devices.length > 0;
 }
 
+/**
+ * Order `/Applications` entries into Xcode bundle candidates, stable first.
+ *
+ * Stable `Xcode.app` wins when present because it is the predictable default;
+ * a beta or versioned install (`Xcode-beta.app`, `Xcode-27.0.app`) is only
+ * picked when it is the sole full Xcode on the machine. Exported for tests.
+ */
+export function orderXcodeAppCandidates(entries: readonly string[]): readonly string[] {
+  return entries
+    .filter((name) => name.startsWith("Xcode") && name.endsWith(".app"))
+    .toSorted((a, b) => {
+      if (a === "Xcode.app") return -1;
+      if (b === "Xcode.app") return 1;
+      return a.localeCompare(b);
+    });
+}
+
 export async function selectRecordingDirectory(
   candidates: readonly string[],
   fallback: string,
@@ -261,6 +282,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly now: () => number;
   /** Injected so a test can set DEVELOPER_DIR without touching the real process. */
   private readonly processEnv: NodeJS.ProcessEnv;
+  private readonly listApplications: () => Promise<readonly string[]>;
+  private readonly xcodeBundleUsable: (developerDir: string) => Promise<boolean>;
 
   /** Geometry learned from helper attachments, keyed by udid. */
   private readonly deviceGeometry = new Map<string, DeviceGeometry>();
@@ -271,6 +294,8 @@ export class IosSimulatorBackend implements DeviceBackend {
    * every listing would spawn a hundred processes per picker open.
    */
   private deviceTypes: Promise<DeviceTypeCatalogue> | null = null;
+  /** One `/Applications` scan per process; see discoverXcodeDeveloperDir. */
+  private xcodeDiscovery: Promise<string | null> | null = null;
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
@@ -302,6 +327,16 @@ export class IosSimulatorBackend implements DeviceBackend {
       ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
     this.recordingDirectoryOverride = options.recordingDirectory;
     this.now = options.now ?? Date.now;
+    this.listApplications = options.listApplications ?? (() => readdir("/Applications"));
+    this.xcodeBundleUsable =
+      options.xcodeBundleUsable ??
+      ((developerDir) =>
+        // `xcrun` is what every downstream command needs; its presence is what
+        // separates a full Xcode from a leftover or half-deleted bundle.
+        access(path.join(developerDir, "usr", "bin", "xcrun")).then(
+          () => true,
+          () => false,
+        ));
   }
 
   // ── Availability ───────────────────────────────────────────────────
@@ -654,7 +689,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       // no HID usage for it and no simctl equivalent. Simulator.app posts a
       // Purple event through a category it compiles into its own executable,
       // and that port is not wired on a headless boot — calling it there is a
-      // silent no-op (docs/device-pane-spec.md has the full probe). Refused
+      // silent no-op (docs/archive/device-pane-spec.md has the full probe). Refused
       // explicitly rather than pretending to work; the pane ships no rotate
       // control for the same reason, and this keeps the agent tool honest.
       throw new DeviceBackendError(
@@ -990,9 +1025,35 @@ export class IosSimulatorBackend implements DeviceBackend {
       timeoutMs: 10_000,
       allowNonZeroExit: true,
     }).catch(() => null);
-    if (!result || result.code !== 0) return null;
-    const trimmed = result.stdout.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    const selected =
+      result !== null && result.code === 0 && result.stdout.trim().length > 0
+        ? result.stdout.trim()
+        : null;
+    if (selected !== null && !selected.includes("CommandLineTools")) return selected;
+    // The machine-wide selection is CommandLineTools (the macOS default after
+    // installing git) or absent, but a full Xcode may still be installed —
+    // beta-only machines commonly have `Xcode-beta.app` and never ran
+    // `xcode-select -s`. Discovering it here turns "run sudo xcode-select"
+    // from a setup blocker into a fallback instruction.
+    return (await this.discoverXcodeDeveloperDir()) ?? selected;
+  }
+
+  /**
+   * Find a full Xcode under `/Applications` without `xcode-select`.
+   *
+   * Cached for the process lifetime: installs are rare, and this backs
+   * `toolchainEnv()`, which runs for every simctl call.
+   */
+  private discoverXcodeDeveloperDir(): Promise<string | null> {
+    this.xcodeDiscovery ??= (async () => {
+      const entries = await this.listApplications().catch(() => [] as string[]);
+      for (const name of orderXcodeAppCandidates(entries)) {
+        const developerDir = path.join("/Applications", name, "Contents", "Developer");
+        if (await this.xcodeBundleUsable(developerDir)) return developerDir;
+      }
+      return null;
+    })();
+    return this.xcodeDiscovery;
   }
 
   private async xcodeLicenseAccepted(): Promise<boolean> {

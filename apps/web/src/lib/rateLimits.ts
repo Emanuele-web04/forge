@@ -7,16 +7,16 @@ import { providerUsageLearnMoreHref } from "@synara/shared/providerUsage";
 
 export interface RateLimitWindow {
   window: string;
-  usedPercent?: number;
-  utilization?: number;
-  resetsAt?: string;
-  windowDurationMins?: number;
+  usedPercent?: number | undefined;
+  utilization?: number | undefined;
+  resetsAt?: string | undefined;
+  windowDurationMins?: number | undefined;
 }
 
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: RateLimitWindow[];
+  limits?: ReadonlyArray<RateLimitWindow>;
   usedPercent?: number;
   utilization?: number;
   resetsAt?: string;
@@ -32,13 +32,22 @@ export interface VisibleRateLimitRow {
   windowDurationMins?: number;
 }
 
+/** Activity kinds that carry account rate-limit payloads. Shared with the store selector
+ *  that narrows usage subscribers to these activities, so the two stay in sync. */
+export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "account.rate-limits.updated",
+  "account.rate-limited",
+]);
+
 const WINDOW_ORDER = new Map([
   ["5h", 0],
-  ["Weekly", 1],
-  ["Weekly (overage)", 2],
-  ["Sonnet", 3],
-  ["Opus", 4],
-  ["Current", 5],
+  ["Daily", 1],
+  ["Weekly", 2],
+  ["Weekly (overage)", 3],
+  ["Fable", 4],
+  ["Sonnet", 5],
+  ["Opus", 6],
+  ["Current", 7],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -103,6 +112,9 @@ export function normalizeRateLimitLabel(
   }
   if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
     return "Weekly";
+  }
+  if (normalized === "seven_day_fable" || normalized === "weekly_fable" || normalized === "fable") {
+    return "Fable";
   }
   if (
     normalized === "seven_day_sonnet" ||
@@ -282,10 +294,7 @@ export function deriveAccountRateLimits(
 
   for (const thread of threads) {
     for (const activity of thread.activities) {
-      if (
-        activity.kind !== "account.rate-limits.updated" &&
-        activity.kind !== "account.rate-limited"
-      ) {
+      if (!ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS.has(activity.kind)) {
         continue;
       }
 

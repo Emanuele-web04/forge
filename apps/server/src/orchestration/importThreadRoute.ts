@@ -19,10 +19,12 @@ import { Data, Effect, Option } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
 import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk.ts";
+import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
+import type { ServerSettingsShape } from "../serverSettings";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
 import {
   mapClaudeSessionMessages,
@@ -47,7 +49,6 @@ function providerResumeCursorForImport(provider: ProviderKind, externalId: strin
       return { resume: externalId };
     case "droid":
       return { schemaVersion: 1, sessionId: externalId };
-    case "kilo":
     case "opencode":
       return { openCodeSessionId: externalId };
     default:
@@ -81,6 +82,7 @@ export interface ImportThreadHandlerOptions {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
+  readonly serverSettings: ServerSettingsShape;
 }
 
 export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
@@ -136,7 +138,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   });
 
   const resolveImportedProviderThreadContext = Effect.fn(function* (input: {
-    readonly provider: "codex" | "droid" | "kilo" | "opencode";
+    readonly provider: "codex" | "droid" | "opencode";
     readonly externalId: string;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
@@ -281,7 +283,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
 
   const importOpenCodeCompatibleThreadHistory = Effect.fn(function* (input: {
     readonly importedAt: string;
-    readonly provider: "kilo" | "opencode";
+    readonly provider: "opencode";
     readonly threadId: ThreadId;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
@@ -292,7 +294,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
           importMessagesError(
             cause instanceof Error && cause.message.length > 0
               ? cause.message
-              : `Failed to read ${input.provider === "kilo" ? "Kilo" : "OpenCode"} session history.`,
+              : "Failed to read OpenCode session history.",
           ),
         ),
       );
@@ -352,6 +354,8 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       );
     }
 
+    yield* ensureProviderEnabled(thread.modelSelection.provider, options.serverSettings);
+
     const projectOption = yield* options.projectionSnapshotQuery.getProjectShellById(
       thread.projectId,
     );
@@ -373,7 +377,6 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     const importedProviderContext =
       (thread.modelSelection.provider === "codex" ||
         thread.modelSelection.provider === "droid" ||
-        thread.modelSelection.provider === "kilo" ||
         thread.modelSelection.provider === "opencode") &&
       project
         ? yield* resolveImportedProviderThreadContext({
@@ -436,10 +439,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
           externalId,
           importedAt: session.updatedAt,
         });
-      } else if (
-        thread.modelSelection.provider === "kilo" ||
-        thread.modelSelection.provider === "opencode"
-      ) {
+      } else if (thread.modelSelection.provider === "opencode") {
         yield* importOpenCodeCompatibleThreadHistory({
           provider: thread.modelSelection.provider,
           threadId: thread.id,

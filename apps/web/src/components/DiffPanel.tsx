@@ -64,6 +64,7 @@ import {
   type DiffPanelTurnScopeIntent,
   type DiffViewKind,
 } from "./DiffPanel.logic";
+import { resolveDraftFallbackModelSelection } from "./ChatView.logic";
 import { DiffPanelPatchViewport } from "./DiffPanelPatchViewport";
 import { DiffPanelToolbar } from "./DiffPanelToolbar";
 import { ReviewFileTreePanel } from "./ReviewFileTreePanel";
@@ -458,7 +459,10 @@ export default function DiffPanel({
       threadId: activeThreadId,
       serverThread: undefined,
       draftThread,
-      fallbackModelSelection: fallbackDraftProject?.defaultModelSelection ?? null,
+      fallbackModelSelection: resolveDraftFallbackModelSelection({
+        projectDefault: fallbackDraftProject?.defaultModelSelection,
+        settingsDefaultProvider: settings.defaultProvider,
+      }),
     });
     return draftBackedThread ? toDiffPanelThreadCatalog(draftBackedThread) : undefined;
   }, [
@@ -466,6 +470,7 @@ export default function DiffPanel({
     draftThread,
     fallbackDraftProject?.defaultModelSelection,
     serverThreadCatalog,
+    settings.defaultProvider,
   ]);
   const activeProjectId = activeThreadContext?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(

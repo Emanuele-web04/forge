@@ -7,8 +7,10 @@ import * as FS from "node:fs";
 import * as Path from "node:path";
 import { promisify } from "node:util";
 import {
+  migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
   parseMigrationRecoveryResumeState,
+  type MigrationSchemaTooNewStartupBlock,
 } from "@synara/shared/migrationRecovery";
 
 const execFile = promisify(ChildProcess.execFile);
@@ -17,6 +19,7 @@ const RECOVERY_OUTPUT_LIMIT_BYTES = 64 * 1024;
 export interface DesktopMigrationRecoveryPaths {
   readonly dbPath: string;
   readonly markerPath: string;
+  readonly provenancePath: string;
   readonly restoreEntryPath: string;
 }
 
@@ -30,6 +33,7 @@ export function resolveDesktopMigrationRecoveryPaths(input: {
   return {
     dbPath,
     markerPath: migrationRecoveryMarkerPath(dbPath),
+    provenancePath: migrationBackupProvenancePath(dbPath),
     restoreEntryPath: Path.join(input.appRoot, "apps/server/dist/restoreMigrationBackup.mjs"),
   };
 }
@@ -44,7 +48,28 @@ export type DesktopMigrationRecoveryDecision =
   | "restore"
   | "quit"
   | "install-update"
-  | "open-release-page";
+  | "open-release-page"
+  | "open-logs";
+
+export interface DesktopMigrationRecoveryChoice {
+  readonly label: string;
+  readonly decision: DesktopMigrationRecoveryDecision;
+}
+
+export function invalidMigrationStartupRecoveryChoices(input: {
+  readonly canInstallUpdate: boolean;
+  readonly canOpenReleasePage: boolean;
+}): ReadonlyArray<DesktopMigrationRecoveryChoice> {
+  const choices: Array<DesktopMigrationRecoveryChoice> = [];
+  if (input.canInstallUpdate) {
+    choices.push({ label: "Update Synara and restart", decision: "install-update" });
+  }
+  if (input.canOpenReleasePage) {
+    choices.push({ label: "Download latest release", decision: "open-release-page" });
+  }
+  choices.push({ label: "Open logs", decision: "open-logs" }, { label: "Quit", decision: "quit" });
+  return choices;
+}
 
 /**
  * Which recovery action failed, so the prompt can say what actually went wrong
@@ -85,6 +110,7 @@ export async function recoverDesktopMigrationIfRequired(input: {
    * them the download itself.
    */
   readonly openReleasePage: () => void;
+  readonly openLogs?: (() => Promise<void>) | undefined;
   readonly requestRestart: () => void;
   readonly requestQuit: (reason: string) => void;
   readonly formatError: (error: unknown) => string;
@@ -100,6 +126,11 @@ export async function recoverDesktopMigrationIfRequired(input: {
     if (decision === "open-release-page") {
       input.log("migration recovery: opening the release download page");
       input.openReleasePage();
+      continue;
+    }
+    if (decision === "open-logs") {
+      input.log("migration recovery: opening logs");
+      await input.openLogs?.();
       continue;
     }
     if (decision === "install-update") {
@@ -142,6 +173,48 @@ export function hasPendingDesktopMigrationRecovery(paths: DesktopMigrationRecove
   return FS.existsSync(paths.markerPath);
 }
 
+export function hasVerifiedDesktopMigrationRestore(
+  paths: DesktopMigrationRecoveryPaths,
+  expectedBackupPath: string,
+): boolean {
+  let provenanceText: string;
+  try {
+    provenanceText = FS.readFileSync(paths.provenancePath, "utf8");
+  } catch {
+    return false;
+  }
+
+  try {
+    const provenance = JSON.parse(provenanceText) as Record<string, unknown>;
+    return (
+      provenance.databasePath === paths.dbPath &&
+      provenance.backupPath === expectedBackupPath &&
+      provenance.phase === "migration-restored" &&
+      typeof provenance.restoredAt === "string" &&
+      provenance.restoredAt.length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+type DesktopMigrationRestoreCandidate = Extract<
+  MigrationSchemaTooNewStartupBlock["recovery"],
+  { readonly kind: "restore-available" }
+>;
+
+export function resolveDesktopMigrationRestoreCandidate(
+  paths: DesktopMigrationRecoveryPaths,
+  block: MigrationSchemaTooNewStartupBlock,
+): DesktopMigrationRestoreCandidate | null {
+  const recovery = block.recovery;
+  return block.databasePath === paths.dbPath &&
+    recovery.kind === "restore-available" &&
+    recovery.provenancePath === paths.provenancePath
+    ? recovery
+    : null;
+}
+
 /**
  * Whether startup must stop and ask the user to restore.
  *
@@ -168,14 +241,30 @@ export async function restoreDesktopMigrationBackup(input: {
   readonly paths: DesktopMigrationRecoveryPaths;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly expectedBackupPath?: string | undefined;
+  readonly expectedProvenancePath?: string | undefined;
+  readonly verifyRestore?: (() => boolean) | undefined;
+  readonly restoreVerificationFailure?: string | undefined;
 }): Promise<string> {
   if (!FS.existsSync(input.paths.restoreEntryPath)) {
     throw new Error(`Migration recovery command is missing: ${input.paths.restoreEntryPath}`);
   }
 
+  if ((input.expectedBackupPath === undefined) !== (input.expectedProvenancePath === undefined)) {
+    throw new Error("Both expected migration backup and provenance paths are required.");
+  }
+  const restoreSelection =
+    input.expectedBackupPath && input.expectedProvenancePath
+      ? [
+          "--backup-path",
+          input.expectedBackupPath,
+          "--provenance-path",
+          input.expectedProvenancePath,
+        ]
+      : [];
   const { stdout, stderr } = await execFile(
     input.executablePath,
-    [...input.nodeArgs, input.paths.restoreEntryPath, input.paths.dbPath],
+    [...input.nodeArgs, input.paths.restoreEntryPath, input.paths.dbPath, ...restoreSelection],
     {
       cwd: input.cwd,
       env: {
@@ -190,8 +279,14 @@ export async function restoreDesktopMigrationBackup(input: {
 
   // Exit zero is not sufficient: the server-owned command must have cleared
   // the durable marker before desktop startup is allowed to continue.
-  if (hasPendingDesktopMigrationRecovery(input.paths)) {
-    throw new Error("Migration recovery completed without clearing its recovery marker.");
+  const restoreVerified = input.verifyRestore
+    ? input.verifyRestore()
+    : !hasPendingDesktopMigrationRecovery(input.paths);
+  if (!restoreVerified) {
+    throw new Error(
+      input.restoreVerificationFailure ??
+        "Migration recovery completed without clearing its recovery marker.",
+    );
   }
 
   return [stdout, stderr]

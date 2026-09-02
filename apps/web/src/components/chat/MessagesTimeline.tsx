@@ -4,13 +4,16 @@
 // Exports: MessagesTimeline
 
 import {
+  type EditorId,
   type MessageId,
   type ProviderMentionReference,
+  type ResolvedKeybindingsConfig,
   ThreadId,
   type ThreadGoalAchievement,
   type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -51,6 +54,8 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  GitForkIcon,
+  GoalIcon,
   LoaderIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -72,7 +77,9 @@ import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
+import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
+import { EditedFileRow } from "./EditedFileRow";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
@@ -104,6 +111,7 @@ import {
   type MessagesTimelineRow,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  resolveThreadFindJumpTarget,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
@@ -115,6 +123,7 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
@@ -125,11 +134,8 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
-import { formatShortTimestamp } from "../../timestampFormat";
-import {
-  buildInlineTerminalContextText,
-  textContainsInlineTerminalContextLabels,
-} from "./userMessageTerminalContexts";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
+import { resolveUserMessageMarkdownText } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   getChatMessageFooterTextStyle,
@@ -160,8 +166,18 @@ import {
   type ActiveTrailSnapshot,
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
+import {
+  applyActiveChatFindMatch,
+  collectCaseInsensitiveSubstringRanges,
+  splitTextWithFindMatches,
+  threadFindMarkdownProps,
+  type ThreadFindHighlight,
+  type ThreadFindMatch,
+} from "./threadFind.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
+const EMPTY_EDITOR_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 // Changed-files list in the per-turn card is capped so large turns stay compact;
 // the rest are revealed via an inline "Show more" row.
 const MAX_VISIBLE_CHANGED_FILES = 5;
@@ -218,8 +234,12 @@ function readLegendListState(
  * checklist can scroll the virtualized list to (and briefly flash) a specific message.
  */
 export interface MessagesTimelineController {
-  scrollToMessage: (messageId: MessageId) => void;
+  scrollToMessage: (
+    messageId: MessageId,
+    options?: { segmentIndex?: number; fineScrollFind?: boolean },
+  ) => void;
   scrollToMarker: (marker: ThreadMarker) => void;
+  setActiveFindMatch: (match: ThreadFindMatch | null) => void;
 }
 
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
@@ -424,6 +444,8 @@ interface MessagesTimelineProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
+  /** Fork the thread from the assistant footer, carrying the transcript up to that turn. */
+  onForkFromMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
   /** Recorded goal achievements; each renders a footer badge on its turn's terminal assistant message. */
@@ -490,6 +512,9 @@ interface MessagesTimelineProps {
   chatFontSizePx?: number;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  /** Already-loaded launcher config; avoids one config subscription per changed-file row. */
+  keybindings?: ResolvedKeybindingsConfig;
+  availableEditors?: ReadonlyArray<EditorId>;
   /**
    * Right padding (px) applied to the scroll viewport so transcript rows clear a right-edge
    * overlay (e.g. the docked Environment card). The scrollbar stays pinned to the viewport's
@@ -504,6 +529,8 @@ interface MessagesTimelineProps {
   contentInsetBottomPx?: number | undefined;
   /** Measured distance from the composer's bottom edge to the top of its footer controls. */
   contentInsetBottomClearancePx?: number | undefined;
+  /** In-thread find highlight; matching itself lives on projected messages, not the DOM. */
+  findHighlight?: ThreadFindHighlight | null;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -521,6 +548,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
+  onForkFromMessage,
   threadMarkers: threadMarkersProp,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
@@ -563,10 +591,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   chatFontSizePx: chatFontSizePxProp,
   timestampFormat,
   workspaceRoot,
+  keybindings,
+  availableEditors,
   emptyStateContent,
   contentInsetRightPx,
   contentInsetBottomPx,
   contentInsetBottomClearancePx,
+  findHighlight: findHighlightProp,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -581,6 +612,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
+  const findHighlight = findHighlightProp ?? null;
+  const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
+  const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
   // The timeline remounts per thread (and when the agent-activity detail view
   // closes), but the anchor lives above it and survives those remounts. An
@@ -735,6 +769,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
+  const activeFindMatchRef = useRef<ThreadFindMatch | null>(null);
+  useLayoutEffect(() => {
+    activeFindMatchRef.current = findHighlight?.activeMatch ?? null;
+  }, [findHighlight]);
   const observeTimelineRow = useTimelineRowOverlapGuard();
   useTailAnchorScroll({
     listRef: resolvedListRef,
@@ -897,6 +935,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      findHighlight,
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
@@ -915,6 +954,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      findHighlight,
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
@@ -968,19 +1008,38 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!controllerRef) {
       return;
     }
-    const scrollToMessage = (messageId: MessageId) => {
-      const index = rowsRef.current.findIndex(
-        (row) => row.kind === "message" && row.message.id === messageId,
-      );
-      if (index < 0) {
-        return false;
+    const scrollToMessage = (
+      messageId: MessageId,
+      segmentIndex?: number,
+    ): ReturnType<typeof resolveThreadFindJumpTarget> => {
+      const target = resolveThreadFindJumpTarget(rowsRef.current, {
+        messageId,
+        ...(segmentIndex === undefined ? {} : { segmentIndex }),
+      });
+      if (!target) {
+        return null;
       }
+      if (target.expandCollapsedWorkMessageId) {
+        setCollapsedWorkExpanded(target.expandCollapsedWorkMessageId, true);
+      }
+      setExpandedUserMessagesById((previous) => {
+        const expandIds = [messageId, target.visibleMessageId];
+        let changed = false;
+        const next = { ...previous };
+        for (const id of expandIds) {
+          if (next[id] !== true) {
+            next[id] = true;
+            changed = true;
+          }
+        }
+        return changed ? next : previous;
+      });
       scrollLegendListToIndex(resolvedListRef, {
-        index,
+        index: target.rowIndex,
         animated: true,
         viewPosition: 0.2,
       });
-      return true;
+      return target;
     };
     const clearJumpHighlightAfterDelay = () => {
       if (jumpHighlightTimeoutRef.current !== null) {
@@ -997,6 +1056,63 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         window.cancelAnimationFrame(markerFineScrollFrameRef.current);
         markerFineScrollFrameRef.current = null;
       }
+    };
+    const applyActiveFindMatch = () => {
+      const root = timelineRootRef.current;
+      const match = activeFindMatchRef.current;
+      applyActiveChatFindMatch(root, null);
+      if (!root || match === null) {
+        return;
+      }
+      const segmentSelector =
+        match.segmentIndex === undefined
+          ? ":not([data-chat-find-segment-index])"
+          : `[data-chat-find-segment-index="${String(match.segmentIndex)}"]`;
+      const scope = root.querySelector(
+        `[data-chat-find-document-id="${cssAttributeSelectorValue(match.messageId)}"]${segmentSelector}`,
+      );
+      applyActiveChatFindMatch(scope, match);
+    };
+    const scheduleFindMatchFineScroll = (
+      target: NonNullable<ReturnType<typeof resolveThreadFindJumpTarget>>,
+    ) => {
+      cancelPendingMarkerFineScroll();
+      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      let attempts = 0;
+      const tick = () => {
+        markerFineScrollFrameRef.current = null;
+        const root = timelineRootRef.current;
+        if (!root) {
+          return;
+        }
+        applyActiveFindMatch();
+        const narrationId = target.collapsedNarrationMessageId;
+        const scope =
+          narrationId === undefined
+            ? root
+            : (root.querySelector(
+                `[data-chat-find-narration-id="${cssAttributeSelectorValue(narrationId)}"]`,
+              ) ?? root);
+        const activeMatch = scope.querySelector('[data-chat-find-match="active"]');
+        if (activeMatch instanceof HTMLElement) {
+          activeMatch.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          return;
+        }
+        if (narrationId !== undefined) {
+          const narration = root.querySelector(
+            `[data-chat-find-narration-id="${cssAttributeSelectorValue(narrationId)}"]`,
+          );
+          if (narration instanceof HTMLElement) {
+            narration.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+            return;
+          }
+        }
+        attempts += 1;
+        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
+          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+        }
+      };
+      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
     };
     const scheduleMarkerFineScroll = (marker: ThreadMarker) => {
       cancelPendingMarkerFineScroll();
@@ -1019,23 +1135,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
     };
     const controller: MessagesTimelineController = {
-      scrollToMessage: (messageId) => {
+      scrollToMessage: (messageId, options) => {
         cancelPendingMarkerFineScroll();
         clearActiveMarkerDecoration();
-        if (!scrollToMessage(messageId)) {
+        const target = scrollToMessage(messageId, options?.segmentIndex);
+        if (!target) {
           return;
         }
-        setHighlightedMessageId(messageId);
+        setHighlightedMessageId(target.visibleMessageId);
         clearJumpHighlightAfterDelay();
+        if (options?.fineScrollFind || target.collapsedNarrationMessageId) {
+          scheduleFindMatchFineScroll(target);
+        }
       },
       scrollToMarker: (marker) => {
         clearActiveMarkerDecoration();
-        if (!scrollToMessage(marker.messageId)) {
+        const target = scrollToMessage(marker.messageId);
+        if (!target) {
           return;
         }
-        setHighlightedMessageId(marker.messageId);
+        setHighlightedMessageId(target.visibleMessageId);
         clearJumpHighlightAfterDelay();
         scheduleMarkerFineScroll(marker);
+      },
+      setActiveFindMatch: (match) => {
+        activeFindMatchRef.current = match;
+        applyActiveFindMatch();
       },
     };
     controllerRef.current = controller;
@@ -1044,7 +1169,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         controllerRef.current = null;
       }
     };
-  }, [controllerRef, resolvedListRef, applyActiveMarkerDecoration, clearActiveMarkerDecoration]);
+  }, [
+    applyActiveMarkerDecoration,
+    clearActiveMarkerDecoration,
+    controllerRef,
+    resolvedListRef,
+    setCollapsedWorkExpanded,
+  ]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -1127,18 +1258,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [onTrailHighlightsChange],
   );
+  // Scroll events can fire several times per frame (smooth scrolls, streaming
+  // re-sticks); the trail-highlight derivation is coalesced to one per frame.
+  // At-end ownership stays synchronous: ChatView's auto-follow layout effect
+  // reads it via a ref in the same frame, and a deferred update would let a
+  // scheduled scrollToEnd override a user gesture that just scrolled away.
+  const listScrollFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (listScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(listScrollFrameRef.current);
+        listScrollFrameRef.current = null;
+      }
+    };
+  }, []);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
-      if (state) {
-        tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
-        if (!state.isAtEnd) {
-          clearTailExpansionScrollTimers();
-        }
-        onIsAtEndChange?.(state.isAtEnd);
-        emitTrailHighlightsForViewport(state.start, state.end);
+      if (!state) {
+        return;
       }
+      tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
+      if (!state.isAtEnd) {
+        clearTailExpansionScrollTimers();
+      }
+      onIsAtEndChange?.(state.isAtEnd);
+      if (listScrollFrameRef.current !== null) {
+        return;
+      }
+      listScrollFrameRef.current = window.requestAnimationFrame(() => {
+        listScrollFrameRef.current = null;
+        const frameState = readLegendListState(resolvedListRef);
+        if (frameState) {
+          emitTrailHighlightsForViewport(frameState.start, frameState.end);
+        }
+      });
     },
     [
       clearTailExpansionScrollTimers,
@@ -1289,14 +1444,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
-        row.kind === "message" && row.message.id === highlightedMessageId
+        (row.kind === "message" || row.kind === "message-segment") &&
+          row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
           : null,
         enteringMessageRowIds.has(row.id) ? "chat-message-send-enter" : null,
       )}
       data-timeline-row-kind={row.kind}
-      data-message-id={row.kind === "message" ? row.message.id : undefined}
-      data-message-role={row.kind === "message" ? row.message.role : undefined}
+      data-message-id={
+        row.kind === "message" || row.kind === "message-segment" ? row.message.id : undefined
+      }
+      data-message-role={
+        row.kind === "message" || row.kind === "message-segment" ? row.message.role : undefined
+      }
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
@@ -1365,7 +1525,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
                     <button
                       type="button"
-                      className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      className={cn(
+                        "font-system-ui transition-colors duration-150 hover:text-foreground",
+                        MUTED_LABEL_TEXT_CLASS_NAME,
+                      )}
                       style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                       onClick={() => handleToggleWorkGroup(groupId)}
                     >
@@ -1391,7 +1554,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
                   <button
                     type="button"
-                    className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                    className={cn(
+                      "font-system-ui transition-colors duration-150 hover:text-foreground",
+                      MUTED_LABEL_TEXT_CLASS_NAME,
+                    )}
                     style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                     onClick={() => handleToggleWorkGroup(groupId)}
                   >
@@ -1411,14 +1577,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
-              <div className="text-muted-foreground/80">
+            <div
+              className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]"
+              data-chat-find-document-id={row.message.id}
+              data-chat-find-segment-index={row.segmentIndex}
+            >
+              <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
                 />
               </div>
             </div>
@@ -1604,6 +1775,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           ? "py-0.5 px-3"
                           : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                       )}
+                      data-chat-find-document-id={row.message.id}
                     >
                       <UserMessageCollapsibleText
                         text={userMessageText}
@@ -1623,6 +1795,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           chatTypographyStyle={userMessageTypographyStyle}
                           resolvedTheme={resolvedTheme}
                           markdownCwd={markdownCwd}
+                          {...threadFindMarkdownProps(findHighlight, row.message.id)}
                         />
                       </UserMessageCollapsibleText>
                     </div>
@@ -1633,7 +1806,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatMessageFooterStyle}
                     >
                       <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
                       </p>
                       <div className="flex items-center gap-2">
                         {displayedUserMessage.copyText && (
@@ -1743,6 +1916,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             messageCanPin &&
             Boolean(onTogglePinMessage) &&
             (assistantCopyState.visible || messagePinned);
+          // Fork rides the same "settled, persisted answer" signal as copy: an
+          // ephemeral or still-streaming bubble has no turn to fork from.
+          const showForkAction =
+            messageCanPin && Boolean(onForkFromMessage) && assistantCopyState.visible;
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -1772,7 +1949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               : null;
           const assistantMeta = [
             isTerminalAssistantMessage
-              ? formatShortTimestamp(row.message.createdAt, timestampFormat)
+              ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
           ]
             .filter((value): value is string => Boolean(value))
@@ -1784,6 +1961,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
+          const knownAbsoluteFilePaths =
+            collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -1883,7 +2062,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <div className="py-0.5">
                           <button
                             type="button"
-                            className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                            className={cn(
+                              "transition-colors duration-150 hover:text-foreground",
+                              MUTED_LABEL_TEXT_CLASS_NAME,
+                            )}
                             style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                             onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                           >
@@ -1907,7 +2089,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           <div className="py-0.5">
                             <button
                               type="button"
-                              className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                              className={cn(
+                                "transition-colors duration-150 hover:text-foreground",
+                                MUTED_LABEL_TEXT_CLASS_NAME,
+                              )}
                               style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                               onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                             >
@@ -1966,7 +2151,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ) : (
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
-                className="text-muted-foreground/80"
+                className={MUTED_LABEL_TEXT_CLASS_NAME}
+                data-chat-find-narration-id={item.message.id}
+                data-chat-find-document-id={item.message.id}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -1974,6 +2161,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                  {...threadFindMarkdownProps(findHighlight, item.message.id)}
                 />
               </div>
             );
@@ -2041,7 +2230,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // -ml-0.5 optically aligns the leading "W" with the reply
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
-                      className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
+                      className={cn(
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
+                        MUTED_LABEL_TEXT_CLASS_NAME,
+                      )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
                       <span>
@@ -2051,7 +2243,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
-                        className="text-muted-foreground/55"
+                        className="text-muted-foreground/70"
                       />
                     </CollapsibleTrigger>
                     <CollapsiblePanel>
@@ -2073,7 +2265,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {messageText !== null ? (
-                  <div data-assistant-message-id={row.message.id}>
+                  <div
+                    data-assistant-message-id={row.message.id}
+                    data-chat-find-document-id={row.message.id}
+                  >
                     <ChatMarkdown
                       text={messageText}
                       cwd={markdownCwd}
@@ -2081,6 +2276,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
+                      knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
                 ) : null}
@@ -2132,6 +2329,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
+                  const fileListHasMounted = Object.hasOwn(
+                    expandedFileListByTurnId,
+                    turnSummary.turnId,
+                  );
                   const checkpointTurnCount = turnSummary.checkpointTurnCount;
                   const checkpointTurnCounts =
                     turnSummary.checkpointTurnCounts ??
@@ -2165,39 +2366,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     // bail out ("Unexpected terminal kind `logical` for logical test block").
                     const additions = file.additions ?? 0;
                     const deletions = file.deletions ?? 0;
-                    const hasDiffStat = additions + deletions > 0;
+                    const fileKind = file.kind ?? "modified";
                     return (
-                      <button
+                      <EditedFileRow
                         key={file.path}
-                        type="button"
-                        className={cn(
-                          "group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
-                          withFirstReset && "first:border-t-0",
-                        )}
-                        onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
-                      >
-                        <FileEntryIcon
-                          pathValue={file.path}
-                          kind="file"
-                          theme={resolvedTheme}
-                          colorMode="inherit"
-                          className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
-                        />
-                        <span
-                          className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                          style={{ fontSize: chatTypographyStyle.fontSize }}
-                        >
-                          {file.path}
-                        </span>
-                        {hasDiffStat && (
-                          <span
-                            className="font-system-ui ml-auto shrink-0 tabular-nums"
-                            style={{ fontSize: chatTypographyStyle.fontSize }}
-                          >
-                            <DiffStatLabel additions={additions} deletions={deletions} />
-                          </span>
-                        )}
-                      </button>
+                        filePath={file.path}
+                        fileKind={fileKind}
+                        additions={additions}
+                        deletions={deletions}
+                        workspaceRoot={workspaceRoot}
+                        keybindings={editorKeybindings}
+                        availableEditors={installedEditors}
+                        resolvedTheme={resolvedTheme}
+                        fontSize={chatTypographyStyle.fontSize}
+                        withFirstReset={withFirstReset}
+                        onReview={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                      />
                     );
                   };
                   return (
@@ -2275,7 +2459,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </div>
                       <DisclosureRegion open={fileChangesExpanded}>
                         {firstCheckpointFiles.map((file) => renderCheckpointFileRow(file, true))}
-                        {overflowCheckpointFiles.length > 0 ? (
+                        {overflowCheckpointFiles.length > 0 && fileListHasMounted ? (
                           <DisclosureRegion open={fileListExpanded}>
                             {overflowCheckpointFiles.map((file) =>
                               renderCheckpointFileRow(file, false),
@@ -2306,53 +2490,57 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   );
                 })()}
                 {(showPinToggle ||
+                  showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
                   goalAchievement !== null) && (
+                  // Turn-end actions read Copy → Fork → Pin → time and stay visible at
+                  // rest: they belong to a settled turn, so hiding them behind hover made
+                  // the whole row feel undiscoverable. The leading button pulls left by
+                  // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
+                  // glyph, not the invisible hit area, aligns with the message text.
                   <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]"
                     style={chatMessageFooterStyle}
                   >
+                    {assistantCopyState.visible ? (
+                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                    ) : null}
+                    {showForkAction ? (
+                      <MessageActionButton
+                        label="Fork thread from this turn"
+                        tooltip="Fork from here"
+                        onClick={() => onForkFromMessage?.(row.message.id)}
+                      >
+                        <GitForkIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
                     {showPinToggle ? (
-                      // Pin sits at the left edge of the footer, before the copy action. It stays
-                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
-                      // unpinned message only reveals it on hover, like the other footer actions.
-                      // Same Central pin glyph in both states — persistence signals the pinned state.
+                      // Same Central pin glyph in both states — the darker tint is what
+                      // signals "this message is pinned".
                       <MessageActionButton
                         label={pinActionLabel("message", messagePinned)}
                         tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
                         aria-pressed={messagePinned}
-                        className={
-                          messagePinned
-                            ? "text-muted-foreground/80"
-                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
-                        }
+                        className={messagePinned ? "text-foreground" : undefined}
                         onClick={() => onTogglePinMessage?.(row.message.id)}
                       >
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
                     ) : null}
-                    {assistantCopyState.visible ? (
-                      <MessageCopyButton
-                        text={assistantCopyState.text ?? ""}
-                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                      />
-                    ) : null}
                     {assistantMeta.length > 0 ? (
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {assistantMeta}
-                      </p>
+                      <p className="tabular-nums">{assistantMeta}</p>
                     ) : null}
                     {goalAchievement !== null ? (
-                      // Persistent (not hover-revealed) marker: the achieved goal is a
-                      // durable fact about this turn, unlike the transient actions.
+                      // Divided off from the actions: the achieved goal is a durable fact
+                      // about the turn, not something you can act on.
                       <>
                         <div aria-hidden className="h-3 w-px shrink-0 bg-border" />
                         <p
                           className="flex min-w-0 items-center gap-1.5 tabular-nums"
                           title={goalAchievement.goal}
                         >
-                          <CircleCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          <GoalIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                           <span className="truncate">
                             {goalAchievement.elapsedMs !== null
                               ? `Goal achieved in ${formatClockDuration(goalAchievement.elapsedMs)}`
@@ -2385,7 +2573,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               tone, size, and full-width divider, but counting up live. -ml-0.5
               optically aligns the leading "W" with the reply text below. */}
           <div
-            className="-ml-0.5 pb-2 text-muted-foreground/70"
+            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
             Working for{" "}
@@ -2401,7 +2589,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
+          className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {workingLabel}
@@ -2903,6 +3091,20 @@ function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): strin
   return items.map((item) => `${item.kind}:${item.id}`).join("|");
 }
 
+function collectAbsoluteFilePathsFromWorkEntries(entries: ReadonlyArray<WorkLogEntry>): string[] {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    for (const path of entry.changedFiles ?? []) {
+      if (isLocalAbsolutePath(path)) paths.add(path);
+    }
+    const detail = entry.detail?.trim();
+    if (detail && isLocalAbsolutePath(detail)) paths.add(detail);
+    const command = entry.command?.trim();
+    if (command && isLocalAbsolutePath(command)) paths.add(command);
+  }
+  return [...paths];
+}
+
 // Keep the live clock scoped to tiny leaf components so active Claude turns do
 // not force the full transcript tree to re-render every second.
 function WorkingTimer({ createdAt }: { createdAt: string }) {
@@ -2973,19 +3175,82 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
 });
 
 // Renders read-only user text with the same inline skill pill treatment as the composer.
+function renderFindWrappedText(
+  text: string,
+  keyPrefix: string,
+  query: string | undefined,
+  activeRange: { startOffset: number; endOffset: number } | null,
+  sourceOffset = 0,
+): ReactNode {
+  if (!query) {
+    return text;
+  }
+  const parts = splitTextWithFindMatches(text, query, activeRange, sourceOffset);
+  if (parts.length === 1 && !parts[0]!.match) {
+    return text;
+  }
+  return parts.map((part, partIndex) =>
+    part.match ? (
+      <span
+        key={`${keyPrefix}:${partIndex}`}
+        className={part.active ? "chat-find-match chat-find-match-active" : "chat-find-match"}
+        data-chat-find-match={part.active ? "active" : "true"}
+        data-chat-find-start={part.startOffset}
+      >
+        {part.text}
+      </span>
+    ) : (
+      part.text
+    ),
+  );
+}
+
 function renderUserMessageInlineText(
   text: string,
   keyPrefix: string,
   resolvedTheme: "light" | "dark",
   mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
+  findQuery?: string,
+  findActiveRange: { startOffset: number; endOffset: number } | null = null,
 ): ReactNode[] {
+  let sourceOffset = 0;
   return splitPromptIntoDisplaySegments(text, mentionReferences).flatMap((segment, index) => {
     const key = `${keyPrefix}:${index}`;
     if (segment.type === "text") {
-      return segment.text.length > 0 ? [<span key={`${key}:text`}>{segment.text}</span>] : [];
+      const content =
+        segment.text.length > 0
+          ? [
+              <span key={`${key}:text`}>
+                {renderFindWrappedText(
+                  segment.text,
+                  `${key}:find`,
+                  findQuery,
+                  findActiveRange,
+                  sourceOffset,
+                )}
+              </span>,
+            ]
+          : [];
+      sourceOffset += segment.text.length;
+      return content;
     }
     if (segment.type === "skill") {
-      return [<InlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
+      const chip = <InlineSkillChip skillName={segment.name} />;
+      const highlighted =
+        findQuery && collectCaseInsensitiveSubstringRanges(segment.name, findQuery).length > 0 ? (
+          <span
+            key={`${key}:skill`}
+            className="chat-find-match"
+            data-chat-find-match="true"
+            data-chat-find-start={sourceOffset}
+          >
+            {chip}
+          </span>
+        ) : (
+          <span key={`${key}:skill`}>{chip}</span>
+        );
+      sourceOffset += segment.name.length;
+      return [highlighted];
     }
     if (segment.type === "mention") {
       return [
@@ -3003,6 +3268,9 @@ function renderUserMessageInlineText(
     }
     if (segment.type === "link") {
       return [<InlineLinkChip key={`${key}:link`} url={segment.url} interactive />];
+    }
+    if (segment.type === "slash-command") {
+      return [<InlineSlashCommandChip key={`${key}:command`} command={segment.command} />];
     }
     return [];
   });
@@ -3224,16 +3492,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
   markdownCwd: string | undefined;
+  findQuery?: string;
+  findActiveRange?: { startOffset: number; endOffset: number } | null;
 }) {
   if (props.terminalContexts.length > 0) {
-    const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
-      props.text,
-      props.terminalContexts,
-    );
-    const inlinePrefix = buildInlineTerminalContextText(props.terminalContexts);
-    const markdownText = hasEmbeddedInlineLabels
-      ? props.text
-      : [inlinePrefix, props.text].filter((part) => part.length > 0).join(" ");
+    const markdownText = resolveUserMessageMarkdownText(props.text, props.terminalContexts);
     if (markdownText.length === 0) {
       return null;
     }
@@ -3246,6 +3509,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         terminalContexts={props.terminalContexts}
         className="font-system-ui wrap-break-word"
         style={props.chatTypographyStyle}
+        findQuery={props.findQuery}
+        findActiveRange={props.findActiveRange}
       />
     );
   }
@@ -3268,6 +3533,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           "user-message-inline-chip-only",
           props.resolvedTheme,
           props.mentionReferences,
+          props.findQuery,
+          props.findActiveRange ?? null,
         )}
       </div>
     );
@@ -3285,6 +3552,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       mentionReferences={props.mentionReferences}
       className="font-system-ui"
       style={props.chatTypographyStyle}
+      findQuery={props.findQuery}
+      findActiveRange={props.findActiveRange}
     />
   );
 });

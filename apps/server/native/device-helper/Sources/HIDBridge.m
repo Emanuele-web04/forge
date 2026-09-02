@@ -234,15 +234,27 @@ static const uint32_t kUsageLeftShift = 225;
   if (developerDir.length == 0) {
     developerDir = @"/Applications/Xcode.app/Contents/Developer";
   }
-  NSString *kitPath = [developerDir
-      stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
-  void *kit = dlopen(kitPath.fileSystemRepresentation, RTLD_NOW);
+  // Same candidate order as simulatorKitCandidatePaths in CoreSimulatorBridge:
+  // Xcode ≤26 keeps SimulatorKit under the developer dir, Xcode 27 beta 4 moved
+  // it to Contents/SharedFrameworks.
+  NSArray<NSString *> *kitPaths = @[
+    [developerDir
+        stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"],
+    [[developerDir stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"SharedFrameworks/SimulatorKit.framework/SimulatorKit"],
+  ];
+  void *kit = NULL;
+  for (NSString *kitPath in kitPaths) {
+    kit = dlopen(kitPath.fileSystemRepresentation, RTLD_NOW);
+    if (kit != NULL) break;
+  }
   if (kit == NULL) {
     if (error) {
       *error = [NSError errorWithDomain:@"dev.synara.device-helper.hid"
                                    code:1
                                userInfo:@{NSLocalizedDescriptionKey:
-                                            [NSString stringWithFormat:@"cannot load SimulatorKit at %@", kitPath]}];
+                                            [NSString stringWithFormat:@"cannot load SimulatorKit at %@",
+                                                                       [kitPaths componentsJoinedByString:@" or "]]}];
     }
     return NO;
   }

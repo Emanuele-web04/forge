@@ -33,6 +33,11 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export interface ContextWindowState {
+  readonly snapshot: ContextWindowSnapshot | null;
+  readonly invalidatedByCompaction: boolean;
+}
+
 export interface ContextWindowSelectionStatus {
   readonly activeLabel: string | null;
   readonly selectedLabel: string | null;
@@ -53,13 +58,27 @@ const KNOWN_CONTEXT_WINDOW_MAX_TOKENS = {
   "1m": 1_000_000,
 } as const;
 
+export function isCompletedContextCompaction(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "context-compaction") {
+    return false;
+  }
+  const payload = asRecord(activity.payload);
+  return payload?.state === "compacted" || payload?.status === "completed";
+}
+
 // Read the latest token-usage snapshot emitted by the runtime.
-function deriveLatestUsageContextWindowSnapshot(
+function deriveLatestUsageContextWindowState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-): ContextWindowSnapshot | null {
+): ContextWindowState {
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
-    if (!activity || activity.kind !== "context-window.updated") {
+    if (!activity) {
+      continue;
+    }
+    if (isCompletedContextCompaction(activity)) {
+      return { snapshot: null, invalidatedByCompaction: true };
+    }
+    if (activity.kind !== "context-window.updated") {
       continue;
     }
 
@@ -85,30 +104,33 @@ function deriveLatestUsageContextWindowSnapshot(
     const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
 
     return {
-      usedTokens,
-      usedPercent: payloadUsedPercent,
-      totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
-      maxTokens,
-      remainingTokens,
-      usedPercentage,
-      remainingPercentage,
-      inputTokens: asFiniteNumber(payload?.inputTokens),
-      cachedInputTokens: asFiniteNumber(payload?.cachedInputTokens),
-      outputTokens: asFiniteNumber(payload?.outputTokens),
-      reasoningOutputTokens: asFiniteNumber(payload?.reasoningOutputTokens),
-      lastUsedTokens: asFiniteNumber(payload?.lastUsedTokens),
-      lastInputTokens: asFiniteNumber(payload?.lastInputTokens),
-      lastCachedInputTokens: asFiniteNumber(payload?.lastCachedInputTokens),
-      lastOutputTokens: asFiniteNumber(payload?.lastOutputTokens),
-      lastReasoningOutputTokens: asFiniteNumber(payload?.lastReasoningOutputTokens),
-      toolUses: asFiniteNumber(payload?.toolUses),
-      durationMs: asFiniteNumber(payload?.durationMs),
-      compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
-      updatedAt: activity.createdAt,
+      snapshot: {
+        usedTokens,
+        usedPercent: payloadUsedPercent,
+        totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
+        maxTokens,
+        remainingTokens,
+        usedPercentage,
+        remainingPercentage,
+        inputTokens: asFiniteNumber(payload?.inputTokens),
+        cachedInputTokens: asFiniteNumber(payload?.cachedInputTokens),
+        outputTokens: asFiniteNumber(payload?.outputTokens),
+        reasoningOutputTokens: asFiniteNumber(payload?.reasoningOutputTokens),
+        lastUsedTokens: asFiniteNumber(payload?.lastUsedTokens),
+        lastInputTokens: asFiniteNumber(payload?.lastInputTokens),
+        lastCachedInputTokens: asFiniteNumber(payload?.lastCachedInputTokens),
+        lastOutputTokens: asFiniteNumber(payload?.lastOutputTokens),
+        lastReasoningOutputTokens: asFiniteNumber(payload?.lastReasoningOutputTokens),
+        toolUses: asFiniteNumber(payload?.toolUses),
+        durationMs: asFiniteNumber(payload?.durationMs),
+        compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
+        updatedAt: activity.createdAt,
+      },
+      invalidatedByCompaction: false,
     };
   }
 
-  return null;
+  return { snapshot: null, invalidatedByCompaction: false };
 }
 
 // Use the configured session window as the source of truth for the meter denominator.
@@ -129,14 +151,19 @@ function deriveLatestConfiguredContextWindowMaxTokens(
   return null;
 }
 
-export function deriveLatestContextWindowSnapshot(
+export function deriveLatestContextWindowState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-): ContextWindowSnapshot | null {
-  const usageSnapshot = deriveLatestUsageContextWindowSnapshot(activities);
+): ContextWindowState {
+  const usageState = deriveLatestUsageContextWindowState(activities);
+  if (usageState.invalidatedByCompaction) {
+    return usageState;
+  }
+
+  const usageSnapshot = usageState.snapshot;
   const configuredMaxTokens = deriveLatestConfiguredContextWindowMaxTokens(activities);
 
   if (usageSnapshot === null && configuredMaxTokens === null) {
-    return null;
+    return usageState;
   }
 
   const usedTokens = usageSnapshot?.usedTokens ?? 0;
@@ -156,27 +183,36 @@ export function deriveLatestContextWindowSnapshot(
   const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
 
   return {
-    usedTokens,
-    usedPercent: usageSnapshot?.usedPercent ?? null,
-    totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
-    maxTokens,
-    remainingTokens,
-    usedPercentage,
-    remainingPercentage,
-    inputTokens: usageSnapshot?.inputTokens ?? null,
-    cachedInputTokens: usageSnapshot?.cachedInputTokens ?? null,
-    outputTokens: usageSnapshot?.outputTokens ?? null,
-    reasoningOutputTokens: usageSnapshot?.reasoningOutputTokens ?? null,
-    lastUsedTokens: usageSnapshot?.lastUsedTokens ?? null,
-    lastInputTokens: usageSnapshot?.lastInputTokens ?? null,
-    lastCachedInputTokens: usageSnapshot?.lastCachedInputTokens ?? null,
-    lastOutputTokens: usageSnapshot?.lastOutputTokens ?? null,
-    lastReasoningOutputTokens: usageSnapshot?.lastReasoningOutputTokens ?? null,
-    toolUses: usageSnapshot?.toolUses ?? null,
-    durationMs: usageSnapshot?.durationMs ?? null,
-    compactsAutomatically: usageSnapshot?.compactsAutomatically ?? false,
-    updatedAt: usageSnapshot?.updatedAt ?? activities[activities.length - 1]?.createdAt ?? "",
+    snapshot: {
+      usedTokens,
+      usedPercent: usageSnapshot?.usedPercent ?? null,
+      totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
+      maxTokens,
+      remainingTokens,
+      usedPercentage,
+      remainingPercentage,
+      inputTokens: usageSnapshot?.inputTokens ?? null,
+      cachedInputTokens: usageSnapshot?.cachedInputTokens ?? null,
+      outputTokens: usageSnapshot?.outputTokens ?? null,
+      reasoningOutputTokens: usageSnapshot?.reasoningOutputTokens ?? null,
+      lastUsedTokens: usageSnapshot?.lastUsedTokens ?? null,
+      lastInputTokens: usageSnapshot?.lastInputTokens ?? null,
+      lastCachedInputTokens: usageSnapshot?.lastCachedInputTokens ?? null,
+      lastOutputTokens: usageSnapshot?.lastOutputTokens ?? null,
+      lastReasoningOutputTokens: usageSnapshot?.lastReasoningOutputTokens ?? null,
+      toolUses: usageSnapshot?.toolUses ?? null,
+      durationMs: usageSnapshot?.durationMs ?? null,
+      compactsAutomatically: usageSnapshot?.compactsAutomatically ?? false,
+      updatedAt: usageSnapshot?.updatedAt ?? activities[activities.length - 1]?.createdAt ?? "",
+    },
+    invalidatedByCompaction: false,
   };
+}
+
+export function deriveLatestContextWindowSnapshot(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ContextWindowSnapshot | null {
+  return deriveLatestContextWindowState(activities).snapshot;
 }
 
 export function deriveSelectedContextWindowSnapshot(

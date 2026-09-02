@@ -1474,6 +1474,106 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect(
+    "skips recurring runs without failure accounting while their provider is disabled",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const repository = yield* AutomationRepository;
+        const serverSettings = yield* ServerSettingsService;
+        const automationId = AutomationId.makeUnsafe("automation-provider-disabled");
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+        yield* repository.createDefinition({
+          id: automationId,
+          input: {
+            ...createInput("local"),
+            schedule: { type: "interval", everySeconds: 300 },
+            maxIterations: 1,
+            stopAfterConsecutiveFailures: 1,
+          },
+          now,
+        });
+
+        const paused = yield* service.runDueOnce({
+          now,
+          limit: 10,
+          leaseOwnerId: "test-scheduler",
+        });
+        const pausedDefinition = (yield* service.list({ projectId })).definitions.find(
+          (definition) => definition.id === automationId,
+        );
+        const pausedRun = paused.find((entry) => entry.run.automationId === automationId)?.run;
+
+        assert.strictEqual(pausedRun?.status, "skipped");
+        assert.match(pausedRun?.result?.summary ?? "", /disabled in Settings/);
+        assert.strictEqual(pausedDefinition?.enabled, true);
+        assert.strictEqual(pausedDefinition?.iterationCount, 0);
+        assert.strictEqual(pausedDefinition?.consecutiveFailureCount, 0);
+        assert.strictEqual(dispatchedCommands.length, 0);
+
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+        const resumed = yield* service.runDueOnce({
+          now: "2026-06-16T10:05:00.000Z",
+          limit: 10,
+          leaseOwnerId: "test-scheduler",
+        });
+        const resumedRun = resumed.find((entry) => entry.run.automationId === automationId)?.run;
+        const resumedDefinition = (yield* service.list({ projectId })).definitions.find(
+          (definition) => definition.id === automationId,
+        );
+
+        assert.strictEqual(resumedRun?.status, "running");
+        assert.strictEqual(resumedDefinition?.iterationCount, 1);
+        assert.isAtLeast(dispatchedCommands.length, 2);
+      }),
+  );
+
+  it.effect("defers a disabled one-shot until its provider is re-enabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const serverSettings = yield* ServerSettingsService;
+      const automationId = AutomationId.makeUnsafe("automation-provider-disabled-once");
+      const runAt = "2026-06-16T10:00:15.000Z";
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt },
+        },
+        now,
+      });
+
+      const paused = yield* service.runDueOnce({
+        now: runAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const deferred = paused.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.isDefined(deferred?.deferredUntil);
+      assert.strictEqual(dispatchedCommands.length, 0);
+
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      const resumed = yield* service.runDueOnce({
+        now: deferred!.deferredUntil!,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const completedDefinition = (yield* service.list({ projectId })).definitions.find(
+        (definition) => definition.id === automationId,
+      );
+
+      const resumedRun = resumed.find((entry) => entry.run.id === deferred?.id)?.run;
+      assert.strictEqual(resumedRun?.id, deferred?.id);
+      assert.strictEqual(resumedRun?.status, "running");
+      assert.strictEqual(completedDefinition?.enabled, false);
+      assert.strictEqual(dispatchedCommands.length, 2);
+    }),
+  );
+
   it.effect("records and advances missed scheduled occurrences when misfire policy is skip", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -3364,6 +3464,68 @@ layer("AutomationService", (it) => {
           "Stop check failed:",
         );
       }),
+  );
+
+  it.effect("defers stop evaluation until the router's fallback provider is re-enabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-provider-disabled");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-provider-disabled");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      yield* serverSettings.updateSettings({
+        textGenerationModelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          opencode: { enabled: false },
+          droid: { enabled: false },
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+        completionPolicy: aiCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeAutomationRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* realDelay(25);
+
+      const deferredRun = (yield* service.list({ projectId })).runs.find(
+        (entry) => entry.id === run.id,
+      );
+      assert.isUndefined(deferredRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+
+      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      const resumed = yield* waitForAutomationList({
+        service,
+        description: "re-enabled provider stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+          undefined,
+      });
+      const resumedRun = resumed.runs.find((entry) => entry.id === run.id);
+
+      assert.strictEqual(resumedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(completionEvaluationInputs.length, 1);
+    }),
   );
 
   it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>

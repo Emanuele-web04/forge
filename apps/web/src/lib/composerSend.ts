@@ -224,7 +224,11 @@ export function resolvePromptEffortFromModelSelection(
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;
-    case "kilo":
+    case "devin":
+      return (
+        modelSelection.options?.reasoningEffort ??
+        (modelSelection.options?.fastMode === true ? "fast" : null)
+      );
     case "opencode":
       return null;
   }

@@ -108,6 +108,10 @@ export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
+/** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */
+export const DragHandleIcon: LucideIcon = centralIconWrapper("dot-grid-2x3");
+/** Sliders glyph for "customize this surface" entries. */
+export const CustomizeIcon: LucideIcon = centralIconWrapper("settings-slider-three");
 export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
@@ -177,7 +181,9 @@ export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
 export const GiftIcon: LucideIcon = centralIconWrapper("gift-2");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
-export const GitForkIcon = centralIconWrapper("fork");
+// Forking a thread reuses the branch glyph: the Central "fork" asset reads as a
+// second, unrelated icon next to it, so fork and branch share one visual.
+export const GitForkIcon: LucideIcon = GitBranchIcon;
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
 export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
@@ -237,10 +243,12 @@ export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
+// Canonical side-chat glyph — every sidechat surface (right dock pane, environment
+// panel rows, tabs) must use this one so the feature reads consistently.
+export const SidechatIcon: LucideIcon = centralIconWrapper("chat-bubble-7");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
-export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-right-wide");
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
-export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
+export const PanelRightCloseIcon = centralIconWrapper("sidebar-simple-right-wide");
 export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
@@ -250,6 +258,12 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
 export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
+// Outline transport glyphs (Central "reversed" set) for surfaces that read as a
+// row of neutral actions rather than playback state — e.g. the composer goal strip.
+export const PauseOutlineIcon: LucideIcon = centralIconWrapper("pause");
+export const PlayOutlineIcon: LucideIcon = centralIconWrapper("play");
+/** Outline trash can from the Central set (Trash2 is the legacy Tabler glyph). */
+export const TrashCanIcon: LucideIcon = centralIconWrapper("trash-can");
 // Persistent thread goal ("Pursuing goal" strip, /goal surfaces).
 export const GoalIcon: LucideIcon = centralIconWrapper("target-arrow");
 export const Plus = adaptIcon(IconPlus);

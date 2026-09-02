@@ -16,7 +16,7 @@ describe("resolveProviderServerPassword", () => {
     };
 
     const password = await Effect.runPromise(
-      resolveProviderServerPassword("kilo").pipe(
+      resolveProviderServerPassword("opencode").pipe(
         Effect.provide(Layer.succeed(ProviderCredentials, credentials)),
       ),
     );

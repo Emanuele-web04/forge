@@ -8,6 +8,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
 
@@ -2130,6 +2131,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
         const core = yield* GitCore;
+        const fileSystem = yield* FileSystem.FileSystem;
 
         yield* core.createBranch({ cwd: tmp, branch: "feature/diff-scopes" });
         yield* core.checkoutBranch({ cwd: tmp, branch: "feature/diff-scopes" });
@@ -2141,6 +2143,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["add", "staged.txt"]);
         yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
         yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+        yield* fileSystem.writeFile(path.join(tmp, "untracked.bin"), new Uint8Array([0, 1, 2, 3]));
 
         const branchPatch = (yield* core.readBranchPatch(tmp)).patch;
         expect(branchPatch).toContain("diff --git a/branch.txt b/branch.txt");
@@ -2157,6 +2160,75 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(unstagedPatch).toContain("diff --git a/README.md b/README.md");
         expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
         expect(unstagedPatch).not.toContain("staged.txt");
+
+        const scopePatches = [
+          ["branch", branchPatch],
+          ["staged", stagedPatch],
+          ["unstaged", unstagedPatch],
+          ["workingTree", (yield* core.readWorkingTreePatch(tmp)).patch],
+        ] as const;
+        for (const [scope, patch] of scopePatches) {
+          expect(yield* core.readDiffStats(tmp, scope)).toEqual(
+            summarizeUnifiedPatchTotals(patch) ?? {
+              additions: 0,
+              deletions: 0,
+              fileCount: 0,
+            },
+          );
+        }
+      }),
+    );
+
+    it.effect("surfaces tracked numstat failures", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: bad object",
+          }),
+        );
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "staged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.tracked",
+            detail: "fatal: bad object",
+          });
+        }
+      }),
+    );
+
+    it.effect("surfaces untracked numstat failures instead of undercounting", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation.endsWith(".untrackedFiles")) {
+            return Effect.succeed({ code: 0, stdout: "vanished.txt\0", stderr: "" });
+          }
+          if (input.operation.endsWith(".untrackedNumstat")) {
+            // `--no-index` also exits 1 when the path cannot be read.
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access 'vanished.txt'",
+            });
+          }
+          return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+        });
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "unstaged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.untrackedNumstat",
+            detail: "error: Could not access 'vanished.txt'",
+          });
+        }
       }),
     );
 

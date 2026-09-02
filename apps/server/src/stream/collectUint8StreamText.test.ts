@@ -33,4 +33,65 @@ describe("collectUint8StreamText", () => {
       truncated: true,
     });
   });
+
+  it("does not mark an exact-limit stream truncated for a trailing empty chunk", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("hello"), new Uint8Array()]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "hello",
+      truncated: false,
+    });
+  });
+
+  it("still marks a later non-empty chunk truncated after an empty chunk", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([
+          encoder.encode("hello"),
+          new Uint8Array(),
+          encoder.encode("!"),
+        ]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "hello",
+      truncated: true,
+    });
+  });
+
+  it("does not emit a replacement character when truncation splits a UTF-8 sequence", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("ab€cd")]),
+        maxBytes: 4,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "ab",
+      truncated: true,
+    });
+    expect(result.text).not.toContain("�");
+  });
+
+  it("drops an incomplete four-byte UTF-8 suffix at the byte limit", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("ok🙂done")]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "ok",
+      truncated: true,
+    });
+  });
 });

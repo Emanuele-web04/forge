@@ -5,8 +5,11 @@
 // Layer: Chat right-dock UI
 // Exports: DockExplorerPane
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import type { ThreadId } from "@synara/contracts";
+
+import { directoryChain, useExplorerRevealRequestStore } from "~/explorerRevealRequestStore";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
@@ -21,6 +24,7 @@ const DOCK_EXPLORER_SIDEBAR_CLASS =
   "flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-border/65 bg-[var(--color-background-surface)]";
 
 export const DockExplorerPane = function DockExplorerPane(props: {
+  threadId: ThreadId;
   workspaceRoot: string | null;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
@@ -31,6 +35,23 @@ export const DockExplorerPane = function DockExplorerPane(props: {
     () => new Set<string>(),
   );
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Reveal requests (e.g. picking a folder in the Cmd+P palette) expand the
+  // full ancestor chain and clear any name filter so the tree is what shows.
+  const revealRequest = useExplorerRevealRequestStore(
+    (state) => state.requestsByThreadId[props.threadId],
+  );
+  useEffect(() => {
+    if (!revealRequest) return;
+    setExpandedDirectories((current) => {
+      const next = new Set(current);
+      for (const directory of directoryChain(revealRequest.path)) {
+        next.add(directory);
+      }
+      return next;
+    });
+    setSearchQuery("");
+  }, [revealRequest]);
 
   const handleSelectFile = (path: string) => {
     setSelectedFilePath(path);

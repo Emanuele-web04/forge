@@ -231,6 +231,135 @@ describe("agent gateway browser tools", () => {
     expect(text).not.toContain("�");
   });
 
+  it("keeps untrusted WebMCP results from flooding model context", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({
+        tabId: TAB_ID,
+        discoveryId: SNAPSHOT_ID,
+        toolId: "w1",
+        toolName: "search",
+        contentTrust: "untrusted-web-page",
+        status: "completed",
+        result: { content: "é".repeat(30_000) },
+        finalUrl: "https://example.test/results",
+        navigated: false,
+        redirects: Array.from(
+          { length: 20 },
+          (_, index) => `https://redirect.example/${"r".repeat(7_900)}?step=${index}`,
+        ),
+        dialogs: Array.from({ length: 20 }, (_, index) => ({
+          kind: "alert",
+          message: `Dialog ${index} ${"d".repeat(4_000)}`,
+          action: "accepted",
+          openedAt: "2026-08-26T10:00:00.000Z",
+        })),
+      }),
+    );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const call = tools.find((tool) => tool.definition.name === "browser_webmcp_call")!;
+
+    const result = await Effect.runPromise(
+      call.handler({ discoveryId: SNAPSHOT_ID, toolId: "w1" }, context),
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(text).toContain("contentTrust=untrusted-web-page");
+    expect(text).toContain("resultPreview=");
+    expect(text).toContain("webMcpResultTruncated=true");
+    expect(text).toContain('"redirectCount":20');
+    expect(text).toContain('"dialogCount":20');
+    expect(text).not.toContain('"result":{"content"');
+    expect(text).not.toContain("�");
+  });
+
+  it("keeps oversized failed WebMCP calls parseable in model context", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({
+        tabId: TAB_ID,
+        discoveryId: SNAPSHOT_ID,
+        toolId: "w1",
+        toolName: "search",
+        contentTrust: "untrusted-web-page",
+        status: "failed",
+        error: { name: "SearchError", message: "Search failed." },
+        finalUrl: "https://example.test/results",
+        navigated: true,
+        redirects: Array.from(
+          { length: 20 },
+          (_, index) => `https://redirect.example/${"r".repeat(7_900)}?step=${index}`,
+        ),
+        dialogs: Array.from({ length: 20 }, (_, index) => ({
+          kind: "alert",
+          message: `Dialog ${index} ${"d".repeat(4_000)}`,
+          action: "accepted",
+          openedAt: "2026-08-26T10:00:00.000Z",
+        })),
+      }),
+    );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const call = tools.find((tool) => tool.definition.name === "browser_webmcp_call")!;
+
+    const result = await Effect.runPromise(
+      call.handler({ discoveryId: SNAPSHOT_ID, toolId: "w1" }, context),
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    const metadata = JSON.parse(text.split("\n")[2] ?? "null") as Record<string, unknown>;
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(metadata).toMatchObject({
+      status: "failed",
+      error: { name: "SearchError", message: "Search failed." },
+      redirectCount: 20,
+      redirectsTruncated: true,
+      dialogCount: 20,
+      dialogsTruncated: true,
+    });
+    expect(text).toContain("webMcpCallProjectionCompacted=true");
+    expect(text).not.toContain("webMcpTextTruncated=true");
+    expect(text).not.toContain("�");
+  });
+
+  it("keeps a full bounded WebMCP discovery intact in model context", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({
+        tabId: TAB_ID,
+        url: `https://example.test/${"u".repeat(7_000)}`,
+        contentTrust: "untrusted-web-page",
+        available: true,
+        implementation: "compatibility",
+        discoveryId: SNAPSHOT_ID,
+        tools: [
+          {
+            toolId: "w1",
+            name: "search",
+            description: "Search the catalogue.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string", description: "s".repeat(15_000) },
+              },
+            },
+            origin: "https://example.test",
+            annotations: { readOnlyHint: true, untrustedContentHint: true },
+          },
+        ],
+        totalToolCount: 1,
+        skippedToolCount: 0,
+        truncated: false,
+      }),
+    );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const discovery = tools.find((tool) => tool.definition.name === "browser_webmcp_tools")!;
+
+    const result = await Effect.runPromise(discovery.handler({}, context));
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(text).not.toContain("webMcpTextTruncated=true");
+    expect(() => JSON.parse(text.split("\n").slice(2).join("\n"))).not.toThrow();
+  });
+
   it("leaves ambiguous aliases invalid instead of guessing", async () => {
     const execute = vi.fn();
     const tools = makeAgentGatewayBrowserTools({ available: true, execute: execute as never });
@@ -263,6 +392,8 @@ describe("agent gateway browser tools", () => {
       "browser_reload",
       "browser_resize",
       "browser_snapshot",
+      "browser_webmcp_tools",
+      "browser_webmcp_call",
       "browser_screenshot",
       "browser_logs",
       "browser_click",

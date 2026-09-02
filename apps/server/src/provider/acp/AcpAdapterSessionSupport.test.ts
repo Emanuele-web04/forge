@@ -1,15 +1,18 @@
 import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
+import { Deferred, Effect, Exit, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
   resolveRequestedAcpSessionModeId,
   resolveAcpTurnInteractionMode,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
+  waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "./AcpAdapterSessionSupport.ts";
 
@@ -211,5 +214,86 @@ describe("ACP adapter session support", () => {
         homeDir: "/home/test",
       }),
     ).toBe("/server");
+  });
+
+  it("runs the shared turn watchdog from adapter lifecycle state", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const timedOut = yield* Deferred.make<number>();
+        const turnId = TurnId.makeUnsafe("turn-watchdog");
+        const pendingApprovals = new Map<string, unknown>([["approval", {}]]);
+        const context = {
+          scope,
+          pendingApprovals,
+          pendingUserInputs: new Map<string, unknown>(),
+          activeTurnId: turnId as TurnId | undefined,
+          lastTurnActivityAt: 0 as number | undefined,
+          stopped: false,
+        };
+
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context,
+          turnId,
+          idleTimeoutMs: 1,
+          checkIntervalMs: 1,
+          onIdleTimeout: (idleMs) => Deferred.succeed(timedOut, idleMs).pipe(Effect.asVoid),
+        });
+        yield* Effect.sleep(5);
+        const touchedWhileAwaitingHuman = (context.lastTurnActivityAt ?? 0) > 0;
+        pendingApprovals.clear();
+        context.lastTurnActivityAt = 0;
+        const idleMs = yield* Deferred.await(timedOut).pipe(Effect.timeout(1_000));
+        yield* Scope.close(scope, Exit.void);
+        return { idleMs, touchedWhileAwaitingHuman };
+      }),
+    );
+
+    expect(result.touchedWhileAwaitingHuman).toBe(true);
+    expect(result.idleMs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("waits until the consumer catches up with enqueued session updates", async () => {
+    let processed = 0;
+    const drained = Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(3),
+        sessionUpdatesProcessed: () => processed,
+        maxWaitMs: 1_000,
+        pollMs: 1,
+      }),
+    );
+    // Simulate the notification consumer handling queued events asynchronously,
+    // as happens across two consecutive turns whose trailing updates are still
+    // in flight when the prompt response resolves.
+    setTimeout(() => {
+      processed = 3;
+    }, 10);
+    await drained;
+    expect(processed).toBe(3);
+  });
+
+  it("returns immediately when the consumer already kept up", async () => {
+    const startedAt = Date.now();
+    await Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(2),
+        sessionUpdatesProcessed: () => 2,
+        maxWaitMs: 1_000,
+        pollMs: 25,
+      }),
+    );
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("bounds the wait so a stalled consumer cannot block settlement", async () => {
+    await Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(5),
+        sessionUpdatesProcessed: () => 0,
+        maxWaitMs: 20,
+        pollMs: 1,
+      }),
+    );
   });
 });

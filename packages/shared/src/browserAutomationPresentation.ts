@@ -10,6 +10,8 @@ export const BROWSER_TOOL_TITLES = {
   browser_reload: "Reload browser page",
   browser_resize: "Resize browser viewport",
   browser_snapshot: "Snapshot browser page",
+  browser_webmcp_tools: "Discover page WebMCP tools",
+  browser_webmcp_call: "Call page WebMCP tool",
   browser_screenshot: "Capture browser screenshot",
   browser_logs: "Read browser diagnostics",
   browser_click: "Click browser target",

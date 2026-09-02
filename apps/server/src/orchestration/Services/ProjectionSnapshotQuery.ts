@@ -84,6 +84,7 @@ export interface ProjectionFullThreadDiffContext {
 export interface ProjectionManagedWorktreeThread {
   readonly id: ThreadId;
   readonly archivedAt: string | null;
+  readonly deletedAt: string | null;
   readonly worktreePath: string | null;
   readonly associatedWorktreePath: string | null;
 }

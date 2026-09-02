@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
   type GitWorktreeSetupPhase,
@@ -12,7 +13,7 @@ import {
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
-import { normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -46,7 +47,7 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import type { ProviderModelOption } from "../providerModelOptions";
+import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -274,6 +275,42 @@ export function buildTranscriptAutoFollowSignal(input: {
   readonly tailKey: string;
 }): string {
   return `${input.messageCount}\u001f${input.tailKey}`;
+}
+
+// Deliberately excludes the tail message's text length: while a streamed
+// message grows, LegendList's own `maintainScrollAtEnd` keeps the bottom
+// stick, and re-arming the auto-follow re-snap on every store flush would
+// schedule a redundant scrollToEnd per flush for the whole stream. The key
+// still moves on every transition that needs an explicit re-snap: a new tail
+// message, role change, stream start/settle, first content landing, and
+// completion.
+export function buildTranscriptTailKey(
+  tailMessage: {
+    readonly id: string;
+    readonly role: string;
+    readonly streaming?: boolean;
+    readonly text: string;
+    readonly completedAt?: string | null | undefined;
+  } | null,
+): string {
+  if (tailMessage === null) {
+    return "empty";
+  }
+  return [
+    tailMessage.id,
+    tailMessage.role,
+    tailMessage.streaming ? "streaming" : "settled",
+    // While streaming, per-token growth is owned by LegendList's
+    // maintainScrollAtEnd — only the empty->content transition matters here.
+    // Once settled, a projection repair can replace the text under the same id
+    // with nothing else changing, so length is back in the key.
+    tailMessage.streaming
+      ? tailMessage.text.length > 0
+        ? "content"
+        : "empty"
+      : String(tailMessage.text.length),
+    tailMessage.completedAt ?? "",
+  ].join(":");
 }
 
 export function resolveThreadArtifactWorkspaceRoot(input: {
@@ -592,6 +629,30 @@ export function resolveGitRepoUiState(input: {
   return input.queriedIsRepo ?? !input.isStudioContainer;
 }
 
+export interface SettledThreadBranchMismatch {
+  readonly threadBranch: string;
+  readonly currentBranch: string;
+}
+
+export function resolveSettledThreadBranchMismatch(input: {
+  isSettled: boolean;
+  isLocalWorkspace: boolean;
+  threadBranch: string | null | undefined;
+  currentBranch: string | null | undefined;
+}): SettledThreadBranchMismatch | null {
+  if (!input.isSettled || !input.isLocalWorkspace) {
+    return null;
+  }
+
+  const threadBranch = input.threadBranch?.trim() ?? "";
+  const currentBranch = input.currentBranch?.trim() ?? "";
+  if (!threadBranch || !currentBranch || threadBranch === currentBranch) {
+    return null;
+  }
+
+  return { threadBranch, currentBranch };
+}
+
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
@@ -688,6 +749,27 @@ export function resolveThreadDetailHydration(input: {
   return input.detailSyncState === "failed" ? "failed" : "loading";
 }
 
+/**
+ * Fallback model selection for a draft thread before the first server turn exists.
+ * An explicit project default wins; otherwise the user's default provider is used
+ * (pi has no default model, so it is skipped), then codex. The model comes from the
+ * project default only when it matches the chosen provider, otherwise the provider's
+ * own default.
+ */
+export function resolveDraftFallbackModelSelection(input: {
+  projectDefault: ModelSelection | null | undefined;
+  settingsDefaultProvider: ProviderKind;
+}): ModelSelection {
+  const settingsProvider =
+    input.settingsDefaultProvider === "pi" ? null : input.settingsDefaultProvider;
+  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
+  const model =
+    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
+    getDefaultModel(provider) ??
+    DEFAULT_MODEL_BY_PROVIDER.codex;
+  return buildModelSelection(provider, model);
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -717,6 +799,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    ...(draftThread.goal ? { goal: draftThread.goal } : {}),
   };
 }
 
@@ -1394,6 +1477,84 @@ export function resolveQueuedSteerGateTransition(input: {
     },
     expiresInMs,
   };
+}
+
+export function shouldHoldQueuedComposerAutoDispatch(input: {
+  hasQueueableLiveTurn: boolean;
+  phase: SessionPhase;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isAwaitingTurnStart: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+}): boolean {
+  return (
+    input.hasQueueableLiveTurn ||
+    input.phase === "disconnected" ||
+    input.isSendBusy ||
+    input.isConnecting ||
+    input.isAwaitingTurnStart ||
+    input.queuedSteerGate !== null ||
+    input.hasPendingApproval ||
+    input.hasPendingProgress ||
+    input.hasPendingUserInput ||
+    input.queuedTurnCount === 0
+  );
+}
+
+/** The post-ack gap is not live-turn takeover, so hold until `hasLiveTurnTakenOver` or fail-open. */
+export function resolveQueuedComposerAutoDispatchHold(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
+  isConnecting: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+  threadError: string | null | undefined;
+  now?: number;
+}): boolean {
+  const isSendBusy =
+    input.localDispatch !== null &&
+    !hasServerAcknowledgedLocalDispatch({
+      localDispatch: input.localDispatch,
+      phase: input.phase,
+      latestTurn: input.latestTurn,
+      session: input.session,
+      messages: input.messages,
+      hasPendingApproval: input.hasPendingApproval,
+      hasPendingUserInput: input.hasPendingUserInput,
+      threadError: input.threadError,
+    });
+  const turnTakenOver = hasLiveTurnTakenOver({
+    localDispatch: input.localDispatch,
+    phase: input.phase,
+    latestTurn: input.latestTurn,
+    session: input.session,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingUserInput: input.hasPendingUserInput,
+    threadError: input.threadError,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
+  return shouldHoldQueuedComposerAutoDispatch({
+    hasQueueableLiveTurn: input.phase === "running" && input.session?.activeTurnId != null,
+    phase: input.phase,
+    isSendBusy,
+    isConnecting: input.isConnecting,
+    isAwaitingTurnStart: input.localDispatch !== null && !turnTakenOver,
+    queuedSteerGate: input.queuedSteerGate,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingProgress: input.hasPendingProgress,
+    hasPendingUserInput: input.hasPendingUserInput,
+    queuedTurnCount: input.queuedTurnCount,
+  });
 }
 
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;

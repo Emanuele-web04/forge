@@ -1,9 +1,10 @@
-import { Option, Schema, SchemaIssue, Struct } from "effect";
+import { Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
   AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
   CursorModelOptions,
+  DevinModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -41,6 +42,7 @@ export const ORCHESTRATION_WS_METHODS = {
   replayEvents: "orchestration.replayEvents",
   listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
   reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
+  prepareQuitResume: "orchestration.prepareQuitResume",
   subscribeShell: "orchestration.subscribeShell",
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -60,11 +62,38 @@ export const ProviderKind = Schema.Literals([
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
+  "devin",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
+
+/**
+ * Providers that no longer exist as `ProviderKind` members but may survive in
+ * persisted data. Renamed providers map to their successor; removed providers
+ * map to the runtime that hosted their sessions. Add an entry here whenever a
+ * provider is renamed or removed so persisted payloads keep decoding.
+ */
+export const LEGACY_PROVIDER_MIGRATIONS: Readonly<Record<string, ProviderKind>> = {
+  gemini: "antigravity",
+  kilo: "opencode",
+};
+
+/**
+ * Decodes a persisted provider value, mapping legacy provider names through
+ * `LEGACY_PROVIDER_MIGRATIONS`. Use for durable payloads (handoffs, snapshots)
+ * where a removed provider must not make the whole row undecodable.
+ */
+export const PersistedProviderKind = Schema.String.pipe(
+  Schema.decodeTo(
+    ProviderKind,
+    SchemaTransformation.transform({
+      // ProviderKind still validates the result, so unknown strings fail decode.
+      decode: (provider) => (LEGACY_PROVIDER_MIGRATIONS[provider] ?? provider) as ProviderKind,
+      encode: (provider: ProviderKind) => provider as string,
+    }),
+  ),
+);
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
   "on-failure",
@@ -130,13 +159,6 @@ export const OpenCodeModelSelection = Schema.Struct({
 });
 export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
-export const KiloModelSelection = Schema.Struct({
-  provider: Schema.Literal("kilo"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(OpenCodeModelOptions),
-});
-export type KiloModelSelection = typeof KiloModelSelection.Type;
-
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
   model: TrimmedNonEmptyString,
@@ -144,14 +166,21 @@ export const PiModelSelection = Schema.Struct({
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 
+export const DevinModelSelection = Schema.Struct({
+  provider: Schema.Literal("devin"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(DevinModelOptions),
+});
+export type DevinModelSelection = typeof DevinModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
+  DevinModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
-  KiloModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
 ]);
@@ -191,24 +220,23 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   experimentalWebSockets: Schema.optional(Schema.Boolean),
 });
 
-export const KiloProviderStartOptions = Schema.Struct({
-  binaryPath: Schema.optional(TrimmedNonEmptyString),
-  serverUrl: Schema.optional(TrimmedNonEmptyString),
-});
-
 export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+});
+
+export const DevinProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
+  devin: Schema.optional(DevinProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
-  kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
 });
@@ -221,6 +249,9 @@ export const ProviderInteractionMode = Schema.Literals(["default", "plan", "debu
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 const SidechatSourceThreadId = Schema.optional(Schema.NullOr(ThreadId)).pipe(
+  Schema.withDecodingDefault(() => null),
+);
+const SidechatLifecycleTimestamp = Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
   Schema.withDecodingDefault(() => null),
 );
 export const ProviderRequestKind = Schema.Literals([
@@ -513,7 +544,9 @@ export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
 export const ThreadHandoff = Schema.Struct({
   sourceThreadId: ThreadId,
-  sourceProvider: ProviderKind,
+  // Handoff metadata is durable: a removed source provider must not make the
+  // whole thread row (and with it the thread list) undecodable.
+  sourceProvider: PersistedProviderKind,
   importedAt: IsoDateTime,
   bootstrapStatus: ThreadHandoffBootstrapStatus,
 });
@@ -648,6 +681,15 @@ export const ThreadNotes = Schema.String.check(Schema.isMaxLength(THREAD_NOTES_M
 export type ThreadNotes = typeof ThreadNotes.Type;
 export const ThreadGoal = Schema.String.check(Schema.isMaxLength(THREAD_GOAL_MAX_CHARS));
 export type ThreadGoal = typeof ThreadGoal.Type;
+export const ThreadGoalStartBehavior = Schema.Literals(["start-if-idle", "defer"]);
+export type ThreadGoalStartBehavior = typeof ThreadGoalStartBehavior.Type;
+export const ThreadGoalContinuationTrigger = Schema.Literals([
+  "goal-updated",
+  "interaction-mode-updated",
+  "turn-completed",
+  "startup-recovery",
+]);
+export type ThreadGoalContinuationTrigger = typeof ThreadGoalContinuationTrigger.Type;
 /**
  * Goal pursuit timing. `goalStartedAt` is (re)stamped by the decider whenever a
  * non-empty goal is set and rebased on resume so `now - goalStartedAt` is always
@@ -812,6 +854,8 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatLastActivityAt: SidechatLifecycleTimestamp,
+  sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -902,6 +946,8 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatLastActivityAt: SidechatLifecycleTimestamp,
+  sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1234,6 +1280,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
+  goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
   // Desired paused state; the decider stamps the authoritative goal timestamps.
   goalPaused: Schema.optional(Schema.Boolean),
   // Marks the active goal accomplished: the decider records a ThreadGoalAchievement
@@ -1352,6 +1399,17 @@ export const ThreadTurnStartCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Server-only (quit resume): accept the turn only while the thread is not archived,
+  // has nothing in flight, and no turn finished on its own since the record was
+  // taken (the recorded turn itself, or any later one). Clients cannot set it:
+  // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
+  resumePrecondition: Schema.optional(
+    Schema.Struct({
+      /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+      recordedTurnId: Schema.NullOr(TurnId),
+      recordedAt: IsoDateTime,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -1581,6 +1639,16 @@ const ThreadSessionSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalContinueCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.continue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  goalStartedAt: Schema.NullOr(IsoDateTime),
+  trigger: ThreadGoalContinuationTrigger,
+  sourceTurnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessagesImportCommand = Schema.Struct({
   type: Schema.Literal("thread.messages.import"),
   commandId: CommandId,
@@ -1656,8 +1724,24 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSidechatActivityRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.sidechat.activity.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  activityAt: IsoDateTime,
+});
+
+const ThreadSidechatExpireCommand = Schema.Struct({
+  type: Schema.Literal("thread.sidechat.expire"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedLastActivityAt: IsoDateTime,
+  expiredAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadGoalContinueCommand,
   ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -1668,6 +1752,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadConversationRollbackCommand,
   ThreadConversationRollbackCompleteCommand,
   ThreadDispatchQueuedTurnCommand,
+  ThreadSidechatActivityRecordCommand,
+  ThreadSidechatExpireCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1704,6 +1790,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
   "thread.task-background-requested",
@@ -1719,6 +1806,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.sidechat-activity-recorded",
+  "thread.sidechat-expired",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1832,6 +1921,8 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatLastActivityAt: SidechatLifecycleTimestamp,
+  sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1843,6 +1934,17 @@ export const ThreadCreatedPayload = Schema.Struct({
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
+});
+
+export const ThreadSidechatActivityRecordedPayload = Schema.Struct({
+  threadId: ThreadId,
+  lastActivityAt: IsoDateTime,
+});
+
+export const ThreadSidechatExpiredPayload = Schema.Struct({
+  threadId: ThreadId,
+  expectedLastActivityAt: IsoDateTime,
+  expiredAt: IsoDateTime,
 });
 
 export const ThreadArchivedPayload = Schema.Struct({
@@ -1884,6 +1986,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
+  goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalAchievements: Schema.optional(ThreadGoalAchievements),
@@ -1950,6 +2053,7 @@ export const ThreadRuntimeModeSetPayload = Schema.Struct({
 
 export const ThreadInteractionModeSetPayload = Schema.Struct({
   threadId: ThreadId,
+  previousInteractionMode: Schema.optional(ProviderInteractionMode),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -1996,6 +2100,14 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 });
 
 export const ThreadTurnQueuedPayload = ThreadTurnStartRequestedPayload;
+
+export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  goalStartedAt: Schema.NullOr(IsoDateTime),
+  trigger: ThreadGoalContinuationTrigger,
+  sourceTurnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
@@ -2255,6 +2367,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.goal-continuation-requested"),
+    payload: ThreadGoalContinuationRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
   }),
@@ -2327,6 +2444,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.sidechat-activity-recorded"),
+    payload: ThreadSidechatActivityRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.sidechat-expired"),
+    payload: ThreadSidechatExpiredPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
@@ -2512,6 +2639,31 @@ export const OrchestrationReconcileProviderDeliveryResult = Schema.Struct({
 export type OrchestrationReconcileProviderDeliveryResult =
   typeof OrchestrationReconcileProviderDeliveryResult.Type;
 
+/**
+ * Desktop quit with "Resume chats automatically": the server durably records the
+ * listed threads (plus their current turn) and interrupts them in one step, so
+ * the renderer can reply to the quit request only after the record exists.
+ */
+export const QUIT_RESUME_MAX_THREADS = 256;
+export const QUIT_RESUME_MAX_PROMPT_CHARS = 2_000;
+
+export const OrchestrationPrepareQuitResumeInput = Schema.Struct({
+  threadIds: Schema.Array(ThreadId).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(QUIT_RESUME_MAX_THREADS),
+  ),
+  /** User-turn text dispatched on each recorded thread at the next server start. */
+  continuationPrompt: TrimmedNonEmptyString.check(Schema.isMaxLength(QUIT_RESUME_MAX_PROMPT_CHARS)),
+});
+export type OrchestrationPrepareQuitResumeInput = typeof OrchestrationPrepareQuitResumeInput.Type;
+
+export const OrchestrationPrepareQuitResumeResult = Schema.Struct({
+  /** Threads durably recorded for resume (unknown or deleted threads are dropped). */
+  recordedThreadIds: Schema.Array(ThreadId),
+  recordedAt: IsoDateTime,
+});
+export type OrchestrationPrepareQuitResumeResult = typeof OrchestrationPrepareQuitResumeResult.Type;
+
 export const OrchestrationSubscribeShellInput = Schema.Struct({});
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
 
@@ -2600,6 +2752,10 @@ export const OrchestrationRpcSchemas = {
   reconcileProviderDelivery: {
     input: OrchestrationReconcileProviderDeliveryInput,
     output: OrchestrationReconcileProviderDeliveryResult,
+  },
+  prepareQuitResume: {
+    input: OrchestrationPrepareQuitResumeInput,
+    output: OrchestrationPrepareQuitResumeResult,
   },
   subscribeShell: {
     input: OrchestrationSubscribeShellInput,

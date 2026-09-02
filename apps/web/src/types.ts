@@ -264,6 +264,8 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
@@ -308,6 +310,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
@@ -356,6 +360,8 @@ export interface SidebarThreadSummary {
   hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }

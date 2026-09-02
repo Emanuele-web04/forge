@@ -13,6 +13,7 @@ import {
   resolveCreatePrDialogRuntimeStatus,
   resolveCreatePrDialogView,
   resolveCreatePrExecution,
+  resolveCommitDialogActions,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
@@ -1388,6 +1389,132 @@ describe("resolveCreatePrDialogExecution", () => {
       kind: "unavailable",
       hint: "Branch is behind upstream. Pull before creating a PR.",
     });
+  });
+});
+
+describe("resolveCommitDialogActions", () => {
+  const baseContext = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+  const dirtyStatus = status({
+    hasWorkingTreeChanges: true,
+    workingTree: {
+      files: [{ path: "a.ts", insertions: 3, deletions: 1 }],
+      insertions: 3,
+      deletions: 1,
+    },
+  });
+  const byId = (context: Parameters<typeof resolveCommitDialogActions>[0]) =>
+    Object.fromEntries(resolveCommitDialogActions(context).map((action) => [action.id, action]));
+
+  it("offers commit, commit & push, and PR on a dirty feature branch", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: dirtyStatus },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.commit, {
+      label: "Commit",
+      action: "commit",
+      featureBranch: false,
+      disabled: false,
+    });
+    assert.deepInclude(actions.commit_new_branch, {
+      label: "Commit on new branch",
+      action: "commit",
+      featureBranch: true,
+      disabled: false,
+    });
+    assert.deepInclude(actions.commit_push, {
+      label: "Commit & push",
+      action: "commit_push",
+      disabled: false,
+    });
+    assert.deepInclude(actions.create_pr, { label: "Create PR", disabled: false });
+  });
+
+  it("blocks every commit row while all files are excluded", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: dirtyStatus },
+      hasFileSelection: false,
+    });
+    assert.equal(actions.commit?.disabled, true);
+    assert.equal(actions.commit?.disabledReason, "Select at least one file to commit.");
+    assert.equal(actions.commit_new_branch?.disabled, true);
+    assert.equal(actions.commit_push?.disabled, true);
+    // The PR row hands off to the Create PR dialog, so it ignores the file selection.
+    assert.equal(actions.create_pr?.disabled, false);
+  });
+
+  it("collapses the push row to a pure push on a clean branch that is ahead", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: status({ aheadCount: 2 }) },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.commit_push, {
+      label: "Push",
+      action: "push",
+      disabled: false,
+    });
+    assert.equal(actions.commit?.disabled, true);
+    assert.equal(
+      actions.commit?.disabledReason,
+      "Worktree is clean. Make changes before committing.",
+    );
+  });
+
+  it("explains why commit & push is blocked behind upstream", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }),
+      },
+      hasFileSelection: true,
+    });
+    assert.equal(actions.commit?.disabled, false);
+    assert.equal(actions.commit_push?.disabled, true);
+    assert.equal(
+      actions.commit_push?.disabledReason,
+      "Branch is behind upstream. Pull/rebase before committing and pushing.",
+    );
+  });
+
+  it("uses the commit & push reason for the default-branch push menu item", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        isDefaultBranch: true,
+        gitStatus: status({ branch: "main", hasWorkingTreeChanges: true, behindCount: 1 }),
+      },
+      hasFileSelection: true,
+    });
+    assert.equal(actions.commit_push?.disabled, true);
+    assert.equal(
+      actions.commit_push?.disabledReason,
+      "Branch is behind upstream. Pull/rebase before committing and pushing.",
+    );
+  });
+
+  it("labels the PR row as View PR when one is already open", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        gitStatus: status({ hasWorkingTreeChanges: true, pr: statusPr() }),
+      },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.create_pr, { label: "View PR", disabled: false });
+  });
+
+  it("disables everything while a git action is running", () => {
+    const actions = resolveCommitDialogActions({
+      context: { ...baseContext, gitStatus: dirtyStatus, isBusy: true },
+      hasFileSelection: true,
+    });
+    assert.isTrue(actions.every((action) => action.disabled));
+    assert.isTrue(actions.every((action) => action.disabledReason === "Git action in progress."));
   });
 });
 

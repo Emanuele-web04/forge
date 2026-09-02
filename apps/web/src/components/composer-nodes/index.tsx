@@ -4,7 +4,7 @@
  * Custom nodes for the composer editor:
  * - ComposerMentionNode: File/path mentions (@path)
  * - ComposerSkillNode: Skill mentions ($skill or /skill)
- * - ComposerSlashCommandNode: app-level slash commands (/automation)
+ * - ComposerSlashCommandNode: app-level slash commands (/automation, /goal)
  * - ComposerAgentMentionNode: Agent mentions (@alias(task))
  * - ComposerTerminalContextNode: Terminal context blocks
  */
@@ -42,7 +42,8 @@ import {
   formatComposerSkillChipLabel,
   resolveAgentChipColor,
 } from "../composerInlineChip";
-import { AGENT_ROBOT_ICON_NAME, ClockIcon, MessageCircleIcon } from "~/lib/icons";
+import { AGENT_ROBOT_ICON_NAME, MessageCircleIcon } from "~/lib/icons";
+import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
@@ -169,16 +170,29 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
   }
 }
 
-const AUTOMATION_COMMAND_ICON_SVG = renderToStaticMarkup(
-  <ClockIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />,
-);
+// Slash-command glyphs are static per command, so each one is rendered to markup
+// once and reused for every chip instance / DOM update.
+const slashCommandIconMarkupCache = new Map<ComposerSlashCommand, string>();
+
+function slashCommandIconMarkup(command: ComposerSlashCommand): string {
+  const cached = slashCommandIconMarkupCache.get(command);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const Icon = slashCommandIcon(command, MessageCircleIcon);
+  const markup = renderToStaticMarkup(
+    <Icon aria-hidden="true" className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />,
+  );
+  slashCommandIconMarkupCache.set(command, markup);
+  return markup;
+}
 
 function renderSlashCommandChipDom(container: HTMLElement, command: ComposerSlashCommand): void {
   resetInlineChipContainer(container);
 
   const icon = document.createElement("span");
   icon.ariaHidden = "true";
-  icon.innerHTML = AUTOMATION_COMMAND_ICON_SVG;
+  icon.innerHTML = slashCommandIconMarkup(command);
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;

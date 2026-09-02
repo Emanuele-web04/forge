@@ -9,7 +9,7 @@
 import { useState } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
-import { GoalIcon, PauseIcon, PencilIcon, PlayIcon, Trash2 } from "~/lib/icons";
+import { GoalIcon, PauseOutlineIcon, PencilIcon, PlayOutlineIcon, TrashCanIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { formatClockDuration } from "../../session-logic";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
@@ -56,6 +56,9 @@ interface ComposerGoalHeaderProps {
   onSetPaused: (paused: boolean) => void | Promise<void>;
   onClear: () => void | Promise<void>;
   attachedToPrevious?: boolean;
+  // False while the goal is only staged on a draft thread: pursuit has not
+  // started, so pausing has nothing to act on and the control is hidden.
+  canPause?: boolean;
 }
 
 export function ComposerGoalHeader({
@@ -66,6 +69,7 @@ export function ComposerGoalHeader({
   onSetPaused,
   onClear,
   attachedToPrevious: attachedToPreviousProp,
+  canPause = true,
 }: ComposerGoalHeaderProps) {
   const [open, setOpen] = useState(false);
   const attachedToPrevious = attachedToPreviousProp ?? false;
@@ -82,7 +86,7 @@ export function ComposerGoalHeader({
         <ComposerStackedPanelRowMain>
           <GoalIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           <ComposerStackedPanelRowLabel className="shrink-0">
-            {paused ? "Goal paused" : "Pursuing goal"}
+            {canPause ? (paused ? "Goal paused" : "Pursuing goal") : "Goal"}
           </ComposerStackedPanelRowLabel>
           {open ? null : (
             <span
@@ -104,21 +108,23 @@ export function ComposerGoalHeader({
           <IconButton variant="ghost" size="icon-chip" label="Edit goal" onClick={onEdit}>
             <PencilIcon />
           </IconButton>
-          <IconButton
-            variant="ghost"
-            size="icon-chip"
-            label={paused ? "Resume goal" : "Pause goal"}
-            onClick={() => void onSetPaused(!paused)}
-          >
-            {paused ? <PlayIcon /> : <PauseIcon />}
-          </IconButton>
+          {canPause ? (
+            <IconButton
+              variant="ghost"
+              size="icon-chip"
+              label={paused ? "Resume goal" : "Pause goal"}
+              onClick={() => void onSetPaused(!paused)}
+            >
+              {paused ? <PlayOutlineIcon /> : <PauseOutlineIcon />}
+            </IconButton>
+          ) : null}
           <IconButton
             variant="ghost"
             size="icon-chip"
             label="Delete goal"
             onClick={() => void onClear()}
           >
-            <Trash2 />
+            <TrashCanIcon />
           </IconButton>
           <IconButton
             variant="ghost"

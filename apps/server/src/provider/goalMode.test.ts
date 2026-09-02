@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeThreadGoal,
+  buildGoalContinuationInput,
   providerGoalPromptOverheadChars,
   withProviderGoalPrompt,
 } from "./goalMode.ts";
@@ -54,5 +55,14 @@ describe("provider thread goal prompt", () => {
     expect(activeThreadGoal({ goal, goalPausedAt: null })).toBe(goal);
     expect(activeThreadGoal({ goal, goalPausedAt: "2026-08-13T10:00:00.000Z" })).toBeUndefined();
     expect(activeThreadGoal({ goalPausedAt: null })).toBeUndefined();
+  });
+
+  it("builds an internal continuation that keeps working until the goal is settled", () => {
+    const input = buildGoalContinuationInput();
+
+    expect(input).toContain("Continue working toward the active thread goal");
+    expect(input).toContain("synara_set_thread_goal");
+    expect(input).toContain("achieved: true");
+    expect(input).toContain("blocked: true");
   });
 });

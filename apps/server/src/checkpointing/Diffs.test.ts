@@ -30,8 +30,8 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
     ].join("\n");
 
     expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "a.txt", additions: 2, deletions: 1 },
-      { path: "src/b.ts", additions: 0, deletions: 2 },
+      { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
+      { path: "src/b.ts", kind: "modified", additions: 0, deletions: 2 },
     ]);
   });
 
@@ -45,7 +45,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
     ].join("\n");
 
     expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "src/new.ts", additions: 0, deletions: 0 },
+      { path: "src/new.ts", kind: "renamed", additions: 0, deletions: 0 },
     ]);
   });
 
@@ -63,7 +63,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
     ].join("\r\n");
 
     expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "a.txt", additions: 2, deletions: 1 },
+      { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
     ]);
   });
 
@@ -88,7 +88,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
     ].join("\n");
 
     expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "CLAUDE.md", additions: 2, deletions: 3 },
+      { path: "CLAUDE.md", kind: "modified", additions: 2, deletions: 3 },
     ]);
   });
 
@@ -107,6 +107,23 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
 
     expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
       { path: "src/app.ts", kind: "modified", additions: 2, deletions: 1 },
+    ]);
+  });
+
+  it("preserves deleted-file status in checkpoint summaries", async () => {
+    const diff = [
+      "diff --git a/src/removed.ts b/src/removed.ts",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/src/removed.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-removed",
+      "",
+    ].join("\n");
+
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
+      { path: "src/removed.ts", kind: "deleted", additions: 0, deletions: 1 },
     ]);
   });
 });

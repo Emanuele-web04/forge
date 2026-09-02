@@ -309,6 +309,9 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       yield* fs.makeDirectory(path.join(home, "Applications", "Muxy.app"), {
         recursive: true,
       });
+      yield* fs.makeDirectory(path.join(home, "Applications", "iTerm.app"), {
+        recursive: true,
+      });
       yield* fs.makeDirectory(path.join(home, "Applications", "WebStorm.app"), {
         recursive: true,
       });
@@ -346,6 +349,16 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         args: ["-a", "Terminal", "/tmp/workspace"],
       });
 
+      const itermLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "iterm" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(itermLaunch, {
+        command: "open",
+        args: ["-a", "iTerm", "/tmp/workspace"],
+      });
+
       const webstormLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "webstorm" },
         "darwin",
@@ -368,6 +381,7 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       const availableEditors = resolveAvailableEditors("darwin", { HOME: home, PATH: "" });
       assert.equal(availableEditors.includes("ghostty"), true);
       assert.equal(availableEditors.includes("muxy"), true);
+      assert.equal(availableEditors.includes("iterm"), true);
       assert.equal(availableEditors.includes("webstorm"), true);
       assert.equal(availableEditors.includes("pycharm"), true);
     }),
@@ -399,31 +413,69 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
-  it.effect("maps file-manager editor to OS open commands", () =>
+  it.effect("reveals macOS files in Finder while opening directories", () =>
     Effect.gen(function* () {
-      const launch1 = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "file-manager" },
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parentPath = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-file-manager-",
+      });
+      const directoryPath = path.join(parentPath, "Project Folder");
+      const filePath = path.join(directoryPath, "source file.ts");
+      yield* fs.makeDirectory(directoryPath);
+      yield* fs.writeFileString(filePath, "");
+
+      const fileLaunch = yield* resolveEditorLaunch(
+        { cwd: filePath, editor: "file-manager" },
         "darwin",
       );
-      assert.deepEqual(launch1, {
+      assert.deepEqual(fileLaunch, {
         command: "open",
-        args: ["/tmp/workspace"],
+        args: ["-R", filePath],
       });
 
-      const launch2 = yield* resolveEditorLaunch(
+      const directoryLaunch = yield* resolveEditorLaunch(
+        { cwd: directoryPath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(directoryLaunch, {
+        command: "open",
+        args: [directoryPath],
+      });
+    }),
+  );
+
+  it.effect("falls back to opening macOS targets when metadata lookup fails", () =>
+    Effect.gen(function* () {
+      const targetPath = `/${"unavailable".repeat(500)}`;
+      const launch = yield* resolveEditorLaunch(
+        { cwd: targetPath, editor: "file-manager" },
+        "darwin",
+      );
+
+      assert.deepEqual(launch, {
+        command: "open",
+        args: [targetPath],
+      });
+    }),
+  );
+
+  it.effect("maps file-manager editor to Windows and Linux open commands", () =>
+    Effect.gen(function* () {
+      const windowsLaunch = yield* resolveEditorLaunch(
         { cwd: "C:\\workspace", editor: "file-manager" },
         "win32",
       );
-      assert.deepEqual(launch2, {
+      assert.deepEqual(windowsLaunch, {
         command: "explorer",
         args: ["C:\\workspace"],
       });
 
-      const launch3 = yield* resolveEditorLaunch(
+      const linuxLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "file-manager" },
         "linux",
       );
-      assert.deepEqual(launch3, {
+      assert.deepEqual(linuxLaunch, {
         command: "xdg-open",
         args: ["/tmp/workspace"],
       });

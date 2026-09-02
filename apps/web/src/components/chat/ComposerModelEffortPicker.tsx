@@ -50,6 +50,7 @@ type ComposerModelEffortPickerProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   compact?: boolean;
@@ -254,6 +255,9 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
               modelOptionsByProvider={props.modelOptionsByProvider}
               {...(props.loadingModelProviders
                 ? { loadingModelProviders: props.loadingModelProviders }
+                : {})}
+              {...(props.discoveryErrorsByProvider
+                ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
                 : {})}
               {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
               {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}

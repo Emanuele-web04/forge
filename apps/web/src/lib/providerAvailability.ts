@@ -28,10 +28,21 @@ export function normalizeProviderStatusForLocalConfig(input: {
   status: ServerProviderStatus | null | undefined;
   customBinaryPath?: string | null | undefined;
   confirmedCustomBinaryPath?: string | null | undefined;
+  disabled?: boolean | undefined;
 }): ServerProviderStatus | null {
   const status = input.status ?? null;
   if (!status) {
     return null;
+  }
+  if (input.disabled) {
+    return {
+      provider: input.provider,
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: status.checkedAt,
+      message: "Provider is disabled in Synara settings.",
+    };
   }
 
   const customBinaryPath = normalizeCustomBinaryPath(input.customBinaryPath);

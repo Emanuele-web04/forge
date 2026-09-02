@@ -60,6 +60,26 @@ describe("diagnostic cursor", () => {
     ).toThrow("thread-2");
   });
 
+  it("rejects a cursor whose page boundary exceeds its stable high-water mark", () => {
+    const filterFingerprint = diagnosticFilterFingerprint({ kinds: [] });
+    const encoded = encodeDiagnosticCursor({
+      version: 1,
+      kind: "activity",
+      threadId: "thread-1",
+      filterFingerprint,
+      highWaterSequence: 42,
+      beforeSequence: 43,
+    });
+
+    expect(() =>
+      decodeDiagnosticCursor(encoded, {
+        kind: "activity",
+        threadId: "thread-1",
+        filterFingerprint,
+      }),
+    ).toThrow("valid activity cursor");
+  });
+
   it("normalizes set-like filters and rejects a cursor when filters change", () => {
     const originalFingerprint = diagnosticFilterFingerprint({
       kinds: ["tool", "message", "tool"],

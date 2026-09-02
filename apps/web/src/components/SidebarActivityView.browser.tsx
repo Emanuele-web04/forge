@@ -74,6 +74,7 @@ function renderActivity(input: {
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+  onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
@@ -94,7 +95,7 @@ function renderActivity(input: {
       prByThreadId={input.prByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
-      onOpenThread={() => {}}
+      onOpenThread={input.onOpenThread ?? (() => {})}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onToggleThreadPinned={() => {}}
       onArchiveThread={() => {}}
@@ -304,6 +305,26 @@ describe("SidebarActivityView", () => {
     expect(onMarkThreadRead.mock.invocationCallOrder[0]).toBeLessThan(
       onSetThreadSettled.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
     );
+    await mounted.unmount();
+  });
+
+  it("opens settled rows through the shared thread activation path", async () => {
+    const settled = makeThread(103, {
+      branch: "feature/finished",
+      settledAt: "2026-08-02T12:30:00.000Z",
+    });
+    const onOpenThread = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [settled],
+        pinnedThreadIdSet: new Set([settled.id]),
+        onOpenThread,
+      }),
+    );
+
+    await page.getByTestId(`activity-thread-${settled.id}`).click();
+    expect(onOpenThread).toHaveBeenCalledOnce();
+    expect(onOpenThread).toHaveBeenCalledWith(settled.id);
     await mounted.unmount();
   });
 

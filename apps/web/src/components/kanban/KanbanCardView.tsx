@@ -107,7 +107,7 @@ function KanbanCardViewComponent({
     card.draftPrompt.length > 0 &&
     card.cardId === kanbanThreadCardId(card.threadId);
 
-  const isForked = Boolean(card.thread?.forkSourceThreadId && !card.thread.sidechatSourceThreadId);
+  const isForked = Boolean(card.thread?.forkSourceThreadId);
   const worktreeBadgeLabel = resolveThreadEnvironmentPresentation({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
@@ -120,6 +120,7 @@ function KanbanCardViewComponent({
       ? (prByThreadId.get(card.threadId) ?? null)
       : resolveThreadPullRequestFallback({
           branch: card.thread.branch,
+          hasDedicatedWorktree: card.thread.worktreePath !== null,
           lastKnownPr: card.thread.lastKnownPr ?? null,
         })
     : null;

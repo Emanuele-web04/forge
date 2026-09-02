@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   isScratchWorkspacePath,
   isWorkspaceRootWithin,
+  normalizeWorkspaceRootForComparison,
   SCRATCH_WORKSPACES_DIRNAME,
+  workspaceRootsEqual,
 } from "./threadWorkspace";
 
 describe("isWorkspaceRootWithin", () => {
@@ -33,6 +35,14 @@ describe("isWorkspaceRootWithin", () => {
 
   it("does not match when the candidate is an ancestor of the root", () => {
     expect(isWorkspaceRootWithin("/Users/dev", "/Users/dev/app")).toBe(false);
+  });
+
+  it("keeps a Windows drive root distinct from a drive-relative path", () => {
+    const options = { platform: "win32" } as const;
+    expect(normalizeWorkspaceRootForComparison("C:\\", options)).toBe("c:/");
+    expect(normalizeWorkspaceRootForComparison("C:", options)).toBe("c:");
+    expect(workspaceRootsEqual("C:", "C:\\", options)).toBe(false);
+    expect(isWorkspaceRootWithin("C:\\repo", "C:\\", options)).toBe(true);
   });
 
   it("returns false for empty inputs", () => {

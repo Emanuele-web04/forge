@@ -9,6 +9,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { makeSqlitePersistenceLive } from "./Sqlite.ts";
+import { resolveSqliteMemoryBudget } from "../sqliteMemoryBudget.ts";
 
 const tempDirectories: Array<string> = [];
 
@@ -72,7 +73,9 @@ describe("SQLite persistence", () => {
         const [mmapSize] = yield* sql<{ readonly mmap_size: number }>`
           PRAGMA mmap_size;
         `;
-        expect(cacheSize?.cache_size).toBe(-262144);
+        expect(cacheSize?.cache_size).toBe(
+          resolveSqliteMemoryBudget(os.totalmem()).cacheSizePragma,
+        );
         expect(mmapSize?.mmap_size).toBeGreaterThan(0);
 
         yield* sql`CREATE TABLE ownership_probe(value TEXT NOT NULL)`;

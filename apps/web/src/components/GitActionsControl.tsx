@@ -14,27 +14,19 @@ import type {
 } from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  ChevronDownIcon,
-  CloudSyncIcon,
-  GitBranchIcon,
-  GitCommitIcon,
-  InfoIcon,
-  type LucideIcon,
-  PushIcon,
-} from "~/lib/icons";
+import { ChevronDownIcon, InfoIcon } from "~/lib/icons";
 import { Input } from "~/components/ui/input";
-import { GitHubIcon } from "./Icons";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
-  type CreatePrDialogContext,
+  type GitDialogContext,
   type GitActionMenuItem,
-  type GitActionIconName,
+  type GitGlyphName,
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
+  resolveGitMenuActionDisabledReason,
   resolveLiveThreadBranchUpdate,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -48,6 +40,8 @@ import {
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
+import { GIT_ACTION_ICON_CLASS, GitActionGlyph } from "./gitActionGlyphs";
+import { GitCommitDialog, type GitCommitDialogSubmission } from "./GitCommitDialog";
 import {
   GitCreatePrDialog,
   type GitCreatePrDialogBrowserRequest,
@@ -73,7 +67,6 @@ import {
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./chat/environment/EnvironmentRow";
-import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -93,8 +86,6 @@ import {
 } from "~/components/ui/menu";
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
-import { ScrollArea } from "~/components/ui/scroll-area";
-import { Textarea } from "~/components/ui/textarea";
 import { toastManager } from "~/components/ui/toast";
 import { openInPreferredEditor } from "~/editorPreferences";
 import {
@@ -186,7 +177,7 @@ interface GitPickerMenuItem {
   label: string;
   disabled: boolean;
   disabledReason: string | null;
-  icon: GitActionIconName | "sync" | "branch";
+  icon: GitGlyphName;
   onSelect: () => void;
 }
 
@@ -207,115 +198,6 @@ function resolveProgressDescription(progress: ActiveGitActionProgress): string |
     return progress.lastOutputLine;
   }
   return formatElapsedDescription(progress.hookStartedAtMs ?? progress.phaseStartedAtMs);
-}
-
-function getMenuActionDisabledReason({
-  item,
-  gitStatus,
-  isBusy,
-  hasOriginRemote,
-  isDefaultBranch,
-  defaultBranchName,
-}: {
-  item: GitActionMenuItem;
-  gitStatus: GitStatusResult | null;
-  isBusy: boolean;
-  hasOriginRemote: boolean;
-  isDefaultBranch: boolean;
-  defaultBranchName: string | null;
-}): string | null {
-  if (!item.disabled) return null;
-  if (isBusy) return "Git action in progress.";
-  if (!gitStatus) return "Git status is unavailable.";
-
-  const hasBranch = gitStatus.branch !== null;
-  const hasChanges = gitStatus.hasWorkingTreeChanges;
-  const hasOpenPr = gitStatus.pr?.state === "open";
-  const isAhead = gitStatus.aheadCount > 0;
-  const isBehind = gitStatus.behindCount > 0;
-
-  if (item.id === "commit") {
-    if (!hasChanges) {
-      return "Worktree is clean. Make changes before committing.";
-    }
-    return "Commit is currently unavailable.";
-  }
-
-  if (item.id === "push") {
-    if (!hasBranch) {
-      return "Detached HEAD: checkout a branch before pushing.";
-    }
-    if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
-    }
-    if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before pushing.";
-    }
-    if (!gitStatus.hasUpstream && !hasOriginRemote) {
-      return 'Add an "origin" remote before pushing.';
-    }
-    if (!isAhead) {
-      return "No local commits to push.";
-    }
-    return "Push is currently unavailable.";
-  }
-
-  if (item.id === "commit_push") {
-    if (!hasBranch) {
-      return "Detached HEAD: checkout a branch before committing and pushing.";
-    }
-    if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before committing and pushing.";
-    }
-    if (!gitStatus.hasUpstream && !hasOriginRemote) {
-      return 'Add an "origin" remote before committing and pushing.';
-    }
-    if (!hasChanges && !isAhead) {
-      return "No local changes or commits to push.";
-    }
-    return "Commit & push is currently unavailable.";
-  }
-
-  if (hasOpenPr) {
-    return "View PR is currently unavailable.";
-  }
-  const prExecution = resolveCreatePrExecution({
-    gitStatus,
-    isBusy,
-    isDefaultBranch,
-    hasOriginRemote,
-    defaultBranchName,
-  });
-  if (prExecution.kind === "unavailable") {
-    return prExecution.hint;
-  }
-  return "Create PR is currently unavailable.";
-}
-
-const COMMIT_DIALOG_TITLE = "Commit changes";
-const COMMIT_DIALOG_DESCRIPTION =
-  "Review and confirm your commit. Leave the message blank to auto-generate one.";
-
-// Central icons render as masked spans (not <svg>), so size them explicitly here
-// rather than relying on parent `[&>svg]` selectors.
-const GIT_ACTION_ICON_CLASS = "size-3.5";
-
-/** Semantic name → glyph for every git affordance. Single source of truth shared by
- *  the header quick action and the dropdown picker rows so the same action always
- *  renders the same icon (e.g. push-family → the cloud PushIcon, PR → GitHub mark). */
-type GitGlyphName = GitActionIconName | "sync" | "branch";
-
-const GIT_ACTION_GLYPH: Record<GitGlyphName, LucideIcon> = {
-  commit: GitCommitIcon,
-  push: PushIcon,
-  pr: GitHubIcon,
-  sync: CloudSyncIcon,
-  branch: GitBranchIcon,
-};
-
-function GitActionGlyph({ name, className }: { name: GitGlyphName; className?: string }) {
-  const Glyph = GIT_ACTION_GLYPH[name];
-  return <Glyph className={className ?? GIT_ACTION_ICON_CLASS} />;
 }
 
 // Map a header quick action onto its shared glyph name; null falls back to a hint icon.
@@ -392,9 +274,6 @@ export default function GitActionsControl({
   );
   const queryClient = useQueryClient();
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
-  const [dialogCommitMessage, setDialogCommitMessage] = useState("");
-  const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
-  const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -453,11 +332,6 @@ export default function GitActionsControl({
   }, [isGitStatusOutOfSync, requestGitActionAvailabilityRefresh]);
 
   const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
-
-  const allFiles = gitStatusForActions?.workingTree.files ?? [];
-  const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
-  const allSelected = excludedFiles.size === 0;
-  const noneSelected = selectedFiles.length === 0;
 
   const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
@@ -1151,7 +1025,7 @@ export default function GitActionsControl({
     ],
   );
 
-  const createPrDialogContext = useMemo<CreatePrDialogContext>(
+  const createPrDialogContext = useMemo<GitDialogContext>(
     () => ({
       gitStatus: createPrDialogRuntimeStatus.gitStatus,
       isBusy: isGitActionRunning,
@@ -1160,6 +1034,19 @@ export default function GitActionsControl({
       defaultBranchName,
     }),
     [createPrDialogRuntimeStatus, defaultBranchName, hasOriginRemote, isGitActionRunning],
+  );
+
+  // The Commit dialog always resolves against live status — unlike Create PR it is never
+  // opened from a surface carrying a post-push snapshot.
+  const commitDialogContext = useMemo<GitDialogContext>(
+    () => ({
+      gitStatus: gitStatusForActions,
+      isBusy: isGitActionRunning,
+      isDefaultBranch,
+      hasOriginRemote,
+      defaultBranchName,
+    }),
+    [defaultBranchName, gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
   );
 
   const continuePendingDefaultBranchAction = useCallback(() => {
@@ -1194,23 +1081,24 @@ export default function GitActionsControl({
     });
   }, [pendingDefaultBranchAction, runGitActionWithToast]);
 
-  const runDialogActionOnNewBranch = useCallback(() => {
-    if (!isCommitDialogOpen) return;
-    const commitMessage = dialogCommitMessage.trim();
-
-    setIsCommitDialogOpen(false);
-    setDialogCommitMessage("");
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
-
-    void runGitActionWithToast({
-      action: "commit",
-      ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
-      featureBranch: true,
-      skipDefaultBranchPrompt: true,
-    });
-  }, [allSelected, isCommitDialogOpen, dialogCommitMessage, runGitActionWithToast, selectedFiles]);
+  const handleCommitDialogSubmit = useCallback(
+    (submission: GitCommitDialogSubmission) => {
+      setIsCommitDialogOpen(false);
+      // Create PR owns its own authoring dialog (title/description/draft), so the
+      // commit dialog hands off instead of dispatching a PR chain itself.
+      if (submission.action === "create_pr") {
+        openCreatePrDialog();
+        return;
+      }
+      void runGitActionWithToast({
+        action: submission.action,
+        ...(submission.message ? { commitMessage: submission.message } : {}),
+        ...(submission.filePaths ? { filePaths: submission.filePaths } : {}),
+        ...(submission.featureBranch ? { featureBranch: true, skipDefaultBranchPrompt: true } : {}),
+      });
+    },
+    [openCreatePrDialog, runGitActionWithToast],
+  );
 
   const openCreateBranchDialog = useCallback(() => {
     setCreateBranchName(suggestedCreateBranchName);
@@ -1259,8 +1147,6 @@ export default function GitActionsControl({
   ]);
 
   const openCommitDialog = useCallback(() => {
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
     setIsCommitDialogOpen(true);
   }, []);
 
@@ -1427,7 +1313,7 @@ export default function GitActionsControl({
         id: "commit",
         label: commitMenuItem.label,
         disabled: commitMenuItem.disabled,
-        disabledReason: getMenuActionDisabledReason({
+        disabledReason: resolveGitMenuActionDisabledReason({
           item: commitMenuItem,
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
@@ -1445,7 +1331,7 @@ export default function GitActionsControl({
         id: "commit_push",
         label: commitPushMenuItem.label,
         disabled: commitPushMenuItem.disabled,
-        disabledReason: getMenuActionDisabledReason({
+        disabledReason: resolveGitMenuActionDisabledReason({
           item: commitPushMenuItem,
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
@@ -1472,7 +1358,7 @@ export default function GitActionsControl({
         id: "push",
         label: pushMenuItem.label,
         disabled: pushMenuItem.disabled,
-        disabledReason: getMenuActionDisabledReason({
+        disabledReason: resolveGitMenuActionDisabledReason({
           item: pushMenuItem,
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
@@ -1490,7 +1376,7 @@ export default function GitActionsControl({
         id: "pr",
         label: prMenuItem.label,
         disabled: prMenuItem.disabled,
-        disabledReason: getMenuActionDisabledReason({
+        disabledReason: resolveGitMenuActionDisabledReason({
           item: prMenuItem,
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
@@ -1527,28 +1413,6 @@ export default function GitActionsControl({
     openCreateBranchDialog,
     openDialogForMenuItem,
     runSyncWithRemote,
-  ]);
-
-  const runDialogAction = useCallback(() => {
-    if (!isCommitDialogOpen) return;
-    const commitMessage = dialogCommitMessage.trim();
-    setIsCommitDialogOpen(false);
-    setDialogCommitMessage("");
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
-    void runGitActionWithToast({
-      action: "commit",
-      ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
-    });
-  }, [
-    allSelected,
-    dialogCommitMessage,
-    isCommitDialogOpen,
-    runGitActionWithToast,
-    selectedFiles,
-    setDialogCommitMessage,
-    setIsCommitDialogOpen,
   ]);
 
   const openChangedFileInEditor = useCallback(
@@ -1604,8 +1468,7 @@ export default function GitActionsControl({
     );
   }
 
-  const hasRunnableCommitPushAction = findRunnableCommitPushMenuItem(gitActionMenuItems) !== null;
-  const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
+  const runnableCommitPushMenuItem = findRunnableCommitPushMenuItem(gitActionMenuItems);
 
   // Shared dropdown body — the picker rows plus the contextual git-status warnings.
   // Rendered identically by the header split button and the panel "Commit and Push" row.
@@ -1683,173 +1546,15 @@ export default function GitActionsControl({
         onOpenInBrowser={handleCreatePrDialogBrowser}
       />
 
-      <Dialog
+      <GitCommitDialog
         open={isCommitDialogOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setIsCommitDialogOpen(false);
-            setDialogCommitMessage("");
-            setExcludedFiles(new Set());
-            setIsEditingFiles(false);
-          }
+          if (!open) setIsCommitDialogOpen(false);
         }}
-      >
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>{COMMIT_DIALOG_TITLE}</DialogTitle>
-            <DialogDescription>{COMMIT_DIALOG_DESCRIPTION}</DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-4">
-            <div className="space-y-3 rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] p-3 text-xs">
-              <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-                <span className="text-muted-foreground">Branch</span>
-                <span className="flex items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {gitStatusForActions?.branch ?? "(detached HEAD)"}
-                  </span>
-                  {isDefaultBranch && (
-                    <span className="text-right text-warning text-xs">Warning: default branch</span>
-                  )}
-                </span>
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {isEditingFiles && allFiles.length > 0 && (
-                      <Checkbox
-                        checked={allSelected}
-                        indeterminate={!allSelected && !noneSelected}
-                        onCheckedChange={() => {
-                          setExcludedFiles(
-                            allSelected ? new Set(allFiles.map((f) => f.path)) : new Set(),
-                          );
-                        }}
-                      />
-                    )}
-                    <span className="text-muted-foreground">Files</span>
-                    {!allSelected && !isEditingFiles && (
-                      <span className="text-muted-foreground">
-                        ({selectedFiles.length} of {allFiles.length})
-                      </span>
-                    )}
-                  </div>
-                  {allFiles.length > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => setIsEditingFiles((prev) => !prev)}
-                    >
-                      {isEditingFiles ? "Done" : "Edit"}
-                    </Button>
-                  )}
-                </div>
-                {!gitStatusForActions || allFiles.length === 0 ? (
-                  <p className="font-medium">none</p>
-                ) : (
-                  <div className="space-y-2">
-                    <ScrollArea className="h-44 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)]">
-                      <div className="space-y-1 p-1">
-                        {allFiles.map((file) => {
-                          const isExcluded = excludedFiles.has(file.path);
-                          return (
-                            <div
-                              key={file.path}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1 font-mono text-xs transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-                            >
-                              {isEditingFiles && (
-                                <Checkbox
-                                  checked={!excludedFiles.has(file.path)}
-                                  onCheckedChange={() => {
-                                    setExcludedFiles((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(file.path)) {
-                                        next.delete(file.path);
-                                      } else {
-                                        next.add(file.path);
-                                      }
-                                      return next;
-                                    });
-                                  }}
-                                />
-                              )}
-                              {/* Raw <button> intentionally — list-row click target, not a shadcn Button. */}
-                              <button
-                                type="button"
-                                className="group flex flex-1 items-center justify-between gap-3 text-left truncate"
-                                onClick={() => openChangedFileInEditor(file.path)}
-                              >
-                                <span
-                                  className={`truncate underline-offset-2 group-hover:underline group-focus-visible:underline${isExcluded ? " text-muted-foreground" : ""}`}
-                                >
-                                  {file.path}
-                                </span>
-                                <span className="shrink-0">
-                                  {isExcluded ? (
-                                    <span className="text-muted-foreground">Excluded</span>
-                                  ) : (
-                                    <>
-                                      <span className="text-success">+{file.insertions}</span>
-                                      <span className="text-muted-foreground"> / </span>
-                                      <span className="text-destructive">-{file.deletions}</span>
-                                    </>
-                                  )}
-                                </span>
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </ScrollArea>
-                    <div className="flex justify-end font-mono">
-                      <span className="text-success">
-                        +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
-                      </span>
-                      <span className="text-muted-foreground"> / </span>
-                      <span className="text-destructive">
-                        -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium">Commit message (optional)</p>
-              <Textarea
-                value={dialogCommitMessage}
-                onChange={(event) => setDialogCommitMessage(event.target.value)}
-                placeholder="Leave empty to auto-generate"
-                size="sm"
-              />
-            </div>
-          </DialogPanel>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setIsCommitDialogOpen(false);
-                setDialogCommitMessage("");
-                setExcludedFiles(new Set());
-                setIsEditingFiles(false);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={noneSelected}
-              onClick={runDialogActionOnNewBranch}
-            >
-              Commit on new branch
-            </Button>
-            <Button size="sm" disabled={noneSelected} onClick={runDialogAction}>
-              Commit
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
+        context={commitDialogContext}
+        onSubmit={handleCommitDialogSubmit}
+        onOpenFile={openChangedFileInEditor}
+      />
 
       <Dialog
         open={pendingDefaultBranchAction !== null}
@@ -1973,6 +1678,21 @@ export default function GitActionsControl({
 
   if (isPanel) {
     const showPanelPullRow = showPromotedPullAction;
+    // The panel row runs its action on click — exactly like Pull — and the chevron
+    // beside it is the only way into the git actions menu (and its dialogs).
+    const panelPrimaryLabel = showPanelPullRow
+      ? (promotedPull?.label ?? "Pull")
+      : (runnableCommitPushMenuItem?.label ?? "Commit and Push");
+    const panelPrimaryGlyph: GitGlyphName = showPanelPullRow ? "sync" : "push";
+    const runPanelPrimaryAction = () => {
+      if (showPanelPullRow) {
+        runSyncWithRemote();
+        return;
+      }
+      if (runnableCommitPushMenuItem) {
+        openDialogForMenuItem(runnableCommitPushMenuItem);
+      }
+    };
     const panelGitActionsMenu = (
       <Menu
         onOpenChange={(open) => {
@@ -1983,38 +1703,13 @@ export default function GitActionsControl({
           render={
             <button
               type="button"
-              className={cn(
-                ENVIRONMENT_ROW_CLASS_NAME,
-                showPanelPullRow
-                  ? "w-auto shrink-0 px-1.5"
-                  : shouldDimPanelCommitPushRow && "opacity-55",
-              )}
-              aria-label={
-                showPanelPullRow
-                  ? "Git action options"
-                  : shouldDimPanelCommitPushRow
-                    ? "Commit and Push unavailable; open Git actions menu"
-                    : "Commit and Push"
-              }
-              title={
-                showPanelPullRow
-                  ? "More Git actions"
-                  : shouldDimPanelCommitPushRow
-                    ? "Commit and Push unavailable. Open for more Git actions."
-                    : "Commit and Push"
-              }
+              className={cn(ENVIRONMENT_ROW_CLASS_NAME, "w-auto shrink-0 px-1.5")}
+              aria-label="Git action options"
+              title="More Git actions"
             />
           }
         >
-          {showPanelPullRow ? (
-            <EnvironmentRowChevron />
-          ) : (
-            <EnvironmentRowBody
-              icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-              label="Commit and Push"
-              trailing={<EnvironmentRowChevron />}
-            />
-          )}
+          <EnvironmentRowChevron />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
           {gitMenuContent}
@@ -2031,25 +1726,28 @@ export default function GitActionsControl({
             disabled={initMutation.isPending}
             onClick={() => initMutation.mutate()}
           />
-        ) : showPanelPullRow ? (
+        ) : (
           <div className="flex w-full items-center">
             <button
               type="button"
               className={cn(ENVIRONMENT_ROW_CLASS_NAME, "min-w-0 flex-1")}
-              aria-label={promotedPull?.label ?? "Pull"}
-              title={promotedPull?.label ?? "Pull"}
-              disabled={isGitActionRunning}
-              onClick={runSyncWithRemote}
+              aria-label={panelPrimaryLabel}
+              title={panelPrimaryLabel}
+              disabled={isGitActionRunning || (!showPanelPullRow && !runnableCommitPushMenuItem)}
+              onClick={runPanelPrimaryAction}
             >
               <EnvironmentRowBody
-                icon={<GitActionGlyph name="sync" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                label={promotedPull?.label ?? "Pull"}
+                icon={
+                  <GitActionGlyph
+                    name={panelPrimaryGlyph}
+                    className={ENVIRONMENT_ROW_ICON_CLASS_NAME}
+                  />
+                }
+                label={panelPrimaryLabel}
               />
             </button>
             {panelGitActionsMenu}
           </div>
-        ) : (
-          panelGitActionsMenu
         )}
         {gitActionDialogs}
       </>

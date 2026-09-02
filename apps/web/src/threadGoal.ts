@@ -1,9 +1,13 @@
-import { type ThreadId } from "@synara/contracts";
+import { type ThreadGoalStartBehavior, type ThreadId } from "@synara/contracts";
 
 import { newCommandId } from "./lib/utils";
 import { readNativeApi } from "./nativeApi";
 
-export async function dispatchThreadGoal(threadId: ThreadId, goal: string): Promise<void> {
+export async function dispatchThreadGoal(
+  threadId: ThreadId,
+  goal: string,
+  options: { readonly startBehavior?: ThreadGoalStartBehavior } = {},
+): Promise<void> {
   const api = readNativeApi();
   if (!api) {
     throw new Error("Synara API is unavailable.");
@@ -13,6 +17,7 @@ export async function dispatchThreadGoal(threadId: ThreadId, goal: string): Prom
     commandId: newCommandId(),
     threadId,
     goal,
+    ...(options.startBehavior !== undefined ? { goalStartBehavior: options.startBehavior } : {}),
   });
 }
 

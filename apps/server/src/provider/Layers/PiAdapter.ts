@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  spawn as spawnChildProcess,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -38,6 +34,10 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -74,13 +74,14 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -112,12 +113,17 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-4-8",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
  * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ * and omitted Fable 5.1 / Fable 5 / Opus 4.8. Values mirror `@earendil-works/pi-ai`
+ * Anthropic models; Fable 5.1 follows Anthropic's published pricing until pi-ai ships it.
  */
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
@@ -133,6 +139,17 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
   "claude-fable-5": {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -180,7 +197,7 @@ export interface PiBashProcessSupervisorOptions {
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => ChildProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
@@ -188,7 +205,14 @@ export interface PiBashProcessSupervisorOptions {
 export function makePiBashProcessSupervisor(
   options: PiBashProcessSupervisorOptions,
 ): PiBashProcessSupervisor {
-  const spawnProcess = options.spawnProcess ?? spawnChildProcess;
+  const spawnProcess =
+    options.spawnProcess ??
+    ((command: string, args: ReadonlyArray<string>, spawnOptions: RuntimeSpawnOptions) =>
+      spawnPlatformProcess(command, args, {
+        ...spawnOptions,
+        requireExecutable: true,
+        ownProcessGroup: true,
+      }));
   const teardownProcessTree = options.teardownProcessTree ?? teardownProviderProcessTree;
   const activeProcesses = new Set<PiActiveProcess>();
   let configuredShellPath: string | undefined;
@@ -229,13 +253,11 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
-          detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-          windowsHide: true,
         },
       );
       const active: PiActiveProcess = {
@@ -541,8 +563,9 @@ export function getPiSupportedThinkingOptions(
 }
 
 /**
- * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
- * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ * When Anthropic is already authenticated, ensure Fable 5.1, Fable 5, and Opus 4.8
+ * appear even if an older pi-anthropic-oauth extension replaced the built-in
+ * Anthropic catalog.
  */
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,
@@ -1324,21 +1347,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
     const runtimeEventIngress = yield* makeBoundedCallbackIngress<
-      ProviderRuntimeEvent,
+      SizedProviderRuntimeEvent,
       never,
       never
     >(
-      (event) =>
-        (nativeEventLogger && event.raw
-          ? nativeEventLogger.write(event.raw, event.threadId).pipe(Effect.ignore)
+      (item) =>
+        (nativeEventLogger && item.event.raw
+          ? nativeEventLogger.write(item.event.raw, item.event.threadId).pipe(Effect.ignore)
           : Effect.void
-        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, event)), Effect.asVoid),
+        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, item.event)), Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 
@@ -2718,10 +2741,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const stopAll: PiAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.keys()), (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+      settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({

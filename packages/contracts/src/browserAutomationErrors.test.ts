@@ -36,6 +36,7 @@ const browserErrorCodes = [
   "BrowserDebuggerConflict",
   "BrowserReconciliationRequired",
   "BrowserStaleReference",
+  "BrowserWebMcpDiscoveryStale",
   "BrowserTargetNotFound",
   "BrowserTargetAmbiguous",
   "BrowserTargetNotVisible",
@@ -79,6 +80,12 @@ const specialPolicies = {
       "The accepted browser routing inventory changed before the operation was admitted. Refresh browser tabs and retry.",
     retryable: true,
     phase: "routing",
+    effectMayHaveCommitted: false,
+  },
+  BrowserWebMcpDiscoveryStale: {
+    message: "The WebMCP discovery is stale. Discover the page's tools again before calling one.",
+    retryable: true,
+    phase: "input",
     effectMayHaveCommitted: false,
   },
   BrowserTargetAmbiguous: {

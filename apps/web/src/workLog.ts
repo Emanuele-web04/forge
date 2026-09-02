@@ -44,6 +44,25 @@ export type WorkLogRequestKind = ApprovalRequestKind;
 // apps/server/src/orchestration/commandInvariants.ts, which the web app cannot
 // import.
 const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
+export const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
+const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
+
+export type ProviderContextLifecycleReason =
+  | "conversation-rebuilt"
+  | "fresh-session"
+  | "native-history-unavailable"
+  | "native-resume-failed";
+
+export interface ProviderContextLifecycleInfo {
+  provider: ProviderKind;
+  nativeHistory: "available" | "unavailable";
+  restartReason: ProviderContextLifecycleReason;
+  sessionRestarted: boolean;
+  recapInjected: boolean;
+  recapCharacters: number;
+  recapPreview: string | null;
+  recapPreviewTruncated: boolean;
+}
 
 export interface WorkLogEntry {
   id: string;
@@ -70,6 +89,7 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  providerContextLifecycle?: ProviderContextLifecycleInfo;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -323,6 +343,12 @@ function shouldKeepActivityForWorkLog(
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
 ): boolean {
+  // Context lifecycle evidence must survive message visibility filters. It is
+  // the durable explanation for why a turn may behave differently after reload.
+  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+    return true;
+  }
+
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
     return true;
@@ -489,6 +515,61 @@ export function parseTaskListTasks(payload: unknown): TaskListTaskSnapshot[] | n
   return tasks;
 }
 
+function isProviderContextLifecycleReason(value: unknown): value is ProviderContextLifecycleReason {
+  return (
+    value === "conversation-rebuilt" ||
+    value === "fresh-session" ||
+    value === "native-history-unavailable" ||
+    value === "native-resume-failed"
+  );
+}
+
+function extractProviderContextLifecycleInfo(
+  payload: Record<string, unknown> | null,
+): ProviderContextLifecycleInfo | null {
+  const provider = PROVIDER_DESCRIPTORS.find(
+    (descriptor) => descriptor.kind === payload?.provider,
+  )?.kind;
+  const nativeHistory = payload?.nativeHistory;
+  const restartReason = payload?.restartReason;
+  const sessionRestarted = payload?.sessionRestarted;
+  const recapInjected = payload?.recapInjected;
+  const recapCharacters = payload?.recapCharacters;
+  const recapPreview = payload?.recapPreview;
+  const recapPreviewTruncated = payload?.recapPreviewTruncated;
+  if (
+    !provider ||
+    (nativeHistory !== "available" && nativeHistory !== "unavailable") ||
+    !isProviderContextLifecycleReason(restartReason) ||
+    typeof sessionRestarted !== "boolean" ||
+    typeof recapInjected !== "boolean" ||
+    typeof recapCharacters !== "number" ||
+    !Number.isInteger(recapCharacters) ||
+    recapCharacters < 0 ||
+    (recapPreview !== null && typeof recapPreview !== "string") ||
+    typeof recapPreviewTruncated !== "boolean"
+  ) {
+    return null;
+  }
+  const boundedPreview =
+    typeof recapPreview === "string" &&
+    recapPreview.length > SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS
+      ? `…${recapPreview.slice(-(SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS - 1)).trimStart()}`
+      : recapPreview;
+  return {
+    provider,
+    nativeHistory,
+    restartReason,
+    sessionRestarted,
+    recapInjected,
+    recapCharacters,
+    recapPreview: boundedPreview,
+    recapPreviewTruncated:
+      recapPreviewTruncated ||
+      (typeof recapPreview === "string" && recapPreview.length > (boundedPreview?.length ?? 0)),
+  };
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -614,6 +695,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const synaraThreadCreation = extractWorkLogSynaraThreadCreation(payload);
     if (synaraThreadCreation) {
       entry.synaraThreadCreation = synaraThreadCreation;
+    }
+  }
+  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+    const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);
+    if (providerContextLifecycle) {
+      entry.providerContextLifecycle = providerContextLifecycle;
     }
   }
   const readableTitle =

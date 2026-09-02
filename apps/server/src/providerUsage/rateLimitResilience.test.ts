@@ -5,6 +5,7 @@
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
+import { parseRetryAfterMs } from "./http";
 import { createRateLimitResilience, MAX_RATE_LIMIT_COOLDOWN_MS } from "./rateLimitResilience";
 
 const NOW_MS = 1_780_000_000_000;
@@ -122,5 +123,28 @@ describe("createRateLimitResilience", () => {
     resilience.enterCooldown("home", NOW_MS, 120_000);
     resilience.reset();
     expect(resilience.serveDuringCooldown("home", NOW_MS)).toBeNull();
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("parses digit-only delta seconds and HTTP dates", () => {
+    expect(parseRetryAfterMs(new Headers({ "Retry-After": " 120 " }), 0)).toBe(120_000);
+
+    const nowMs = Date.parse("2026-10-21T07:27:00.000Z");
+    const retryAt = new Date(nowMs + 60_000).toUTCString();
+    expect(parseRetryAfterMs(new Headers({ "Retry-After": retryAt }), nowMs)).toBe(60_000);
+  });
+
+  it("rejects non-HTTP numeric spellings", () => {
+    const invalidValues = ["1e3", "0x10", "1.5", "+10", "-10"];
+    for (const value of invalidValues) {
+      expect(parseRetryAfterMs(new Headers({ "Retry-After": value }), 0)).toBeUndefined();
+    }
+  });
+
+  it("rejects zero and unsafe delta values", () => {
+    expect(parseRetryAfterMs(new Headers({ "Retry-After": "0" }), 0)).toBeUndefined();
+    const unsafeSeconds = String(Number.MAX_SAFE_INTEGER);
+    expect(parseRetryAfterMs(new Headers({ "Retry-After": unsafeSeconds }), 0)).toBeUndefined();
   });
 });

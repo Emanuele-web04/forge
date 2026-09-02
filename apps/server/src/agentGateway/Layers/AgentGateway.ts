@@ -30,6 +30,7 @@ import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { GitManager } from "../../git/Services/GitManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -112,6 +113,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const git = yield* GitCore;
+  const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
   const providerHealth = yield* ProviderHealth;
   const serverSettings = yield* ServerSettingsService;
@@ -544,6 +546,70 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const setThreadPullRequest: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_set_thread_pull_request",
+      description:
+        "Associate a pull request with a Synara thread. Use this after successfully creating the pull request that represents that thread's own deliverable. Do not associate pull requests that the thread only reviews, references, or discusses. Defaults to your own thread when threadId is omitted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Thread that owns the pull request. Defaults to your own thread.",
+          },
+          reference: {
+            type: "string",
+            description: "GitHub pull request URL or number resolvable from the thread repository.",
+          },
+        },
+        required: ["reference"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Associate a pull request", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
+        const reference = readStringArg(args, "reference", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
+
+        const project = Option.getOrUndefined(
+          yield* snapshotQuery
+            .getProjectShellById(target.projectId)
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
+        );
+        if (!project) {
+          return yield* Effect.fail(
+            new ToolInputError(`Project for thread "${threadId}" was not found.`),
+          );
+        }
+        const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
+        if (!cwd) {
+          return yield* Effect.fail(
+            new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
+          );
+        }
+
+        const { pullRequest } = yield* gitManager
+          .resolvePullRequest({ cwd, reference })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request`),
+            threadId: target.id,
+            lastKnownPr: pullRequest,
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({ threadId: target.id, pullRequest });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const setThreadArchived: ToolEntry = {
     requiredCapability: "thread:write",
     requiresActiveTurn: true,
@@ -605,7 +671,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_set_thread_goal",
       description:
-        "Set a persistent goal for a thread. Only set a goal when the user has explicitly asked for one (for example, 'keep working until X' or 'the goal of this thread is Y') or when dispatching a thread explicitly created to pursue a stated objective. Do NOT infer or invent goals from ordinary tasks or set one as a side effect of normal work. Clearing requires the same explicit user intent. When the active goal's objective has been accomplished, pass achieved: true instead of clearing: Synara records the achievement (with the time it took) and clears the goal.",
+        "Set a persistent goal for a thread. Only set a goal when the user has explicitly asked for one (for example, 'keep working until X' or 'the goal of this thread is Y') or when dispatching a thread explicitly created to pursue a stated objective. Do NOT infer or invent goals from ordinary tasks or set one as a side effect of normal work. Clearing requires the same explicit user intent. When the active goal's objective has been accomplished, pass achieved: true instead of clearing: Synara records the achievement (with the time it took) and clears the goal. If the same external blocker prevents meaningful progress for three consecutive goal turns, pass blocked: true to pause the goal. Do not mark a goal blocked merely because the work is difficult, incomplete, or would benefit from clarification.",
       inputSchema: {
         type: "object",
         properties: {
@@ -617,12 +683,17 @@ export const makeAgentGateway = Effect.gen(function* () {
             type: ["string", "null"],
             maxLength: THREAD_GOAL_MAX_CHARS,
             description:
-              "Persistent objective. Pass null or an empty string to clear it. Ignored when achieved is true.",
+              "Persistent objective. Pass null or an empty string to clear it. Ignored when achieved or blocked is true.",
           },
           achieved: {
             type: "boolean",
             description:
               "Pass true when the active goal's objective has been accomplished. Records a goal achievement and clears the goal.",
+          },
+          blocked: {
+            type: "boolean",
+            description:
+              "Pass true only after the same external blocker prevents meaningful progress for three consecutive goal turns. Pauses the active goal.",
           },
         },
         required: [],
@@ -636,14 +707,25 @@ export const makeAgentGateway = Effect.gen(function* () {
         if ("achieved" in args && typeof args.achieved !== "boolean") {
           return yield* Effect.fail(new ToolInputError(`Argument "achieved" must be a boolean.`));
         }
+        if ("blocked" in args && typeof args.blocked !== "boolean") {
+          return yield* Effect.fail(new ToolInputError(`Argument "blocked" must be a boolean.`));
+        }
         const achieved = args.achieved === true;
-        const goal = achieved ? "" : readThreadGoalArg(args);
+        const blocked = args.blocked === true;
+        if (achieved && blocked) {
+          return yield* Effect.fail(
+            new ToolInputError(`Arguments "achieved" and "blocked" are mutually exclusive.`),
+          );
+        }
+        const goal = achieved || blocked ? "" : readThreadGoalArg(args);
         const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
-        if (achieved && (target.goal ?? "").trim().length === 0) {
+        if ((achieved || blocked) && (target.goal ?? "").trim().length === 0) {
           return yield* Effect.fail(
-            new ToolInputError("Thread has no active goal to mark achieved."),
+            new ToolInputError(
+              `Thread has no active goal to mark ${achieved ? "achieved" : "blocked"}.`,
+            ),
           );
         }
         yield* orchestrationEngine
@@ -651,13 +733,15 @@ export const makeAgentGateway = Effect.gen(function* () {
             type: "thread.meta.update",
             commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:goal`),
             threadId: target.id,
-            ...(achieved ? { goalAchieved: true } : { goal }),
+            ...(achieved ? { goalAchieved: true } : blocked ? { goalPaused: true } : { goal }),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson(
           achieved
             ? { threadId: target.id, goal: null, achieved: true }
-            : { threadId: target.id, goal: goal || null },
+            : blocked
+              ? { threadId: target.id, goal: target.goal, blocked: true, paused: true }
+              : { threadId: target.id, goal: goal || null },
         );
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
@@ -707,6 +791,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     sendMessage,
     interruptThread,
     setThreadTitle,
+    setThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
     ...automationTools,

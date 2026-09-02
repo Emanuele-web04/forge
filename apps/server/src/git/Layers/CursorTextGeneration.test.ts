@@ -36,7 +36,7 @@ function makeAcpAgentWrapper(dir: string, env: Record<string, string>): string {
       '  printf "%s\\n" "unexpected args: $*" >&2',
       "  exit 11",
       "fi",
-      `exec bun ${JSON.stringify(mockAgentPath)}`,
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}`,
       "",
     ].join("\n"),
     "utf8",
@@ -65,16 +65,22 @@ function withFakeAcpAgent<A, E, R>(
   );
 }
 
-function waitForFileContent(filePath: string): Effect.Effect<string> {
+function waitForFileContent(filePath: string, containing?: string): Effect.Effect<string> {
   return Effect.promise(async () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       try {
-        return readFileSync(filePath, "utf8");
+        const content = readFileSync(filePath, "utf8");
+        if (containing === undefined || content.includes(containing)) {
+          return content;
+        }
       } catch (error) {
         if (Date.now() >= deadline) {
           throw error instanceof Error ? error : new Error(String(error));
         }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for file content: ${filePath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -363,7 +369,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
 
           expect(generated.title).toBe("Trim reconnect spinner status after resume");
 
-          const exitLog = yield* waitForFileContent(exitLogPath);
+          const exitLog = yield* waitForFileContent(exitLogPath, "exit:0");
           expect(exitLog).toContain("exit:0");
 
           rmSync(exitLogDir, { recursive: true, force: true });

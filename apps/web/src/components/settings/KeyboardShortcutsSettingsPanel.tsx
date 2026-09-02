@@ -21,7 +21,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { keybindingFromKeyboardEvent, keybindingValueFromShortcut } from "~/lib/keybindingCapture";
 import { ensureNativeApi } from "~/nativeApi";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform } from "~/lib/utils";
 import {
   buildShortcutSheetSections,
   filterShortcutSheetSections,
@@ -65,7 +65,7 @@ export function KeyboardShortcutsSettingsPanel() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const queryClient = useQueryClient();
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
 
   const sections = buildShortcutSheetSections({
     keybindings,

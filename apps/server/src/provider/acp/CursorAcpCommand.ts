@@ -9,6 +9,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 
+import { executableCandidates, executableNameCandidates } from "@synara/shared/executable";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 
 export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
@@ -31,12 +32,14 @@ export interface CursorAgentCommand {
 
 export interface CursorAgentCommandOptions {
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
   readonly pathExists?: (path: string) => boolean;
   readonly realpath?: (path: string) => string;
 }
 
 interface ResolvedCursorAgentCommandOptions {
   readonly env: NodeJS.ProcessEnv;
+  readonly platform: NodeJS.Platform;
   readonly pathExists: (path: string) => boolean;
   readonly realpath: (path: string) => string;
 }
@@ -48,9 +51,8 @@ interface CursorCommandPathParts {
   readonly stem: string;
 }
 
-const CURSOR_EXECUTABLE_EXTENSION_PATTERN = /\.(?:bat|cmd|exe|ps1)$/iu;
 const POWERSHELL_EXECUTABLE = "powershell.exe";
-const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
+const WINDOWS_CURSOR_SIBLING_EXTENSIONS = [".exe", ".cmd", ".bat", ".ps1"] as const;
 
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const trimmed = command.trim();
@@ -60,7 +62,7 @@ function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const hasDirectory = separatorIndex >= 0;
   const directory = hasDirectory ? trimmed.slice(0, separatorIndex + 1) : "";
   const filename = hasDirectory ? trimmed.slice(separatorIndex + 1) : trimmed;
-  const extension = filename.match(CURSOR_EXECUTABLE_EXTENSION_PATTERN)?.[0] ?? "";
+  const extension = path.extname(filename);
   const stem = (extension ? filename.slice(0, -extension.length) : filename).toLowerCase();
   return { directory, extension, hasDirectory, stem };
 }
@@ -158,8 +160,8 @@ function resolveCursorSiblingCommand(
   binary: string,
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
-  for (const extension of cursorSiblingAgentExtensions(parts)) {
-    const siblingAgent = `${parts.directory}${binary}${extension}`;
+  for (const name of cursorSiblingNameCandidates(parts, binary, options)) {
+    const siblingAgent = `${parts.directory}${name}`;
     if (options.pathExists(siblingAgent)) {
       return { command: siblingAgent, args: [] };
     }
@@ -167,28 +169,31 @@ function resolveCursorSiblingCommand(
   return undefined;
 }
 
-function cursorSiblingAgentExtensions(parts: CursorCommandPathParts): ReadonlyArray<string> {
-  const shouldProbeWindowsExtensions = shouldProbeWindowsExtensionsForParts(parts);
-  const preferredExtension = isWindowsSafeExecutableExtension(parts.extension)
-    ? [parts.extension]
-    : [];
-  const powerShellFallbackExtension =
-    parts.extension.toLowerCase() === ".ps1" ? [parts.extension] : [];
-  const extensions = shouldProbeWindowsExtensions
-    ? [...preferredExtension, ...WINDOWS_EXECUTABLE_EXTENSIONS, "", ...powerShellFallbackExtension]
-    : [parts.extension];
-  return [...new Set(extensions)];
+function cursorSiblingNameCandidates(
+  parts: CursorCommandPathParts,
+  binary: string,
+  options: ResolvedCursorAgentCommandOptions,
+): ReadonlyArray<string> {
+  if (shouldProbeWindowsCursorSiblings(parts, options)) {
+    return WINDOWS_CURSOR_SIBLING_EXTENSIONS.map((extension) => `${binary}${extension}`);
+  }
+
+  const preferred = parts.extension ? [`${binary}${parts.extension}`] : [];
+  const names = executableNameCandidates(binary, options.platform, options.env, true);
+  return [...new Set([...preferred, ...names])];
 }
 
-function shouldProbeWindowsExtensionsForParts(parts: CursorCommandPathParts): boolean {
+function shouldProbeWindowsCursorSiblings(
+  parts: CursorCommandPathParts,
+  options: ResolvedCursorAgentCommandOptions,
+): boolean {
+  const extension = parts.extension.toLowerCase();
   return (
-    process.platform === "win32" || parts.directory.includes("\\") || parts.extension.length > 0
-  );
-}
-
-function isWindowsSafeExecutableExtension(extension: string): boolean {
-  return WINDOWS_EXECUTABLE_EXTENSIONS.includes(
-    extension as (typeof WINDOWS_EXECUTABLE_EXTENSIONS)[number],
+    options.platform === "win32" ||
+    parts.directory.includes("\\") ||
+    WINDOWS_CURSOR_SIBLING_EXTENSIONS.includes(
+      extension as (typeof WINDOWS_CURSOR_SIBLING_EXTENSIONS)[number],
+    )
   );
 }
 
@@ -196,25 +201,12 @@ function findCommandOnPath(
   command: string,
   options: ResolvedCursorAgentCommandOptions,
 ): string | undefined {
-  const searchPath = options.env.PATH ?? options.env.Path ?? "";
-  if (!searchPath.trim()) {
-    return undefined;
-  }
-  const separator =
-    options.env.Path !== undefined && options.env.PATH === undefined ? ";" : path.delimiter;
-  const extensions =
-    process.platform === "win32" && path.extname(command) === ""
-      ? WINDOWS_EXECUTABLE_EXTENSIONS
-      : [""];
-  for (const directory of searchPath.split(separator)) {
-    if (!directory.trim()) {
-      continue;
-    }
-    for (const extension of extensions) {
-      const candidate = path.join(directory, `${command}${extension}`);
-      if (options.pathExists(candidate)) {
-        return candidate;
-      }
+  for (const candidate of executableCandidates(command, {
+    platform: options.platform,
+    env: options.env,
+  })) {
+    if (options.pathExists(candidate.path)) {
+      return candidate.path;
     }
   }
   return undefined;
@@ -247,6 +239,7 @@ export function buildCursorAgentCommand(
   const command = resolveCursorAgentBinaryPath(binaryPath);
   const commandOptions = {
     env: options.env ?? process.env,
+    platform: options.platform ?? process.platform,
     pathExists: options.pathExists ?? existsSync,
     realpath: options.realpath ?? realpathSync.native,
   };

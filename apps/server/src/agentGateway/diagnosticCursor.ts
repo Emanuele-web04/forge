@@ -47,7 +47,9 @@ export function decodeDiagnosticCursor(
       !Number.isSafeInteger(value.highWaterSequence) ||
       !Number.isSafeInteger(value.beforeSequence) ||
       (value.highWaterSequence ?? -1) < 0 ||
-      (value.beforeSequence ?? -1) < 0
+      (value.beforeSequence ?? -1) < 0 ||
+      (value.beforeSequence ?? Number.POSITIVE_INFINITY) >
+        (value.highWaterSequence ?? Number.NEGATIVE_INFINITY)
     ) {
       throw new Error("cursor fields are invalid");
     }

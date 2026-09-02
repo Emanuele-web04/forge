@@ -6,13 +6,14 @@
  *
  * @module Open
  */
-import { spawn } from "node:child_process";
+import { resolveExecutable } from "@synara/shared/executable";
+import { spawnProcess } from "@synara/shared/processRuntime";
 import { statSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import pathWin32 from "node:path/win32";
 
 import { EDITORS, type EditorId } from "@synara/contracts";
-import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
+import { resolveWindowsSystemRoot } from "@synara/shared/platformEnvironment";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
@@ -22,7 +23,6 @@ import {
   resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
-import { resolveExecutable } from "./executableLookup.ts";
 
 // ==============================
 // Definitions
@@ -145,6 +145,21 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
     default:
       return "xdg-open";
   }
+}
+
+function shouldRevealInFinder(target: string): boolean {
+  try {
+    return statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+  } catch {
+    return false;
+  }
+}
+
+function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
+  const command = fileManagerCommandForPlatform(platform);
+  const shouldReveal = platform === "darwin" && shouldRevealInFinder(target);
+
+  return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
 
 // Terminal integrations should receive a directory even when the source target is file:line:column.
@@ -402,7 +417,7 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     return yield* new OpenError({ message: `Unsupported editor: ${input.editor}` });
   }
 
-  return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
+  return resolveFileManagerLaunch(input.cwd, platform);
 });
 
 function editorLaunchesEqual(left: EditorLaunch, right: EditorLaunch): boolean {
@@ -436,13 +451,10 @@ export const launchDetached = (launch: EditorLaunch) =>
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        const prepared = prepareWindowsSafeProcess(launch.command, launch.args);
-        child = spawn(prepared.command, prepared.args, {
+        child = spawnProcess(launch.command, launch.args, {
           detached: true,
           stdio: "ignore",
-          shell: prepared.shell,
-          windowsHide: prepared.windowsHide,
-          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+          requireExecutable: true,
         });
       } catch (error) {
         return resume(

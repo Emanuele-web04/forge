@@ -1,6 +1,6 @@
 import type { KeybindingShortcut } from "@synara/contracts";
 
-import { isMacPlatform } from "~/lib/utils";
+import { getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 /**
  * Converts the browser's key representation into the stable tokens accepted by
@@ -49,7 +49,7 @@ export function normalizeShortcutKeyToken(key: string): string | null {
  */
 export function keybindingFromKeyboardEvent(
   event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
-  platform = typeof navigator === "undefined" ? "" : navigator.platform,
+  platform = getNavigatorPlatform(),
 ): string | null {
   const keyToken = normalizeShortcutKeyToken(event.key);
   if (!keyToken) return null;

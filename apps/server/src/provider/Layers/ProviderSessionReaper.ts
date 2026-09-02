@@ -29,6 +29,13 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
 
     const sweep = Effect.gen(function* () {
+      if (!providerService.stopRuntimeSession) {
+        yield* Effect.logWarning(
+          "provider session reaper skipped sweep: stopRuntimeSession is unavailable",
+        );
+        return;
+      }
+      const stopRuntimeSession = providerService.stopRuntimeSession;
       const bindings = yield* directory.listBindings();
       const now = Date.now();
 
@@ -54,7 +61,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           .pipe(Effect.map(Option.getOrUndefined));
         if (thread?.session?.activeTurnId != null) continue;
 
-        yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
+        yield* stopRuntimeSession({ threadId: binding.threadId }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("provider session reaper failed to stop stale session", {
               threadId: binding.threadId,
