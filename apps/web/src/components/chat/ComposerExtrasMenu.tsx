@@ -11,7 +11,7 @@ import type {
 } from "@synara/contracts";
 import { useId, useRef, useState, type ChangeEvent } from "react";
 
-import { insertAppSnapCaptureIntoDraft } from "~/appSnapIntake";
+import { attachAppSnapCapture } from "~/appSnapAttach";
 import {
   BugIcon,
   ListTodoIcon,
@@ -104,17 +104,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
     void bridge
       .captureWindow({ windowId })
       .then(async (capture) => {
-        const result = await insertAppSnapCaptureIntoDraft(threadId, capture);
-        toastManager.add({
-          type: result === "unverified" ? "warning" : "success",
-          title: result === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
-          description:
-            result === "unverified"
-              ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
-              : "The window was added to this composer.",
-          data: { allowCrossThreadVisibility: true },
-        });
-        await bridge.acknowledgeCapture(capture.id).catch(() => undefined);
+        await attachAppSnapCapture(threadId, capture, () => bridge.acknowledgeCapture(capture.id));
       })
       .catch((error) => {
         toastManager.add({

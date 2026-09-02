@@ -76,14 +76,14 @@ export async function insertAppSnapCaptureIntoDraft(
       file: appSnapImage.file,
     });
 
-    // Match ordinary composer mutations: recalled prompt-history state no longer owns the draft.
-    draftStore.setPromptHistorySavedDraft(threadId, null);
     if (!draftStore.addImage(threadId, appSnapImage)) {
       throw new Error(
         "The AppSnap was prepared, but this message already has the maximum number of references.",
       );
     }
     imageAddedToDraft = true;
+    // Match ordinary composer mutations: recalled prompt-history state no longer owns the draft.
+    draftStore.setPromptHistorySavedDraft(threadId, null);
     const currentPersistedAttachments =
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [];
     const result = await draftStore.syncPersistedAttachments(threadId, [

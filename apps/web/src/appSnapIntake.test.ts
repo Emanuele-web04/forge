@@ -108,6 +108,8 @@ describe("insertAppSnapCaptureIntoDraft", () => {
     await expect(insertAppSnapCaptureIntoDraft(threadId, captureFixture())).rejects.toThrow(
       "draft metadata was rejected",
     );
+    expect(addImage).toHaveBeenCalledWith(threadId, expect.anything());
+    expect(setPromptHistorySavedDraft).toHaveBeenCalledWith(threadId, null);
     expect(removeImage).toHaveBeenCalledWith(threadId, "image-1");
     expect(deleteComposerImageBlob).toHaveBeenCalledWith("blob-key-1");
   });
@@ -123,6 +125,7 @@ describe("insertAppSnapCaptureIntoDraft", () => {
       );
       expect(revokeObjectUrl).toHaveBeenCalledWith("blob:image-1");
       expect(deleteComposerImageBlob).toHaveBeenCalledWith("blob-key-1");
+      expect(setPromptHistorySavedDraft).not.toHaveBeenCalled();
     } finally {
       URL.revokeObjectURL = originalRevoke;
     }

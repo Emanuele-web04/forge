@@ -6,6 +6,7 @@
 import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapShortcut,
+  type DesktopBridge,
   type ThreadId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -21,7 +22,8 @@ import {
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
 } from "../appSnap.logic";
-import { insertAppSnapCaptureIntoDraft, sourceWithCachedIcon } from "../appSnapIntake";
+import { attachAppSnapCapture } from "../appSnapAttach";
+import { sourceWithCachedIcon } from "../appSnapIntake";
 import {
   type ComposerImageAttachment,
   type PersistedComposerImageAttachment,
@@ -194,7 +196,11 @@ export function AppSnapCoordinator() {
   const blobHydrationInFlightRef = useRef(new Set<string>());
   const hydratePersistedAppSnapsRef = useRef<(captureId?: string) => Promise<void>>(async () => {});
   const attachCaptureRef = useRef<
-    ((capture: DesktopAppSnapCapture) => Promise<"persisted" | "unverified">) | null
+    | ((
+        capture: DesktopAppSnapCapture,
+        bridge: DesktopBridge["appSnap"],
+      ) => Promise<"persisted" | "unverified">)
+    | null
   >(null);
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
@@ -333,7 +339,7 @@ export function AppSnapCoordinator() {
   );
 
   const attachCapture = useCallback(
-    async (capture: DesktopAppSnapCapture) => {
+    async (capture: DesktopAppSnapCapture, bridge: DesktopBridge["appSnap"]) => {
       const captureAtMs = captureTimestampMs(capture);
       const resolvedTarget = resolveAppSnapTarget({
         captureAtMs,
@@ -363,21 +369,13 @@ export function AppSnapCoordinator() {
         }
       }
 
-      const persistenceResult = await insertAppSnapCaptureIntoDraft(target.threadId, capture);
+      const persistenceResult = await attachAppSnapCapture(
+        target.threadId,
+        capture,
+        () => bridge.acknowledgeCapture(capture.id),
+      );
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
       requestComposerFocus(target.threadId);
-      toastManager.add({
-        type: persistenceResult === "unverified" ? "warning" : "success",
-        title:
-          persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
-        description:
-          persistenceResult === "unverified"
-            ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
-            : capture.sourceAppName
-              ? `Captured ${capture.sourceAppName} and added it to the composer.`
-              : "The frontmost window was added to the composer.",
-        data: { allowCrossThreadVisibility: true },
-      });
       return persistenceResult;
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],
@@ -423,7 +421,6 @@ export function AppSnapCoordinator() {
               }
             }
           }
-          let persistence: "persisted" | "unverified";
           try {
             // Missing blob bytes make the old metadata unusable. Purge every
             // row for this capture (including prompt-history snapshots) before
@@ -431,7 +428,7 @@ export function AppSnapCoordinator() {
             useComposerDraftStore.getState().removeAppSnapCapture(capture.id);
             const attach = attachCaptureRef.current;
             if (!attach) throw new Error("The AppSnap composer is not ready yet.");
-            persistence = await attach(capture);
+            await attach(capture, bridge);
           } catch (error) {
             toastManager.add({
               type: "error",
@@ -448,12 +445,6 @@ export function AppSnapCoordinator() {
             });
             return;
           }
-          // An unverified draft may vanish on reload; keeping the capture
-          // pending lets the next mount re-deliver it.
-          if (persistence !== "persisted") return;
-          await bridge
-            .acknowledgeCapture(capture.id)
-            .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
         })
         .catch(() => undefined);
     };
