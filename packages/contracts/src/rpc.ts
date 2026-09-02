@@ -1397,4 +1397,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsMindListRpc,
+  WsMindForgetRpc,
+  WsMindSetPinnedRpc,
 );

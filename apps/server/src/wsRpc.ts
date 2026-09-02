@@ -4,6 +4,7 @@ import {
   CommandId,
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
+  MIND_MEMORY_PROJECT_CAP,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
@@ -39,6 +40,7 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { MindService } from "./mind/Services/MindService";
 import {
   ServerAuth,
   type AuthError,
@@ -351,6 +353,7 @@ const makeWsRpcHandlersLayer = () =>
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
+      const mindService = yield* MindService;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerCommandReactor = yield* ProviderCommandReactor;
@@ -2042,6 +2045,57 @@ const makeWsRpcHandlersLayer = () =>
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
+          ),
+
+        [WS_METHODS.mindList]: (input) =>
+          rpcEffect(
+            input.projectId !== undefined
+              ? mindService.list({ projectId: input.projectId })
+              : Effect.gen(function* () {
+                  // The Mind view is project-agnostic: sweep+list every active
+                  // project and merge into one weight-desc page. The merged array
+                  // stays inside the contracts' cap by keeping only the top slice;
+                  // `count` stays the true total so the UI can tell when the page
+                  // is truncated.
+                  const shell = yield* projectionReadModelQuery.getShellSnapshot();
+                  const perProject = yield* Effect.all(
+                    shell.projects.map((project) => mindService.list({ projectId: project.id })),
+                  );
+                  const memories = perProject
+                    .flatMap((result) => result.memories)
+                    .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
+                    .slice(0, MIND_MEMORY_PROJECT_CAP);
+                  return {
+                    memories,
+                    count: perProject.reduce((total, result) => total + result.count, 0),
+                    cap: MIND_MEMORY_PROJECT_CAP,
+                  };
+                }),
+            "Failed to list memories",
+          ),
+        [WS_METHODS.mindForget]: (input) =>
+          rpcEffect(
+            mindService
+              .forget({
+                memoryId: input.memoryId,
+                // The UI has no thread context; journal actor is the plain user.
+                actor: { kind: "user" },
+                threadId: null,
+                turnId: null,
+              })
+              .pipe(Effect.asVoid),
+            "Failed to forget memory",
+          ),
+        [WS_METHODS.mindSetPinned]: (input) =>
+          rpcEffect(
+            mindService.setPinned({
+              memoryId: input.memoryId,
+              pinned: input.pinned,
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory pin",
           ),
 
         ...makeWsDeviceHandlers(deviceService),
