@@ -202,6 +202,8 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
+    // The gateway serves the synara_* memory tools over the shared Mind service.
+    Layer.provideMerge(mindServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
