@@ -47,6 +47,7 @@ import {
   type WorktreeSetupStep,
 } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
+import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
   BotIcon,
@@ -424,7 +425,7 @@ function WorktreeSetupCard({
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
-  workingLabel?: string | undefined;
+  workingLabel?: WorkingLabel | undefined;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
