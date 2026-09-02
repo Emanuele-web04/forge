@@ -86,6 +86,12 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import {
+  KEEP_AWAKE_MODE_OPTIONS,
+  KEEP_AWAKE_ROW_TITLE,
+  keepAwakeStatusLabel,
+} from "../lib/keepAwake";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
@@ -178,6 +184,14 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const KEEP_AWAKE_SEGMENTED_OPTIONS = KEEP_AWAKE_MODE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
+const KEEP_AWAKE_ROW_DESCRIPTION = `Uses macOS caffeinate. ${KEEP_AWAKE_MODE_OPTIONS.map(
+  (option) => `${option.label}: ${option.description}`,
+).join(" ")}`;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -211,6 +225,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -1149,6 +1164,32 @@ function SettingsRouteView() {
           ariaLabel: "Stream assistant messages",
         })}
       </SettingsSection>
+
+      {keepAwake?.available ? (
+        <SettingsSection title="System">
+          <SettingsRow
+            title={KEEP_AWAKE_ROW_TITLE}
+            description={KEEP_AWAKE_ROW_DESCRIPTION}
+            status={keepAwakeStatusLabel(keepAwake)}
+            resetAction={
+              settings.keepAwakeMode !== defaults.keepAwakeMode ? (
+                <SettingResetButton
+                  label="keep computer awake"
+                  onClick={() => updateSettings({ keepAwakeMode: defaults.keepAwakeMode })}
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.keepAwakeMode}
+                onValueChange={(value) => updateSettings({ keepAwakeMode: value })}
+                ariaLabel={KEEP_AWAKE_ROW_TITLE}
+                options={KEEP_AWAKE_SEGMENTED_OPTIONS}
+              />
+            }
+          />
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection title="Review">
         {renderBooleanSettingRow({

@@ -311,6 +311,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Terminal close confirmation",
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
+  {
+    id: "behavior:keep-computer-awake",
+    section: "behavior",
+    title: "Keep computer awake",
+    keywords:
+      "caffeinate sleep macOS prevent sleep keep awake agent working system on off idle active",
+    // Row only renders on macOS with caffeinate available.
+    target: null,
+  },
 
   // ── Keybindings ───────────────────────────────────────────────────────────────
   {
