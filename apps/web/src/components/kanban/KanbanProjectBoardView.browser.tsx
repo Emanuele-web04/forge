@@ -21,6 +21,11 @@ vi.mock("~/hooks/useProviderStatusRefresh", () => ({
 }));
 vi.mock("../../lib/kanbanDispatch", () => ({
   dispatchKanbanDraftCard: vi.fn().mockResolvedValue({ ok: true }),
+  kanbanDispatchFailureToast: vi.fn().mockReturnValue({
+    type: "error",
+    title: "Mock toast",
+    description: "mock",
+  }),
 }));
 
 import type { ThreadId } from "@synara/contracts";

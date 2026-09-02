@@ -50,7 +50,14 @@ vi.mock("~/lib/activeThreadDelete", () => ({
 vi.mock("~/lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
 vi.mock("~/lib/threadArchive", () => ({ archiveThreadFromClient: harness.archiveThread }));
 vi.mock("~/lib/threadRename", () => ({ dispatchThreadRename: vi.fn() }));
-vi.mock("~/lib/kanbanDispatch", () => ({ dispatchKanbanDraftCardAsGoal: harness.sendAsGoal }));
+vi.mock("~/lib/kanbanDispatch", () => ({
+  dispatchKanbanDraftCardAsGoal: harness.sendAsGoal,
+  kanbanDispatchFailureToast: vi.fn().mockReturnValue({
+    type: "error",
+    title: "Mock toast",
+    description: "mock",
+  }),
+}));
 vi.mock("../../composerDraftStore", () => ({
   useComposerDraftStore: (selector: (state: unknown) => unknown) =>
     selector({
