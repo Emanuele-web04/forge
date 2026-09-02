@@ -178,7 +178,7 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let superview, bounds.contains(convert(point, from: superview)) else { return nil }
+        guard bounds.contains(point) else { return nil }
         return self
     }
 

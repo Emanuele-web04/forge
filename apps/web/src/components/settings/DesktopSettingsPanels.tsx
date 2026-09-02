@@ -312,6 +312,36 @@ export function AppSnapSettingsPanel({
     }
   }, [openGuidePane]);
 
+  // Listen for the native coach to close or report a grant so the inline guide
+  // does not stay stale.
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    let disposed = false;
+    const unsubscribe = bridge.onPermissionGuideState((state) => {
+      if (disposed) return;
+      if (state === "granted") {
+        // Refresh the real permission state so the success effect can close the
+        // guide and show the "Permission granted" toast.
+        void bridge
+          .getState()
+          .then((s) => {
+            if (!disposed) setAppSnapState(s);
+          })
+          .catch(() => undefined);
+      } else if (state === "closed") {
+        // The coach was dismissed (e.g., Escape). Close the matching inline
+        // guide. The manager only forwards events from the active guide, so a
+        // stale 'closed' from a replaced guide cannot close a newer pane.
+        setOpenGuidePane((current) => (current ? null : current));
+      }
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
   useEffect(() => {
     if (!openGuidePane || !appSnapState) return;
     if (appSnapPanePermission(appSnapState, openGuidePane) !== "granted") return;

@@ -4,7 +4,7 @@
 
 import "../../index.css";
 
-import type { DesktopAppSnapState } from "@synara/contracts";
+import type { DesktopAppSnapPermissionGuideState, DesktopAppSnapState } from "@synara/contracts";
 import type { AppSettingsBinding } from "~/appSettings";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
@@ -138,6 +138,7 @@ describe("NotificationsSettingsPanel", () => {
 describe("AppSnapSettingsPanel", () => {
   it("owns the native state subscription and releases it on unmount", async () => {
     const unsubscribe = vi.fn();
+    const guideUnsubscribe = vi.fn();
     const getState = vi.fn().mockResolvedValue(READY_STATE);
     const requestPermissions = vi.fn().mockResolvedValue(READY_STATE);
     const setEnabled = vi.fn().mockResolvedValue(READY_STATE);
@@ -147,6 +148,7 @@ describe("AppSnapSettingsPanel", () => {
       availability: { available: true, reason: null },
     });
     const onState = vi.fn(() => unsubscribe);
+    const onPermissionGuideState = vi.fn(() => guideUnsubscribe);
     setDesktopBridge({
       appSnap: {
         getState,
@@ -155,6 +157,7 @@ describe("AppSnapSettingsPanel", () => {
         checkShortcut,
         setShortcut,
         onState,
+        onPermissionGuideState,
       },
     });
 
@@ -163,6 +166,7 @@ describe("AppSnapSettingsPanel", () => {
       .element(mounted.getByText("Listening — press ⌥ left + ⌥ right to snap"))
       .toBeVisible();
     expect(onState).toHaveBeenCalledOnce();
+    expect(onPermissionGuideState).toHaveBeenCalledOnce();
 
     await mounted.getByRole("button", { name: "Leave AppSnap" }).click();
     await mounted.getByRole("button", { name: "Return to AppSnap" }).click();
@@ -178,6 +182,7 @@ describe("AppSnapSettingsPanel", () => {
 
     await mounted.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(guideUnsubscribe).toHaveBeenCalledOnce();
   });
 
   it("records two keys, checks availability, and saves the shortcut", async () => {
@@ -198,6 +203,7 @@ describe("AppSnapSettingsPanel", () => {
         checkShortcut,
         setShortcut,
         onState: vi.fn(() => vi.fn()),
+        onPermissionGuideState: vi.fn(() => vi.fn()),
       },
     });
 
@@ -271,6 +277,7 @@ describe("AppSnapSettingsPanel", () => {
           pushedStateRef.current = listener;
           return vi.fn();
         }),
+        onPermissionGuideState: vi.fn(() => vi.fn()),
       },
     });
 
@@ -302,6 +309,59 @@ describe("AppSnapSettingsPanel", () => {
       expect(
         mounted.getByRole("button", { name: "Open Input Monitoring settings" }),
       ).not.toBeInTheDocument();
+    });
+
+    await mounted.unmount();
+  });
+
+  it("closes the inline guide when the native coach is dismissed", async () => {
+    const pushedGuideStateRef: {
+      current: ((state: DesktopAppSnapPermissionGuideState) => void) | null;
+    } = { current: null };
+    const openPermissionSettings = vi.fn().mockResolvedValue(true);
+    const showPermissionGuide = vi.fn().mockResolvedValue(undefined);
+    const hidePermissionGuide = vi.fn().mockResolvedValue(undefined);
+    setDesktopBridge({
+      appSnap: {
+        getState: vi.fn().mockResolvedValue(DENIED_STATE),
+        requestPermissions: vi.fn().mockResolvedValue(DENIED_STATE),
+        setEnabled: vi.fn().mockResolvedValue(DENIED_STATE),
+        checkShortcut: vi.fn().mockResolvedValue({ available: true, reason: null }),
+        setShortcut: vi.fn().mockResolvedValue({
+          state: DENIED_STATE,
+          availability: { available: true, reason: null },
+        }),
+        openPermissionSettings,
+        restartApp: vi.fn(),
+        showPermissionGuide,
+        hidePermissionGuide,
+        onState: vi.fn(() => vi.fn()),
+        onPermissionGuideState: vi.fn(
+          (listener: (state: DesktopAppSnapPermissionGuideState) => void) => {
+            pushedGuideStateRef.current = listener;
+            return vi.fn();
+          },
+        ),
+      },
+    });
+
+    const mounted = await render(<AppSnapActivityHarness />);
+    await expect.element(mounted.getByText("Denied").first()).toBeVisible();
+
+    await mounted.getByRole("button", { name: "Grant" }).first().click();
+    await expect
+      .element(mounted.getByRole("button", { name: "Open Input Monitoring settings" }))
+      .toBeVisible();
+
+    await vi.waitFor(() => {
+      expect(openPermissionSettings).toHaveBeenCalledWith("input-monitoring");
+      expect(showPermissionGuide).toHaveBeenCalledWith("input-monitoring");
+    });
+
+    pushedGuideStateRef.current?.("closed");
+    await vi.waitFor(async () => {
+      expect(hidePermissionGuide).toHaveBeenCalled();
+      await expect.element(mounted.getByRole("button", { name: "Grant" }).first()).toBeVisible();
     });
 
     await mounted.unmount();
