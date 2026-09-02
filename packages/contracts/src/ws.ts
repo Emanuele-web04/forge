@@ -14,6 +14,7 @@ import {
   AutomationStreamEvent,
   AutomationUpdateInput,
 } from "./automation";
+import { MindForgetInput, MindListInput, MindSetPinnedInput } from "./mind";
 import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
@@ -293,6 +294,11 @@ export const WS_METHODS = {
   automationArchiveRun: "automation.archiveRun",
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
+
+  // Mind methods
+  mindList: "mind.list",
+  mindForget: "mind.forget",
+  mindSetPinned: "mind.setPinned",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -500,6 +506,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
+
+  // Mind methods
+  tagRequestBody(WS_METHODS.mindList, MindListInput),
+  tagRequestBody(WS_METHODS.mindForget, MindForgetInput),
+  tagRequestBody(WS_METHODS.mindSetPinned, MindSetPinnedInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
