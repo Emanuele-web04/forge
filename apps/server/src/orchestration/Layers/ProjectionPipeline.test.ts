@@ -82,6 +82,32 @@ const makeAppendAndProject =
       .append(event)
       .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
 
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+// Scenario event appender: generates the event envelope (ids, causation,
+// metadata) so tests only spell the meaningful fields. `prefix` keeps ids
+// unique across the shared per-file test database.
+const makeScenarioAppender = (
+  appendAndProject: ReturnType<typeof makeAppendAndProject>,
+  prefix: string,
+) => {
+  let scenarioSequence = 0;
+  return (
+    event: DistributiveOmit<
+      Parameters<typeof appendAndProject>[0],
+      "eventId" | "commandId" | "correlationId" | "causationEventId" | "metadata"
+    >,
+  ) =>
+    appendAndProject({
+      ...event,
+      eventId: EventId.makeUnsafe(`evt-${prefix}-${++scenarioSequence}`),
+      commandId: CommandId.makeUnsafe(`cmd-${prefix}-${scenarioSequence}`),
+      correlationId: CommandId.makeUnsafe(`cmd-${prefix}-${scenarioSequence}`),
+      causationEventId: null,
+      metadata: {},
+    });
+};
+
 const exists = (filePath: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -653,23 +679,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const startedAt = "2026-09-01T00:00:02.000Z";
       const completedAt = "2026-09-01T00:00:03.000Z";
 
-      let scenarioSequence = 0;
-      type AppendEventInput = Parameters<typeof appendAndProject>[0];
-      type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-      const appendScenarioEvent = (
-        event: DistributiveOmit<
-          AppendEventInput,
-          "eventId" | "commandId" | "correlationId" | "causationEventId" | "metadata"
-        >,
-      ) =>
-        appendAndProject({
-          ...event,
-          eventId: EventId.makeUnsafe(`evt-completion-updated-${++scenarioSequence}`),
-          commandId: CommandId.makeUnsafe(`cmd-completion-updated-${scenarioSequence}`),
-          correlationId: CommandId.makeUnsafe(`cmd-completion-updated-${scenarioSequence}`),
-          causationEventId: null,
-          metadata: {},
-        });
+      const appendScenarioEvent = makeScenarioAppender(appendAndProject, "completion-updated");
       const session = (
         status: "running" | "ready",
         activeTurnId: TurnId | null,
@@ -762,6 +772,133 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       yield* projectionPipeline.bootstrap;
 
       assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+    }),
+  );
+
+  it.effect("keeps thread updatedAt monotonic across stale session events and replay", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const appendScenarioEvent = makeScenarioAppender(appendAndProject, "stale-session");
+      const threadId = ThreadId.makeUnsafe("thread-stale-session-updated-at");
+      const turnId = TurnId.makeUnsafe("turn-stale-session-updated-at");
+      const projectId = ProjectId.makeUnsafe("project-stale-session-updated");
+      const modelSelection = { provider: "codex", model: "gpt-5.6-sol" } as const;
+      const createdAt = "2026-09-01T00:00:00.000Z";
+      const requestedAt = "2026-09-01T00:00:01.000Z";
+      const startedAt = "2026-09-01T00:00:02.000Z";
+      const completedAt = "2026-09-01T00:00:03.000Z";
+
+      const session = (
+        status: "running" | "ready",
+        activeTurnId: TurnId | null,
+        updatedAt: string,
+      ) => ({
+        threadId,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access" as const,
+        activeTurnId,
+        lastError: null,
+        updatedAt,
+      });
+
+      yield* appendScenarioEvent({
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        payload: {
+          projectId,
+          title: "Stale session project",
+          workspaceRoot: "/tmp/project-stale-session",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        payload: {
+          threadId,
+          projectId,
+          title: "Stale session thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.turn-start-requested",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-stale-session"),
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          createdAt: requestedAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        payload: { threadId, session: session("running", turnId, startedAt) },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: completedAt,
+        payload: { threadId, session: session("ready", null, completedAt) },
+      });
+      // A late-arriving session event whose sequence follows completion but
+      // whose occurredAt precedes it (retry, import, reconciliation).
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        payload: { threadId, session: session("running", turnId, startedAt) },
+      });
+
+      const readThreadUpdatedAt = sql<{ readonly updatedAt: string }>`
+        SELECT updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const readTurn = sql<{ readonly state: string; readonly completedAt: string | null }>`
+        SELECT state, completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+
+      // Projection repair resets projector cursors and replays from the journal;
+      // the stale event must not regress the thread row during the rebuild.
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threads}
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+      assert.deepEqual(yield* readTurn, [{ state: "completed", completedAt }]);
     }),
   );
 });
