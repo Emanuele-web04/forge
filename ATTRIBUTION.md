@@ -20,8 +20,8 @@ substitute.
 
 ## Adapted work
 
-| Project | Author   | Source                           | License | Used in                                                                | Nature                                                                                                    |
-| ------- | -------- | -------------------------------- | ------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Project | Author   | Source                           | License | Used in                                                                                                                        | Nature                                                                                                      |
+| ------- | -------- | -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature — storage foundation in https://github.com/Emanuele-web04/synara/pull/899, feature integration in progress | Adapted — memory lifecycle concepts, scoring constants, and near-verbatim standing-order prose are adapted. |
 
 ### License notice for mind
