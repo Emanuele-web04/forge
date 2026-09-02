@@ -156,9 +156,13 @@ function buildMacLauncher(electronBinaryPath) {
   // The plist patches above break the linker-signed bundle's seal, and TCC
   // refuses to persist grants for bundles it cannot verify. Re-seal ad-hoc so
   // Input Monitoring / Screen Recording grants survive quit-and-reopen.
-  const signResult = spawnSync("codesign", ["--force", "--deep", "--sign", "-", targetAppBundlePath], {
-    encoding: "utf8",
-  });
+  const signResult = spawnSync(
+    "codesign",
+    ["--force", "--deep", "--sign", "-", targetAppBundlePath],
+    {
+      encoding: "utf8",
+    },
+  );
   if (signResult.status !== 0) {
     const details = [signResult.stderr, signResult.stdout].filter(Boolean).join("\n").trim();
     throw new Error(
