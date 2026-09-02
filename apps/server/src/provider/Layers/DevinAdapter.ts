@@ -161,12 +161,11 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 30 * 60 * 1000,
 });
 
-// Wedge recovery: the devin child can deadlock while staying alive (observed in
-// its exec session_manager: a hung sandbox_manager lock acquisition, and a PTY
-// spawn that never reaches "waiting for shell ready"). A wedged child emits no
-// ACP events, so the idle budgets alone leave the turn hanging for up to an
-// hour. The child announces both failure shapes on its mirrored stderr log
-// stream; those signals arm a fast auto-recovery path.
+// Wedge recovery: the devin child can deadlock while staying alive (observed
+// twice in its exec session_manager: a hung sandbox_manager lock acquisition,
+// and a PTY spawn that never reached "waiting for shell ready"). A wedged
+// child emits no ACP events, so the idle budgets alone leave the turn hanging
+// for up to an hour; the child announces both shapes on its mirrored stderr.
 const DEVIN_STALL_WATCH_LOG_PATTERN = "affogato::stall_watch";
 const DEVIN_SPAWN_START_LOG_PATTERN = /session_id=([0-9a-f]+) \[create_session\] starting/;
 const DEVIN_SPAWN_READY_LOG_PATTERN =
@@ -2447,14 +2446,20 @@ export function makeDevinAdapter(
       });
 
     // Auto-recovery for a wedged (alive-but-silent) child: settle the stuck
-    // turn as cancelled, restart the session from its persisted resume cursor
-    // (the CLI persists partial turn state, and a resumed session replays it),
-    // then dispatch a continuation prompt. This automates the interrupt ->
-    // resend flow that was previously manual. Bounded per turn and per thread;
-    // once the budget is exhausted the supervisor fails the turn instead.
+    // turn as cancelled, restart the session from its resume cursor, and
+    // dispatch a continuation prompt — the interrupt -> resend flow that was
+    // previously manual. Bounded per turn and per thread; once the budget is
+    // exhausted the supervisor fails the turn instead. Every destructive step
+    // re-validates against live adapter state first: a user stop, interrupt,
+    // or fresh turn that lands mid-recovery always wins.
     const recoverDevinWedgedTurn = (ctx: DevinSessionContext, signal: DevinWedgeSignal) =>
       Effect.gen(function* () {
         const turnId = ctx.activeTurnId;
+        // The wedged turn must still be the active one on the registered
+        // session; a settled or replaced turn means the child recovered (or the
+        // user acted) and this recovery is obsolete.
+        const stillOwnsTurn = () =>
+          !ctx.stopped && sessions.get(ctx.threadId) === ctx && ctx.activeTurnId === turnId;
         if (turnId === undefined || ctx.stopped) return;
         if (ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0) return;
         if (ctx.devinWedgeRecoveryAttemptedFor === turnId) return;
@@ -2479,12 +2484,7 @@ export function makeDevinAdapter(
           );
           return;
         }
-        // The wedged turn must still be the active one on the registered
-        // session; a settled or replaced turn means the child recovered (or the
-        // user acted) and this recovery is obsolete.
-        if (ctx.stopped || sessions.get(ctx.threadId) !== ctx || ctx.activeTurnId !== turnId) {
-          return;
-        }
+        if (!stillOwnsTurn()) return;
         ctx.devinWedgeRecoveryAttemptedFor = turnId;
         wedgeRecoveryAtByThread.set(ctx.threadId, [...threadRecoveries, Date.now()].slice(-16));
         yield* Effect.logWarning("devin.acp.wedge_recovery_started", {

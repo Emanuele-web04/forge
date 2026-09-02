@@ -212,14 +212,9 @@ interface WedgeRuntimePlan {
 function makeWedgeRuntimeFactory(plan: WedgeRuntimePlan) {
   const promptInputs: Array<string> = [];
   const stderrTaps: Array<(line: string) => void> = [];
-  const emitters: Array<{
-    emitToolCall: ReturnType<typeof makeEventAcpRuntime>["emitToolCall"];
-    emitProgress: ReturnType<typeof makeEventAcpRuntime>["emitProgress"];
-    completeProcessedEvent: () => void;
-  }> = [];
   let callIndex = 0;
   let promptCallIndex = 0;
-  let currentEmitter: (typeof emitters)[number] | undefined;
+  let current: ReturnType<typeof makeEventAcpRuntime> | undefined;
   const makeAcpRuntime = (input: DevinAcpRuntimeInput) => {
     const index = callIndex++;
     if (plan.failStartAtIndex === index) {
@@ -238,16 +233,16 @@ function makeWedgeRuntimeFactory(plan: WedgeRuntimePlan) {
       return behavior(params);
     });
     if (input.onChildStderrLine) stderrTaps.push(input.onChildStderrLine);
-    emitters.push(handles);
-    currentEmitter = handles;
+    current = handles;
     return Effect.succeed(handles.runtime);
   };
   return {
     makeAcpRuntime,
     promptInputs,
     stderrTaps,
-    emitter: (index: number) => emitters[index]!,
-    completeProcessedEvent: () => currentEmitter?.completeProcessedEvent(),
+    emitToolCall: (...args: Parameters<ReturnType<typeof makeEventAcpRuntime>["emitToolCall"]>) =>
+      current!.emitToolCall(...args),
+    completeProcessedEvent: () => current!.completeProcessedEvent(),
   };
 }
 
@@ -532,8 +527,8 @@ describe("Devin wedge auto-recovery", () => {
         expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["work"]);
         expect(factory.stderrTaps.length).toBe(1);
         factory.stderrTaps[0]!(STALL_WATCH_LINE);
-        yield* factory.emitter(0).emitToolCall("tool-1", "inProgress");
-        factory.emitter(0).completeProcessedEvent();
+        yield* factory.emitToolCall("tool-1", "inProgress");
+        factory.completeProcessedEvent();
         yield* advanceTimers(10_000);
         expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["work"]);
       }).pipe(Effect.provide(makeWedgeTestLayer(factory))),
