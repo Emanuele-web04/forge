@@ -62,19 +62,40 @@ private func number(
     dictionary[key as String] as? NSNumber
 }
 
-private func onScreenWindowInfo() -> Result<[[String: Any]], AppSnapFailure> {
-    guard let windowInfo = CGWindowListCopyWindowInfo(
+private let windowListUnavailableFailure = AppSnapFailure(
+    code: "window_list_unavailable",
+    message: "macOS did not provide a window list."
+)
+
+private let excludedFrontmostApplicationFailure = AppSnapFailure(
+    code: "excluded_frontmost_application",
+    message: "Synara cannot capture its own window."
+)
+
+private func onScreenWindowInfo() -> [[String: Any]]? {
+    CGWindowListCopyWindowInfo(
         [.optionOnScreenOnly, .excludeDesktopElements],
         kCGNullWindowID
-    ) as? [[String: Any]] else {
-        return .failure(
-            AppSnapFailure(
-                code: "window_list_unavailable",
-                message: "macOS did not provide a window list."
-            )
-        )
+    ) as? [[String: Any]]
+}
+
+/// Shared layer-0 window eligibility predicate: on-screen, visible, shareable,
+/// and large enough to capture. Pure reads of the window dictionary.
+private func eligibleWindow(_ candidate: [String: Any]) -> (windowID: CGWindowID, bounds: CGRect)? {
+    guard number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
+          number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
+          number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
+          number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
+              CGWindowSharingType.none.rawValue,
+          let windowID = number(in: candidate, forKey: kCGWindowNumber)?.uint32Value,
+          let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
+          let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
+          bounds.width >= 2,
+          bounds.height >= 2
+    else {
+        return nil
     }
-    return .success(windowInfo)
+    return (windowID, bounds)
 }
 
 func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedWindow, AppSnapFailure> {
@@ -88,20 +109,11 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
     }
 
     if application.bundleIdentifier == excludedBundleIdentifier {
-        return .failure(
-            AppSnapFailure(
-                code: "excluded_frontmost_application",
-                message: "Synara cannot capture its own window."
-            )
-        )
+        return .failure(excludedFrontmostApplicationFailure)
     }
 
-    let windowInfo: [[String: Any]]
-    switch onScreenWindowInfo() {
-    case let .success(info):
-        windowInfo = info
-    case let .failure(failure):
-        return .failure(failure)
+    guard let windowInfo = onScreenWindowInfo() else {
+        return .failure(windowListUnavailableFailure)
     }
 
     // The on-screen window list is ordered front to back, so the first
@@ -109,31 +121,21 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
     // can still expose untitled auxiliary layer-0 windows (overlays, buffers)
     // above the focused document window, so prefer the frontmost *titled*
     // window and only fall back to the frontmost untitled candidate.
-    let processIdentifier = application.processIdentifier
     var chosen: (windowID: CGWindowID, bounds: CGRect, title: String?)?
     for candidate in windowInfo {
-        guard number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value == processIdentifier,
-              number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
-              number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
-              number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
-              number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
-                  CGWindowSharingType.none.rawValue,
-              let windowID = number(in: candidate, forKey: kCGWindowNumber)?.uint32Value,
-              let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
-              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
-              bounds.width >= 2,
-              bounds.height >= 2
+        guard number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value == application.processIdentifier,
+              let eligible = eligibleWindow(candidate)
         else {
             continue
         }
 
         let title = candidate[kCGWindowName as String] as? String
         if let title, !title.isEmpty {
-            chosen = (windowID, bounds, title)
+            chosen = (eligible.windowID, eligible.bounds, title)
             break
         }
         if chosen == nil {
-            chosen = (windowID, bounds, title)
+            chosen = (eligible.windowID, eligible.bounds, title)
         }
     }
 
@@ -159,23 +161,14 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
 }
 
 func listVisibleWindows(excludedBundleIdentifier: String) -> [WindowListEntry] {
-    guard case let .success(windowInfo) = onScreenWindowInfo() else {
+    guard let windowInfo = onScreenWindowInfo() else {
         return []
     }
 
     var entries: [WindowListEntry] = []
     var iconBundleKeys = Set<String>()
     for candidate in windowInfo where entries.count < maximumListedWindows {
-        guard number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
-              number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
-              number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
-              number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
-                  CGWindowSharingType.none.rawValue,
-              let windowID = number(in: candidate, forKey: kCGWindowNumber)?.uint32Value,
-              let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
-              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
-              bounds.width >= 2,
-              bounds.height >= 2,
+        guard let eligible = eligibleWindow(candidate),
               let ownerPID = number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value
         else {
             continue
@@ -188,14 +181,13 @@ func listVisibleWindows(excludedBundleIdentifier: String) -> [WindowListEntry] {
         }
 
         let title = candidate[kCGWindowName as String] as? String
-        let iconKey = bundleIdentifier ?? ""
-        let shouldAttachIcon = !iconBundleKeys.contains(iconKey)
-        iconBundleKeys.insert(iconKey)
-        let iconDataURL = shouldAttachIcon ? application.flatMap { appIconDataURL(for: $0) } : nil
+        let iconDataURL = iconBundleKeys.insert(bundleIdentifier ?? "").inserted
+            ? application.flatMap { appIconDataURL(for: $0) }
+            : nil
 
         entries.append(
             WindowListEntry(
-                windowID: windowID,
+                windowID: eligible.windowID,
                 appName: application?.localizedName,
                 bundleIdentifier: bundleIdentifier,
                 windowTitle: title,
@@ -210,27 +202,15 @@ func selectWindow(
     withID windowID: CGWindowID,
     excludedBundleIdentifier: String
 ) -> Result<SelectedWindow, AppSnapFailure> {
-    let windowInfo: [[String: Any]]
-    switch onScreenWindowInfo() {
-    case let .success(info):
-        windowInfo = info
-    case let .failure(failure):
-        return .failure(failure)
+    guard let windowInfo = onScreenWindowInfo() else {
+        return .failure(windowListUnavailableFailure)
     }
 
     for candidate in windowInfo {
         guard number(in: candidate, forKey: kCGWindowNumber)?.uint32Value == windowID else {
             continue
         }
-        guard number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
-              number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
-              number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
-              number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
-                  CGWindowSharingType.none.rawValue,
-              let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
-              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
-              bounds.width >= 2,
-              bounds.height >= 2,
+        guard let eligible = eligibleWindow(candidate),
               let ownerPID = number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value,
               let application = NSRunningApplication(processIdentifier: ownerPID)
         else {
@@ -242,18 +222,13 @@ func selectWindow(
             )
         }
         if application.bundleIdentifier == excludedBundleIdentifier {
-            return .failure(
-                AppSnapFailure(
-                    code: "excluded_frontmost_application",
-                    message: "Synara cannot capture its own window."
-                )
-            )
+            return .failure(excludedFrontmostApplicationFailure)
         }
 
         return .success(
             SelectedWindow(
                 windowID: windowID,
-                bounds: bounds,
+                bounds: eligible.bounds,
                 sourceAppName: application.localizedName,
                 sourceBundleIdentifier: application.bundleIdentifier,
                 sourceAppIconDataURL: appIconDataURL(for: application),

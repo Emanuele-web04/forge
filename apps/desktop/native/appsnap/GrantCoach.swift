@@ -3,7 +3,7 @@ import Carbon
 
 /// Copied from the Cue overlay (GrantCoach.swift, AppDragView.swift, Overlay.swift,
 /// CueTokens.swift) and refactored for the Synara helper: only the app name, app
-/// bundle path, permission pane, and emitter wiring are parameterized. The drag
+/// bundle path, and permission pane are parameterized. The drag
 /// session follows zats/permiso's AppDragSourceView (proven against the System
 /// Settings privacy lists). The panel stays movable by its background like Cue,
 /// while the chip opts out of window movement so dragging it moves only the
@@ -19,16 +19,7 @@ func cuePaintFill(_ view: NSView, fill: NSColor, stroke: NSColor, width: CGFloat
 }
 
 enum CueTokens {
-    static let space1: CGFloat = 4
-    static let space2: CGFloat = 8
-    static let space3: CGFloat = 12
-    static let space4: CGFloat = 16
-    static let space5: CGFloat = 24
-    static let space6: CGFloat = 32
-
     static let radiusChrome: CGFloat = 12
-    static let radiusCard: CGFloat = 8
-    static let radiusControl: CGFloat = 6
 
     static let hairline: CGFloat = 0.5
 
@@ -108,9 +99,6 @@ final class CueChromeView: NSView {
 
 final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource {
     var onDragBegan: (() -> Void)?
-    var showsGrip = false {
-        didSet { gripView.isHidden = !showsGrip }
-    }
 
     private let dragURL: URL
     private let titleField: NSTextField
@@ -128,7 +116,6 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
         gripView.image = NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: nil)
         gripView.contentTintColor = .tertiaryLabelColor
         gripView.imageScaling = .scaleProportionallyUpOrDown
-        gripView.isHidden = true
         addSubview(gripView)
         if let icon = NSWorkspace.shared.icon(forFile: appPath) as NSImage?,
            !icon.isTemplate, icon.size.width > 1 {
@@ -141,8 +128,6 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
         addSubview(iconView)
         titleField.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         titleField.textColor = .labelColor
-        titleField.drawsBackground = false
-        titleField.isBordered = false
         titleField.alignment = .left
         addSubview(titleField)
         toolTip = toolTipText
@@ -159,19 +144,16 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
 
     override func layout() {
         super.layout()
-        let grip: CGFloat = showsGrip ? 14 : 0
         let icon: CGFloat = 16
         let inset: CGFloat = 8
         let gap: CGFloat = 4
-        if showsGrip {
-            gripView.frame = NSRect(
-                x: inset,
-                y: (bounds.height - 12) / 2,
-                width: 12,
-                height: 12
-            )
-        }
-        let iconX = inset + (showsGrip ? grip + gap : 0)
+        gripView.frame = NSRect(
+            x: inset,
+            y: (bounds.height - 12) / 2,
+            width: 12,
+            height: 12
+        )
+        let iconX = inset + 14 + gap
         iconView.frame = NSRect(
             x: iconX,
             y: (bounds.height - icon) / 2,
@@ -247,18 +229,12 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
     }
 }
 
-enum CoachPhase {
-    case dismissed
-    case presented
-}
-
 @MainActor
 final class GrantCoach {
     private let appName: String
     private let appPath: String
     private let pane: String
-    private let emitter: NDJSONEmitter
-    private var phase: CoachPhase = .dismissed
+    private var isPresented = false
     private var panel: NSPanel?
     private var followTimer: Timer?
     private var grantTimer: Timer?
@@ -269,11 +245,10 @@ final class GrantCoach {
     private var titleField: NSTextField?
     private var lastFollow = CGRect.null
 
-    init(appName: String, appPath: String, pane: String, emitter: NDJSONEmitter) {
+    init(appName: String, appPath: String, pane: String) {
         self.appName = appName
         self.appPath = appPath
         self.pane = pane
-        self.emitter = emitter
     }
 
     private var paneTitle: String {
@@ -286,7 +261,7 @@ final class GrantCoach {
         if panel == nil {
             build()
         }
-        phase = .presented
+        isPresented = true
         lastFollow = .null
         titleField?.stringValue = "Drop \(appName) on the list above."
         installEscapeHotKey()
@@ -307,8 +282,8 @@ final class GrantCoach {
     }
 
     func dismiss() {
-        guard phase == .presented else { return }
-        phase = .dismissed
+        guard isPresented else { return }
+        isPresented = false
         removeEscapeHotKey()
         followTimer?.invalidate()
         followTimer = nil
@@ -318,15 +293,9 @@ final class GrantCoach {
     }
 
     func dismissFromEscape() {
-        guard phase == .presented else { return }
+        guard isPresented else { return }
         dismiss()
         onDismissed?()
-    }
-
-    /// Parent-initiated close (stdin `close` line). Reports the same closed
-    /// signal as an Escape dismissal so the app can keep its guide state honest.
-    func dismissFromParent() {
-        dismissFromEscape()
     }
 
     private func checkGranted() {
@@ -395,7 +364,6 @@ final class GrantCoach {
             appPath: appPath,
             toolTipText: "Drag \(appName) onto the \(paneTitle) list"
         )
-        chip.showsGrip = true
         chip.onDragBegan = { [weak self] in
             self?.titleField?.stringValue = "Turn \(self?.appName ?? "the app") on, then quit if asked."
         }
@@ -404,7 +372,7 @@ final class GrantCoach {
     }
 
     private func follow() {
-        guard phase == .presented, let panel else { return }
+        guard isPresented, let panel else { return }
         let size = panel.frame.size
         let next: CGRect
         if let settings = settingsCocoaFrame() {

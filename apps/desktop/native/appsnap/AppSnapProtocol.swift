@@ -29,6 +29,29 @@ struct AppSnapOptions {
         var guideAppName: String?
         var index = 0
 
+        // Consumes the value token after a flag, keeping the "--flag requires
+        // …" usage errors identical across flags.
+        func readValue(_ flag: String, _ what: String) throws -> String {
+            index += 1
+            guard index < arguments.count else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "\(flag) requires \(what)."
+                )
+            }
+            return arguments[index]
+        }
+
+        // Watch-only flags are invalid in every non-watch mode.
+        func rejectWatchArguments(_ message: String) throws {
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: message
+                )
+            }
+        }
+
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
@@ -41,52 +64,17 @@ struct AppSnapOptions {
                 }
                 requestedMode = argument
             case "--output-dir":
-                index += 1
-                guard index < arguments.count else {
-                    throw AppSnapFailure(
-                        code: "invalid_arguments",
-                        message: "--output-dir requires a path."
-                    )
-                }
-                outputDirectory = arguments[index]
+                outputDirectory = try readValue("--output-dir", "a path")
             case "--excluded-bundle-id":
-                index += 1
-                guard index < arguments.count else {
-                    throw AppSnapFailure(
-                        code: "invalid_arguments",
-                        message: "--excluded-bundle-id requires a bundle identifier."
-                    )
-                }
-                excludedBundleIdentifier = arguments[index]
+                excludedBundleIdentifier = try readValue("--excluded-bundle-id", "a bundle identifier")
             case "--external-trigger":
                 externalTrigger = true
             case "--pane":
-                index += 1
-                guard index < arguments.count else {
-                    throw AppSnapFailure(
-                        code: "invalid_arguments",
-                        message: "--pane requires a value."
-                    )
-                }
-                guidePane = arguments[index]
+                guidePane = try readValue("--pane", "a value")
             case "--app-path":
-                index += 1
-                guard index < arguments.count else {
-                    throw AppSnapFailure(
-                        code: "invalid_arguments",
-                        message: "--app-path requires a path."
-                    )
-                }
-                guideAppPath = arguments[index]
+                guideAppPath = try readValue("--app-path", "a path")
             case "--app-name":
-                index += 1
-                guard index < arguments.count else {
-                    throw AppSnapFailure(
-                        code: "invalid_arguments",
-                        message: "--app-name requires a value."
-                    )
-                }
-                guideAppName = arguments[index]
+                guideAppName = try readValue("--app-name", "a value")
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -98,28 +86,13 @@ struct AppSnapOptions {
 
         switch requestedMode {
         case "--check-permissions":
-            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
-                throw AppSnapFailure(
-                    code: "invalid_arguments",
-                    message: "Permission checks do not accept watch arguments."
-                )
-            }
+            try rejectWatchArguments("Permission checks do not accept watch arguments.")
             return AppSnapOptions(mode: .checkPermissions)
         case "--request-permissions":
-            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
-                throw AppSnapFailure(
-                    code: "invalid_arguments",
-                    message: "Permission requests do not accept watch arguments."
-                )
-            }
+            try rejectWatchArguments("Permission requests do not accept watch arguments.")
             return AppSnapOptions(mode: .requestPermissions)
         case "--permission-guide":
-            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
-                throw AppSnapFailure(
-                    code: "invalid_arguments",
-                    message: "The permission guide does not accept watch arguments."
-                )
-            }
+            try rejectWatchArguments("The permission guide does not accept watch arguments.")
             guard let guidePane, guidePane == "screen-recording" || guidePane == "input-monitoring" else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",

@@ -57,6 +57,17 @@ final class ExternalTriggerListener {
         }
     }
 
+    private func emitInvalidRequest(message: String, requestId: String? = nil) {
+        emitter.emitError(
+            AppSnapFailure(
+                code: "invalid_request",
+                message: message
+            ),
+            capturedAt: appSnapTimestamp(),
+            requestId: requestId
+        )
+    }
+
     private func handle(line: String) {
         let parts = line.split(
             separator: " ",
@@ -76,12 +87,8 @@ final class ExternalTriggerListener {
             }
         case "capture-window" where parts.count == 3:
             guard let windowID = UInt32(parts[2]) else {
-                emitter.emitError(
-                    AppSnapFailure(
-                        code: "invalid_request",
-                        message: "capture-window requires a numeric window id."
-                    ),
-                    capturedAt: appSnapTimestamp(),
+                emitInvalidRequest(
+                    message: "capture-window requires a numeric window id.",
                     requestId: parts[1]
                 )
                 return
@@ -91,15 +98,9 @@ final class ExternalTriggerListener {
                 onCaptureWindow(requestId, CGWindowID(windowID))
             }
         default:
-            let requestId = parts.count == 2 && parts[0] == "list-windows" ? parts[1] : nil
-            emitter.emitError(
-                AppSnapFailure(
-                    code: "invalid_request",
-                    message: "Unknown AppSnap helper request."
-                ),
-                capturedAt: appSnapTimestamp(),
-                requestId: requestId
-            )
+            // A well-formed `list-windows <id>` line always matches the case
+            // above, so unknown lines carry no requestId to correlate with.
+            emitInvalidRequest(message: "Unknown AppSnap helper request.")
         }
     }
 }

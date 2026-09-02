@@ -65,8 +65,7 @@ do {
             let coach = GrantCoach(
                 appName: appName,
                 appPath: appPath,
-                pane: pane,
-                emitter: emitter
+                pane: pane
             )
             let parentProcessMonitor = ParentProcessMonitor()
             parentProcessMonitor.start()
@@ -96,7 +95,7 @@ do {
             guard line == "close" else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    coach.dismissFromParent()
+                    coach.dismissFromEscape()
                 }
             }
         }
