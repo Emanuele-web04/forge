@@ -138,7 +138,7 @@ export function FeedbackDialogForm({
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [open]);
 
   const disabled = isSending || isDraftingIssue;
   const canSubmit = details.trim().length > 0 && !disabled;
