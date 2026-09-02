@@ -47,6 +47,7 @@ import {
   TerminalError,
   TerminalManager,
   TerminalManagerShape,
+  type TerminalActiveSessionDescriptor,
   type TerminalCloseOpenedAtOrBeforeInput,
   TerminalSessionState,
   TerminalStartInput,
@@ -2267,6 +2268,17 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     return [...this.sessions.values()].filter((session) => session.threadId === threadId);
   }
 
+  listActiveSessions(): TerminalActiveSessionDescriptor[] {
+    return [...this.sessions.values()].map((session) => ({
+      threadId: session.threadId,
+      terminalId: session.terminalId,
+      cwd: session.cwd,
+      status: session.status,
+      pid: session.pid,
+      updatedAt: session.updatedAt,
+    }));
+  }
+
   private async deleteAllHistoryForThread(threadId: string): Promise<void> {
     const threadPrefix = `${toSafeThreadId(threadId)}_`;
     for (const key of [...this.persistedHistoryByKey.keys()]) {
@@ -2419,6 +2431,7 @@ export const TerminalManagerLive = Layer.effect(
           catch: (cause) =>
             terminalErrorFromCause("Failed to close archived thread terminals", cause),
         }),
+      listActiveSessions: () => Effect.sync(() => runtime.listActiveSessions()),
       subscribe: (listener) =>
         Effect.sync(() => {
           runtime.on("event", listener);

@@ -9,6 +9,13 @@ import {
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
   WsPullRequestsReviewRequestCountRpc,
+  WsResourceCancelDiskScanRpc,
+  WsResourceCleanWorkspacesRpc,
+  WsResourceGetSnapshotRpc,
+  WsResourceKillAllSessionsRpc,
+  WsResourceKillSessionRpc,
+  WsResourceRestartDaemonRpc,
+  WsResourceScanDiskRpc,
   WsRpcError,
   WsRpcGroup,
 } from "./rpc";
@@ -45,5 +52,22 @@ describe("WS RPC contracts", () => {
 
   it("exports the count-only pull request review RPC", () => {
     expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
+  });
+
+  it("exports every resource-manager RPC through the feature group", () => {
+    expect(WsResourceGetSnapshotRpc).toBeDefined();
+    expect(WsResourceKillSessionRpc).toBeDefined();
+    expect(WsResourceKillAllSessionsRpc).toBeDefined();
+    expect(WsResourceCleanWorkspacesRpc).toBeDefined();
+    expect(WsResourceScanDiskRpc).toBeDefined();
+    expect(WsResourceCancelDiskScanRpc).toBeDefined();
+    expect(WsResourceRestartDaemonRpc).toBeDefined();
+    expect(WsFeatureRpcGroup.requests.has("resource.getSnapshot")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.killSession")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.killAllSessions")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.cleanWorkspaces")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.scanDisk")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.cancelDiskScan")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("resource.restartDaemon")).toBe(true);
   });
 });
