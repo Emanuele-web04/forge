@@ -223,7 +223,9 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
           id: project.id,
           title: project.name,
           cwd: project.cwd,
-          sources: project.sources,
+          // `sources` only exists on bases with multi-source projects; probe
+          // instead of accessing so this compiles on upstream too.
+          sources: "sources" in project && Array.isArray(project.sources) ? project.sources : [],
         })),
         configQuery.data?.homeDir ?? null,
       ),
