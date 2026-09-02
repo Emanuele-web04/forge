@@ -59,8 +59,6 @@ export interface ListLocalServersOptions {
   // "dev" (default) reports recognized dev servers only; "all" reports every
   // listening process except app internals (Orca-style "Puertos" view).
   readonly includeAll?: boolean;
-  // Bypass the short-lived scan cache (used for stop revalidation).
-  readonly fresh?: boolean;
   // Listener ports to drop from the result (e.g. Synara's own server/web
   // ports so the app never lists itself).
   readonly excludePorts?: readonly number[] | undefined;
@@ -1018,12 +1016,6 @@ export function buildLocalServerProcesses(
   );
 }
 
-const SCAN_CACHE_TTL_MS = 5_000;
-const scanCache = new Map<
-  string,
-  { expiresAtMs: number; promise: Promise<ServerListLocalServersResult> }
->();
-
 // Ports Synara itself listens on, from the environment the dev runner (or
 // desktop launcher) starts the server with. Lets the Ports panel exclude our
 // own server/web listeners; absent in environments that don't set them.
@@ -1049,8 +1041,8 @@ export function excludePortsFromListeners(
   return listeners.filter((listener) => !excluded.has(listener.port));
 }
 
-// lsof/ps spawns cost 50–200ms per cycle; concurrent Environment + sidebar
-// polls share one in-flight scan and reuse it for a few seconds.
+// Each scan shells out to lsof/ps (~50–200ms); callers poll at 10s intervals,
+// so no cache — every call sees fresh listeners.
 async function scanLocalServers(
   includeAll: boolean,
   excludePorts: readonly number[] | undefined,
@@ -1072,26 +1064,7 @@ async function scanLocalServers(
 export async function listLocalServers(
   options: ListLocalServersOptions = {},
 ): Promise<ServerListLocalServersResult> {
-  const includeAll = options.includeAll ?? false;
-  const excludePorts = options.excludePorts ?? [];
-  if (options.fresh) {
-    return scanLocalServers(includeAll, excludePorts);
-  }
-  const key = `${includeAll ? "all" : "dev"}:${[...excludePorts].toSorted((a, b) => a - b).join(",")}`;
-  const now = Date.now();
-  const cached = scanCache.get(key);
-  if (cached && cached.expiresAtMs > now) {
-    return cached.promise;
-  }
-  const promise = scanLocalServers(includeAll, excludePorts);
-  // Drop failed scans so the next call retries instead of serving a rejection.
-  promise.catch(() => {
-    if (scanCache.get(key)?.promise === promise) {
-      scanCache.delete(key);
-    }
-  });
-  scanCache.set(key, { expiresAtMs: now + SCAN_CACHE_TTL_MS, promise });
-  return promise;
+  return scanLocalServers(options.includeAll ?? false, options.excludePorts ?? []);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1115,7 +1088,7 @@ export async function stopLocalServer(
   const target =
     prevalidatedTarget !== undefined
       ? prevalidatedTarget
-      : (await listLocalServers({ includeAll: true, fresh: true })).servers.find(
+      : (await listLocalServers({ includeAll: true })).servers.find(
           (server) => server.pid === input.pid && server.ports.includes(input.port),
         );
 

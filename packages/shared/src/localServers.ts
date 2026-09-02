@@ -100,7 +100,8 @@ export interface PortProjectInput {
   readonly id: string;
   readonly title: string;
   readonly cwd: string;
-  readonly sources: readonly { readonly path: string }[];
+  // Absent on upstream bases that predate multi-source projects.
+  readonly sources?: readonly { readonly path: string }[];
 }
 
 /**
@@ -118,7 +119,7 @@ export function toPortProjectSources(
   return projects.map((project) => ({
     id: project.id,
     title: project.title,
-    roots: [project.cwd, ...project.sources.map((source) => source.path)].filter(
+    roots: [project.cwd, ...(project.sources ?? []).map((source) => source.path)].filter(
       (root) =>
         root.trim().length > 0 &&
         (normalizedHome === null || normalizeWorkspaceRootForComparison(root) !== normalizedHome),

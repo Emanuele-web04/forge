@@ -683,9 +683,7 @@ const makeWsRpcHandlersLayer = () =>
         port: number;
       }) {
         const localServer =
-          (yield* Effect.promise(() =>
-            listLocalServers({ includeAll: true, fresh: true }),
-          )).servers.find(
+          (yield* Effect.promise(() => listLocalServers({ includeAll: true }))).servers.find(
             (server) => server.pid === input.pid && server.ports.includes(input.port),
           ) ?? null;
         const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
