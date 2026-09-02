@@ -1,6 +1,9 @@
+// Scoring model and constants adapted from "mind" (https://github.com/Da7-Tech/mind), Copyright (c) 2026 Da7-Tech, MIT License.
 import type { MindMemoryType } from "@synara/contracts";
 
 export const CONFIRM_WEIGHT_BUMP = 0.15;
+// Synara choice: new memories start at 0.6 (plan 05 §6.2).
+export const INITIAL_WEIGHT = 0.6;
 export const MAX_WEIGHT = 1;
 export const STABILITY_BASE_DAYS = 3;
 export const STABILITY_PER_ACCESS_DAYS = 14;
