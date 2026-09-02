@@ -48,6 +48,7 @@ import {
 } from "./EnvironmentAutomationsSection";
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
+import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentStudioOutputsSection } from "./EnvironmentStudioOutputsSection";
@@ -365,6 +366,8 @@ export function EnvironmentPanel({
       ) : null}
 
       <EnvironmentLocalServersSection enabled={open} />
+
+      <EnvironmentResourcesSection enabled={open} />
 
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
