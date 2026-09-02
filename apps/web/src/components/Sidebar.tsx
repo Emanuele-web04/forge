@@ -438,6 +438,9 @@ import {
 const ExpandAllIcon = createCentralIconComponent("expand-45");
 const CollapseAllIcon = createCentralIconComponent("minimize-45");
 const SortFilterIcon = createCentralIconComponent("filter-2");
+// Mind nav glyph: the Central brain asset, matching the memory concept the same way
+// the clock carries "automations" across surfaces.
+const MindIcon = createCentralIconComponent("brain");
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const subscribeGitHubProvisioningCapability = (listener: () => void) =>
@@ -1403,6 +1406,7 @@ export default function Sidebar() {
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
+  const isOnMind = pathname.startsWith("/mind");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -3764,12 +3768,22 @@ export default function Sidebar() {
           void navigate({ to: "/automations" });
         },
       },
+      mind: {
+        icon: MindIcon,
+        label: "Mind",
+        active: isOnMind,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/mind" });
+        },
+      },
     }),
     [
       automationAttentionBadge,
       handlePrimaryNewThread,
       isOnAutomations,
       isOnKanban,
+      isOnMind,
       isOnPullRequests,
       navigate,
       prefetchModelsForPrimaryNewThread,
