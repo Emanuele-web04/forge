@@ -1,21 +1,108 @@
 // FILE: ComposerExtrasMenu.browser.tsx
-// Purpose: Verifies the composer `+` menu exposes generic file uploads and quick mode toggles.
+// Purpose: Verifies the composer `+` menu exposes generic file uploads, quick mode toggles, and the AppSnap window picker.
 // Layer: Browser UI test
 // Depends on: vitest browser rendering helpers and the ComposerExtrasMenu component.
 
 import "../../index.css";
 
 import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import type { ProviderInteractionMode } from "@synara/contracts";
+import type {
+  DesktopAppSnapCapture,
+  DesktopAppSnapState,
+  ProviderInteractionMode,
+  ThreadId,
+} from "@synara/contracts";
+
+const harness = vi.hoisted(() => ({
+  insertAppSnapCaptureIntoDraft: vi.fn(),
+  toastAdd: vi.fn(),
+}));
+
+vi.mock("~/appSnapIntake", () => ({
+  insertAppSnapCaptureIntoDraft: harness.insertAppSnapCaptureIntoDraft,
+}));
+
+vi.mock("~/components/ui/toast", () => ({
+  toastManager: { add: harness.toastAdd },
+}));
 
 import { ComposerExtrasMenu } from "./ComposerExtrasMenu";
+
+const threadId = "thread-1" as ThreadId;
+
+const READY_STATE: DesktopAppSnapState = {
+  platform: "macos",
+  supported: true,
+  enabled: true,
+  status: "ready",
+  shortcut: { kind: "both-option-keys" },
+  inputMonitoringPermission: "granted",
+  screenRecordingPermission: "granted",
+  message: null,
+  appDisplayName: "Synara (Dev)",
+};
+
+const CAPTURE: DesktopAppSnapCapture = {
+  id: "capture-1",
+  capturedAt: "2026-09-02T10:00:00.000Z",
+  name: "AppSnap-capture-1.png",
+  mimeType: "image/png",
+  sizeBytes: 5,
+  bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]),
+  sourceAppName: "Ghostty",
+  sourceBundleIdentifier: "com.mitchellh.ghostty",
+  sourceAppIconDataUrl: null,
+  sourceWindowTitle: "dev",
+};
+
+function setDesktopBridge(value: unknown): void {
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value,
+  });
+}
+
+function appSnapBridge(overrides: {
+  getState?: () => Promise<DesktopAppSnapState>;
+  listWindows?: () => Promise<unknown[]>;
+  captureWindow?: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
+  acknowledgeCapture?: (captureId: string) => Promise<void>;
+}) {
+  return {
+    appSnap: {
+      getState: overrides.getState ?? (() => Promise.resolve(READY_STATE)),
+      listWindows:
+        overrides.listWindows ??
+        (() =>
+          Promise.resolve([
+            {
+              windowId: 42,
+              appName: "Ghostty",
+              bundleIdentifier: "com.mitchellh.ghostty",
+              windowTitle: "dev",
+              appIconDataUrl: null,
+            },
+            {
+              windowId: 43,
+              appName: "Finder",
+              bundleIdentifier: "com.apple.finder",
+              windowTitle: null,
+              appIconDataUrl: null,
+            },
+          ])),
+      captureWindow: overrides.captureWindow ?? (() => Promise.resolve(CAPTURE)),
+      acknowledgeCapture: overrides.acknowledgeCapture ?? (() => Promise.resolve()),
+    },
+  };
+}
 
 async function mountMenu(props?: {
   fastModeEnabled?: boolean;
   interactionMode?: ProviderInteractionMode;
   supportsFastMode?: boolean;
+  threadId?: ThreadId;
 }) {
   const onAddAttachments = vi.fn();
   const onToggleFastMode = vi.fn();
@@ -27,6 +114,7 @@ async function mountMenu(props?: {
       interactionMode={props?.interactionMode ?? "default"}
       supportsFastMode={props?.supportsFastMode ?? true}
       fastModeEnabled={props?.fastModeEnabled ?? false}
+      {...(props?.threadId !== undefined ? { threadId: props.threadId } : {})}
       onAddAttachments={onAddAttachments}
       onToggleFastMode={onToggleFastMode}
       onInteractionModeChange={onInteractionModeChange}
@@ -49,8 +137,14 @@ async function mountMenu(props?: {
 }
 
 describe("ComposerExtrasMenu", () => {
+  beforeEach(() => {
+    harness.insertAppSnapCaptureIntoDraft.mockReset().mockResolvedValue("persisted");
+    harness.toastAdd.mockReset();
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
+    setDesktopBridge(undefined);
   });
 
   it("uses an unrestricted file picker and forwards every selected file", async () => {
@@ -108,5 +202,61 @@ describe("ComposerExtrasMenu", () => {
     await page.getByRole("menuitemradio", { name: "Fast" }).click();
 
     expect(menu.onToggleFastMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the AppSnap window picker without a desktop bridge", async () => {
+    await using _ = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Add files");
+      expect(text).not.toContain("Attach window");
+    });
+  });
+
+  it("lists windows and captures the picked window into the composer draft", async () => {
+    const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
+    const acknowledgeCapture = vi.fn(() => Promise.resolve());
+    setDesktopBridge(appSnapBridge({ captureWindow, acknowledgeCapture }));
+    await using _ = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+    await page.getByText("Attach window").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Ghostty");
+      expect(text).toContain("Finder");
+    });
+    await page.getByText("Ghostty").click();
+
+    await vi.waitFor(() => {
+      expect(captureWindow).toHaveBeenCalledWith({ windowId: 42 });
+      expect(harness.insertAppSnapCaptureIntoDraft).toHaveBeenCalledWith(threadId, CAPTURE);
+      expect(acknowledgeCapture).toHaveBeenCalledWith("capture-1");
+      expect(harness.toastAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "success", title: "AppSnap added" }),
+      );
+    });
+  });
+
+  it("points at Settings when AppSnap is not listening", async () => {
+    setDesktopBridge(
+      appSnapBridge({
+        getState: () => Promise.resolve({ ...READY_STATE, status: "disabled", enabled: false }),
+      }),
+    );
+    await using _ = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+    await page.getByText("Attach window").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Enable AppSnap in Settings");
+      expect(text).not.toContain("Ghostty");
+    });
   });
 });
