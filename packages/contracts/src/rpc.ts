@@ -207,6 +207,7 @@ import {
   ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerListLocalServersInput,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
@@ -1038,7 +1039,7 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
 });
 
 export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
-  payload: Schema.Struct({}),
+  payload: ServerListLocalServersInput,
   success: ServerListLocalServersResult,
   error: WsRpcError,
 });

@@ -21,7 +21,10 @@ export const serverQueryKeys = {
   settings: () => ["server", "settings"] as const,
   providerAccounts: () => ["server", "providerAccounts"] as const,
   worktrees: () => ["server", "worktrees"] as const,
-  localServers: () => ["server", "localServers"] as const,
+  localServers: (includeAll?: boolean) =>
+    includeAll
+      ? (["server", "localServers", "all"] as const)
+      : (["server", "localServers"] as const),
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
@@ -209,15 +212,19 @@ export function serverLocalServersQueryOptions(
         enabled?: boolean;
         refetchInterval?: number | false;
         staleTime?: number;
+        // Full Orca-style scan (every listener) vs recognized dev servers only.
+        // Keyed separately so the sidebar's dev-only snapshot is unaffected.
+        includeAll?: boolean;
       } = true,
 ) {
   const options = typeof input === "boolean" ? { enabled: input } : input;
   const enabled = options.enabled ?? true;
+  const includeAll = options.includeAll ?? false;
   return queryOptions({
-    queryKey: serverQueryKeys.localServers(),
+    queryKey: serverQueryKeys.localServers(includeAll),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.server.listLocalServers();
+      return api.server.listLocalServers(includeAll ? { includeAll: true } : {});
     },
     enabled,
     staleTime: options.staleTime ?? LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,

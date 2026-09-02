@@ -80,7 +80,7 @@ import {
 } from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
-import { listLocalServers, stopLocalServer } from "./localServerMonitor";
+import { listLocalServers, resolveOwnListenerPorts, stopLocalServer } from "./localServerMonitor";
 import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
@@ -661,7 +661,9 @@ const makeWsRpcHandlersLayer = () =>
         port: number;
       }) {
         const localServer =
-          (yield* Effect.promise(() => listLocalServers())).servers.find(
+          (yield* Effect.promise(() =>
+            listLocalServers({ includeAll: true, fresh: true }),
+          )).servers.find(
             (server) => server.pid === input.pid && server.ports.includes(input.port),
           ) ?? null;
         const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
@@ -1763,9 +1765,14 @@ const makeWsRpcHandlersLayer = () =>
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
             "Failed to list managed worktrees",
           ),
-        [WS_METHODS.serverListLocalServers]: () =>
+        [WS_METHODS.serverListLocalServers]: (input) =>
           rpcEffect(
-            Effect.promise(() => listLocalServers()),
+            Effect.promise(() =>
+              listLocalServers({
+                includeAll: input.includeAll ?? false,
+                excludePorts: input.includeAll ? resolveOwnListenerPorts() : undefined,
+              }),
+            ),
             "Failed to list local servers",
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>

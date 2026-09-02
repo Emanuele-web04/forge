@@ -32,6 +32,7 @@ import {
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
+  type ServerListLocalServersInput,
   type ServerSettingsUpdatedPayload,
   type ServerVoiceTranscriptionResult,
   type TerminalEvent,
@@ -711,7 +712,8 @@ export function createWsNativeApi(): NativeApi {
       updateProvider: (input) =>
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
-      listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      listLocalServers: (input?: ServerListLocalServersInput) =>
+        transport.request(WS_METHODS.serverListLocalServers, input ?? {}),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
