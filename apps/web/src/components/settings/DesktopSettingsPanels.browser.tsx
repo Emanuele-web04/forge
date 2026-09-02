@@ -80,6 +80,15 @@ const READY_STATE: DesktopAppSnapState = {
   inputMonitoringPermission: "granted",
   screenRecordingPermission: "granted",
   message: null,
+  appDisplayName: "Synara (Dev)",
+};
+
+const DENIED_STATE: DesktopAppSnapState = {
+  ...READY_STATE,
+  status: "permission-required",
+  message: "Allow the required macOS permissions, then try again.",
+  inputMonitoringPermission: "denied",
+  screenRecordingPermission: "denied",
 };
 
 function setDesktopBridge(value: unknown): void {
@@ -231,6 +240,137 @@ describe("AppSnapSettingsPanel", () => {
       expect(harness.updateSettings).toHaveBeenCalledWith({
         appSnapShortcut: { kind: "key-chord", modifier: "option", key: "KeyS" },
       });
+    });
+
+    await mounted.unmount();
+  });
+
+  it("walks through a denied permission with the guided flow", async () => {
+    const pushedStateRef: { current: ((state: DesktopAppSnapState) => void) | null } = {
+      current: null,
+    };
+    const openPermissionSettings = vi.fn().mockResolvedValue(true);
+    const restartApp = vi.fn();
+    const showPermissionGuide = vi.fn().mockResolvedValue(undefined);
+    const hidePermissionGuide = vi.fn().mockResolvedValue(undefined);
+    setDesktopBridge({
+      appSnap: {
+        getState: vi.fn().mockResolvedValue(DENIED_STATE),
+        requestPermissions: vi.fn().mockResolvedValue(DENIED_STATE),
+        setEnabled: vi.fn().mockResolvedValue(DENIED_STATE),
+        checkShortcut: vi.fn().mockResolvedValue({ available: true, reason: null }),
+        setShortcut: vi.fn().mockResolvedValue({
+          state: DENIED_STATE,
+          availability: { available: true, reason: null },
+        }),
+        openPermissionSettings,
+        restartApp,
+        showPermissionGuide,
+        hidePermissionGuide,
+        onState: vi.fn((listener: (state: DesktopAppSnapState) => void) => {
+          pushedStateRef.current = listener;
+          return vi.fn();
+        }),
+      },
+    });
+
+    const mounted = await render(<AppSnapActivityHarness />);
+    await expect.element(mounted.getByText("Denied").first()).toBeVisible();
+
+    await mounted.getByRole("button", { name: "Grant" }).first().click();
+    await expect
+      .element(mounted.getByRole("button", { name: "Open Input Monitoring settings" }))
+      .toBeVisible();
+    expect(mounted.getByText("Find Synara (Dev) in the list and turn on its toggle.")).toBeTruthy();
+
+    await vi.waitFor(() => {
+      expect(openPermissionSettings).toHaveBeenCalledWith("input-monitoring");
+      expect(showPermissionGuide).toHaveBeenCalledWith("input-monitoring");
+    });
+
+    await mounted.getByRole("button", { name: "Restart Synara (Dev)" }).click();
+    await vi.waitFor(() => {
+      expect(restartApp).toHaveBeenCalledOnce();
+    });
+
+    pushedStateRef.current?.({ ...DENIED_STATE, inputMonitoringPermission: "granted" });
+    await vi.waitFor(() => {
+      expect(harness.toastAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "success", title: "Permission granted" }),
+      );
+      expect(hidePermissionGuide).toHaveBeenCalled();
+      expect(
+        mounted.getByRole("button", { name: "Open Input Monitoring settings" }),
+      ).not.toBeInTheDocument();
+    });
+
+    await mounted.unmount();
+  });
+
+  it("opens the guided flow automatically when enabling without permissions", async () => {
+    const showPermissionGuide = vi.fn().mockResolvedValue(undefined);
+    setDesktopBridge({
+      appSnap: {
+        getState: vi.fn().mockResolvedValue(DENIED_STATE),
+        requestPermissions: vi.fn().mockResolvedValue(DENIED_STATE),
+        setEnabled: vi.fn().mockResolvedValue(DENIED_STATE),
+        checkShortcut: vi.fn().mockResolvedValue({ available: true, reason: null }),
+        setShortcut: vi.fn().mockResolvedValue({
+          state: DENIED_STATE,
+          availability: { available: true, reason: null },
+        }),
+        showPermissionGuide,
+        onState: vi.fn(() => vi.fn()),
+      },
+    });
+
+    const mounted = await render(<AppSnapActivityHarness />);
+    await mounted.getByLabelText("Enable AppSnap").click();
+
+    await vi.waitFor(() => {
+      expect(mounted.getByRole("button", { name: "Open Input Monitoring settings" })).toBeVisible();
+      expect(showPermissionGuide).toHaveBeenCalledWith("input-monitoring");
+    });
+
+    await mounted.unmount();
+  });
+
+  it("shows recheck progress and reports unchanged permissions", async () => {
+    const releaseRecheckRef: { current: ((state: DesktopAppSnapState) => void) | null } = {
+      current: null,
+    };
+    setDesktopBridge({
+      appSnap: {
+        getState: vi.fn().mockResolvedValue(DENIED_STATE),
+        requestPermissions: vi.fn(
+          () =>
+            new Promise<DesktopAppSnapState>((resolve) => {
+              releaseRecheckRef.current = resolve;
+            }),
+        ),
+        setEnabled: vi.fn().mockResolvedValue(DENIED_STATE),
+        checkShortcut: vi.fn().mockResolvedValue({ available: true, reason: null }),
+        setShortcut: vi.fn().mockResolvedValue({
+          state: DENIED_STATE,
+          availability: { available: true, reason: null },
+        }),
+        onState: vi.fn(() => vi.fn()),
+      },
+    });
+
+    const mounted = await render(<AppSnapActivityHarness />);
+    await mounted.getByRole("button", { name: "Recheck permissions" }).click();
+
+    const rechecking = mounted.getByRole("button", { name: "Rechecking…" });
+    await expect.element(rechecking).toBeVisible();
+    expect(rechecking).toBeDisabled();
+
+    releaseRecheckRef.current?.(DENIED_STATE);
+    await vi.waitFor(() => {
+      expect(harness.toastAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "info", title: "Permissions unchanged" }),
+      );
+      expect(mounted.getByRole("button", { name: "Recheck permissions" })).toBeEnabled();
     });
 
     await mounted.unmount();

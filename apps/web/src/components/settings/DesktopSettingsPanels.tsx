@@ -5,6 +5,7 @@
 
 import {
   type DesktopAppSnapPermission,
+  type DesktopAppSnapSettingsPane,
   type DesktopAppSnapState,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
@@ -27,13 +28,16 @@ import {
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
 } from "~/settingsPanelStyles";
-import { Button } from "~/components/ui/button";
-import { Switch } from "~/components/ui/switch";
-import { toastManager } from "~/components/ui/toast";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { AppSnapPermissionGuide } from "./AppSnapPermissionGuide";
 import { AppSnapShortcutControl } from "./AppSnapShortcutControl";
 import { SettingResetButton } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
+import { Button } from "~/components/ui/button";
+import { Spinner } from "~/components/ui/spinner";
+import { Switch } from "~/components/ui/switch";
+import { toastManager } from "~/components/ui/toast";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
   if (!state) return "Available in the Synara desktop app";
@@ -76,6 +80,20 @@ function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPerm
     </span>
   );
 }
+
+function appSnapPanePermission(
+  state: DesktopAppSnapState,
+  pane: DesktopAppSnapSettingsPane,
+): DesktopAppSnapPermission {
+  return pane === "input-monitoring"
+    ? state.inputMonitoringPermission
+    : state.screenRecordingPermission;
+}
+
+const APP_SNAP_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
+  "input-monitoring": "Input Monitoring",
+  "screen-recording": "Screen Recording",
+};
 
 export function NotificationsSettingsPanel({
   settings,
@@ -235,6 +253,8 @@ export function AppSnapSettingsPanel({
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const [openGuidePane, setOpenGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
+  const [recheckPending, setRecheckPending] = useState(false);
   const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: active });
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
@@ -257,6 +277,52 @@ export function AppSnapSettingsPanel({
       unsubscribe();
     };
   }, []);
+
+  // macOS fires no event when a TCC permission changes, so an open guide polls
+  // the helper's preflight until the grant shows up (or the user restarts).
+  useEffect(() => {
+    if (!openGuidePane) return;
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    let disposed = false;
+    const poll = () => {
+      void bridge
+        .getState()
+        .then((state) => {
+          if (!disposed) setAppSnapState(state);
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const interval = setInterval(poll, 2_000);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [openGuidePane]);
+
+  // The floating drag-in coach lives for exactly as long as the inline guide.
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    if (openGuidePane) {
+      void bridge.showPermissionGuide(openGuidePane).catch(() => undefined);
+    } else {
+      void bridge.hidePermissionGuide?.();
+    }
+  }, [openGuidePane]);
+
+  useEffect(() => {
+    if (!openGuidePane || !appSnapState) return;
+    if (appSnapPanePermission(appSnapState, openGuidePane) !== "granted") return;
+    const paneLabel = APP_SNAP_PANE_LABELS[openGuidePane];
+    setOpenGuidePane(null);
+    toastManager.add({
+      type: "success",
+      title: "Permission granted",
+      description: `${paneLabel} is ready for AppSnap.`,
+    });
+  }, [openGuidePane, appSnapState]);
 
   async function setAppSnapEnabled(nextEnabled: boolean) {
     const requestGuard = appSnapRequestGuardRef.current;
@@ -282,7 +348,13 @@ export function AppSnapSettingsPanel({
       const state = await bridge.setEnabled(nextEnabled);
       if (!requestGuard.isCurrent(requestId)) return;
       setAppSnapState(state);
-      if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
+      if (nextEnabled && state.status === "permission-required") {
+        if (state.inputMonitoringPermission !== "granted") {
+          setOpenGuidePane("input-monitoring");
+        } else if (state.screenRecordingPermission !== "granted") {
+          setOpenGuidePane("screen-recording");
+        }
+      } else if (nextEnabled && state.status === "error") {
         toastManager.add({
           type: "warning",
           title: "Finish AppSnap setup",
@@ -302,14 +374,23 @@ export function AppSnapSettingsPanel({
 
   async function recheckAppSnapPermissions() {
     const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
+    if (!bridge || recheckPending) return;
     const requestGuard = appSnapRequestGuardRef.current;
     const requestId = requestGuard.begin();
+    setRecheckPending(true);
     try {
       await bridge.requestPermissions();
       const state = await bridge.setEnabled(settings.enableAppSnap);
       if (!requestGuard.isCurrent(requestId)) return;
       setAppSnapState(state);
+      if (state.status === "permission-required") {
+        toastManager.add({
+          type: "info",
+          title: "Permissions unchanged",
+          description:
+            "Use Grant next to a permission to walk through setup. If you just granted, restart Synara to apply it.",
+        });
+      }
     } catch (error) {
       if (!requestGuard.isCurrent(requestId)) return;
       toastManager.add({
@@ -317,6 +398,8 @@ export function AppSnapSettingsPanel({
         title: "Could not check AppSnap permissions",
         description: error instanceof Error ? error.message : "Permission check failed.",
       });
+    } finally {
+      if (requestGuard.isCurrent(requestId)) setRecheckPending(false);
     }
   }
 
@@ -429,29 +512,94 @@ export function AppSnapSettingsPanel({
         />
       </SettingsSection>
 
-      {supported ? (
+      {supported && appSnapState ? (
         <SettingsSection title="macOS permissions">
-          <SettingsRow
-            title="Input Monitoring"
-            description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
-            control={<AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />}
-          />
-          <SettingsRow
-            title="Screen Recording"
-            description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
-            control={<AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />}
-          />
+          {(
+            [
+              {
+                pane: "input-monitoring" as const,
+                title: "Input Monitoring",
+                description:
+                  "Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded.",
+              },
+              {
+                pane: "screen-recording" as const,
+                title: "Screen Recording",
+                description:
+                  "Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord.",
+              },
+            ] as const
+          ).map(({ pane, title, description }) => {
+            const permission = appSnapPanePermission(appSnapState, pane);
+            const guideOpen = openGuidePane === pane;
+            return (
+              <SettingsRow
+                key={pane}
+                title={title}
+                description={description}
+                control={
+                  <div className="flex items-center gap-2">
+                    <AppSnapPermissionBadge permission={permission} />
+                    {permission !== "granted" ? (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => {
+                          const nextPane = guideOpen ? null : pane;
+                          setOpenGuidePane(nextPane);
+                          if (nextPane) {
+                            void window.desktopBridge?.appSnap
+                              ?.openPermissionSettings(pane)
+                              .catch(() => undefined);
+                          }
+                        }}
+                      >
+                        {guideOpen ? "Hide steps" : "Grant"}
+                      </Button>
+                    ) : null}
+                  </div>
+                }
+              >
+                <DisclosureRegion open={guideOpen}>
+                  <div className="pt-3">
+                    <AppSnapPermissionGuide
+                      pane={pane}
+                      appDisplayName={appSnapState.appDisplayName}
+                      waiting={permission !== "granted"}
+                      onOpenSettings={() => {
+                        void window.desktopBridge?.appSnap
+                          ?.openPermissionSettings(pane)
+                          .catch(() => undefined);
+                      }}
+                      onRestart={() => {
+                        void window.desktopBridge?.appSnap?.restartApp();
+                      }}
+                    />
+                  </div>
+                </DisclosureRegion>
+              </SettingsRow>
+            );
+          })}
           <SettingsRow
             title="Permission status"
-            description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+            description="Grant each permission with the steps above. macOS applies changes after a restart."
             control={
               <Button
                 type="button"
                 size="xs"
                 variant="outline"
+                disabled={recheckPending}
                 onClick={() => void recheckAppSnapPermissions()}
               >
-                Recheck permissions
+                {recheckPending ? (
+                  <>
+                    <Spinner className="size-3" />
+                    Rechecking…
+                  </>
+                ) : (
+                  "Recheck permissions"
+                )}
               </Button>
             }
           />
