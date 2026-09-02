@@ -55,6 +55,7 @@ import {
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
+  formatActivityRowTime,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
   resolveActivityScope,
@@ -66,6 +67,7 @@ import {
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
+import { DEFAULT_TIMESTAMP_FORMAT, type TimestampFormat } from "../appSettings";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import {
@@ -110,6 +112,7 @@ function ActivityThreadRow({
   pr,
   status,
   threadJumpLabel,
+  rowTime,
   onOpen,
   onSetSettled,
   onTogglePinned,
@@ -127,6 +130,8 @@ function ActivityThreadRow({
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   threadJumpLabel: string | null;
+  /** Pre-computed by the parent so every row in a section shares one clock. */
+  rowTime: string;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
@@ -149,13 +154,12 @@ function ActivityThreadRow({
     threadId: thread.id,
   });
   const actionToneClassName = "text-muted-foreground/42";
-  // One trailing slot, top-right, shared by every status: the accent dot for an
-  // unread completion and the running spinner (or state dot) for everything
-  // else — same rule and same glyphs the classic thread/project rows use.
+  // The status glyph lives inline in the second line (next to PR/branch) instead
+  // of the absolute top-right slot, so it stays visible while the hover actions
+  // appear — the classic rows fade it out exactly when it is most needed.
   const trailingStatus = resolveThreadStatusTrailingIndicator({
     status,
     isActive,
-    slotOccupied: Boolean(threadJumpLabel),
   });
   const threadJumpLabelParts = threadJumpLabel ? splitShortcutLabel(threadJumpLabel) : [];
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
@@ -189,7 +193,9 @@ function ActivityThreadRow({
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
             SIDEBAR_ROW_FOCUS_CLASS_NAME,
             isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
-            isSettled && "opacity-55 transition-opacity hover:opacity-85",
+            // Pinned rows never dim: dimming means "settled/done" in this feed,
+            // and a pinned-but-settled thread must not read as finished.
+            isSettled && !isPinned && "opacity-55 transition-opacity hover:opacity-85",
           )}
         >
           <span
@@ -232,6 +238,10 @@ function ActivityThreadRow({
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
               ) : null}
+              {trailingStatus ? <SidebarStatusTrailingGlyph status={trailingStatus} /> : null}
+              <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60">
+                {rowTime}
+              </span>
             </span>
           </span>
         </button>
@@ -246,17 +256,6 @@ function ActivityThreadRow({
               <Kbd key={part}>{part}</Kbd>
             ))}
           </KbdGroup>
-        ) : null}
-        {trailingStatus ? (
-          <span
-            data-slot="activity-completion-status"
-            className={cn(
-              "pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center",
-              sidebarHoverRevealHideClassName("activity-row"),
-            )}
-          >
-            <SidebarStatusTrailingGlyph status={trailingStatus} />
-          </span>
         ) : null}
         <span
           className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
@@ -507,22 +506,31 @@ function ActivityFilterMenu({
 function ActivityShowMoreRow({
   canShowMore,
   canShowLess,
+  hiddenCount,
+  pageSize,
   onShowMore,
   onShowLess,
 }: {
   canShowMore: boolean;
   canShowLess: boolean;
+  /** Rows still hidden; drives the "Show N more (M)" label. */
+  hiddenCount: number;
+  pageSize: number;
   onShowMore: () => void;
   onShowLess: () => void;
 }) {
   if (!canShowMore && !canShowLess) return null;
+  const visibleHiddenCount = Math.max(0, hiddenCount);
+  const nextPageCount = Math.min(pageSize, visibleHiddenCount);
+  const moreLabel =
+    nextPageCount > 0 ? `Show ${nextPageCount} more (${visibleHiddenCount})` : "Show more";
   const buttonClassName =
     "h-7 cursor-pointer rounded-lg px-2.5 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:text-foreground";
   return (
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
         <button type="button" className={cn(buttonClassName, "flex-1")} onClick={onShowMore}>
-          Show more
+          {moreLabel}
         </button>
       ) : null}
       {canShowLess ? (
@@ -561,6 +569,7 @@ export function SidebarActivityView({
   onVisibleThreadIdsChange,
   onCreateChat,
   onAddProject,
+  timestampFormat: timestampFormatProp,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -592,7 +601,12 @@ export function SidebarActivityView({
   onCreateChat: () => void;
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
+  /** Clock format for row timestamps; defaults to the app locale setting. */
+  timestampFormat?: TimestampFormat;
 }) {
+  // Default resolved in the body, not the destructuring pattern: an
+  // AssignmentPattern in the parameter list makes React Compiler bail out.
+  const timestampFormat = timestampFormatProp ?? DEFAULT_TIMESTAMP_FORMAT;
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
@@ -740,6 +754,7 @@ export function SidebarActivityView({
       }
       status={resolveThreadStatus(thread)}
       threadJumpLabel={threadJumpLabelByThreadId.get(thread.id) ?? null}
+      rowTime={formatActivityRowTime({ thread, nowMs, timestampFormat })}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
@@ -840,6 +855,8 @@ export function SidebarActivityView({
               <ActivityShowMoreRow
                 canShowMore={paging.canShowMore}
                 canShowLess={paging.canShowLess}
+                hiddenCount={group.threads.length - paging.previewLimit}
+                pageSize={ACTIVITY_LIST_PAGE_SIZE}
                 onShowMore={() => {
                   setProjectExtraPagesByKey((current) => {
                     const next = new Map(current);
@@ -895,6 +912,8 @@ export function SidebarActivityView({
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
+                hiddenCount={dateBuckets.earlier.length - earlierPaging.previewLimit}
+                pageSize={ACTIVITY_LIST_PAGE_SIZE}
                 onShowMore={() => setEarlierExtraPages(earlierPaging.effectiveExtraPages + 1)}
                 onShowLess={() =>
                   setEarlierExtraPages(Math.max(0, earlierPaging.effectiveExtraPages - 1))
@@ -917,6 +936,8 @@ export function SidebarActivityView({
           <ActivityShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
+            hiddenCount={model.settled.length - settledPaging.previewLimit}
+            pageSize={ACTIVITY_LIST_PAGE_SIZE}
             onShowMore={() => setSettledExtraPages(settledPaging.effectiveExtraPages + 1)}
             onShowLess={() =>
               setSettledExtraPages(Math.max(0, settledPaging.effectiveExtraPages - 1))
