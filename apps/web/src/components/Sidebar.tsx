@@ -209,8 +209,9 @@ import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButt
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
+import { SidebarElapsedTimeLabel } from "./SidebarElapsedTimeLabel";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -241,6 +242,7 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  resolveProjectThreadListExtraPages,
   subscribeSidebarUiState,
 } from "./Sidebar.uiState";
 import {
@@ -316,7 +318,9 @@ import {
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
-  pruneProjectThreadListPagingForCollapsedProjects,
+  isThreadActivelyWorking,
+  isUrgentThreadStatusPill,
+  pruneProjectThreadListExtraPagesById,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
@@ -610,8 +614,9 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
 /** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
 function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?: string): string {
   return cn(
+    // The status glyph stays visible on hover (only the meta chips fade), so the
+    // hover-action overlay carries its own solid background to sit above it.
     "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
-    sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "text-[10px]"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
@@ -1601,8 +1606,20 @@ export default function Sidebar() {
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
-  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
-  const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
+  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project id.
+  const [threadListExtraPagesByProjectId, setThreadListExtraPagesByProjectId] = useState<
+    ReadonlyMap<ProjectId, number>
+  >(
+    () =>
+      new Map<ProjectId, number>(
+        Object.entries(readSidebarUiState().projectThreadListExtraPagesById) as Array<
+          [ProjectId, number]
+        >,
+      ),
+  );
+  // Pre-migration paging keyed by normalized cwd: read-only fallback for the id-first
+  // lookup, preserved verbatim on persist but never written by the paging handlers.
+  const [legacyThreadListExtraPagesByCwd, setLegacyThreadListExtraPagesByCwd] = useState<
     ReadonlyMap<string, number>
   >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
@@ -1640,7 +1657,12 @@ export default function Sidebar() {
       subscribeSidebarUiState((state) => {
         setChatSectionExpanded(state.chatSectionExpanded);
         setChatThreadListExtraPages(state.chatThreadListExtraPages);
-        setThreadListExtraPagesByProjectCwd(
+        setThreadListExtraPagesByProjectId(
+          new Map<ProjectId, number>(
+            Object.entries(state.projectThreadListExtraPagesById) as Array<[ProjectId, number]>,
+          ),
+        );
+        setLegacyThreadListExtraPagesByCwd(
           new Map(Object.entries(state.projectThreadListExtraPagesByCwd)),
         );
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
@@ -3308,7 +3330,8 @@ export default function Sidebar() {
       persistSidebarUiState({
         chatSectionExpanded,
         chatThreadListExtraPages,
-        projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
+        projectThreadListExtraPagesByCwd: Object.fromEntries(legacyThreadListExtraPagesByCwd),
+        projectThreadListExtraPagesById: Object.fromEntries(threadListExtraPagesByProjectId),
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
@@ -3319,7 +3342,8 @@ export default function Sidebar() {
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
-      threadListExtraPagesByProjectCwd,
+      legacyThreadListExtraPagesByCwd,
+      threadListExtraPagesByProjectId,
     ],
   );
   const { activateThreadFromSidebarIntent } = useThreadActivationController({
@@ -3946,6 +3970,8 @@ export default function Sidebar() {
     canShowLessChatThreads,
     canShowMoreChatThreads,
     chatThreadListEffectiveExtraPages,
+    hiddenChatThreadCount,
+    chatShowMoreCount,
     renderedChatEntries,
   } = useMemo(() => {
     const paging = resolveSidebarThreadListPaging({
@@ -3959,6 +3985,7 @@ export default function Sidebar() {
       activeEntryId: activeChatPreviewEntry?.rowId,
       previewLimit: paging.previewLimit,
     });
+    const hiddenThreadCount = Math.max(0, visibleChatPreviewEntries.length - paging.previewLimit);
     return {
       // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
       // cap, so only offer "Show more" while rows are genuinely hidden.
@@ -3966,6 +3993,8 @@ export default function Sidebar() {
         paging.canShowMore && visibleEntries.length < visibleChatPreviewEntries.length,
       canShowLessChatThreads: paging.canShowLess,
       chatThreadListEffectiveExtraPages: paging.effectiveExtraPages,
+      hiddenChatThreadCount: hiddenThreadCount,
+      chatShowMoreCount: Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenThreadCount),
       renderedChatEntries: visibleEntries,
     };
   }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
@@ -4020,6 +4049,33 @@ export default function Sidebar() {
     () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
     [pinnedProjectIds, standardProjectsBase],
   );
+  // deriveSidebarProjectData still pages by normalized cwd, so resolve every surface
+  // project through the id-first lookup (stable id wins, legacy cwd map backfills).
+  const threadListExtraPagesByProjectCwd = useMemo(() => {
+    const resolved = new Map<string, number>();
+    for (const project of [...standardProjects, ...studioProjects]) {
+      const extraPages = resolveProjectThreadListExtraPages({
+        extraPagesById: threadListExtraPagesByProjectId,
+        legacyExtraPagesByCwd: legacyThreadListExtraPagesByCwd,
+        projectId: project.id,
+        projectCwd: project.cwd,
+      });
+      if (extraPages <= 0) {
+        continue;
+      }
+      const cwdKey = normalizeSidebarProjectThreadListCwd(project.cwd);
+      if (cwdKey.length === 0) {
+        continue;
+      }
+      resolved.set(cwdKey, Math.max(resolved.get(cwdKey) ?? 0, extraPages));
+    }
+    return resolved;
+  }, [
+    legacyThreadListExtraPagesByCwd,
+    standardProjects,
+    studioProjects,
+    threadListExtraPagesByProjectId,
+  ]);
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
     shouldShowProjectPathEntry: createProjectDialogOpen,
@@ -4089,11 +4145,10 @@ export default function Sidebar() {
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
     const settle = window.setTimeout(() => {
-      setThreadListExtraPagesByProjectCwd((current) =>
-        pruneProjectThreadListPagingForCollapsedProjects({
-          threadListExtraPagesByProjectCwd: current,
+      setThreadListExtraPagesByProjectId((current) =>
+        pruneProjectThreadListExtraPagesById({
+          threadListExtraPagesByProjectId: current,
           projects: standardProjects,
-          normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         }),
       );
     }, 0);
@@ -4127,7 +4182,8 @@ export default function Sidebar() {
     persistSidebarUiState({
       chatSectionExpanded,
       chatThreadListExtraPages,
-      projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
+      projectThreadListExtraPagesByCwd: Object.fromEntries(legacyThreadListExtraPagesByCwd),
+      projectThreadListExtraPagesById: Object.fromEntries(threadListExtraPagesByProjectId),
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
@@ -4137,7 +4193,8 @@ export default function Sidebar() {
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
-    threadListExtraPagesByProjectCwd,
+    legacyThreadListExtraPagesByCwd,
+    threadListExtraPagesByProjectId,
     lastThreadRoute,
   ]);
 
@@ -4353,7 +4410,13 @@ export default function Sidebar() {
     const includePinToggle = input.includePinToggle !== false;
 
     return (
-      <SidebarRowHoverActions threadId={input.threadId}>
+      <SidebarRowHoverActions
+        threadId={input.threadId}
+        testId={`thread-hover-actions-${input.threadId}`}
+        // Solid background so the actions read as an overlay above the status
+        // glyph, which no longer fades out on hover.
+        className="rounded-md bg-[var(--sidebar-background,var(--background))]"
+      >
         <div className="pointer-events-auto inline-flex items-center gap-2">
           {includePinToggle ? (
             <ThreadPinToggleButton
@@ -4719,6 +4782,16 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // Urgent rows keep a short time label in normal flow (next to the title, which
+    // truncates first) now that the trailing status slot is always visible.
+    // Running rows render a live "running for" elapsed via SidebarElapsedTimeLabel
+    // (1s tick scoped to the row); settled rows fall back to recency here.
+    const threadIsRunning =
+      isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
+    const urgentThreadRecency =
+      threadStatus !== null && isUrgentThreadStatusPill(threadStatus)
+        ? formatRelativeTime(thread.latestTurn?.completedAt ?? thread.updatedAt ?? thread.createdAt)
+        : null;
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
@@ -4826,18 +4899,23 @@ export default function Sidebar() {
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
               suffix={
-                showTemporaryThreadIcon ? (
+                showTemporaryThreadIcon || threadIsRunning || urgentThreadRecency !== null ? (
                   <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                            <TemporaryThreadIcon />
-                          </span>
-                        }
-                      />
-                      <TooltipPopup side="top">Temporary chat</TooltipPopup>
-                    </Tooltip>
+                    {threadIsRunning || urgentThreadRecency !== null ? (
+                      <SidebarElapsedTimeLabel thread={thread} recencyLabel={urgentThreadRecency} />
+                    ) : null}
+                    {showTemporaryThreadIcon ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                              <TemporaryThreadIcon />
+                            </span>
+                          }
+                        />
+                        <TooltipPopup side="top">Temporary chat</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
                   </div>
                 ) : undefined
               }
@@ -4887,6 +4965,14 @@ export default function Sidebar() {
       canShowMoreThreads,
       canShowLessThreads,
     } = projectSidebarData;
+    // "Show more" reveals one page; the label names that page and the total still hidden.
+    const projectPreviewLimit =
+      THREAD_PREVIEW_LIMIT + threadListExtraPages * THREAD_PREVIEW_PAGE_SIZE;
+    const hiddenProjectThreadCount = Math.max(
+      0,
+      orderedProjectThreadIds.length - projectPreviewLimit,
+    );
+    const projectShowMoreCount = Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenProjectThreadCount);
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -5026,7 +5112,12 @@ export default function Sidebar() {
             >
               <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
             </button>
-            <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarSectionToolbar
+              placement="overlay"
+              revealOnHover
+              // Solid background so the toolbar reads as an overlay above the row content.
+              className="rounded-md bg-[var(--sidebar-background,var(--background))]"
+            >
               <SidebarIconButton
                 icon={IoIosGitCompare}
                 label={`View pull requests for ${project.name}`}
@@ -5122,10 +5213,12 @@ export default function Sidebar() {
                         className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
-                          showMoreThreadsForProject(project.cwd, threadListExtraPages);
+                          showMoreThreadsForProject(project.id, threadListExtraPages);
                         }}
                       >
-                        <span>Show more</span>
+                        <span>
+                          Show {projectShowMoreCount} more ({hiddenProjectThreadCount})
+                        </span>
                       </SidebarMenuSubButton>
                     )}
                     {canShowLessThreads && (
@@ -5140,7 +5233,7 @@ export default function Sidebar() {
                         )}
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
-                          showLessThreadsForProject(project.cwd, threadListExtraPages);
+                          showLessThreadsForProject(project.id, threadListExtraPages);
                         }}
                       >
                         <span>Show less</span>
@@ -5824,17 +5917,15 @@ export default function Sidebar() {
   // Both handlers step from the *effective* (clamped) page count reported by the derived
   // project data, so stale/oversized stored paging self-heals on the very next click.
   const setThreadListExtraPagesForProject = useCallback(
-    (projectCwd: string, nextExtraPages: number) => {
-      const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-      if (cwdKey.length === 0) return;
-      setThreadListExtraPagesByProjectCwd((current) => {
+    (projectId: ProjectId, nextExtraPages: number) => {
+      setThreadListExtraPagesByProjectId((current) => {
         const clampedExtraPages = Math.max(0, nextExtraPages);
-        if ((current.get(cwdKey) ?? 0) === clampedExtraPages) return current;
+        if ((current.get(projectId) ?? 0) === clampedExtraPages) return current;
         const next = new Map(current);
         if (clampedExtraPages === 0) {
-          next.delete(cwdKey);
+          next.delete(projectId);
         } else {
-          next.set(cwdKey, clampedExtraPages);
+          next.set(projectId, clampedExtraPages);
         }
         return next;
       });
@@ -5843,15 +5934,15 @@ export default function Sidebar() {
   );
 
   const showMoreThreadsForProject = useCallback(
-    (projectCwd: string, currentExtraPages: number) => {
-      setThreadListExtraPagesForProject(projectCwd, currentExtraPages + 1);
+    (projectId: ProjectId, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectId, currentExtraPages + 1);
     },
     [setThreadListExtraPagesForProject],
   );
 
   const showLessThreadsForProject = useCallback(
-    (projectCwd: string, currentExtraPages: number) => {
-      setThreadListExtraPagesForProject(projectCwd, currentExtraPages - 1);
+    (projectId: ProjectId, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectId, currentExtraPages - 1);
     },
     [setThreadListExtraPagesForProject],
   );
@@ -6147,6 +6238,7 @@ export default function Sidebar() {
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
                     pinnedThreadIdSet={pinnedThreadIdSet}
+                    timestampFormat={appSettings.timestampFormat}
                     settledOverrideByThreadId={settledOverrideByThreadId}
                     threadsHydrated={threadsHydrated}
                     resolveThreadStatus={resolveThreadStatusForSidebar}
@@ -6390,7 +6482,9 @@ export default function Sidebar() {
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
                               }
                             >
-                              <span>Show more</span>
+                              <span>
+                                Show {chatShowMoreCount} more ({hiddenChatThreadCount})
+                              </span>
                             </SidebarMenuButton>
                           ) : null}
                           {canShowLessChatThreads ? (

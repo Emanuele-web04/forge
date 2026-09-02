@@ -158,7 +158,7 @@ describe("SidebarActivityView", () => {
     });
     expect(document.querySelector('[title="#42 PR merged: Live merged PR"]')).not.toBeNull();
 
-    await page.getByRole("button", { name: "Show more" }).click();
+    await page.getByRole("button", { name: /Show \d+ more \(\d+\)/ }).click();
     await vi.waitFor(() => {
       expect(document.querySelectorAll("[data-testid^='activity-thread-']")).toHaveLength(40);
       expect(onVisibleThreadIdsChange.mock.lastCall?.[0]).toHaveLength(40);
@@ -274,14 +274,15 @@ describe("SidebarActivityView", () => {
       }),
     );
 
-    const completedDot = page
-      .getByTestId(`activity-thread-${unseen.id}`)
-      .element()
-      .parentElement?.querySelector('[aria-label="Unread completion"]');
+    const unseenRowButton = page.getByTestId(`activity-thread-${unseen.id}`).element();
+    const completedDot = unseenRowButton.parentElement?.querySelector(
+      '[aria-label="Unread completion"]',
+    );
     expect(completedDot).not.toBeNull();
-    expect(completedDot?.parentElement?.dataset.slot).toBe("activity-completion-status");
-    const completedStatusSlot = completedDot?.parentElement;
-    const completedStatusLeft = completedStatusSlot?.getBoundingClientRect().left;
+    // The status glyph lives inline in the row's second line (next to PR/branch),
+    // not in an absolutely-positioned slot that hovers actions would cover.
+    expect(unseenRowButton.contains(completedDot ?? null)).toBe(true);
+    const completedStatusLeft = completedDot?.getBoundingClientRect().left;
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
@@ -293,9 +294,11 @@ describe("SidebarActivityView", () => {
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
     await vi.waitFor(() => {
-      expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
+      // The inline status stays visible while hover actions appear (it no longer
+      // fades out) and the row must not shift around it.
+      expect(getComputedStyle(completedDot!).opacity).not.toBe("0");
     });
-    expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
+    expect(completedDot?.getBoundingClientRect().left).toBe(completedStatusLeft);
     await page.getByRole("button", { name: "Done" }).click();
     expect(onMarkThreadRead).toHaveBeenCalledWith(
       unseen.id,
