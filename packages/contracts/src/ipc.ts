@@ -198,13 +198,6 @@ import type {
   ServerVoiceTranscriptionResult,
 } from "./server";
 import type {
-  ServerCreateProviderAccountInput,
-  ServerListProviderAccountsResult,
-  ServerProviderAccountInput,
-  ServerProviderAccountMutationResult,
-  ServerSetActiveProviderAccountInput,
-} from "./providerAccounts";
-import type {
   TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
@@ -797,19 +790,6 @@ export interface NativeApi {
     getEnvironment: () => Promise<ServerGetEnvironmentResult>;
     getSettings: () => Promise<ServerGetSettingsResult>;
     updateSettings: (input: ServerUpdateSettingsInput) => Promise<ServerUpdateSettingsResult>;
-    listProviderAccounts: () => Promise<ServerListProviderAccountsResult>;
-    createProviderAccount: (
-      input: ServerCreateProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    setActiveProviderAccount: (
-      input: ServerSetActiveProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    reauthenticateProviderAccount: (
-      input: ServerProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    deleteProviderAccount: (
-      input: ServerProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
     getAuthSession: () => Promise<AuthSessionState>;
     bootstrapAuth: (input: AuthBootstrapInput) => Promise<AuthBootstrapResult>;
     bootstrapBearerAuth: (input: AuthBootstrapInput) => Promise<AuthBearerBootstrapResult>;

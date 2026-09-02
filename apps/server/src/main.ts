@@ -57,7 +57,6 @@ import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntime
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
-import { ProviderAccountService } from "./providerAccounts";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
@@ -394,7 +393,6 @@ const makeServerProgram = (input: CliInput) =>
     const openDeps = yield* Open;
     const serverAuth = yield* ServerAuth;
     const serverSettings = yield* ServerSettingsService;
-    const providerAccounts = yield* ProviderAccountService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
@@ -447,18 +445,14 @@ const makeServerProgram = (input: CliInput) =>
         readonly claudeAgent: { readonly enabled: boolean; readonly binaryPath?: string };
       };
     }) =>
-      Effect.gen(function* () {
-        const account = yield* providerAccounts.resolveEnvironment("claudeAgent");
-        yield* Effect.promise(() =>
-          claudeKeepalive.reconcile({
-            enabled: settings.providers.claudeAgent.enabled,
-            env: account.env,
-            ...(settings.providers.claudeAgent.binaryPath !== undefined
-              ? { binaryPath: settings.providers.claudeAgent.binaryPath }
-              : {}),
-          }),
-        );
-      });
+      Effect.promise(() =>
+        claudeKeepalive.reconcile({
+          enabled: settings.providers.claudeAgent.enabled,
+          ...(settings.providers.claudeAgent.binaryPath !== undefined
+            ? { binaryPath: settings.providers.claudeAgent.binaryPath }
+            : {}),
+        }),
+      );
     // Attach before reading the initial snapshot. The settings PubSub does not
     // replay, so reading first could miss a disable/path update in the small
     // window before the stream consumer subscribes.
@@ -469,12 +463,6 @@ const makeServerProgram = (input: CliInput) =>
     yield* Stream.fromQueue(claudeKeepaliveSettingsChanges).pipe(
       Stream.runForEach(reconcileClaudeKeepalive),
       Effect.ensuring(Effect.promise(() => claudeKeepalive.stop())),
-      Effect.forkChild,
-    );
-    yield* providerAccounts.streamChanges.pipe(
-      Stream.runForEach(() =>
-        serverSettings.getSettings.pipe(Effect.flatMap(reconcileClaudeKeepalive)),
-      ),
       Effect.forkChild,
     );
 

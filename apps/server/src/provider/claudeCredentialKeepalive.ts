@@ -74,7 +74,6 @@ export function resolveClaudeCredentialKeepaliveIntervalMs(env: NodeJS.ProcessEn
 async function nudgeClaudeTokenRefresh(
   binaryPath: string,
   homeDir: string | undefined,
-  env: NodeJS.ProcessEnv,
   signal: AbortSignal,
 ): Promise<void> {
   const release = await acquireClaudeAuthStatusLockWithSignal(signal);
@@ -83,7 +82,7 @@ async function nudgeClaudeTokenRefresh(
       encoding: "utf8",
       timeout: COMMAND_TIMEOUT_MS,
       signal,
-      env: buildClaudeProcessEnv(homeDir ? { env, homeDir } : { env }),
+      env: buildClaudeProcessEnv(homeDir ? { homeDir } : undefined),
       requireExecutable: true,
     });
   } finally {
@@ -132,7 +131,6 @@ export interface ClaudeCredentialKeepaliveController {
   readonly reconcile: (input: {
     readonly enabled: boolean;
     readonly binaryPath?: string;
-    readonly env?: NodeJS.ProcessEnv;
   }) => Promise<void>;
   readonly stop: () => Promise<void>;
 }
@@ -146,7 +144,6 @@ export function startClaudeCredentialKeepalive(input?: {
   readonly runAuthStatus?: (input: {
     readonly binaryPath: string;
     readonly homeDir: string | undefined;
-    readonly env: NodeJS.ProcessEnv;
     readonly signal: AbortSignal;
   }) => Promise<void>;
 }): ClaudeCredentialKeepaliveHandle {
@@ -157,7 +154,7 @@ export function startClaudeCredentialKeepalive(input?: {
   const log = input?.log ?? (() => {});
   const runAuthStatus =
     input?.runAuthStatus ??
-    ((input) => nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.env, input.signal));
+    ((input) => nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.signal));
 
   // Only run when explicitly enabled. The check touches Claude Code auth data, so
   // Synara should not do it as background work merely because the app opened.
@@ -175,7 +172,7 @@ export function startClaudeCredentialKeepalive(input?: {
     if (stopped || activeTick) {
       return activeTick ?? Promise.resolve();
     }
-    activeTick = runAuthStatus({ binaryPath, homeDir, env, signal: abortController.signal })
+    activeTick = runAuthStatus({ binaryPath, homeDir, signal: abortController.signal })
       .catch((cause) => {
         if (abortController.signal.aborted) return;
         // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure
@@ -224,7 +221,6 @@ export function createClaudeCredentialKeepaliveController(input?: {
   const start = input?.start ?? startClaudeCredentialKeepalive;
   let active: {
     readonly binaryPath: string;
-    readonly environmentKey: string;
     readonly handle: ClaudeCredentialKeepaliveHandle;
   } | null = null;
   let transitionQueue = Promise.resolve();
@@ -252,18 +248,15 @@ export function createClaudeCredentialKeepaliveController(input?: {
           return;
         }
         const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(settings.binaryPath);
-        const env = settings.env ?? input?.env ?? process.env;
-        const environmentKey = env.CLAUDE_CONFIG_DIR?.trim() ?? "system";
-        if (active?.binaryPath === binaryPath && active.environmentKey === environmentKey) {
+        if (active?.binaryPath === binaryPath) {
           return;
         }
         await stopActive();
         active = {
           binaryPath,
-          environmentKey,
           handle: start({
             ...(input?.platform ? { platform: input.platform } : {}),
-            env,
+            ...(input?.env ? { env: input.env } : {}),
             binaryPath,
             ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
             ...(input?.log ? { log: input.log } : {}),

@@ -143,11 +143,6 @@ import {
 } from "./providerDiscovery";
 import { ProviderCompactThreadInput } from "./provider";
 import {
-  ServerCreateProviderAccountInput,
-  ServerProviderAccountInput,
-  ServerSetActiveProviderAccountInput,
-} from "./providerAccounts";
-import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestDetailInput,
@@ -243,11 +238,6 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverGetEnvironment: "server.getEnvironment",
   serverGetSettings: "server.getSettings",
-  serverListProviderAccounts: "server.listProviderAccounts",
-  serverCreateProviderAccount: "server.createProviderAccount",
-  serverSetActiveProviderAccount: "server.setActiveProviderAccount",
-  serverReauthenticateProviderAccount: "server.reauthenticateProviderAccount",
-  serverDeleteProviderAccount: "server.deleteProviderAccount",
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -458,11 +448,6 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetEnvironment, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverListProviderAccounts, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverCreateProviderAccount, ServerCreateProviderAccountInput),
-  tagRequestBody(WS_METHODS.serverSetActiveProviderAccount, ServerSetActiveProviderAccountInput),
-  tagRequestBody(WS_METHODS.serverReauthenticateProviderAccount, ServerProviderAccountInput),
-  tagRequestBody(WS_METHODS.serverDeleteProviderAccount, ServerProviderAccountInput),
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateProvider, ServerProviderUpdateInput),

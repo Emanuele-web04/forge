@@ -9,11 +9,6 @@ import {
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
   WsPullRequestsReviewRequestCountRpc,
-  WsServerCreateProviderAccountRpc,
-  WsServerDeleteProviderAccountRpc,
-  WsServerListProviderAccountsRpc,
-  WsServerReauthenticateProviderAccountRpc,
-  WsServerSetActiveProviderAccountRpc,
   WsRpcError,
   WsRpcGroup,
 } from "./rpc";
@@ -50,18 +45,5 @@ describe("WS RPC contracts", () => {
 
   it("exports the count-only pull request review RPC", () => {
     expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
-  });
-
-  it("exports every provider-account RPC through the feature group", () => {
-    expect(WsServerListProviderAccountsRpc).toBeDefined();
-    expect(WsServerCreateProviderAccountRpc).toBeDefined();
-    expect(WsServerSetActiveProviderAccountRpc).toBeDefined();
-    expect(WsServerReauthenticateProviderAccountRpc).toBeDefined();
-    expect(WsServerDeleteProviderAccountRpc).toBeDefined();
-    expect(WsFeatureRpcGroup.requests.has("server.listProviderAccounts")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("server.createProviderAccount")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("server.setActiveProviderAccount")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("server.reauthenticateProviderAccount")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("server.deleteProviderAccount")).toBe(true);
   });
 });
