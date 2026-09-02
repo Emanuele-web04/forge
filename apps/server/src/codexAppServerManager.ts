@@ -65,6 +65,7 @@ import {
   teardownProviderProcessTree,
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
+import { registerProviderProcess } from "./providerProcessRegistry.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
@@ -2901,6 +2902,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
+    // Register the app-server pid for the resource manager: single-owner
+    // provider runtimes join their thread's worktree instead of orphan.
+    // Stale entries are pruned lazily by liveness + command-identity checks.
+    const pid = context.child.pid;
+    if (pid !== undefined) {
+      registerProviderProcess({ pid, provider: "codex", threadIds: [context.session.threadId] });
+    }
     const onStdoutData = (chunk: Buffer) => {
       if (context.stopping) return;
       try {
