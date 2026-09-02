@@ -309,4 +309,38 @@ describe("kanbanDispatch send-as-goal", () => {
       expect.objectContaining({ type: "thread.turn.start" }),
     );
   });
+
+  it("coalesces a drag racing a send-as-goal onto one turn start", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-goal-9");
+    const projectId = ProjectId.makeUnsafe("project-goal");
+    useComposerDraftStore.getState().setPrompt(threadId, "Racing drag and goal");
+    const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
+
+    const [plain, goal] = await Promise.all([
+      dispatchKanbanDraftThread({
+        threadId,
+        projectId,
+        thread,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      }),
+      dispatchKanbanDraftThreadAsGoal({
+        threadId,
+        projectId,
+        thread,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      }),
+    ]);
+
+    // The in-flight guard is keyed by threadId alone: both callers join the
+    // first dispatch instead of queueing two thread.turn.start commands.
+    expect(plain).toEqual({ kind: "dispatched" });
+    expect(goal).toEqual({ kind: "dispatched" });
+    const turnStarts = nativeApiMocks.dispatchCommand.mock.calls.filter(
+      ([command]) => commandType(command) === "thread.turn.start",
+    );
+    expect(turnStarts).toHaveLength(1);
+    expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+  });
 });

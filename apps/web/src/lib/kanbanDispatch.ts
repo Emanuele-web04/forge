@@ -148,31 +148,27 @@ interface KanbanDraftDispatchInput {
 
 const MAX_KANBAN_GOAL_LENGTH = 4096;
 
-// Racing callers (a re-drop before the board re-derives, drag + send-now) must
-// not queue two turns for the same thread — the server accepts duplicate
-// thread.turn.start commands while the session is still starting. Same pattern
-// as threadCreatePromotion's inFlightThreadCreateById. Dispatch and "Send as goal"
-// are keyed separately so a concurrent drag and context-menu action do not
-// coalesce onto the wrong mode.
+// Racing callers (a re-drop before the board re-derives, drag + send-now, or a
+// drag racing a right-click "Send as goal") must not queue two turns for the
+// same thread — the server accepts duplicate thread.turn.start commands while
+// the session is still starting. Same pattern as threadCreatePromotion's
+// inFlightThreadCreateById. The guard is keyed by threadId alone so a
+// concurrent dispatch and "Send as goal" coalesce onto the first turn instead
+// of racing past each other on mode-specific keys.
 const inFlightDispatchByThreadId = new Map<string, Promise<KanbanDraftDispatchResult>>();
-
-function inFlightDispatchKey(mode: "dispatch" | "goal", threadId: ThreadId): string {
-  return `${mode}:${threadId}`;
-}
 
 function dispatchKanbanDraftThreadInternal(
   input: KanbanDraftDispatchInput,
   mode: "dispatch" | "goal",
 ): Promise<KanbanDraftDispatchResult> {
-  const key = inFlightDispatchKey(mode, input.threadId);
-  const existing = inFlightDispatchByThreadId.get(key);
+  const existing = inFlightDispatchByThreadId.get(input.threadId);
   if (existing) {
     return existing;
   }
   const dispatchPromise = dispatchKanbanDraftThreadOnce(input, mode).finally(() => {
-    inFlightDispatchByThreadId.delete(key);
+    inFlightDispatchByThreadId.delete(input.threadId);
   });
-  inFlightDispatchByThreadId.set(key, dispatchPromise);
+  inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
   return dispatchPromise;
 }
 
