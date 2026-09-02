@@ -172,6 +172,12 @@ const catchToolError = (error: unknown): Effect.Effect<McpToolCallResult> =>
       : mcpToolResultError(errorText(error)),
   );
 
+/** Trimmed string arg for the audit log; undefined when absent/non-string. */
+const auditArg = (args: Record<string, unknown>, key: string): string | undefined => {
+  const value = args[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+};
+
 export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyArray<ToolEntry> {
   const { snapshotQuery, workspacePaths, helpers } = input;
   const now = input.now ?? (() => Date.now());
@@ -200,11 +206,6 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     toolName: string,
     run: (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult>,
   ): (args: Record<string, unknown>, context: ToolContext) => Effect.Effect<McpToolCallResult> {
-    /** Trimmed string arg for the audit log; undefined when absent/non-string. */
-    const auditArg = (args: Record<string, unknown>, key: string): string | undefined => {
-      const value = args[key];
-      return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-    };
     return (args, context) =>
       run(args, context).pipe(
         Effect.tap((result) => {
