@@ -268,9 +268,11 @@ import { DesktopAppSnapManager } from "./appSnapManager";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
+  APP_SNAP_SETTINGS_PANE_URLS,
   registerAppSnapIpcHandlers,
   sendAppSnapCaptured,
   sendAppSnapError,
+  sendAppSnapPermissionGuideState,
   sendAppSnapState,
 } from "./appSnapIpc";
 
@@ -1808,6 +1810,17 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
+/// The .app bundle that owns this process; the permission guide drags this
+/// bundle into the System Settings privacy lists.
+function resolveAppSnapAppBundlePath(): string {
+  let directory = Path.dirname(app.getPath("exe"));
+  while (directory !== Path.dirname(directory)) {
+    if (directory.endsWith(".app")) return directory;
+    directory = Path.dirname(directory);
+  }
+  return app.getPath("exe");
+}
+
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
   if (mainWindow?.isDestroyed()) {
     mainWindow = null;
@@ -1845,9 +1858,16 @@ function initializeDesktopAppSnap(): void {
     helperPath: resolveAppSnapHelperPath(),
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
+    appDisplayName: desktopIdentity.displayName,
+    appBundlePath: resolveAppSnapAppBundlePath(),
     shortcutRegistry: globalShortcut,
     onState: (state) => {
       sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
+    },
+    onPermissionGuideState: (state) => {
+      sendAppSnapEvent(mainWindow, (webContents) =>
+        sendAppSnapPermissionGuideState(webContents, state),
+      );
     },
     onCaptured: (capture) => {
       const window = ensureMainWindowForAppSnap();
@@ -4647,7 +4667,20 @@ function registerIpcHandlers(): void {
       }),
   );
   if (appSnapManager) {
-    registerAppSnapIpcHandlers(ipcMain, appSnapManager);
+    registerAppSnapIpcHandlers(ipcMain, appSnapManager, {
+      openPermissionSettingsPane: (pane) => {
+        const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
+        if (!paneUrl) return Promise.resolve(false);
+        return shell
+          .openExternal(paneUrl)
+          .then(() => true)
+          .catch(() => false);
+      },
+      restartApp: () => {
+        app.relaunch();
+        requestGracefulAppQuit("appsnap-permission-relaunch");
+      },
+    });
   }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
