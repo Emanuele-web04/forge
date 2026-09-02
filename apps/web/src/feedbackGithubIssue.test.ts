@@ -2,9 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { normalizeHomePaths, redactObviousSecrets } from "./feedback";
+import { formatFeedbackSummary, normalizeHomePaths, redactObviousSecrets } from "./feedback";
 import {
-  buildBugReportDiagnostics,
   buildGithubIssueInterviewPrompt,
   BUG_REPORT_CONFIRMATION_QUESTION,
   escapePromptDelimiters,
@@ -37,7 +36,10 @@ const SAMPLE_DIAGNOSTICS = {
 const makePrompt = (details: string) =>
   buildGithubIssueInterviewPrompt({
     details,
-    diagnosticsSummary: buildBugReportDiagnostics(SAMPLE_DIAGNOSTICS),
+    diagnosticsSummary: formatFeedbackSummary({
+      category: "bug",
+      diagnostics: SAMPLE_DIAGNOSTICS,
+    }),
   });
 
 const section = (prompt: string, tag: string) =>
@@ -49,7 +51,9 @@ describe("buildGithubIssueInterviewPrompt", () => {
       "I hit a bug with my ghp_0123456789abcdefghijklmnopqrst and /Users/kartik/scratch project.",
     );
 
-    expect(section(prompt, "diagnostics")).toContain("I ran into a bug in Synara 0.7.3.");
+    expect(section(prompt, "diagnostics")).toContain(
+      "I ran into a bug in Synara 0.7.3, using codex with gpt-5.6-sol.",
+    );
     expect(section(prompt, "initial-report")).toBe(
       "I hit a bug with my [REDACTED] and ~/scratch project.",
     );
@@ -87,9 +91,13 @@ describe("buildGithubIssueInterviewPrompt", () => {
       .split("\n")
       .find((line) => line.includes(`gh issue create -R ${SYNARA_UPSTREAM_REPO}`));
     expect(commandLine).toBeDefined();
+    expect(commandLine).toContain('--title "$title"');
     expect(commandLine).toContain("--body-file");
     expect(commandLine).not.toContain("--label");
+    expect(commandLine).not.toContain("$(");
 
+    expect(prompt).toContain(`printf '%s\\n' "$title" > "$title_file"`);
+    expect(prompt).toContain(`printf '%s\\n' "$body" > "$body_file"`);
     expect(prompt).toContain(BUG_REPORT_CONFIRMATION_QUESTION);
     expect(prompt).toContain(GITHUB_ISSUE_URL);
     expect(prompt).toContain("?title=<encoded title>&body=<encoded body>");
@@ -176,8 +184,11 @@ describe("normalizeHomePaths", () => {
     ["/home/k/x", "~/x"],
     ["/root/k/x", "~/x"],
     ["/Users/kartik", "~"],
-    ["/Users/kartik.", "~."],
-    ["/Users/kartik, ok?", "~, ok?"],
+    // Dots and other punctuation are part of the username; only path
+    // separators and whitespace end the home segment.
+    ["/Users/john.doe/project", "~/project"],
+    ["/Users/kartik.", "~"],
+    ["/Users/kartik, ok?", "~ ok?"],
     ["C:\\Users\\kartik\\Desktop", "~\\Desktop"],
     ["C:/Users/kartik/dev", "~/dev"],
     ["HOME=/Users/kartik/dev", "HOME=~/dev"],

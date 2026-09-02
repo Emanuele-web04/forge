@@ -4,7 +4,6 @@
 // Layer: Web feature logic
 
 import { sanitizeUntrustedText } from "./feedback";
-import type { FeedbackDiagnostics } from "./feedback";
 
 export const SYNARA_UPSTREAM_REPO = "Emanuele-web04/synara";
 
@@ -21,34 +20,6 @@ export function escapePromptDelimiters(text: string): string {
  */
 function defangPromptPlaceholders(text: string): string {
   return text.replace(/\{\{/g, "{ {").replace(/\}\}/g, "} }");
-}
-
-function formatStateFlags(diagnostics: FeedbackDiagnostics): string {
-  const flags: string[] = [];
-  if (diagnostics.hasThreadError) flags.push("thread error");
-  if (diagnostics.hasPendingApproval) flags.push("pending approval");
-  if (diagnostics.hasPendingUserInput) flags.push("pending user input");
-  return flags.length > 0 ? flags.join(", ") : "nothing pending";
-}
-
-/** Builds the privacy-safe diagnostics block shown to the bug-report agent. */
-export function buildBugReportDiagnostics(diagnostics: FeedbackDiagnostics): string {
-  return [
-    `I ran into a bug in Synara ${diagnostics.appVersion}.`,
-    "",
-    `App version: ${diagnostics.appVersion}`,
-    `Provider: ${diagnostics.provider ?? "Not set"}`,
-    `Model: ${diagnostics.model ?? "Not set"}`,
-    `Project kind: ${diagnostics.projectKind ?? "Not set"}`,
-    `Environment mode: ${diagnostics.environmentMode ?? "Not set"}`,
-    `Runtime mode: ${diagnostics.runtimeMode ?? "Not set"}`,
-    `Interaction mode: ${diagnostics.interactionMode ?? "Not set"}`,
-    `Session status: ${diagnostics.sessionStatus ?? "Not set"}`,
-    `Latest turn state: ${diagnostics.latestTurnState ?? "Not set"}`,
-    `Thread size: ${diagnostics.messageCount} messages, ${diagnostics.activityCount} activities`,
-    `State: ${formatStateFlags(diagnostics)}`,
-    `Platform: ${diagnostics.platform}, viewport ${diagnostics.viewport}`,
-  ].join("\n");
 }
 
 export const BUG_REPORT_CONFIRMATION_QUESTION = `File this issue to ${SYNARA_UPSTREAM_REPO} under your GitHub account (via gh)? Reply 'file it' to submit, or tell me what to change.`;
@@ -122,8 +93,11 @@ Follow these steps in order, asking one focused question at a time and waiting f
    Do not run any command that creates an issue until my next message is an explicit yes ("file it" or "yes, file it"). Run the create command exactly once per explicit confirmation; if it fails, report the error and stop. If I request edits, apply them and repeat this step with the full updated body.
 6. Filing path (only after my explicit confirmation):
    - Run gh auth status to confirm you are authenticated. If it reports a failure or gh is missing, switch to the fallback path in step 7 instead of filing.
-   - Create a temp file with mktemp, write the title and body with printf (not echo), chmod 600 it, then run
-       gh issue create -R ${SYNARA_UPSTREAM_REPO} --title "$(cat "$title_file")" --body-file "$body_file"
+   - Create temp files with mktemp, write the title and body with a printf format string (not echo, not command substitution):
+       printf '%s\\n' "$title" > "$title_file"
+       printf '%s\\n' "$body" > "$body_file"
+     chmod 600 both files, then run
+       gh issue create -R ${SYNARA_UPSTREAM_REPO} --title "$title" --body-file "$body_file"
      and rm the temp files. Do not pass --label. Print the returned issue URL.
 7. Fallback path (gh missing or unauthenticated): do NOT install or authenticate gh. Output the final title and body as one copy-ready markdown block, give me a prefilled link
    ${GITHUB_ISSUE_URL}?title=<encoded title>&body=<encoded body>

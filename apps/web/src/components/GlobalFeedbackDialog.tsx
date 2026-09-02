@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { buildFeedbackSubmission } from "../feedback";
 import type { FeedbackThreadContext } from "../feedback";
-import { buildBugReportDiagnostics, buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
+import { buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -63,9 +63,11 @@ export function GlobalFeedbackDialog() {
     }
 
     const submission = buildFeedbackSubmission({ category: "bug", details, context });
+    // The summary is already sanitized by buildFeedbackSubmission; deriving the
+    // prompt diagnostics from it avoids re-building from raw diagnostics.
     const prompt = buildGithubIssueInterviewPrompt({
       details: submission.details,
-      diagnosticsSummary: buildBugReportDiagnostics(submission.diagnostics),
+      diagnosticsSummary: submission.summary,
     });
 
     const threadId = await handleNewThread(projectId, { fresh: true });
