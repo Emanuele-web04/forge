@@ -610,7 +610,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     definition: {
       name: "synara_move_kanban_card",
       description:
-        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). A card already in the requested column reports a no-op (alreadyInProgress / alreadyDone). Prohibited moves fail with a tool error: Awaiting you is human-attention state and cannot be targeted, and "done" requires an in-flight turn to settle.',
+        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). A card already in the requested column reports a no-op (alreadyInProgress / alreadyDone). Awaiting-you is a human-attention state: target "inProgress" reports a no-op with awaitingYou=true, and target "done" is prohibited.',
       inputSchema: {
         type: "object",
         properties: {
@@ -681,15 +681,15 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             if (target === "inProgress") {
               if (currentColumn === "awaitingYou") {
                 // Awaiting-you is human attention: starting a turn here would
-                // stomp it, so the prohibited move fails instead of silently
-                // reporting success.
-                return yield* Effect.fail(
-                  new GatewayToolError(
-                    "operation_failed",
-                    `Card "${threadId}" is Awaiting you; it cannot be driven until the human responds. Resolve the attention flag first.`,
-                    { threadId, target, column: currentColumn },
-                  ),
-                );
+                // stomp it, so we report a no-op with the attention flag rather
+                // than silently succeeding or failing.
+                return mcpToolResultJson({
+                  threadId,
+                  target,
+                  alreadyInProgress: true,
+                  awaitingYou: true,
+                  card: cardPayload(currentColumn),
+                });
               }
               if (currentColumn === "inProgress") {
                 // Already in the requested column: an idempotent no-op, not a

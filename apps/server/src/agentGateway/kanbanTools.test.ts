@@ -766,7 +766,7 @@ describe("synara_move_kanban_card", () => {
     expect(interrupted).toHaveLength(0);
   });
 
-  it("rejects driving an awaiting-you card into a new turn", async () => {
+  it("refuses to drive an awaiting-you card into a new turn and reports why", async () => {
     const { tools, started } = makeTools({
       threads: [
         makeSessionShell("thread-waiting", "project-a", {
@@ -776,8 +776,9 @@ describe("synara_move_kanban_card", () => {
     });
 
     const result = await move(tools, "thread-waiting", "inProgress");
-    expect(result.isError).toBe(true);
-    expect(result.__errorText).toContain("Awaiting you");
+    expect(result.isError ?? false).toBe(false);
+    expect(result.alreadyInProgress).toBe(true);
+    expect(result.awaitingYou).toBe(true);
     expect(started).toHaveLength(0);
   });
 
