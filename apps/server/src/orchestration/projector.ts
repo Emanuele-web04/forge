@@ -67,11 +67,20 @@ const MAX_THREAD_CHECKPOINTS = 500;
 // Cap per-message text in the in-memory read model at the same 512 KB limit as
 // the durable provider runtime event journal. Ordinary messages are untouched.
 const MAX_IN_MEMORY_MESSAGE_TEXT_BYTES = 512 * 1024;
+// UTF-8 encodes at most 3 bytes per UTF-16 code unit, so text at or below a
+// third of the byte cap cannot exceed it. This cheap length check keeps the
+// per-delta streaming hot path from re-encoding the whole string just to
+// confirm it is small; only text that could actually be over the cap pays for
+// the encode/decode pass.
+const MAX_IN_MEMORY_MESSAGE_TEXT_UTF16_UNITS = Math.floor(MAX_IN_MEMORY_MESSAGE_TEXT_BYTES / 3);
 
 const messageTextEncoder = new TextEncoder();
 const messageTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function compactInMemoryMessageText(text: string): string {
+  if (text.length <= MAX_IN_MEMORY_MESSAGE_TEXT_UTF16_UNITS) {
+    return text;
+  }
   const bytes = messageTextEncoder.encode(text);
   if (bytes.length <= MAX_IN_MEMORY_MESSAGE_TEXT_BYTES) {
     return text;
