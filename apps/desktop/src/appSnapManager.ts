@@ -96,14 +96,8 @@ type AppSnapHelperMessage =
       requestId?: string;
     };
 
-interface PendingAppSnapWindowRequest {
-  resolve: (windows: DesktopAppSnapWindowEntry[]) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-interface PendingAppSnapCaptureRequest {
-  resolve: (capture: DesktopAppSnapCapture) => void;
+interface PendingAppSnapRequest<T> {
+  resolve: (value: T) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
@@ -424,8 +418,8 @@ export class DesktopAppSnapManager {
   #captureReadQueue: Promise<void> = Promise.resolve();
   #shortcut: DesktopAppSnapShortcut = DEFAULT_APP_SNAP_SHORTCUT;
   #registeredAccelerator: string | null = null;
-  #pendingWindowRequests = new Map<string, PendingAppSnapWindowRequest>();
-  #pendingCaptureRequests = new Map<string, PendingAppSnapCaptureRequest>();
+  #pendingWindowRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapWindowEntry[]>>();
+  #pendingCaptureRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapCapture>>();
   #guideProcess: AppSnapHelperProcess | null = null;
   #guideOutputLines: Readline.Interface | null = null;
   #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
@@ -667,7 +661,6 @@ export class DesktopAppSnapManager {
       // Fall through to the kill below.
     }
     setTimeout(() => {
-      if (this.#guideProcess === child) return;
       child.kill("SIGTERM");
     }, 500).unref();
   }
@@ -1287,15 +1280,14 @@ export class DesktopAppSnapManager {
     );
   }
 
-  async #consumeCapture(
+  async #readCaptureFromHelperMessage(
     message: Extract<AppSnapHelperMessage, { type: "captured" }>,
-  ): Promise<void> {
+  ): Promise<{ capture: DesktopAppSnapCapture; capturePath: string }> {
     const capturePath = Path.resolve(message.path);
     if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
       throw new Error("The AppSnap helper returned a capture outside its private directory.");
     }
 
-    await this.#ensurePendingCapturesLoaded();
     const bytes = await readValidatedPendingPng(capturePath);
     const now = this.#options.now();
     const capture: DesktopAppSnapCapture = {
@@ -1312,6 +1304,14 @@ export class DesktopAppSnapManager {
       sourceAppIconDataUrl: normalizeAppIconDataUrl(message.sourceAppIconDataUrl),
       sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
     };
+    return { capture, capturePath };
+  }
+
+  async #consumeCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
+    const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
+    await this.#ensurePendingCapturesLoaded();
     const pendingRecord = await this.#persistPendingCapture(capture);
     // Only delete the helper's temporary file once the pending copy durably
     // owns the capture; deleting it earlier would destroy the only on-disk
@@ -1341,27 +1341,7 @@ export class DesktopAppSnapManager {
   async #consumeRequestCapture(
     message: Extract<AppSnapHelperMessage, { type: "captured" }>,
   ): Promise<void> {
-    const capturePath = Path.resolve(message.path);
-    if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
-      throw new Error("The AppSnap helper returned a capture outside its private directory.");
-    }
-
-    const bytes = await readValidatedPendingPng(capturePath);
-    const now = this.#options.now();
-    const capture: DesktopAppSnapCapture = {
-      id: normalizeOptionalText(message.id, 128) ?? Crypto.randomUUID(),
-      capturedAt: normalizeDate(message.capturedAt, now),
-      name:
-        normalizeOptionalText(message.name, 240) ??
-        `AppSnap-${now.toISOString().replace(/[:.]/g, "-")}.png`,
-      mimeType: "image/png",
-      sizeBytes: bytes.byteLength,
-      bytes: new Uint8Array(bytes),
-      sourceAppName: normalizeOptionalText(message.sourceAppName),
-      sourceBundleIdentifier: normalizeOptionalText(message.sourceBundleIdentifier),
-      sourceAppIconDataUrl: normalizeAppIconDataUrl(message.sourceAppIconDataUrl),
-      sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
-    };
+    const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
     // Request-driven captures are synchronous: the caller receives the bytes
     // directly, so the temporary file is deleted immediately and nothing is
     // written to the pending queue for replay.
