@@ -10,8 +10,11 @@ export interface EnvironmentProviderUsageSummary {
   readonly ariaLabel: string;
 }
 
-function providerUsageStatusLabel(snapshot: ServerProviderUsageSnapshot): string {
-  switch (snapshot.status) {
+function providerUsageStatusLabel(
+  snapshot: ServerProviderUsageSnapshot | undefined,
+  hasUsageLines: boolean,
+): string {
+  switch (snapshot?.status) {
     case "needs-auth":
       return "Sign in";
     case "unsupported":
@@ -19,16 +22,18 @@ function providerUsageStatusLabel(snapshot: ServerProviderUsageSnapshot): string
     case "error":
       return "Unavailable";
     default:
-      return "No data";
+      return hasUsageLines ? "Connected" : "No data";
   }
 }
 
 export function resolveEnvironmentProviderUsageSummary(input: {
   readonly providerName: string;
   readonly rows: ReadonlyArray<ProviderUsageDisplayRow>;
-  readonly snapshot: ServerProviderUsageSnapshot;
+  /** Live batch snapshot when available; the row renders without one (local/thread fallbacks). */
+  readonly snapshot: ServerProviderUsageSnapshot | undefined;
+  readonly hasUsageLines: boolean;
 }): EnvironmentProviderUsageSummary {
-  const statusLabel = providerUsageStatusLabel(input.snapshot);
+  const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines);
   const rowSummary = input.rows
     .map((row) => `${row.label} ${row.remainingLabel} remaining`)
     .join(", ");

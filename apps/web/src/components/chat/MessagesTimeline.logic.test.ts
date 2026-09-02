@@ -21,7 +21,7 @@ import {
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import type { TimelineEntry, WorkLogEntry } from "../../session-logic";
-import type { TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
+import type { ChatMessage, TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 describe("canSubmitUserMessageEdit", () => {
   it("allows an empty edit only when hidden annotations remain attached", () => {
@@ -969,6 +969,85 @@ describe("deriveMessagesTimelineRows", () => {
     // Timed from the user message, not from the last intermediate narration.
     expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("folds settled message-segments into the collapsed group instead of stranding the turn", () => {
+    // Streaming delivery splits a settled assistant message whose deltas were
+    // interleaved with tool rows into message-segment slices. Those slices must
+    // not stop the fold scan, or everything earlier in the turn renders above
+    // the "Worked for..." disclosure.
+    const segmented: ChatMessage = {
+      id: MessageId.makeUnsafe("seg-msg"),
+      role: "assistant",
+      text: "part one part two",
+      createdAt: "2026-01-01T00:00:03Z",
+      streaming: false,
+      turnId: TurnId.makeUnsafe("t1"),
+      textSegments: [
+        {
+          startedAt: "2026-01-01T00:00:03Z",
+          endedAt: "2026-01-01T00:00:03Z",
+          sequence: 1,
+          text: "part one ",
+        },
+        {
+          startedAt: "2026-01-01T00:00:05Z",
+          endedAt: "2026-01-01T00:00:05Z",
+          sequence: 2,
+          text: "part two",
+        },
+      ],
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into it",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        {
+          id: "entry-seg-msg#seg:0",
+          kind: "message-segment",
+          createdAt: "2026-01-01T00:00:03Z",
+          sequence: 1,
+          message: segmented,
+          segmentIndex: 0,
+        },
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        {
+          id: "entry-seg-msg#seg:1",
+          kind: "message-segment",
+          createdAt: "2026-01-01T00:00:05Z",
+          sequence: 2,
+          message: segmented,
+          segmentIndex: 1,
+        },
+        assistantEntry("a2", "2026-01-01T00:00:06Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:07Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message"]);
+    const terminal = messageRow(rows, "a2");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual([
+      "narration:a1",
+      "work:w1",
+      "narration:seg-msg",
+      "work:w2",
+    ]);
+    // The segmented message folds once and keeps its original reference.
+    const narration = terminal!.collapsedTurnItems!.find(
+      (item) => item.kind === "narration" && item.id === "seg-msg",
+    );
+    expect(narration?.kind === "narration" && narration.message).toBe(segmented);
+    expect(terminal!.collapsedWorkElapsed).toBe("7.0s");
   });
 
   it("resolves a folded assistant match to the terminal row that now owns it", () => {

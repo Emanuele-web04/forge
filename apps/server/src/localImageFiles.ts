@@ -65,7 +65,10 @@ export function resolveLocalPreviewGrantRealPath(input: {
 
 function isPathInside(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 async function realpathOrNull(candidate: string | undefined): Promise<string | null> {

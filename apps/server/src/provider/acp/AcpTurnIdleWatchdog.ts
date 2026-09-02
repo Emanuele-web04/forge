@@ -1,22 +1,44 @@
 /**
  * AcpTurnIdleWatchdog - idle-progress backstop for ACP provider turns.
  *
- * ACP providers (Grok, Cursor) drive a turn by issuing a single `session/prompt`
- * JSON-RPC request to the child agent. That request only settles when the agent
- * finishes the turn. If the child stays alive but goes silent — wedged on an
- * internal retry loop, a stalled upstream API call, or a deadlock — the request
- * never settles, no `turn.completed` is ever emitted, and the UI shows
- * "Working" forever (observed in the wild as a turn stuck for 15+ hours).
+ * ACP providers (Grok, Cursor, Devin) drive a turn by issuing a single
+ * `session/prompt` JSON-RPC request to the child agent. That request only
+ * settles when the agent finishes the turn. If the child stays alive but goes
+ * silent — wedged on an internal retry loop, a stalled upstream API call, or a
+ * deadlock — the request never settles, no `turn.completed` is ever emitted, and
+ * the UI shows "Working" forever (observed in the wild as a turn stuck for
+ * 15+ hours).
  *
  * A process *crash* mid-prompt is already handled (the transport fails the
  * pending request). This watchdog covers the remaining gap: the alive-but-hung
  * child. It is a fail-safe for hangs, NOT a wall-clock cap on legitimate long
- * turns — any inbound ACP activity resets it, and it pauses entirely while the
- * turn is legitimately blocked on a human approval.
+ * turns — real turn-progress events reset it (see
+ * {@link isAcpTurnProgressEventTag}), and it pauses entirely while the turn is
+ * legitimately blocked on a human approval. Heartbeats like mode/config/usage
+ * updates must not keep a finished-but-unsettled prompt alive forever.
  *
  * @module AcpTurnIdleWatchdog
  */
 import { Effect, Fiber, Scope } from "effect";
+
+/**
+ * ACP session-event tags that prove the agent is still doing turn work.
+ * Mode/command/usage updates alone are not progress: they can keep arriving
+ * after the agent has stopped producing output while `session/prompt` hangs,
+ * which would otherwise prevent the idle watchdog from ever firing.
+ */
+export function isAcpTurnProgressEventTag(tag: string): boolean {
+  switch (tag) {
+    case "ContentDelta":
+    case "ToolCallUpdated":
+    case "PlanUpdated":
+    case "AssistantItemStarted":
+    case "AssistantItemCompleted":
+      return true;
+    default:
+      return false;
+  }
+}
 
 export interface AcpTurnIdleWatchdogParams {
   /** How long the turn may go without any inbound ACP activity before it is force-failed. */

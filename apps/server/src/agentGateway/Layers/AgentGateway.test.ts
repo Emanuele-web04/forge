@@ -835,7 +835,6 @@ function makeHarnessLayer(
         ],
         grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
         droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
-        kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto" }],
         opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
         pi: [{ slug: "test-pi", name: "Test Pi" }],
       };
@@ -850,7 +849,6 @@ function makeHarnessLayer(
     "antigravity",
     "grok",
     "droid",
-    "kilo",
     "opencode",
     "pi",
   ];
@@ -2080,7 +2078,7 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("starts explicit OpenCode and Kilo plan-agent targets in plan mode", () => {
+  it.effect("starts explicit OpenCode plan-agent targets in plan mode", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -2098,14 +2096,6 @@ describe("AgentGateway", () => {
                 options: { agent: "plan" },
               },
             },
-            {
-              prompt: "plan the Kilo work",
-              target: {
-                provider: "kilo",
-                model: "kilo/kilo-auto/free",
-                options: { agent: "plan" },
-              },
-            },
           ],
         },
       });
@@ -2113,8 +2103,8 @@ describe("AgentGateway", () => {
 
       const creates = harness.dispatched.filter((command) => command.type === "thread.create");
       const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");
-      assert.lengthOf(creates, 2);
-      assert.lengthOf(turns, 2);
+      assert.lengthOf(creates, 1);
+      assert.lengthOf(turns, 1);
       for (const command of [...creates, ...turns]) {
         assert.equal(command.interactionMode, "plan");
         assert.deepInclude(command.modelSelection ?? {}, {

@@ -15,6 +15,8 @@ import {
   type ModelSelection,
   type ModelSlug,
   type OpenCodeModelOptions,
+  type ProviderModelDescriptor,
+  type ProviderModelVariantDescriptor,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type PiModelOptions,
@@ -28,13 +30,13 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
-  // Antigravity's built-in list is intentionally empty; its CLI supplies the live catalog.
   antigravity: new Set<ModelSlug>(),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
-  kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
+  // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
+  devin: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -131,32 +133,118 @@ export function parseCursorCliReasoningEffort(model: string): string | undefined
   return undefined;
 }
 
-/** Check whether a capabilities object includes a given effort value. */
 export function hasEffortLevel(caps: ModelCapabilities, value: string): boolean {
   return caps.reasoningEffortLevels.some((l) => l.value === value);
 }
 
-/** Return the default effort value for a capabilities object, or null if none. */
 export function getDefaultEffort(caps: ModelCapabilities): string | null {
   return caps.reasoningEffortLevels.find((l) => l.isDefault)?.value ?? null;
 }
 
-/** Check whether a capabilities object includes a given context window value. */
 export function hasContextWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.contextWindowOptions.some((option) => option.value === value);
 }
 
-/** Return the default context window value for a capabilities object, or null if none. */
 export function getDefaultContextWindow(caps: ModelCapabilities): string | null {
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
-/** Check whether a Claude auto-compaction budget is supported. */
+const DEVIN_STATIC_MODEL_VARIANTS: Readonly<
+  Record<string, ReadonlyArray<ProviderModelVariantDescriptor>>
+> = {
+  "swe-1-6": [
+    { model: "swe-1-6", fastMode: false },
+    { model: "swe-1-6-fast", fastMode: true },
+  ],
+  "swe-1-7": [
+    { model: "swe-1-7", fastMode: false },
+    { model: "swe-1-7-lightning", fastMode: true },
+  ],
+};
+
+export function getDevinStaticModelVariants(
+  model: string | null | undefined,
+): ReadonlyArray<ProviderModelVariantDescriptor> | undefined {
+  const normalizedModel = normalizeModelSlug(model, "devin");
+  return normalizedModel ? DEVIN_STATIC_MODEL_VARIANTS[normalizedModel] : undefined;
+}
+
+export function resolveDevinModelVariant(input: {
+  readonly model?: string | null | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly modelVariant?: string | null | undefined;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly fastMode?: boolean | undefined;
+  readonly thinking?: boolean | null | undefined;
+  readonly contextWindow?: string | null | undefined;
+}): string | undefined {
+  const variants = input.runtimeModel?.modelVariants ?? getDevinStaticModelVariants(input.model);
+  const explicitVariant = trimOrNull(input.modelVariant) ?? undefined;
+  if (!variants?.length) {
+    return explicitVariant;
+  }
+
+  const reasoningEffort = trimOrNull(input.reasoningEffort);
+  const contextWindow = trimOrNull(input.contextWindow);
+  const mapsReasoningEffort =
+    reasoningEffort !== null && variants.some((variant) => variant.reasoningEffort !== undefined);
+  const mapsFastMode =
+    input.fastMode !== undefined && variants.some((variant) => variant.fastMode !== undefined);
+  const mapsThinking =
+    input.thinking !== null &&
+    input.thinking !== undefined &&
+    variants.some((variant) => variant.thinking !== undefined);
+  const mapsContextWindow =
+    contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
+  if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
+    return explicitVariant;
+  }
+
+  const effectiveReasoningEffort =
+    reasoningEffort ?? trimOrNull(input.runtimeModel?.defaultReasoningEffort);
+  const effectiveContextWindow =
+    contextWindow ?? trimOrNull(input.runtimeModel?.defaultContextWindow);
+  // Thinking is on by default for Devin families that expose a thinking
+  // toggle. Keep the persisted option sparse, but use the effective
+  // default when resolving a non-default context window to its concrete
+  // process-start variant.
+  const effectiveThinking =
+    input.thinking ?? (input.runtimeModel?.supportsThinkingToggle === true ? true : undefined);
+  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
+    if (effectiveReasoningEffort && variant.reasoningEffort !== effectiveReasoningEffort) {
+      return false;
+    }
+    if (effectiveContextWindow && variant.contextWindow !== effectiveContextWindow) {
+      return false;
+    }
+    if (input.fastMode === true && variant.fastMode !== true) {
+      return false;
+    }
+    if (input.fastMode !== true && variant.fastMode === true) {
+      return false;
+    }
+    if (
+      effectiveThinking !== null &&
+      effectiveThinking !== undefined &&
+      variant.thinking !== undefined
+    ) {
+      return variant.thinking === effectiveThinking;
+    }
+    return true;
+  };
+
+  const preferred = variants.filter(matches);
+  const withDefaultContext =
+    !contextWindow && effectiveContextWindow
+      ? preferred.filter((variant) => variant.contextWindow === effectiveContextWindow)
+      : preferred;
+  return (withDefaultContext[0] ?? preferred[0])?.model;
+}
+
 export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
-/** Return the default Claude auto-compaction budget, or null if the model has no override. */
 export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
@@ -283,7 +371,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "variant";
   }
   if (provider === "pi") {
@@ -297,15 +385,13 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode"
-      ? (caps.variantOptions ?? [])
-      : caps.reasoningEffortLevels;
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
   if (primaryOptions.length > 0) {
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
       id: reasoningDescriptorId(provider),
-      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
+      label: provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,
@@ -493,10 +579,15 @@ export function normalizeModelSlug(
   }
 
   const providerScopedModel =
-    provider === "claudeAgent" ? trimmed.replace(/\[[^\]]+\]$/u, "") : trimmed;
+    provider === "claudeAgent"
+      ? trimmed.replace(/\[[^\]]+\]$/u, "")
+      : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
+        ? trimmed.slice(0, -"-medium".length)
+        : trimmed;
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
-  const aliased = Object.prototype.hasOwnProperty.call(aliases, providerScopedModel)
-    ? aliases[providerScopedModel]
+  const aliasKey = providerScopedModel.toLowerCase();
+  const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
+    ? aliases[aliasKey]
     : undefined;
   return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
 }
@@ -539,7 +630,7 @@ export function resolveModelSlug(
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
-  if (provider === "pi") {
+  if (provider === "devin" || provider === "pi") {
     return normalized;
   }
   if (!normalized) {
@@ -558,7 +649,6 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
-/** Trim a string, returning null for empty/missing values. */
 export function trimOrNull<T extends string>(value: T | null | undefined): T | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim() as T;

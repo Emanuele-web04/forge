@@ -26,7 +26,6 @@ import {
   normalizeGrokModelOptions,
 } from "@synara/shared/model";
 import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -43,7 +42,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
@@ -83,6 +83,7 @@ import {
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
@@ -91,6 +92,7 @@ import {
   scopeAcpToolCallStateForTurn,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
+  waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { forkViaAcpRuntime } from "../acp/acpFork.ts";
@@ -108,7 +110,7 @@ import {
 import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
-  forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
@@ -907,24 +909,12 @@ export function makeGrokAdapter(
         });
       });
 
-    // Holds the active-turn window open until session/update events that were
-    // already enqueued when the prompt response resolved have been fully
-    // handled by the notification consumer, so they settle with their turn
-    // attribution (and recorded failed-tool detail) intact. Snapshotting the
-    // runtime's enqueued count and waiting for the adapter's processed count
-    // to catch up is immune to stream chunk buffering and in-flight handlers,
-    // unlike a queue-size probe. Returns immediately when the consumer kept
-    // up; bounded so a chatty stream cannot stall settlement past the cap.
     const waitForGrokQueuedTurnEventsDrained = (ctx: GrokSessionContext) =>
-      Effect.gen(function* () {
-        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
-        const startedAt = Date.now();
-        while (
-          ctx.sessionUpdatesProcessed < target &&
-          Date.now() - startedAt < GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS
-        ) {
-          yield* Effect.sleep(GROK_TURN_SETTLE_DRAIN_POLL_MS);
-        }
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
+        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
+        maxWaitMs: GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
+        pollMs: GROK_TURN_SETTLE_DRAIN_POLL_MS,
       });
 
     // Waits until the notification consumer has been quiet briefly so state it
@@ -1343,9 +1333,9 @@ export function makeGrokAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -2049,16 +2039,11 @@ export function makeGrokAdapter(
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
-        yield* forkAcpTurnIdleWatchdog({
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context: ctx,
+          turnId,
           idleTimeoutMs: GROK_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: GROK_TURN_WATCHDOG_INTERVAL_MS,
-          scope: ctx.scope,
-          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
-          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
-          touchActivity: () => {
-            ctx.lastTurnActivityAt = Date.now();
-          },
           onIdleTimeout: (idleMs) => failGrokTurnAsTimedOut(ctx, turnId, idleMs),
         });
 
@@ -2409,11 +2394,8 @@ export function makeGrokAdapter(
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
           const childEnv = buildProviderChildEnvironment({ provider: "grok" });
-          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: childEnv });
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(binaryPath, ["models"], {
               env: childEnv,
             }),
           );

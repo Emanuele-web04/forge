@@ -116,6 +116,14 @@ const AUTOMATION_DEFINITION_UPDATE_SCOPE = {
   id: "automation-definition-updates",
 } as const;
 
+export function automationTargetThreads<
+  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId">,
+>(threads: readonly TThread[], projectId: string): readonly TThread[] {
+  return threads.filter(
+    (thread) => thread.projectId === projectId && !thread.sidechatSourceThreadId,
+  );
+}
+
 export function automationDefinitionUpdateMutationOptions(
   mutationFn: (input: AutomationUpdateInput) => Promise<AutomationDefinition>,
 ) {
@@ -898,6 +906,7 @@ export function AutomationModelPicker({
   const {
     modelOptionsByProvider,
     loadingModelProviders,
+    discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeModel,
   } = useProviderModelCatalog({
@@ -933,6 +942,7 @@ export function AutomationModelPicker({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={loadingModelProviders}
+      discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
       disabled={disabled ?? false}
@@ -996,7 +1006,7 @@ export function AutomationDialog({
     acknowledgedWarningIdsProp ?? new Set<AutomationDraftWarningId>();
   const setField = <K extends keyof AutomationFormState>(key: K, value: AutomationFormState[K]) =>
     onFormChange({ ...form, [key]: value });
-  const projectThreads = threads.filter((thread) => thread.projectId === form.projectId);
+  const projectThreads = automationTargetThreads(threads, form.projectId);
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const [selectedModelSupportsAuto, setSelectedModelSupportsAuto] = useState(() =>
     form.modelSelection.provider === "claudeAgent"

@@ -50,6 +50,10 @@ async function resolveDestinationToPage(
       return undefined;
     }
     const ref = explicitDest[0];
+    if (typeof ref === "number" && Number.isInteger(ref)) {
+      const pageNumber = ref + 1;
+      return pageNumber >= 1 && pageNumber <= doc.numPages ? pageNumber : undefined;
+    }
     if (ref == null || typeof ref !== "object") {
       return undefined;
     }

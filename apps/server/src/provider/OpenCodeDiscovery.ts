@@ -36,7 +36,6 @@ export interface OpenCodeModelInventory {
             readonly output?: number;
           };
           readonly variants?: Record<string, Record<string, unknown>>;
-          readonly isFree?: boolean;
         }
       >;
     }>;
@@ -503,18 +502,10 @@ export function flattenOpenCodeCliModels(input: {
 export function flattenOpenCodeModels(input: {
   readonly inventory: OpenCodeModelInventory;
   readonly credentialProviderIDs?: ReadonlyArray<string>;
-  readonly freeOnlyProviderID?: string;
 }): ProviderListModelsResult["models"] {
   return resolvePreferredOpenCodeModelProviders(input)
     .flatMap((provider) =>
       Object.values(provider.models).flatMap((model) => {
-        if (
-          input.freeOnlyProviderID &&
-          provider.id === input.freeOnlyProviderID &&
-          model.isFree !== true
-        ) {
-          return [];
-        }
         const descriptor = toOpenCodeModelDescriptor({
           slug: `${provider.id}/${model.id}`,
           name: model.name,
@@ -531,7 +522,6 @@ export function mergeOpenCodeCliModelDescriptors(input: {
   readonly inventory: OpenCodeModelInventory;
   readonly models: ReadonlyArray<OpenCodeModelDescriptor>;
   readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
-  readonly freeOnlyProviderID?: string;
 }): ProviderListModelsResult["models"] {
   const providerById = new Map(
     input.inventory.providerList.all.map((provider) => [provider.id, provider] as const),
@@ -539,13 +529,6 @@ export function mergeOpenCodeCliModelDescriptors(input: {
   const mergedBySlug = new Map(input.models.map((model) => [model.slug, model] as const));
 
   for (const cliModel of input.cliModels) {
-    if (
-      input.freeOnlyProviderID &&
-      cliModel.providerID === input.freeOnlyProviderID &&
-      cliModel.isFree !== true
-    ) {
-      continue;
-    }
     if (mergedBySlug.has(cliModel.slug)) {
       continue;
     }

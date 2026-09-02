@@ -74,9 +74,14 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
   });
 
-  it("keeps retrying transient failures for other providers", () => {
+  it("fails fast only for cursor and droid, and devin uses the standard on-demand policy", () => {
     expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
+    expect(providerModelsQueryOptions({ provider: "devin" }).retry).toBe(3);
+    expect(providerModelsQueryOptions({ provider: "devin" }).staleTime).toBe(30_000);
     expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(0);
+    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(5 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).retry).toBe(0);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(30_000);
   });
 
   it("keeps Droid discovery cached for five minutes and ignores focus", () => {

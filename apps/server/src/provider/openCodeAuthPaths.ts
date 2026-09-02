@@ -1,5 +1,5 @@
 // FILE: openCodeAuthPaths.ts
-// Purpose: Candidate auth.json locations for OpenCode-compatible CLIs (OpenCode and Kilo).
+// Purpose: Candidate auth.json locations for OpenCode-compatible CLIs.
 // Official OpenCode stores auth at xdgData/opencode — `XDG_DATA_HOME` or `~/.local/share` —
 // on every OS, including Windows and macOS. Some Windows tools still write %APPDATA% or
 // %LOCALAPPDATA%; those stay fallbacks so we do not miss a login, but they are never first.
@@ -19,7 +19,6 @@ function dataDirectoryOverride(
   dataDirectoryName: string,
 ): string | undefined {
   if (dataDirectoryName === "opencode") return env?.OPENCODE_DATA_DIR?.trim();
-  if (dataDirectoryName === "kilo") return env?.KILO_DATA_DIR?.trim();
   return undefined;
 }
 

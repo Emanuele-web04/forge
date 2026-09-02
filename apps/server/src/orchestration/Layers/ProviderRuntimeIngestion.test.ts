@@ -6976,13 +6976,15 @@ describe("ProviderRuntimeIngestion", () => {
   it("starts when an accepted open-turn row can no longer replay its stored command", async () => {
     const harness = await createHarness({ startIngestion: false });
     const eventId = asEventId("evt-open-turn-unreplayable");
+    const turnId = asTurnId("turn-open-turn-unreplayable");
+    const bufferedItemId = asItemId("item-after-unreplayable-open-turn");
     const event: ProviderRuntimeEvent = {
       type: "item.updated",
       eventId,
       provider: "codex",
       createdAt: "2026-07-14T00:03:00.000Z",
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-open-turn-unreplayable"),
+      turnId,
       itemId: asItemId("item-collab-unreplayable"),
       payload: {
         itemType: "collab_agent_tool_call",
@@ -7032,24 +7034,68 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(true);
 
+    const bufferedRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "content.delta",
+        eventId: asEventId("evt-buffered-after-unreplayable-open-turn"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:03:00.500Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: bufferedItemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "Replay continued after the failed event.",
+        },
+      }),
+    );
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: bufferedRow.sequence,
+          updatedAt: "2026-07-14T00:03:00.500Z",
+        }),
+      ),
+    ).toBe(true);
+
     await harness.startIngestion();
 
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "item.completed",
+        eventId: asEventId("evt-complete-after-unreplayable-open-turn"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:03:01.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: bufferedItemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      }),
+    );
     await Effect.runPromise(
       harness.runtimeEventRepository.append({
         type: "runtime.warning",
         eventId: asEventId("evt-after-unreplayable-open-turn"),
         provider: "codex",
-        createdAt: "2026-07-14T00:03:01.000Z",
+        createdAt: "2026-07-14T00:03:02.000Z",
         threadId: asThreadId("thread-1"),
         payload: { message: "still ingesting" },
       }),
     );
     await harness.drain();
-    const parent = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) =>
-          activity.id === "evt-after-unreplayable-open-turn",
-      ),
+    const parent = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-after-unreplayable-open-turn",
+        ) &&
+        entry.messages.some(
+          (message) =>
+            message.id === `assistant:${bufferedItemId}` &&
+            message.text === "Replay continued after the failed event.",
+        ),
     );
     expect(parent.id).toBe("thread-1");
   });

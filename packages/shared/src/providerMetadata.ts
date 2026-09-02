@@ -92,16 +92,6 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     },
   },
   {
-    kind: "kilo",
-    displayName: PROVIDER_DISPLAY_NAMES.kilo,
-    available: true,
-    supportsNativeTurnSteering: false,
-    usage: {
-      signInCommand: "kilo",
-      learnMoreHref: "https://kilo.ai",
-    },
-  },
-  {
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
@@ -119,6 +109,16 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     usage: {
       signInCommand: "pi",
       learnMoreHref: "https://pi.dev",
+    },
+  },
+  {
+    kind: "devin",
+    displayName: PROVIDER_DISPLAY_NAMES.devin,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "devin auth login",
+      learnMoreHref: "https://app.devin.ai/usage",
     },
   },
 ] as const satisfies readonly ProviderDescriptor[]);
