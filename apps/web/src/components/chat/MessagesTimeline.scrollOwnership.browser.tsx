@@ -199,7 +199,7 @@ describe("MessagesTimeline scroll ownership", () => {
       await startStreamingAndFollow(handle, container);
       const scrollTopBeforeWheel = container.scrollTop;
       wheelUp(handle, 100, 100);
-      await settleFrames(1);
+      await settleFrames(2);
 
       expect(container.scrollTop).toBeLessThan(scrollTopBeforeWheel);
 
