@@ -34,6 +34,8 @@ const frameworkArguments = [
   "-framework",
   "AppKit",
   "-framework",
+  "Carbon",
+  "-framework",
   "CoreGraphics",
   "-framework",
   "CoreImage",

@@ -19,6 +19,16 @@ struct SelectedWindow {
     let sourceWindowTitle: String?
 }
 
+struct WindowListEntry {
+    let windowID: CGWindowID
+    let appName: String?
+    let bundleIdentifier: String?
+    let windowTitle: String?
+    let appIconDataURL: String?
+}
+
+private let maximumListedWindows = 50
+
 private func appIconDataURL(for application: NSRunningApplication) -> String? {
     guard let bundleURL = application.bundleURL else {
         return nil
@@ -52,6 +62,21 @@ private func number(
     dictionary[key as String] as? NSNumber
 }
 
+private func onScreenWindowInfo() -> Result<[[String: Any]], AppSnapFailure> {
+    guard let windowInfo = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements],
+        kCGNullWindowID
+    ) as? [[String: Any]] else {
+        return .failure(
+            AppSnapFailure(
+                code: "window_list_unavailable",
+                message: "macOS did not provide a window list."
+            )
+        )
+    }
+    return .success(windowInfo)
+}
+
 func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedWindow, AppSnapFailure> {
     guard let application = NSWorkspace.shared.frontmostApplication, !application.isTerminated else {
         return .failure(
@@ -71,16 +96,12 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
         )
     }
 
-    guard let windowInfo = CGWindowListCopyWindowInfo(
-        [.optionOnScreenOnly, .excludeDesktopElements],
-        kCGNullWindowID
-    ) as? [[String: Any]] else {
-        return .failure(
-            AppSnapFailure(
-                code: "window_list_unavailable",
-                message: "macOS did not provide a window list."
-            )
-        )
+    let windowInfo: [[String: Any]]
+    switch onScreenWindowInfo() {
+    case let .success(info):
+        windowInfo = info
+    case let .failure(failure):
+        return .failure(failure)
     }
 
     // The on-screen window list is ordered front to back, so the first
@@ -133,6 +154,118 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
             sourceBundleIdentifier: application.bundleIdentifier,
             sourceAppIconDataURL: appIconDataURL(for: application),
             sourceWindowTitle: chosen.title
+        )
+    )
+}
+
+func listVisibleWindows(excludedBundleIdentifier: String) -> [WindowListEntry] {
+    guard case let .success(windowInfo) = onScreenWindowInfo() else {
+        return []
+    }
+
+    var entries: [WindowListEntry] = []
+    var iconBundleKeys = Set<String>()
+    for candidate in windowInfo where entries.count < maximumListedWindows {
+        guard number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
+              number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
+              number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
+              number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
+                  CGWindowSharingType.none.rawValue,
+              let windowID = number(in: candidate, forKey: kCGWindowNumber)?.uint32Value,
+              let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
+              bounds.width >= 2,
+              bounds.height >= 2,
+              let ownerPID = number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value
+        else {
+            continue
+        }
+
+        let application = NSRunningApplication(processIdentifier: ownerPID)
+        let bundleIdentifier = application?.bundleIdentifier
+        guard bundleIdentifier != excludedBundleIdentifier else {
+            continue
+        }
+
+        let title = candidate[kCGWindowName as String] as? String
+        let iconKey = bundleIdentifier ?? ""
+        let shouldAttachIcon = !iconBundleKeys.contains(iconKey)
+        iconBundleKeys.insert(iconKey)
+        let iconDataURL = shouldAttachIcon ? application.flatMap { appIconDataURL(for: $0) } : nil
+
+        entries.append(
+            WindowListEntry(
+                windowID: windowID,
+                appName: application?.localizedName,
+                bundleIdentifier: bundleIdentifier,
+                windowTitle: title,
+                appIconDataURL: iconDataURL
+            )
+        )
+    }
+    return entries
+}
+
+func selectWindow(
+    withID windowID: CGWindowID,
+    excludedBundleIdentifier: String
+) -> Result<SelectedWindow, AppSnapFailure> {
+    let windowInfo: [[String: Any]]
+    switch onScreenWindowInfo() {
+    case let .success(info):
+        windowInfo = info
+    case let .failure(failure):
+        return .failure(failure)
+    }
+
+    for candidate in windowInfo {
+        guard number(in: candidate, forKey: kCGWindowNumber)?.uint32Value == windowID else {
+            continue
+        }
+        guard number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
+              number(in: candidate, forKey: kCGWindowAlpha)?.doubleValue ?? 1 > 0,
+              number(in: candidate, forKey: kCGWindowIsOnscreen)?.boolValue ?? true,
+              number(in: candidate, forKey: kCGWindowSharingState)?.uint32Value !=
+                  CGWindowSharingType.none.rawValue,
+              let boundsDictionary = candidate[kCGWindowBounds as String] as? [String: Any],
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
+              bounds.width >= 2,
+              bounds.height >= 2,
+              let ownerPID = number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value,
+              let application = NSRunningApplication(processIdentifier: ownerPID)
+        else {
+            return .failure(
+                AppSnapFailure(
+                    code: "window_not_eligible",
+                    message: "The requested window is no longer visible or shareable."
+                )
+            )
+        }
+        if application.bundleIdentifier == excludedBundleIdentifier {
+            return .failure(
+                AppSnapFailure(
+                    code: "excluded_frontmost_application",
+                    message: "Synara cannot capture its own window."
+                )
+            )
+        }
+
+        return .success(
+            SelectedWindow(
+                windowID: windowID,
+                bounds: bounds,
+                sourceAppName: application.localizedName,
+                sourceBundleIdentifier: application.bundleIdentifier,
+                sourceAppIconDataURL: appIconDataURL(for: application),
+                sourceWindowTitle: candidate[kCGWindowName as String] as? String
+            )
+        )
+    }
+
+    return .failure(
+        AppSnapFailure(
+            code: "window_unavailable",
+            message: "The requested window disappeared before it could be captured."
         )
     )
 }
@@ -495,19 +628,61 @@ final class AppSnapCaptureCoordinator {
 
     func handleGesture() {
         queue.async { [weak self] in
-            self?.beginCapture()
+            guard let self else { return }
+            // Resolve the target before notifying Electron. That prevents any focus
+            // response to `triggered` from changing which application is captured.
+            let selection = DispatchQueue.main.sync {
+                selectFrontmostWindow(excludedBundleIdentifier: self.excludedBundleIdentifier)
+            }
+            self.beginCapture(selection: selection)
         }
     }
 
-    private func beginCapture() {
-        let id = UUID().uuidString.lowercased()
-        let capturedAt = appSnapTimestamp()
-
-        // Resolve the target before notifying Electron. That prevents any focus
-        // response to `triggered` from changing which application is captured.
-        let selection = DispatchQueue.main.sync {
-            selectFrontmostWindow(excludedBundleIdentifier: excludedBundleIdentifier)
+    func handleListWindows(requestId: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let windows = DispatchQueue.main.sync {
+                listVisibleWindows(excludedBundleIdentifier: self.excludedBundleIdentifier)
+            }
+            self.emitter.emitWindows(
+                requestId: requestId,
+                windows: windows.map { entry in
+                    var payload: [String: Any] = [
+                        "windowId": entry.windowID,
+                        "appName": entry.appName ?? NSNull(),
+                        "bundleIdentifier": entry.bundleIdentifier ?? NSNull(),
+                        "windowTitle": entry.windowTitle ?? NSNull(),
+                    ]
+                    if let appIconDataURL = entry.appIconDataURL {
+                        payload["appIconDataUrl"] = appIconDataURL
+                    }
+                    return payload
+                }
+            )
         }
+    }
+
+    func handleCaptureWindow(windowID: CGWindowID, requestId: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            // Resolve the target before notifying Electron. That prevents any focus
+            // response to `triggered` from changing which application is captured.
+            let selection = DispatchQueue.main.sync {
+                selectWindow(
+                    withID: windowID,
+                    excludedBundleIdentifier: self.excludedBundleIdentifier
+                )
+            }
+            self.beginCapture(selection: selection, requestedID: requestId)
+        }
+    }
+
+    private func beginCapture(
+        selection: Result<SelectedWindow, AppSnapFailure>,
+        requestedID: String? = nil
+    ) {
+        let id = requestedID ?? UUID().uuidString.lowercased()
+        let capturedAt = appSnapTimestamp()
 
         // Overlapping chords report only the overlap error; emitting `triggered`
         // first would mis-order protocol semantics for consumers correlating ids.

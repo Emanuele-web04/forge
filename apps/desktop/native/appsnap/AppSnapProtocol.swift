@@ -13,6 +13,7 @@ enum AppSnapMode {
         excludedBundleIdentifier: String,
         externalTrigger: Bool
     )
+    case permissionGuide(pane: String, appPath: String, appName: String)
 }
 
 struct AppSnapOptions {
@@ -23,12 +24,15 @@ struct AppSnapOptions {
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
         var externalTrigger = false
+        var guidePane: String?
+        var guideAppPath: String?
+        var guideAppName: String?
         var index = 0
 
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch":
+            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -56,6 +60,33 @@ struct AppSnapOptions {
                 excludedBundleIdentifier = arguments[index]
             case "--external-trigger":
                 externalTrigger = true
+            case "--pane":
+                index += 1
+                guard index < arguments.count else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--pane requires a value."
+                    )
+                }
+                guidePane = arguments[index]
+            case "--app-path":
+                index += 1
+                guard index < arguments.count else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--app-path requires a path."
+                    )
+                }
+                guideAppPath = arguments[index]
+            case "--app-name":
+                index += 1
+                guard index < arguments.count else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--app-name requires a value."
+                    )
+                }
+                guideAppName = arguments[index]
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -82,6 +113,34 @@ struct AppSnapOptions {
                 )
             }
             return AppSnapOptions(mode: .requestPermissions)
+        case "--permission-guide":
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "The permission guide does not accept watch arguments."
+                )
+            }
+            guard let guidePane, guidePane == "screen-recording" || guidePane == "input-monitoring" else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --pane screen-recording or input-monitoring."
+                )
+            }
+            guard let guideAppPath, !guideAppPath.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --app-path."
+                )
+            }
+            guard let guideAppName, !guideAppName.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --app-name."
+                )
+            }
+            return AppSnapOptions(
+                mode: .permissionGuide(pane: guidePane, appPath: guideAppPath, appName: guideAppName)
+            )
         case "--watch":
             guard let outputDirectory, !outputDirectory.isEmpty else {
                 throw AppSnapFailure(
@@ -178,7 +237,12 @@ final class NDJSONEmitter {
         emit(payload)
     }
 
-    func emitError(_ failure: AppSnapFailure, capturedAt: String, id: String? = nil) {
+    func emitError(
+        _ failure: AppSnapFailure,
+        capturedAt: String,
+        id: String? = nil,
+        requestId: String? = nil
+    ) {
         var payload: [String: Any] = [
             "type": "error",
             "code": failure.code,
@@ -188,7 +252,25 @@ final class NDJSONEmitter {
         if let id {
             payload["id"] = id
         }
+        if let requestId {
+            payload["requestId"] = requestId
+        }
         emit(payload)
+    }
+
+    func emitWindows(requestId: String, windows: [[String: Any]]) {
+        emit([
+            "type": "windows",
+            "requestId": requestId,
+            "windows": windows,
+        ])
+    }
+
+    func emitPermissionGuide(state: String) {
+        emit([
+            "type": "permission-guide",
+            "state": state,
+        ])
     }
 
     func emitPermissions(inputMonitoring: Bool, screenRecording: Bool) {
