@@ -11377,7 +11377,6 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
-    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     isStudioChat: isStudioContainer,
     studioFolderPath: isStudioContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,
