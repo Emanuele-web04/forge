@@ -8,7 +8,6 @@ import {
   ProviderCredentialsLive,
 } from "../providerCredentials";
 import { ServerSettingsService } from "../serverSettings";
-import { ProviderAccountService } from "../providerAccounts";
 import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
@@ -35,7 +34,6 @@ export function makeServerProviderLayer(
   return Effect.gen(function* () {
     const credentials = yield* ProviderCredentials;
     const serverSettings = yield* ServerSettingsService;
-    const providerAccounts = yield* ProviderAccountService;
     const resolveProviderServerPassword = makeProviderServerPasswordResolver(credentials);
     const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
     const nativeEventLogger = logProviderEvents
@@ -56,20 +54,12 @@ export function makeServerProviderLayer(
     // the same MCP catalog/dispatcher through its native custom-tool API.
     const agentGatewayCredentialsLayer =
       options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
-    const codexAdapterLayer = makeCodexAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveHomePath: async () =>
-        (await Effect.runPromise(providerAccounts.resolveEnvironment("codex"))).homePath,
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const claudeAdapterLayer = makeClaudeAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveProcessEnvironment: async () => {
-        const resolved = await Effect.runPromise(
-          providerAccounts.resolveEnvironment("claudeAgent"),
-        );
-        return { accountId: resolved.accountId, env: resolved.env };
-      },
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const codexAdapterLayer = makeCodexAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const claudeAdapterLayer = makeClaudeAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,

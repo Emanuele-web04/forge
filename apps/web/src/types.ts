@@ -267,7 +267,6 @@ export interface Thread extends ThreadWorkspaceState {
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
-  subagentOrdinal?: number | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
   sidechatLastActivityAt?: string | null;
@@ -356,12 +355,9 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
-  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
-  /** Materialized from the parent spawn event so detail eviction cannot renumber the row. */
-  subagentOrdinal?: number | null;
   latestUserMessageAt: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
