@@ -424,6 +424,26 @@ describe("synara_read_kanban_card", () => {
     expect(result.callerThreadId).toBe("thread-caller");
   });
 
+  it("rejects a card whose project is not an ordinary project row", async () => {
+    const { tools } = makeTools({
+      threads: [
+        makeThreadShell("thread-caller", "chat-container"),
+        makeThreadShell("thread-chat", "chat-container"),
+      ],
+      projects: [
+        makeProjectShell("chat-container", "Chats", WORKSPACE_PATHS.chatWorkspaceRoot, "chat"),
+      ],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_read_kanban_card"), {
+        threadId: "thread-chat",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("no Kanban card");
+  });
+
   it.each([
     {
       label: "missing",

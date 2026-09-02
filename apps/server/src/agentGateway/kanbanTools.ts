@@ -394,6 +394,28 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             ),
           );
         }
+        // Mirror the board read's project filter: threads in managed chat or
+        // Studio containers (or the legacy home chat row) have no board card,
+        // so a scoped read must not materialize one either.
+        const snapshot = yield* snapshotQuery
+          .getShellSnapshot()
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        const project = snapshot.projects.find((candidate) => candidate.id === thread.projectId);
+        if (
+          !project ||
+          !isOrdinaryProjectRow({
+            projectKind: project.kind,
+            projectTitle: project.title,
+            projectWorkspaceRoot: project.workspaceRoot,
+            workspacePaths,
+          })
+        ) {
+          return yield* Effect.fail(
+            new ToolInputError(
+              `Thread "${threadId}" is not in an ordinary project and has no Kanban card.`,
+            ),
+          );
+        }
         if ((thread.archivedAt ?? null) !== null) {
           return yield* Effect.fail(
             new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
