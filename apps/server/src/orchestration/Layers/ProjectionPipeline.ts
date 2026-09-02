@@ -861,11 +861,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
-        // Turn completion advances the thread row in live operation (the shell
-        // summary projector and the in-memory projector both stamp it), so the
-        // replay filter must cover these events too — otherwise a cursor reset
-        // during projection repair regresses updated_at back to the turn start,
-        // which re-marks already-read chats as unread after a restart.
+        // Turn completion must advance updated_at here too, or projection repair
+        // replay regresses it to the turn start (re-marks read chats unread).
         case "thread.session-set":
         case "thread.turn-diff-completed":
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({

@@ -646,23 +646,51 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
       const threadId = ThreadId.makeUnsafe("thread-completion-updated-at");
       const turnId = TurnId.makeUnsafe("turn-completion-updated-at");
+      const projectId = ProjectId.makeUnsafe("project-completion-updated");
+      const modelSelection = { provider: "codex", model: "gpt-5.6-sol" } as const;
       const createdAt = "2026-09-01T00:00:00.000Z";
       const requestedAt = "2026-09-01T00:00:01.000Z";
       const startedAt = "2026-09-01T00:00:02.000Z";
       const completedAt = "2026-09-01T00:00:03.000Z";
 
-      yield* appendAndProject({
+      let scenarioSequence = 0;
+      type AppendEventInput = Parameters<typeof appendAndProject>[0];
+      type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+      const appendScenarioEvent = (
+        event: DistributiveOmit<
+          AppendEventInput,
+          "eventId" | "commandId" | "correlationId" | "causationEventId" | "metadata"
+        >,
+      ) =>
+        appendAndProject({
+          ...event,
+          eventId: EventId.makeUnsafe(`evt-completion-updated-${++scenarioSequence}`),
+          commandId: CommandId.makeUnsafe(`cmd-completion-updated-${scenarioSequence}`),
+          correlationId: CommandId.makeUnsafe(`cmd-completion-updated-${scenarioSequence}`),
+          causationEventId: null,
+          metadata: {},
+        });
+      const session = (
+        status: "running" | "ready",
+        activeTurnId: TurnId | null,
+        updatedAt: string,
+      ) => ({
+        threadId,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access" as const,
+        activeTurnId,
+        lastError: null,
+        updatedAt,
+      });
+
+      yield* appendScenarioEvent({
         type: "project.created",
-        eventId: EventId.makeUnsafe("evt-completion-updated-project"),
         aggregateKind: "project",
-        aggregateId: ProjectId.makeUnsafe("project-completion-updated"),
+        aggregateId: projectId,
         occurredAt: createdAt,
-        commandId: CommandId.makeUnsafe("cmd-completion-updated-project"),
-        causationEventId: null,
-        correlationId: CommandId.makeUnsafe("cmd-completion-updated-project"),
-        metadata: {},
         payload: {
-          projectId: ProjectId.makeUnsafe("project-completion-updated"),
+          projectId,
           title: "Completion updated project",
           workspaceRoot: "/tmp/project-completion-updated",
           defaultModelSelection: null,
@@ -671,21 +699,16 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           updatedAt: createdAt,
         },
       });
-      yield* appendAndProject({
+      yield* appendScenarioEvent({
         type: "thread.created",
-        eventId: EventId.makeUnsafe("evt-completion-updated-thread"),
         aggregateKind: "thread",
         aggregateId: threadId,
         occurredAt: createdAt,
-        commandId: CommandId.makeUnsafe("cmd-completion-updated-thread"),
-        causationEventId: null,
-        correlationId: CommandId.makeUnsafe("cmd-completion-updated-thread"),
-        metadata: {},
         payload: {
           threadId,
-          projectId: ProjectId.makeUnsafe("project-completion-updated"),
+          projectId,
           title: "Completion updated thread",
-          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          modelSelection,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -693,71 +716,34 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           updatedAt: createdAt,
         },
       });
-      yield* appendAndProject({
+      yield* appendScenarioEvent({
         type: "thread.turn-start-requested",
-        eventId: EventId.makeUnsafe("evt-completion-updated-start"),
         aggregateKind: "thread",
         aggregateId: threadId,
         occurredAt: requestedAt,
-        commandId: CommandId.makeUnsafe("cmd-completion-updated-start"),
-        causationEventId: null,
-        correlationId: CommandId.makeUnsafe("cmd-completion-updated-start"),
-        metadata: {},
         payload: {
           threadId,
           messageId: MessageId.makeUnsafe("message-completion-updated"),
-          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          modelSelection,
           runtimeMode: "full-access",
           interactionMode: "default",
           dispatchMode: "queue",
           createdAt: requestedAt,
         },
       });
-      yield* appendAndProject({
+      yield* appendScenarioEvent({
         type: "thread.session-set",
-        eventId: EventId.makeUnsafe("evt-completion-updated-running"),
         aggregateKind: "thread",
         aggregateId: threadId,
         occurredAt: startedAt,
-        commandId: CommandId.makeUnsafe("cmd-completion-updated-running"),
-        causationEventId: null,
-        correlationId: CommandId.makeUnsafe("cmd-completion-updated-running"),
-        metadata: {},
-        payload: {
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: startedAt,
-          },
-        },
+        payload: { threadId, session: session("running", turnId, startedAt) },
       });
-      yield* appendAndProject({
+      yield* appendScenarioEvent({
         type: "thread.session-set",
-        eventId: EventId.makeUnsafe("evt-completion-updated-ready"),
         aggregateKind: "thread",
         aggregateId: threadId,
         occurredAt: completedAt,
-        commandId: CommandId.makeUnsafe("cmd-completion-updated-ready"),
-        causationEventId: null,
-        correlationId: CommandId.makeUnsafe("cmd-completion-updated-ready"),
-        metadata: {},
-        payload: {
-          threadId,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: completedAt,
-          },
-        },
+        payload: { threadId, session: session("ready", null, completedAt) },
       });
 
       const readThreadUpdatedAt = sql<{ readonly updatedAt: string }>`
@@ -765,7 +751,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         FROM projection_threads
         WHERE thread_id = ${threadId}
       `;
-
       assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
 
       // Projection repair resets projector cursors and replays from the journal;
