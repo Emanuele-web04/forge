@@ -44,10 +44,10 @@ describe("pathEntries", () => {
     ]);
   });
 
-  it("reads PATH under any capitalization and treats an empty PATH as no entries", () => {
+  it("reads PATH under any capitalization and distinguishes absent from empty on POSIX", () => {
     expect(pathEntries({ Path: "/a" }, "darwin")).toEqual(["/a"]);
     expect(pathEntries({ path: "/a" }, "darwin")).toEqual(["/a"]);
-    expect(pathEntries({}, "darwin")).toEqual([]);
+    expect(pathEntries({}, "darwin")).toEqual(["/usr/bin", "/bin"]);
     expect(pathEntries({ PATH: "" }, "darwin")).toEqual([]);
   });
 });

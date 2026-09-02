@@ -2,6 +2,7 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -1178,6 +1179,94 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("Thread 'thread-missing' does not exist");
+
+    await system.dispose();
+  });
+
+  it("loads authoritative pending interactions before expiring a side chat", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+    const projectId = asProjectId("project-sidechat-pending-expiry");
+    const sourceThreadId = ThreadId.makeUnsafe("thread-sidechat-pending-source");
+    const sidechatId = ThreadId.makeUnsafe("thread-sidechat-pending");
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-project"),
+        projectId,
+        title: "Sidechat pending expiry",
+        workspaceRoot: "/tmp/sidechat-pending-expiry",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-source"),
+        threadId: sourceThreadId,
+        projectId,
+        title: "Source thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-create"),
+        threadId: sidechatId,
+        sourceThreadId,
+        sidechatSourceThreadId: sourceThreadId,
+        projectId,
+        title: "Pending side chat",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-approval"),
+        threadId: sidechatId,
+        activity: {
+          id: EventId.makeUnsafe("activity-sidechat-pending-approval"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          payload: {
+            requestId: "approval-sidechat-pending",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.sidechat.expire",
+          commandId: CommandId.makeUnsafe("cmd-sidechat-pending-expire"),
+          threadId: sidechatId,
+          expectedLastActivityAt: createdAt,
+          expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+        }),
+      ),
+    ).rejects.toThrow("still has a pending interaction");
 
     await system.dispose();
   });

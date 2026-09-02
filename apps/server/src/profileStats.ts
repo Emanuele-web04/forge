@@ -31,9 +31,9 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
+  "devin",
 ]);
 
 type HeatmapCell = ProfileStats["activity"]["heatmap"][number];

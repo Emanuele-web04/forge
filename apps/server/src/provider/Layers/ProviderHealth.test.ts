@@ -22,6 +22,7 @@ import {
   checkAntigravityProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkDevinProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   checkPiProviderStatus,
@@ -30,8 +31,8 @@ import {
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
+  makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
-  makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
@@ -156,10 +157,10 @@ const allProvidersDisabledSettings = {
     codex: { enabled: false },
     claudeAgent: { enabled: false },
     cursor: { enabled: false },
+    devin: { enabled: false },
     antigravity: { enabled: false },
     grok: { enabled: false },
     droid: { enabled: false },
-    kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
   },
@@ -171,10 +172,10 @@ const allProvidersDisabledServerSettings = {
     codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
     claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
+    devin: { ...DEFAULT_SERVER_SETTINGS.providers.devin, enabled: false },
     antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
-    kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
   },
@@ -312,27 +313,27 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
     });
 
-    it("updates npm-managed Kilo through its matching package manager and PATH", () => {
-      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.kilo;
+    it("updates npm-managed Codex through its matching package manager and PATH", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.codex;
       assert.ok(definition);
 
       const capabilities = resolvePackageManagedProviderMaintenance(definition, {
-        binaryPath: "kilo",
+        binaryPath: "codex",
         realCommandPath:
-          "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+          "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex",
         commandDirectory: "/Users/test/.nvm/versions/node/v24.13.0/bin",
       });
 
       assert.deepStrictEqual(capabilities.update, {
         command:
-          "npm install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
+          "npm install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @openai/codex@latest",
         executable: "npm",
         args: [
           "install",
           "-g",
           "--prefix",
           "/Users/test/.nvm/versions/node/v24.13.0",
-          "@kilocode/cli@latest",
+          "@openai/codex@latest",
         ],
         lockKey: "npm-global",
         pathPrepend: "/Users/test/.nvm/versions/node/v24.13.0/bin",
@@ -350,15 +351,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         yield* writeProviderStatusCache({
           filePath: resolveProviderStatusCachePath({
             stateDir: path.join(baseDir, "userdata"),
-            provider: "kilo",
+            provider: "codex",
           }),
           provider: {
-            provider: "kilo",
+            provider: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",
             checkedAt: "2026-07-15T12:00:00.000Z",
-            message: "Kilo CLI is installed and authenticated.",
+            message: "Codex CLI is installed and authenticated.",
             version: "7.3.46",
           },
         });
@@ -366,11 +367,11 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           ...allProvidersDisabledServerSettings,
           providers: {
             ...allProvidersDisabledServerSettings.providers,
-            kilo: {
-              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+            codex: {
+              ...DEFAULT_SERVER_SETTINGS.providers.codex,
               enabled: true,
               binaryPath:
-                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex",
             },
           },
         } satisfies typeof DEFAULT_SERVER_SETTINGS;
@@ -383,21 +384,21 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               shouldHang: (args, command) =>
                 command === "npm" &&
                 args.join(" ") ===
-                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
+                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @openai/codex@latest",
             }),
           ),
         );
 
         const result = yield* Effect.gen(function* () {
           const providerHealth = yield* ProviderHealth;
-          return yield* TestClock.withLive(providerHealth.updateProvider({ provider: "kilo" }));
+          return yield* TestClock.withLive(providerHealth.updateProvider({ provider: "codex" }));
         }).pipe(Effect.provide(layer));
-        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+        const codex = result.providers.find((provider) => provider.provider === "codex");
 
         assert.strictEqual(killed, true);
-        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(codex?.updateState?.status, "failed");
         assert.strictEqual(
-          kilo?.updateState?.message,
+          codex?.updateState?.message,
           "Update timed out after 20 milliseconds. The provider process was stopped.",
         );
       }),
@@ -418,15 +419,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         yield* writeProviderStatusCache({
           filePath: resolveProviderStatusCachePath({
             stateDir: path.join(baseDir, "userdata"),
-            provider: "kilo",
+            provider: "codex",
           }),
           provider: {
-            provider: "kilo",
+            provider: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",
             checkedAt: "2026-07-15T12:00:00.000Z",
-            message: "Kilo CLI is installed and authenticated.",
+            message: "Codex CLI is installed and authenticated.",
             version: "7.3.46",
           },
         });
@@ -434,11 +435,11 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           ...allProvidersDisabledServerSettings,
           providers: {
             ...allProvidersDisabledServerSettings.providers,
-            kilo: {
-              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+            codex: {
+              ...DEFAULT_SERVER_SETTINGS.providers.codex,
               enabled: true,
               binaryPath:
-                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex",
             },
           },
         } satisfies typeof DEFAULT_SERVER_SETTINGS;
@@ -453,7 +454,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               shouldHang: (args, command) =>
                 command === "npm" &&
                 args.join(" ") ===
-                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
+                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @openai/codex@latest",
             }),
           ),
         );
@@ -463,19 +464,19 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             const providerHealth = yield* ProviderHealth;
             const serverSettings = yield* ServerSettingsService;
             const updateFiber = yield* providerHealth
-              .updateProvider({ provider: "kilo" })
+              .updateProvider({ provider: "codex" })
               .pipe(Effect.forkChild);
             yield* Effect.promise(() => started);
-            yield* serverSettings.updateSettings({ providers: { kilo: { enabled: false } } });
+            yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
             return yield* Fiber.join(updateFiber);
           }).pipe(Effect.provide(layer)),
         );
-        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+        const codex = result.providers.find((provider) => provider.provider === "codex");
 
         assert.strictEqual(killed, true);
-        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(codex?.updateState?.status, "failed");
         assert.strictEqual(
-          kilo?.updateState?.message,
+          codex?.updateState?.message,
           "Update stopped because the provider was disabled.",
         );
       }),
@@ -484,8 +485,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
   describe("disabled provider handling", () => {
     it("builds an inert status for disabled providers", () => {
-      assert.deepStrictEqual(makeDisabledProviderStatus("kilo", "2026-06-16T12:00:00.000Z"), {
-        provider: "kilo",
+      assert.deepStrictEqual(makeDisabledProviderStatus("opencode", "2026-06-16T12:00:00.000Z"), {
+        provider: "opencode",
         status: "warning",
         available: false,
         authStatus: "unknown",
@@ -759,10 +760,10 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("rejects one-click updates for disabled providers", () =>
       Effect.gen(function* () {
         const providerHealth = yield* ProviderHealth;
-        const error = yield* Effect.flip(providerHealth.updateProvider({ provider: "kilo" }));
+        const error = yield* Effect.flip(providerHealth.updateProvider({ provider: "opencode" }));
 
         assert.ok(error instanceof ServerProviderUpdateError);
-        assert.strictEqual(error.provider, "kilo");
+        assert.strictEqual(error.provider, "opencode");
         assert.strictEqual(error.reason, "Provider is disabled in Synara settings.");
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
     );
@@ -2073,24 +2074,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
-  describe("checkKiloProviderStatus", () => {
-    it.effect("uses configured Kilo binary for version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* makeCheckKiloProviderStatus("/custom/bin/kilo");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/kilo");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "kilo 7.2.52\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-  });
-
   describe("checkPiProviderStatus", () => {
     it.effect("returns ready using only the Pi CLI version probe", () =>
       Effect.gen(function* () {
@@ -2318,6 +2301,115 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
+  describe("checkDevinProviderStatus", () => {
+    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () => {
+      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
+      const previousDevinKey = process.env.DEVIN_API_KEY;
+      process.env.WINDSURF_API_KEY = "windsurf-test-key";
+      delete process.env.DEVIN_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "Devin API Key");
+        assert.strictEqual(status.version, "2.0.0");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousWindsurfKey === undefined) {
+              delete process.env.WINDSURF_API_KEY;
+            } else {
+              process.env.WINDSURF_API_KEY = previousWindsurfKey;
+            }
+            if (previousDevinKey === undefined) {
+              delete process.env.DEVIN_API_KEY;
+            } else {
+              process.env.DEVIN_API_KEY = previousDevinKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.match(status.message ?? "", /devin auth login|WINDSURF_API_KEY/u);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("recognizes credentials saved by devin auth login", () => {
+      let credentialsRead = false;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => {
+          credentialsRead = true;
+          return { apiKey: "stored-test-key" };
+        });
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(credentialsRead, true);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
+    it.effect("returns unavailable when Devin CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.message, "Devin CLI (`devin`) is not installed or not on PATH.");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn devin ENOENT"))),
+    );
+
+    it.effect("uses the configured Devin binary for the version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus("/custom/bin/devin");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/devin");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
     );
   });
 

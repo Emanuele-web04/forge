@@ -9,10 +9,11 @@
  * recovery action, so server and client must never drift apart.
  */
 export const PROVIDER_DELIVERY_BLOCK_SUMMARY = "Thread is blocked by an earlier provider failure";
+const PROVIDER_DELIVERY_BLOCK_DETAIL_PREFIX = `${PROVIDER_DELIVERY_BLOCK_SUMMARY}:`;
 
 /** Session error detail written for a quarantined thread, e.g. "<summary>: <blocker>". */
 export function formatProviderDeliveryBlockDetail(blockerDetail: string): string {
-  return `${PROVIDER_DELIVERY_BLOCK_SUMMARY}: ${blockerDetail}`;
+  return `${PROVIDER_DELIVERY_BLOCK_DETAIL_PREFIX} ${blockerDetail}`;
 }
 
 /**
@@ -20,7 +21,10 @@ export function formatProviderDeliveryBlockDetail(blockerDetail: string): string
  * meaning the thread can be recovered by reconciling its blocking deliveries.
  */
 export function isProviderDeliveryBlockDetail(detail: string | null | undefined): boolean {
+  if (typeof detail !== "string") return false;
+  const normalized = detail.trimStart();
   return (
-    typeof detail === "string" && detail.trimStart().startsWith(PROVIDER_DELIVERY_BLOCK_SUMMARY)
+    normalized === PROVIDER_DELIVERY_BLOCK_SUMMARY ||
+    normalized.startsWith(PROVIDER_DELIVERY_BLOCK_DETAIL_PREFIX)
   );
 }

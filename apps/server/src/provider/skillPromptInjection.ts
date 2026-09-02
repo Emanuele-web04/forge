@@ -27,7 +27,12 @@ const CROSS_PROVIDER_SKILL_DIR_NAMES = [
 ] as const;
 
 function pathSegments(path: string): Set<string> {
-  return new Set(nodePath.normalize(path).split(/[\\/]+/));
+  return new Set(
+    nodePath
+      .normalize(path)
+      .split(/[\\/]+/)
+      .map((segment) => segment.toLowerCase()),
+  );
 }
 
 export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: string): boolean {
@@ -48,12 +53,20 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
     case "claudeAgent":
       // Claude Code only loads skills from .claude/skills folders.
       return !segments.has(".claude");
+    case "devin":
+      return !(
+        [".agents", ".claude", ".codeium", ".cognition", ".devin", ".windsurf"].some((dir) =>
+          segments.has(dir),
+        ) ||
+        ((segments.has(".config") || (segments.has("appdata") && segments.has("roaming"))) &&
+          (segments.has("devin") || segments.has("cognition")))
+      );
     case "pi":
       // Pi loads its own skill set; anything resolved from a cross-provider
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // Antigravity/Grok/Droid/Kilo/OpenCode have no native skill support.
+      // Antigravity/Grok/Droid/OpenCode have no native skill support.
       return true;
   }
 }

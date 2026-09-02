@@ -76,6 +76,7 @@ import {
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
+import { observeProviderStartup, ProviderStartupLifecycle } from "../providerStartupLifecycle.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
@@ -1682,10 +1683,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const resolvedProvider = parsed.provider ?? parsed.modelSelection?.provider;
+        if (resolvedProvider === undefined) {
+          return yield* toValidationError(
+            "provider.session.start",
+            "startSession requires an explicit provider or modelSelection with a provider",
+          );
+        }
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? "codex",
+          provider: resolvedProvider,
         };
         yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
         yield* validateAutoRuntimeMode(
@@ -1724,6 +1732,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 : undefined);
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
+            const startupLifecycle = new ProviderStartupLifecycle();
             const startAndPersistReplacement = Effect.gen(function* () {
               yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
               const resolvedAdapterStartInput = {
@@ -1740,14 +1749,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // lifecycle lock and the caller's command slot forever. Bound it,
               // retire whatever the adapter may have half-spawned, and fail
               // with text the caller can surface as a session error.
-              const started = yield* adapter
-                .startSession(resolvedAdapterStartInput)
-                .pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              startupLifecycle.transition("starting");
+              startupLifecycle.transition("handshaking");
+              // The lifecycle is updated inside observeProviderStartup; these taps
+              // only log the already-recorded outcome.
+              const started = yield* observeProviderStartup(
+                adapter.startSession(resolvedAdapterStartInput),
+                { lifecycle: startupLifecycle, timeout: PROVIDER_START_SESSION_TIMEOUT },
+              ).pipe(
+                Effect.tapError((cause) =>
+                  Effect.logError("provider.session.start_failed", {
+                    threadId,
+                    provider: input.provider,
+                    startup: startupLifecycle.snapshot(),
+                    cause: cause instanceof Error ? cause.message : String(cause),
+                  }),
+                ),
+                Effect.onInterrupt(() =>
+                  Effect.logInfo("provider.session.start_cancelled", {
+                    threadId,
+                    provider: input.provider,
+                    startup: startupLifecycle.snapshot(),
+                  }),
+                ),
+              );
               if (Option.isNone(started)) {
                 yield* Effect.logError("provider session start exceeded its deadline", {
                   threadId,
                   provider: input.provider,
                   timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                  startup: startupLifecycle.snapshot(),
                 });
                 yield* adapter.stopSession(threadId).pipe(
                   Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
@@ -1767,6 +1798,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
               const session = started.value;
+              startupLifecycle.transition("ready");
               replacementStarted = true;
               const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
               const nativeResumeSucceeded = nativeResumeAttempted
@@ -1797,6 +1829,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
               lease.commit();
+              startupLifecycle.transition("running");
+              yield* Effect.logDebug("provider.session.started", {
+                threadId,
+                provider: input.provider,
+                startup: startupLifecycle.snapshot(),
+              });
               if (
                 replacementFence !== undefined &&
                 providerInterruptionFences.get(threadId) === replacementFence

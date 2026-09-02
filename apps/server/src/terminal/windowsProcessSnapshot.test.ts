@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProcessChildrenMap } from "./processTreeKiller";
 import {
   createWindowsProcessSnapshotObserver,
+  createWindowsTeardownProcessSnapshotObserver,
   parseWindowsProcessSnapshotLine,
   type ProcessChildrenSnapshotWorker,
 } from "./windowsProcessSnapshot";
@@ -155,6 +156,49 @@ describe("Windows process snapshots", () => {
     await expect(observer.capture()).resolves.toBe(recoveredSnapshot);
     expect(createWorker).toHaveBeenCalledTimes(3);
     expect(recoveredWorker.capture).toHaveBeenCalledTimes(2);
+    observer.dispose();
+  });
+
+  it("retries teardown snapshots within the process-exit proof window", async () => {
+    vi.useFakeTimers();
+    const recoveredSnapshot = snapshot([{ ppid: 400, pid: 401, command: "provider.exe" }]);
+    const failedWorker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockRejectedValue(new Error("CIM unavailable")),
+      dispose: vi.fn(),
+    };
+    const recoveredWorker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockResolvedValue(recoveredSnapshot),
+      dispose: vi.fn(),
+    };
+    const workers = [failedWorker, recoveredWorker];
+    const observer = createWindowsTeardownProcessSnapshotObserver({
+      createWorker: () => workers.shift() ?? recoveredWorker,
+    });
+
+    const capture = observer.captureWithin(1_500);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(capture).resolves.toBe(recoveredSnapshot);
+    expect(failedWorker.capture).toHaveBeenCalledTimes(1);
+    expect(recoveredWorker.capture).toHaveBeenCalledTimes(1);
+    observer.dispose();
+  });
+
+  it("does not start a fallback probe after the teardown snapshot budget expires", async () => {
+    vi.useFakeTimers();
+    const stalledCapture = deferred<ProcessChildrenMap>();
+    const worker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn(() => stalledCapture.promise),
+      dispose: vi.fn(),
+    };
+    const createWorker = vi.fn(() => worker);
+    const observer = createWindowsTeardownProcessSnapshotObserver({ createWorker });
+
+    const capture = observer.captureWithin(500);
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(capture).resolves.toBeNull();
+    expect(createWorker).toHaveBeenCalledTimes(1);
     observer.dispose();
   });
 });

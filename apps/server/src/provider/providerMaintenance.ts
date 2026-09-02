@@ -90,9 +90,20 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function splitPrerelease(version: string): { main: string; prerelease: string | undefined } {
+  const separatorIndex = version.indexOf("-");
+  if (separatorIndex === -1) {
+    return { main: version, prerelease: undefined };
+  }
+  return {
+    main: version.slice(0, separatorIndex),
+    prerelease: version.slice(separatorIndex + 1),
+  };
+}
+
 function normalizeSemverVersion(version: string): string {
-  const [main, prerelease] = version.trim().replace(/^v/, "").split("-", 2);
-  const segments = (main ?? "")
+  const { main, prerelease } = splitPrerelease(version.trim().replace(/^v/, ""));
+  const segments = main
     .split(".")
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
@@ -105,7 +116,7 @@ function normalizeSemverVersion(version: string): string {
 }
 
 function parseSemver(value: string): ParsedSemver | null {
-  const [main = "", prerelease] = normalizeSemverVersion(value).split("-", 2);
+  const { main, prerelease } = splitPrerelease(normalizeSemverVersion(value));
   const segments = main.split(".");
   if (segments.length !== 3) {
     return null;

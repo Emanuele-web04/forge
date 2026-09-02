@@ -335,6 +335,20 @@ describe("threadDetailSubscriptionRetention", () => {
     ]);
   });
 
+  it("does not keep hidden side chats subscribed through cache retention", () => {
+    const visibleSidechat = ThreadId.makeUnsafe("sidechat-visible");
+    const hiddenSidechat = ThreadId.makeUnsafe("sidechat-hidden");
+
+    expect(
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds: [visibleSidechat],
+        retainedThreadIds: [visibleSidechat, hiddenSidechat],
+        serverThreadIds: new Set([visibleSidechat, hiddenSidechat]),
+        retentionExcludedThreadIds: new Set([visibleSidechat, hiddenSidechat]),
+      }),
+    ).toEqual([visibleSidechat]);
+  });
+
   it("notifies eviction subscribers so lease owners can refresh wiped detail", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-eviction-listener");

@@ -289,7 +289,6 @@ describe("external MCP gateway stdio flow", () => {
       "antigravity",
       "grok",
       "droid",
-      "kilo",
       "opencode",
       "pi",
     ].map((provider) => ({

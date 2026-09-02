@@ -1,8 +1,8 @@
 // FILE: providerUsage/providers/claude.ts
 // Purpose: Live Claude (Anthropic) usage fetcher. Reads the Claude Code OAuth token from
 // ~/.claude/.credentials.json or the macOS keychain ("Claude Code-credentials", possibly
-// hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly/sonnet
-// utilization windows + extra-usage credits.
+// hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly windows,
+// the per-model weekly windows (Fable, Sonnet, Opus) + extra-usage credits.
 //
 // Token freshness is delegated to the Claude CLI (`claude auth status` under the shared
 // auth-status lock). Anthropic rotates the single-use refresh token on every redemption, so
@@ -56,6 +56,14 @@ const AUTH_NUDGE_TIMEOUT_MS = 20_000;
 // A successful CLI refresh keeps the token fresh for hours; the cooldown only bounds how often a
 // *failing* nudge (logged-out user, missing binary) can re-spawn the CLI under steady polling.
 const AUTH_NUDGE_COOLDOWN_MS = 5 * 60 * 1000;
+const SESSION_WINDOW_MINS = 5 * 60;
+const WEEKLY_WINDOW_MINS = 7 * 24 * 60;
+// Legacy top-level per-model weekly keys, used only when `limits[]` lacks a scoped row for them.
+const LEGACY_MODEL_WEEKLY_WINDOWS: ReadonlyArray<readonly [label: string, key: string]> = [
+  ["Fable", "seven_day_fable"],
+  ["Sonnet", "seven_day_sonnet"],
+  ["Opus", "seven_day_opus"],
+];
 
 type ClaudeCredSource = { kind: "file"; path: string } | { kind: "keychain" };
 
@@ -256,13 +264,14 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
   const limits: ServerProviderUsageLimit[] = [];
   const usageLines: ServerProviderUsageLine[] = [];
 
-  const pushWindow = (label: string, windowValue: unknown, windowDurationMins: number): void => {
-    const window = asRecord(windowValue);
-    if (!window) {
-      return;
-    }
-    const usedPercent = clampPercent(asFiniteNumber(window.utilization));
-    const resetsAt = isoFromString(window.resets_at);
+  const pushLimit = (
+    label: string,
+    percent: number | undefined,
+    resetsAtValue: unknown,
+    windowDurationMins: number,
+  ): void => {
+    const usedPercent = clampPercent(percent);
+    const resetsAt = isoFromString(resetsAtValue);
     if (usedPercent === undefined && !resetsAt) {
       return;
     }
@@ -274,10 +283,39 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
     });
   };
 
-  pushWindow("5h", root?.five_hour, 300);
-  pushWindow("Weekly", root?.seven_day, 10_080);
-  pushWindow("Sonnet", root?.seven_day_sonnet, 10_080);
-  pushWindow("Opus", root?.seven_day_opus, 10_080);
+  const pushWindow = (label: string, windowValue: unknown, windowDurationMins: number): void => {
+    const window = asRecord(windowValue);
+    if (!window) {
+      return;
+    }
+    pushLimit(label, asFiniteNumber(window.utilization), window.resets_at, windowDurationMins);
+  };
+
+  pushWindow("5h", root?.five_hour, SESSION_WINDOW_MINS);
+  pushWindow("Weekly", root?.seven_day, WEEKLY_WINDOW_MINS);
+
+  // Per-model weekly windows. Anthropic moved these off the legacy top-level `seven_day_<model>`
+  // keys (which now come back null) into `limits[]` as `weekly_scoped` rows named by
+  // `scope.model.display_name` (e.g. "Fable"). Read the array first, then fall back to the legacy
+  // keys for any model the array did not cover so older responses keep working.
+  const scopedLabels = new Set<string>();
+  for (const entry of Array.isArray(root?.limits) ? root.limits : []) {
+    const scoped = asRecord(entry);
+    if (scoped?.kind !== "weekly_scoped") {
+      continue;
+    }
+    const label = asString(asRecord(asRecord(scoped.scope)?.model)?.display_name)?.trim();
+    if (!label || scopedLabels.has(label)) {
+      continue;
+    }
+    scopedLabels.add(label);
+    pushLimit(label, asFiniteNumber(scoped.percent), scoped.resets_at, WEEKLY_WINDOW_MINS);
+  }
+  for (const [label, key] of LEGACY_MODEL_WEEKLY_WINDOWS) {
+    if (!scopedLabels.has(label)) {
+      pushWindow(label, root?.[key], WEEKLY_WINDOW_MINS);
+    }
+  }
 
   const extra = asRecord(root?.extra_usage);
   if (extra && extra.is_enabled !== false) {

@@ -1,5 +1,5 @@
 // FILE: openCodeAuthPaths.test.ts
-// Purpose: Locks OpenCode/Kilo auth.json discovery so Windows does not prefer %APPDATA%
+// Purpose: Locks OpenCode auth.json discovery so Windows does not prefer %APPDATA%
 // over the XDG path OpenCode actually uses, and so Linux/macOS never consult AppData.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -58,15 +58,15 @@ describe("resolveOpenCodeCompatibleAuthPaths", () => {
       homeDir,
       env: { XDG_DATA_HOME: "/tmp/xdg-data" },
       platform: "darwin",
-      dataDirectoryName: "kilo",
+      dataDirectoryName: "opencode",
     });
     expect(paths).toEqual([
-      nodePath.join("/tmp/xdg-data", "kilo", "auth.json"),
-      nodePath.join(homeDir, ".local", "share", "kilo", "auth.json"),
+      nodePath.join("/tmp/xdg-data", "opencode", "auth.json"),
+      nodePath.join(homeDir, ".local", "share", "opencode", "auth.json"),
     ]);
   });
 
-  it("honors OPENCODE_DATA_DIR and KILO_DATA_DIR overrides first", () => {
+  it("honors the OPENCODE_DATA_DIR override first", () => {
     expect(
       resolveOpenCodeCompatibleAuthPaths({
         homeDir: "/home/tester",
@@ -75,14 +75,6 @@ describe("resolveOpenCodeCompatibleAuthPaths", () => {
         dataDirectoryName: "opencode",
       })[0],
     ).toBe(nodePath.join("/custom/opencode-data", "auth.json"));
-    expect(
-      resolveOpenCodeCompatibleAuthPaths({
-        homeDir: "/home/tester",
-        env: { KILO_DATA_DIR: "/custom/kilo-data" },
-        platform: "linux",
-        dataDirectoryName: "kilo",
-      })[0],
-    ).toBe(nodePath.join("/custom/kilo-data", "auth.json"));
   });
 });
 

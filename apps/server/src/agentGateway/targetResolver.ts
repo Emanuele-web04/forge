@@ -216,16 +216,6 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
   }),
-  kilo: defineProviderOptionConfig<"kilo">({
-    primaryOptionKey: "variant",
-    options: {
-      variant: providerOptionRule("string", [], "model-discovery"),
-      agent: providerOptionRule("string", [], "model-discovery", {
-        validation: { kind: "non-empty-string" },
-        allowsCustomValue: true,
-      }),
-    },
-  }),
   opencode: defineProviderOptionConfig<"opencode">({
     primaryOptionKey: "variant",
     options: {
@@ -236,7 +226,35 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  devin: defineProviderOptionConfig<"devin">({
+    primaryOptionKey: "modelVariant",
+    options: {
+      fastMode: providerOptionRule("boolean", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "boolean-capability", capability: "supportsFastMode" },
+      }),
+      thinking: providerOptionRule("boolean", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "boolean-capability", capability: "supportsThinkingToggle" },
+      }),
+      contextWindow: providerOptionRule("string", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "context-window" },
+      }),
+      reasoningEffort: providerOptionRule("string", [], "model-discovery"),
+      modelVariant: providerOptionRule("string", [], "model-discovery", {
+        validation: { kind: "non-empty-string" },
+        allowsCustomValue: true,
+      }),
+    },
+  }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
+
+function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptionConfig {
+  const registry: Readonly<Record<ProviderKind, ProviderTargetOptionConfig>> =
+    PROVIDER_TARGET_OPTION_RULES;
+  return registry[provider];
+}
 
 function providerDefaultModel(provider: ProviderKind): string | null {
   return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
@@ -298,7 +316,7 @@ export function loadAgentGatewayProviderCatalog(input: {
 function providerTargetOptionRules(
   provider: ProviderKind,
 ): ReadonlyArray<AgentGatewayTargetOptionRule> {
-  return Object.entries(PROVIDER_TARGET_OPTION_RULES[provider].options)
+  return Object.entries(providerTargetOptionConfig(provider).options)
     .filter(([, option]) => option.advertised)
     .map(([key, { valueType, allowedValues, allowedValuesSource, allowsCustomValue }]) => ({
       key,
@@ -310,7 +328,7 @@ function providerTargetOptionRules(
 }
 
 function providerPrimaryOptionKey(provider: ProviderKind): string {
-  return PROVIDER_TARGET_OPTION_RULES[provider].primaryOptionKey;
+  return providerTargetOptionConfig(provider).primaryOptionKey;
 }
 
 function convertDiscoveredOptionValue(
@@ -357,7 +375,12 @@ function modelTargetOptionRules(
   };
 
   const discoveredEfforts = model.supportedReasoningEfforts?.map((entry) => entry.value) ?? [];
-  replaceAllowedValues(providerPrimaryOptionKey(provider), discoveredEfforts);
+  const primaryOptionKey = providerPrimaryOptionKey(provider);
+  // A custom-value primary option (e.g. Devin modelVariant) accepts arbitrary
+  // values, so the discovered reasoning-effort list must not constrain it.
+  if (rules.find((rule) => rule.key === primaryOptionKey)?.allowsCustomValue !== true) {
+    replaceAllowedValues(primaryOptionKey, discoveredEfforts);
+  }
 
   for (const descriptor of model.optionDescriptors ?? []) {
     const rule = rules.find((candidate) => candidate.key === descriptor.id);
@@ -464,7 +487,7 @@ function providerOptionRuleSpec(
   provider: ProviderKind,
   optionId: string,
 ): ResolvedProviderTargetOptionRuleSpec | undefined {
-  const rule = PROVIDER_TARGET_OPTION_RULES[provider].options[optionId];
+  const rule = providerTargetOptionConfig(provider).options[optionId];
   return rule ? { key: optionId, ...rule } : undefined;
 }
 

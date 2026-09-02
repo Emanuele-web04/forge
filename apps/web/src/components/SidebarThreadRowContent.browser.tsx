@@ -9,10 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
-import {
-  resolveSubagentRowDescription,
-  SidebarThreadRowContent,
-} from "./SidebarThreadRowContent";
+import { resolveSubagentRowDescription, SidebarThreadRowContent } from "./SidebarThreadRowContent";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -150,6 +147,7 @@ describe("SidebarThreadRowContent", () => {
           session: {
             provider: "codex",
             status: "closed",
+            orchestrationStatus: "stopped",
             createdAt: "2026-07-19T12:00:00.000Z",
             updatedAt: "2026-07-19T12:01:00.000Z",
           },

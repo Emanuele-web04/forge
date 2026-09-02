@@ -22,6 +22,178 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.8.1",
+    date: "Sep 2",
+    features: [
+      {
+        id: "claude-fable-5-1",
+        title: "Use Claude Fable 5.1 across Claude and Pi",
+        description:
+          "Claude Fable 5.1 is now a first-class model with the right thinking controls, aliases, context variants, and usage reporting.",
+        details:
+          "Synara lists Fable 5.1 at the top of the Claude catalog and repairs older Pi Anthropic catalogs so the model remains selectable there too. The plain `fable` alias now resolves to 5.1 while explicit Fable 5 selections keep working. Its always-on thinking model exposes Low through Max effort without a fast-mode lane, compatible Cursor context variants are recognized, and Claude usage surfaces now show Fable's dedicated weekly allowance from Anthropic's current scoped-limit response.",
+      },
+      {
+        id: "large-database-startup",
+        title: "Open large workspaces with less startup work",
+        description:
+          "Synara avoids redundant sidebar snapshots, dead-turn replay, and oversized SQLite memory budgets during launch.",
+        details:
+          "The browser now accepts the live shell snapshot and only falls back when one is genuinely missing, including after reconnects. The server prunes unrecoverable open-turn rows instead of replaying and logging them on every boot, stops a failed replay once, and scales SQLite cache and mmap budgets to the machine. On the measured 1.7 GB database, shell snapshot requests fell from three to one and warm server boot-to-listen time fell from 1.06 seconds to 0.53 seconds.",
+      },
+      {
+        id: "devin-active-tool-reliability",
+        title: "Keep long-running Devin tools alive",
+        description:
+          "Quiet but active Devin tools no longer look like abandoned turns, and malformed tool-output requests recover safely.",
+        details:
+          "A current in-progress tool call now receives its own one-hour idle budget instead of sharing the ordinary 30-minute turn watchdog, with stale events prevented from refreshing the active clock. Synara also normalizes Devin's unexpected boolean `get_output.block` field without weakening other ACP messages, and project creation waits for a real task before navigation so superseded routes cannot overwrite newer work.",
+      },
+      {
+        id: "windows-process-runtime",
+        title: "Run and stop providers more predictably on Windows",
+        description:
+          "Provider, Git, updater, voice, terminal, native Windows, and WSL process handling now share one hardened runtime boundary.",
+        details:
+          "Executable lookup, PATH and PATHEXT handling, `.cmd` and PowerShell launches, WSL working directories, lifecycle diagnostics, and process-tree teardown now follow one implementation. Startup failures retain a typed phase and cause, stop operations reverify process identity before escalation, migration and lock durability use platform-aware filesystem rules, and failure to prove process exit stays visible instead of being reported as success.",
+      },
+      {
+        id: "git-writing-and-composer-polish",
+        title: "Keep Git writing and project picking focused",
+        description:
+          "Git copy is generated only through dedicated backends, while project and composer controls share a cleaner interaction style.",
+        details:
+          "The Git-writing picker now includes Cursor alongside Codex, OpenCode, and Droid while excluding chat-only agents that lack a safe one-shot generation path. The composer is slightly tighter, picker capsules use consistent hover treatment, and the project reset affordance now matches the folder control without losing its highlighted reset state.",
+      },
+    ],
+  },
+  {
+    version: "0.8.0",
+    date: "Sep 1",
+    features: [
+      {
+        id: "devin-acp-provider",
+        title: "Work with Devin from the same Synara workspace",
+        description:
+          "Devin CLI joins Synara as a first-class ACP provider with its own models, commands, modes, usage, attachments, and MCP configuration.",
+        details:
+          "Synara can start and resume Devin ACP sessions, discover the models and slash commands exposed by the installed CLI, switch Plan mode, compact long conversations, attach files and images, pass compatible MCP servers, and show account usage. Authentication remains owned by Devin through `devin auth login` or its supported API-key environment variables, and provider capabilities are gated so unsupported active-turn steering is never implied.",
+      },
+      {
+        id: "provider-neutral-webmcp",
+        title: "Give any capable provider the live browser tools",
+        description:
+          "WebMCP browser tools are now provider-neutral instead of being tied to one agent runtime.",
+        details:
+          "Browser sessions expose the same bounded, task-owned WebMCP surface to supported providers, with consistent tool discovery, invocation, timeouts, result shaping, tab ownership, and lifecycle cleanup. This keeps browser work attached to the correct task while allowing more agents to inspect and operate the page Synara is already showing.",
+      },
+      {
+        id: "in-thread-find",
+        title: "Find anything inside a long conversation",
+        description:
+          "Press Cmd/Ctrl+F to search the current transcript from a compact floating panel.",
+        details:
+          "The search walks real transcript messages, highlights matching text, reports the active result and total count, supports previous/next navigation and keyboard shortcuts, and follows matches without confusing tool-only rows with new assistant output. Closing the panel clears the temporary highlights without changing the conversation.",
+      },
+      {
+        id: "fast-live-conversations",
+        title: "Models, sidebars, and live replies react faster",
+        description:
+          "A focused performance pass reduces model-loading delay, sidebar work, toggle churn, and streaming update cost.",
+        details:
+          "Available models are ready sooner, sidebar projections do less repeated work, visibility changes avoid unnecessary updates, and assistant text follows a simpler live-output path. Auto-scroll now responds to real transcript messages rather than buffering, reconnecting, approvals, or tool-only activity, which avoids feedback loops and unwanted jumps while work is merely pending.",
+      },
+      {
+        id: "queued-reply-reliability",
+        title: "Queued follow-ups wait, dispatch, and recover predictably",
+        description:
+          "Follow-ups no longer race the turn ahead of them or strand work when a task is in the background.",
+        details:
+          "Synara holds a queued follow-up until the previous turn has actually started, promotes work for backgrounded tasks, preserves preview contents while capacity is constrained, resumes from the durable cursor after an idle stop, and prevents duplicated streamed replies. Reconnect and settlement paths converge on the same turn instead of replaying visible text twice.",
+      },
+      {
+        id: "migration-recovery-and-isolation",
+        title: "Database upgrades fail safely and explain recovery",
+        description:
+          "Schema migrations now verify runtime identity, ask before risky recovery, and keep source builds isolated from installed app data.",
+        details:
+          "A source checkout uses its own development home by default instead of silently opening Stable or Canary state. Migration startup verifies that the launcher and database belong together, creates recoverable backups, records recovery state, and presents deliberate restore or retry choices when an upgrade cannot complete. Existing Stable, Canary, and explicit home-directory behavior remains intact.",
+      },
+      {
+        id: "provider-control-and-context",
+        title: "Provider state is controlled by the server and visible in context",
+        description:
+          "Settings, usage, context changes, update notices, and enabled-provider behavior now agree on what the runtime can actually do.",
+        details:
+          "Disabling a provider now prevents server lifecycle execution instead of only hiding it in the interface. Usage is available for every enabled provider Synara can verify, provider-driven context changes appear in the conversation, routine lifecycle hooks stay out of the transcript, and update notices recover when availability checks overlap or temporarily fail.",
+      },
+      {
+        id: "durable-sidechat-panes",
+        title: "Side chats keep their place and relationship",
+        description:
+          "Parent-linked side chats now survive refreshes and expiry without losing the pane you were working in.",
+        details:
+          "Side-chat leases and parent relationships are stored durably, docked panes restore against the correct task, and archiving or unarchiving no longer discards an active lease. Expired transient state is reclaimed without confusing a regular child task for a disposable side chat.",
+      },
+      {
+        id: "custom-sidebar-navigation",
+        title: "Arrange the sidebar around your workflow",
+        description:
+          "The main navigation groups can now be reordered and keep that order across windows and restarts.",
+        details:
+          "Drag the configurable sidebar destinations into the order that suits you. The preference synchronizes through shared local storage, tolerates additions and older saved values, and preserves sensible defaults when stored data is incomplete or invalid.",
+      },
+      {
+        id: "file-actions-and-previews",
+        title: "Files open, reveal, copy, and preview more reliably",
+        description:
+          "Edited-file cards and workspace references have clearer actions and better path handling.",
+        details:
+          "macOS users can reveal a file in Finder, every platform can copy its path, and Open actions are separated from file management. Missing relative references no longer become misleading chips, valid absolute paths render as badges, dot-prefixed images and attachments are accepted, preview contents survive constrained queues, and numeric PDF destinations resolve to the intended page.",
+      },
+      {
+        id: "kilo-to-opencode-migration",
+        title: "Kilo Code data moves safely to OpenCode",
+        description:
+          "The retired Kilo Code provider has been removed, with existing Kilo tasks and preferences migrated to OpenCode.",
+        details:
+          "The database migration preserves provider sessions and task history while translating the provider kind. Follow-up compatibility handling also moves favorite providers and saved editor-tab state, so older installations do not retain broken Kilo selections after upgrading.",
+      },
+      {
+        id: "git-terminal-and-thread-correctness",
+        title: "Git, terminal shortcuts, and task metadata stay attached",
+        description:
+          "Pull-request attribution, creation time, terminal numbering, and final replies now resolve against the correct task.",
+        details:
+          "Pull requests are attributed to the owning thread rather than a neighboring checkout, created-at ordering remains stable, numbered terminal shortcuts select the intended tab, and the final assistant response remains self-contained after segmented or folded output. Factory Droid can also generate Git commit and pull-request text through the shared action flow.",
+      },
+      {
+        id: "security-boundary-hardening",
+        title: "Paths, networks, payloads, and credentials fail closed",
+        description:
+          "A broad boundary audit closes prototype, path, byte-limit, loopback, retry, and temporary-credential edge cases.",
+        details:
+          "Untrusted object keys cannot mutate prototypes, Windows drive-relative paths are rejected while drive roots remain valid, UTF-8 limits count bytes without splitting characters, IPv4-mapped addresses cannot bypass network policy, Retry-After values are validated and bounded, empty streamed chunks settle correctly at limits, and provider credential files use isolated temporary locations.",
+      },
+      {
+        id: "platform-update-safety",
+        title: "Desktop updates and platform paths are safer",
+        description:
+          "Electron, backend shutdown, Windows home paths, and source-launch identity received release-focused fixes.",
+        details:
+          "Electron is upgraded to 43.4.1 to include the fix for CVE-2026-70608. POSIX desktop updates now shut the backend down gracefully before replacement, Windows home paths abbreviate consistently, and source validation uses the working directory only when no stronger launcher digest is available.",
+      },
+      {
+        id: "provider-lifecycle-integrity",
+        title: "Provider resumes, compaction, and versions keep their identity",
+        description:
+          "Replay gates and exact provider metadata prevent stale lifecycle work from appearing as new activity.",
+        details:
+          "ACP load replay is suppressed until the restored session is ready, native resume is gated by the provider's real capability, Claude Auto variants match exact context limits and fail closed, compaction refreshes usage from the new boundary, long-message pagination is lossless and Unicode-safe, and prerelease provider versions retain their complete identifiers.",
+      },
+    ],
+  },
+  {
     version: "0.7.3",
     date: "Aug 21",
     features: [

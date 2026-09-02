@@ -212,10 +212,7 @@ export function resolveThreadHandoffModelSelection(input: {
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
   ): selection is ModelSelection => {
-    if (!selection || selection.provider !== input.targetProvider) {
-      return false;
-    }
-    return input.targetProvider !== "kilo" || selection.model.startsWith("kilo/");
+    return Boolean(selection && selection.provider === input.targetProvider);
   };
 
   const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];

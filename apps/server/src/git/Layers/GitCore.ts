@@ -20,7 +20,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
@@ -637,7 +638,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
           const child = yield* commandSpawner
             .spawn(
-              ChildProcess.make("git", commandInput.args, {
+              makeEffectProcessCommand("git", commandInput.args, {
                 cwd: commandInput.cwd,
                 env: {
                   ...process.env,

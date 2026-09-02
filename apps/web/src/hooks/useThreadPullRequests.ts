@@ -71,13 +71,14 @@ export function toThreadPullRequest(
  */
 export function resolveThreadPullRequestFallback(input: {
   readonly branch: string | null;
+  readonly hasDedicatedWorktree: boolean;
   readonly lastKnownPr: OrchestrationThreadPullRequest | null | undefined;
 }): ThreadPullRequest {
   return resolveSidebarThreadPullRequest({
     threadBranch: input.branch,
     liveBranch: null,
     hasLiveStatus: false,
-    hasDedicatedWorktree: false,
+    hasDedicatedWorktree: input.hasDedicatedWorktree,
     livePullRequest: null,
     persistedPullRequest: input.lastKnownPr ? toThreadPullRequest(input.lastKnownPr) : null,
   });

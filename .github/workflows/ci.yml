@@ -76,6 +76,9 @@ jobs:
       - name: Verify Synara identity
         run: bun run brand:check
 
+      - name: Verify Windows runtime boundary
+        run: bun run windows-runtime:check
+
       - name: Format
         run: bun run fmt:check
 
@@ -145,8 +148,25 @@ jobs:
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
 
-      - name: Test Windows process planning
-        run: bun run --cwd packages/shared test src/windowsProcess.test.ts
+      - name: Verify Windows runtime boundary
+        run: bun run windows-runtime:check
+
+      - name: Test Windows process runtime
+        run: >-
+          bun run --cwd packages/shared test
+          src/windowsProcess.test.ts
+          src/platformProcess.test.ts
+          src/processRuntime.test.ts
+          src/filesystemPlatform.test.ts
+          src/platformEnvironment.test.ts
+
+      - name: Test Windows lifecycle and process trees
+        run: >-
+          bun run --cwd apps/server test
+          src/platform/processTreeController.test.ts
+          src/provider/supervisedProcessTeardown.test.ts
+          src/provider/providerStartupLifecycle.test.ts
+          src/processRunner.test.ts
 
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts

@@ -13,10 +13,11 @@ import type {
   RuntimeMode,
   TurnId,
 } from "@synara/contracts";
-import { Deferred, Effect, Option, Semaphore, SynchronizedRef } from "effect";
+import { Deferred, Effect, Option, Scope, Semaphore, SynchronizedRef } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import type { AcpSessionMode, AcpSessionModeState, AcpToolCallState } from "./AcpRuntimeModel.ts";
+import { forkAcpTurnIdleWatchdog } from "./AcpTurnIdleWatchdog.ts";
 
 export interface AcpSessionModeAliases {
   readonly plan: ReadonlyArray<string>;
@@ -183,6 +184,60 @@ export function finalizeAcpActiveTurnCost(context: { latestSessionCostUsd: numbe
   return context.latestSessionCostUsd !== undefined
     ? { cumulativeCostUsd: context.latestSessionCostUsd }
     : {};
+}
+
+// Holds the active-turn window open until session/update events that were
+// already enqueued when the prompt response resolved have been fully handled
+// by the adapter's notification consumer, so they settle with their turn
+// attribution (and recorded failed-tool detail) intact. Snapshotting the
+// runtime's enqueued count and waiting for the adapter's processed count to
+// catch up is immune to stream chunk buffering and in-flight handlers, unlike
+// a queue-size probe. Returns immediately when the consumer kept up; bounded
+// so a chatty stream cannot stall settlement past the cap.
+export function waitForAcpQueuedTurnEventsDrained(input: {
+  readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
+  readonly sessionUpdatesProcessed: () => number;
+  readonly maxWaitMs: number;
+  readonly pollMs: number;
+}): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const target = yield* input.sessionUpdatesEnqueuedCount;
+    const startedAt = Date.now();
+    while (input.sessionUpdatesProcessed() < target && Date.now() - startedAt < input.maxWaitMs) {
+      yield* Effect.sleep(input.pollMs);
+    }
+  });
+}
+
+export function forkAcpAdapterTurnIdleWatchdog(input: {
+  readonly context: {
+    readonly scope: Scope.Closeable;
+    readonly pendingApprovals: { readonly size: number };
+    readonly pendingUserInputs: { readonly size: number };
+    activeTurnId: TurnId | undefined;
+    lastTurnActivityAt: number | undefined;
+    stopped: boolean;
+  };
+  readonly turnId: TurnId;
+  readonly idleTimeoutMs: number;
+  readonly currentIdleTimeoutMs?: () => number;
+  readonly checkIntervalMs: number;
+  readonly onIdleTimeout: (idleMs: number) => Effect.Effect<void>;
+}) {
+  const { context } = input;
+  return forkAcpTurnIdleWatchdog({
+    idleTimeoutMs: input.idleTimeoutMs,
+    ...(input.currentIdleTimeoutMs ? { currentIdleTimeoutMs: input.currentIdleTimeoutMs } : {}),
+    checkIntervalMs: input.checkIntervalMs,
+    scope: context.scope,
+    isTurnActive: () => context.activeTurnId === input.turnId && !context.stopped,
+    isAwaitingHuman: () => context.pendingApprovals.size > 0 || context.pendingUserInputs.size > 0,
+    lastActivityAt: () => context.lastTurnActivityAt ?? Date.now(),
+    touchActivity: () => {
+      context.lastTurnActivityAt = Date.now();
+    },
+    onIdleTimeout: input.onIdleTimeout,
+  });
 }
 
 export function withAcpPlanModePrompt(input: {

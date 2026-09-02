@@ -100,7 +100,6 @@ const SAFE_UNTRUSTED_STRING_VALUES = new Set([
   "in_progress",
   "inProgress",
   "input_text",
-  "kilo",
   "once",
   "output_text",
   "opencode",

@@ -10,7 +10,10 @@ import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
-import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import {
+  type ProviderUsageSummaryData,
+  useProviderUsageSummary,
+} from "~/hooks/useProviderUsageSummary";
 import {
   deriveProviderUsageDisplayRows,
   selectPrimaryProviderUsageDisplayRow,
@@ -37,6 +40,25 @@ export interface ProviderUsageMenuModel {
   notice: string | undefined;
   emptyMessage: string | undefined;
   isLoading: boolean;
+}
+
+export function buildProviderUsageMenuModel(input: {
+  provider: ProviderKind;
+  providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  usageSummary: ProviderUsageSummaryData & { readonly isLoading: boolean };
+}): ProviderUsageMenuModel {
+  const rows = deriveProviderUsageDisplayRows(input.usageSummary.rateLimits);
+
+  return {
+    menuTitle: `${PROVIDER_DISPLAY_NAMES[input.provider]} usage`,
+    primaryRow: selectPrimaryProviderUsageDisplayRow(rows),
+    rows,
+    rateLimits: input.usageSummary.rateLimits,
+    usageLines: input.usageSummary.usageLines,
+    notice: input.usageSummary.usageNotice,
+    emptyMessage: providerUsageEmptyMessage(input.provider, input.providerSnapshot),
+    isLoading: input.usageSummary.isLoading,
+  };
 }
 
 // Module-level: the selector memoizes on store slices, so recreating it per render would
@@ -74,30 +96,25 @@ export function useProviderUsageMenuModel(
     providerSnapshot: input.providerSnapshot,
     fetchOpenUsageData: false,
   });
-  const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
-  const primaryRow = selectPrimaryProviderUsageDisplayRow(usageRows);
 
-  return {
-    menuTitle: `${PROVIDER_DISPLAY_NAMES[provider]} usage`,
-    primaryRow,
-    rows: usageRows,
-    rateLimits: usageSummary.rateLimits,
-    usageLines: usageSummary.usageLines,
-    notice: usageSummary.usageNotice,
-    emptyMessage: providerUsageEmptyMessage(provider, input.providerSnapshot),
-    isLoading: usageSummary.isLoading,
-  };
+  return buildProviderUsageMenuModel({
+    provider,
+    providerSnapshot: input.providerSnapshot,
+    usageSummary,
+  });
 }
 
 export function ProviderUsageMenuPopup({
   provider,
   model,
   align: alignProp,
+  showUsageLines = false,
   children,
 }: {
   provider: ProviderKind;
   model: ProviderUsageMenuModel;
   align?: "start" | "end";
+  showUsageLines?: boolean;
   children: ReactNode;
 }) {
   const align = alignProp ?? "end";
@@ -112,7 +129,7 @@ export function ProviderUsageMenuPopup({
           notice={model.notice}
           emptyMessage={model.emptyMessage}
           isLoading={model.isLoading}
-          showUsageLines={false}
+          showUsageLines={showUsageLines}
           showTitle={false}
           className="px-2 pb-1 pt-1"
         />
