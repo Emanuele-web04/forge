@@ -369,10 +369,8 @@ export function AppSnapCoordinator() {
         }
       }
 
-      const persistenceResult = await attachAppSnapCapture(
-        target.threadId,
-        capture,
-        () => bridge.acknowledgeCapture(capture.id),
+      const persistenceResult = await attachAppSnapCapture(target.threadId, capture, () =>
+        bridge.acknowledgeCapture(capture.id),
       );
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
       requestComposerFocus(target.threadId);
