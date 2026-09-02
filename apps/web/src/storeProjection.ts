@@ -38,7 +38,12 @@ import {
   threadTurnStatesEqual,
   type ProjectNormalizationInput,
 } from "./storeNormalization";
-import { forgetProjectState, projectCwdKey, rememberProjectState } from "./storePersistence";
+import {
+  forgetProjectState,
+  projectCwdKey,
+  rememberProjectState,
+  resetStaleRememberedProjectState,
+} from "./storePersistence";
 import {
   EMPTY_ACTIVITY_BY_THREAD,
   EMPTY_ACTIVITY_IDS_BY_THREAD,
@@ -1259,6 +1264,11 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] === undefined,
   );
+  // The snapshot is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
+  resetStaleRememberedProjectState(
+    new Set(snapshotProjects.map((project) => projectCwdKey(project.workspaceRoot))),
+  );
   const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
@@ -1414,12 +1424,15 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     (readModel.spaces ?? []).filter((space) => space.deletedAt === null),
     state.spaces ?? [],
   );
-  const projects = mapProjects(
-    readModel.projects.filter(
-      (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
-    ),
-    state.projects,
+  const liveProjects = readModel.projects.filter(
+    (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
   );
+  // The read model is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
+  resetStaleRememberedProjectState(
+    new Set(liveProjects.map((project) => projectCwdKey(project.workspaceRoot))),
+  );
+  const projects = mapProjects(liveProjects, state.projects);
   const nextThreads = readModel.threads
     .filter(
       (thread) =>

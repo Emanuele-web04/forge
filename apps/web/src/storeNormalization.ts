@@ -379,6 +379,16 @@ export function normalizeProject(
   const hasKnownLegacyExpansion =
     rememberedUiState.projectOrderCount === 0 &&
     (rememberedUiState.expandedProjectCount > 0 || rememberedUiState.isLegacyExpansionPayload);
+  // Expansion resolves from three states, in priority order:
+  // 1. Previous match — a previous project with the same workspace root keeps its
+  //    live expansion, so server syncs never clobber local toggles.
+  // 2. Remembered state — when this cwd is known to the persisted order, or the
+  //    payload is a legacy expansion-only payload, reuse the remembered expansion.
+  // 3. Default — a project we have never seen starts expanded.
+  // `isLegacyExpansionPayload` is true only while the remembered payload uses the
+  // legacy shape (expandedProjectCwds with no projectOrderCwds). It flips off for
+  // good once modern order state is remembered, and is what lets an empty legacy
+  // list mean "all collapsed" instead of "no preference, default expanded".
   const expanded =
     (previous && projectCwdKey(previous.cwd) === workspaceRootKey
       ? previous.expanded

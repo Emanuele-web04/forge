@@ -52,19 +52,46 @@ function resetRememberedProjectState(): void {
   persistedExpandedProjectCwdsDefined = false;
 }
 
+/**
+ * Drops remembered project UI state that cannot match the incoming project set.
+ *
+ * A server snapshot is the authoritative project list. When it reports no projects
+ * at all, or a set sharing no workspace root with anything remembered (e.g. the
+ * server switched data directories), every remembered alias/order/expansion entry
+ * is stale and would otherwise leak into the incoming projects. Overlapping sets
+ * keep their shared history. Callers pass already-keyed cwds (`projectCwdKey`).
+ */
+export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<string>): void {
+  if (incomingCwdKeys.size === 0) {
+    resetRememberedProjectState();
+    return;
+  }
+  for (const cwdKey of incomingCwdKeys) {
+    if (
+      persistedProjectOrderByCwd.has(cwdKey) ||
+      persistedExpandedProjectCwds.has(cwdKey) ||
+      persistedProjectNamesByCwd.has(cwdKey)
+    ) {
+      return;
+    }
+  }
+  resetRememberedProjectState();
+}
+
 export function rememberProjectState(
   projects: ReadonlyArray<Pick<Project, "cwd" | "expanded" | "localName">>,
 ): void {
-  for (const project of projects) {
+  for (const [index, project] of projects.entries()) {
     const cwdKey = projectCwdKey(project.cwd);
     if (project.expanded) {
       persistedExpandedProjectCwds.add(cwdKey);
     } else {
       persistedExpandedProjectCwds.delete(cwdKey);
     }
-    if (!persistedProjectOrderByCwd.has(cwdKey)) {
-      persistedProjectOrderByCwd.set(cwdKey, persistedProjectOrderByCwd.size);
-    }
+    // Callers pass the full ordered project list, so the array position is the
+    // current order. Re-index known projects too, or the remembered order would
+    // drift after reorderProjects.
+    persistedProjectOrderByCwd.set(cwdKey, index);
     const localName = project.localName?.trim() ?? "";
     if (localName.length > 0) {
       persistedProjectNamesByCwd.set(cwdKey, localName);
@@ -152,7 +179,9 @@ export function persistState(state: AppState): void {
         projectNamesByCwd,
       }),
     );
-  } catch {
-    // Ignore quota/storage errors to avoid breaking chat UX.
+  } catch (error) {
+    // Quota/private-mode storage failures are not actionable in the UI; log at
+    // debug level so they are observable in devtools without breaking chat UX.
+    console.debug("Failed to persist renderer state", error);
   }
 }

@@ -282,6 +282,94 @@ describe("storePersistence", () => {
     expect(after.projectNameForCwd("/tmp/project-2")).toBe("beta");
   });
 
+  it("reindexes a known project to match its current position", async () => {
+    const storage = new Map<string, string>();
+    const { rememberProjectState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    const project = (id: string, cwd: string) => makeProject({ id: ProjectId.makeUnsafe(id), cwd });
+    rememberProjectState([
+      project("project-1", "/tmp/project-1"),
+      project("project-2", "/tmp/project-2"),
+    ]);
+    expect(getRememberedProjectUiState().projectOrderIndexForCwd("/tmp/project-1")).toBe(0);
+
+    rememberProjectState([
+      project("project-2", "/tmp/project-2"),
+      project("project-1", "/tmp/project-1"),
+    ]);
+
+    expect(getRememberedProjectUiState().projectOrderIndexForCwd("/tmp/project-2")).toBe(0);
+    expect(getRememberedProjectUiState().projectOrderIndexForCwd("/tmp/project-1")).toBe(1);
+  });
+
+  it("resets remembered state when the incoming project set shares no cwd with it", async () => {
+    const storage = new Map<string, string>();
+    const { rememberProjectState, resetStaleRememberedProjectState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    rememberProjectState([
+      makeProject({
+        id: ProjectId.makeUnsafe("project-1"),
+        cwd: "/tmp/project-1",
+        expanded: true,
+        localName: "alpha",
+      }),
+    ]);
+    expect(getRememberedProjectUiState().projectOrderCount).toBe(1);
+
+    resetStaleRememberedProjectState(new Set(["/tmp/project-2"]));
+
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectOrderCount).toBe(0);
+    expect(remembered.expandedProjectCount).toBe(0);
+    expect(remembered.projectNameForCwd("/tmp/project-1")).toBeUndefined();
+    expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
+  });
+
+  it("keeps remembered state when the incoming project set overlaps remembered cwds", async () => {
+    const storage = new Map<string, string>();
+    const { rememberProjectState, resetStaleRememberedProjectState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    rememberProjectState([
+      makeProject({
+        id: ProjectId.makeUnsafe("project-1"),
+        cwd: "/tmp/project-1",
+        expanded: true,
+        localName: "alpha",
+      }),
+      makeProject({
+        id: ProjectId.makeUnsafe("project-2"),
+        cwd: "/tmp/project-2",
+        expanded: false,
+      }),
+    ]);
+
+    resetStaleRememberedProjectState(new Set(["/tmp/project-2", "/tmp/project-3"]));
+
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectOrderCount).toBe(2);
+    expect(remembered.projectNameForCwd("/tmp/project-1")).toBe("alpha");
+    expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(true);
+  });
+
+  it("resets remembered state when the incoming project set is empty", async () => {
+    const storage = new Map<string, string>();
+    const { rememberProjectState, resetStaleRememberedProjectState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    rememberProjectState([
+      makeProject({
+        id: ProjectId.makeUnsafe("project-1"),
+        cwd: "/tmp/project-1",
+        expanded: true,
+      }),
+    ]);
+
+    resetStaleRememberedProjectState(new Set());
+
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectOrderCount).toBe(0);
+    expect(remembered.expandedProjectCount).toBe(0);
+  });
+
   it("does not call localStorage.setItem while threadsHydrated is false", async () => {
     const storage = new Map<string, string>();
     const fakeWindow = makeFakeWindow(storage);
