@@ -520,6 +520,40 @@ describe("synara_create_kanban_task", () => {
     expect(spec.projectId).toBe("project-a");
   });
 
+  it("defaults the spawned task to the caller's own thread model", async () => {
+    const { tools, created } = makeTools({
+      threads: [
+        makeThreadShell("thread-caller", "project-a", {
+          modelSelection: { provider: "claudeAgent", model: "sonnet-5" },
+        }),
+        makeSessionShell("thread-created"),
+      ],
+      runCreateThreads: () => createOk(["thread-created"]),
+    });
+    const readTarget = () =>
+      (
+        created[created.length - 1] as {
+          threads: Array<{ target: { provider: string; model: string } }>;
+        }
+      ).threads[0]!.target;
+
+    // No model argument: the task inherits the caller's own non-default model
+    // instead of the provider default.
+    await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      requestId: "req-caller-model",
+    });
+    expect(readTarget()).toEqual({ provider: "claudeAgent", model: "sonnet-5" });
+
+    // An explicit model argument still wins over the caller's own model.
+    await runHandler(toolById(tools, "synara_create_kanban_task"), {
+      title: "Fix bug",
+      model: "opus-4.8",
+      requestId: "req-explicit-model",
+    });
+    expect(readTarget()).toEqual({ provider: "claudeAgent", model: "opus-4.8" });
+  });
+
   it("returns the failed creation result untouched as isError", async () => {
     const { tools } = makeTools({
       threads: [],

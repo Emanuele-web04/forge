@@ -458,12 +458,18 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 ),
               );
             }
-            // Default the provider/model to the caller's own so an agent never
-            // spawns a task on a provider it cannot reason about.
+            // Default the provider to the caller's own and the model to the
+            // caller's own thread model, so an agent never spawns a task on a
+            // provider it cannot reason about — or silently on a different
+            // model than the one it runs itself.
             const spec: Record<string, unknown> = {
               title,
               prompt: description ?? title,
-              target: buildModelSelection(context.callerProvider, model),
+              target: buildModelSelection(
+                context.callerProvider,
+                model,
+                callerShell.modelSelection.model,
+              ),
               projectId: String(callerShell.projectId),
             };
             const result = yield* runCreateThreads(
