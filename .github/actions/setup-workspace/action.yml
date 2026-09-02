@@ -20,12 +20,10 @@ runs:
       with:
         node-version-file: package.json
 
-    - name: Cache Bun and Turbo
+    - name: Cache Bun install
       uses: actions/cache@v5
       with:
-        path: |
-          ~/.bun/install/cache
-          .turbo
+        path: ~/.bun/install/cache
         key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
         restore-keys: |
           ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
@@ -36,8 +34,6 @@ runs:
       with:
         path: ~/.cache/electron
         key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-electron-
 
     - name: Install dependencies
       shell: bash

@@ -71,8 +71,6 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
 
       # Run the workspace-local playwright binary directly: bunx stalled after
       # the chromium download on hosted runners. The step timeout stops any
@@ -109,6 +107,15 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           electron: "true"
+
+      # Only the build job produces a meaningful .turbo cache, so it is cached
+      # here rather than in the shared setup action. Exact key only: build
+      # outputs must never be restored from a prefix-matched key.
+      - name: Cache Turbo build outputs
+        uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-build-${{ github.sha }}
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -231,6 +238,7 @@ jobs:
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
