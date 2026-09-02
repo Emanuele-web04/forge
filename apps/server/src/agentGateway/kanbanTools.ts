@@ -28,7 +28,13 @@ import {
   readStringArg,
   ToolInputError,
 } from "./toolInput.ts";
-import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry, type ToolContext } from "./toolRuntime.ts";
+import {
+  GatewayToolError,
+  gatewayToolErrorResult,
+  READ_ONLY_TOOL_ANNOTATIONS,
+  type ToolEntry,
+  type ToolContext,
+} from "./toolRuntime.ts";
 import { summarizeThreadShell } from "./threadSummary.ts";
 
 /**
@@ -152,6 +158,18 @@ export interface KanbanToolsInput {
   readonly helpers: KanbanGatewayHelpers;
   readonly now?: () => number;
 }
+
+/**
+ * Render a failed kanban tool effect as an MCP tool error result.
+ * GatewayToolError keeps its machine-readable code and details; every other
+ * failure degrades to its message text.
+ */
+const catchToolError = (error: unknown): Effect.Effect<McpToolCallResult> =>
+  Effect.succeed(
+    error instanceof GatewayToolError
+      ? gatewayToolErrorResult(error)
+      : mcpToolResultError(errorText(error)),
+  );
 
 export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyArray<ToolEntry> {
   const { snapshotQuery, workspacePaths, helpers } = input;
@@ -352,7 +370,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               }
             : {}),
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch(catchToolError)),
     ),
   };
 
@@ -427,7 +445,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
           asOf: new Date(now()).toISOString(),
           callerThreadId: context.callerThreadId,
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch(catchToolError)),
     ),
   };
 
@@ -614,7 +632,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 attention: createdCard.attention,
               },
             });
-          }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+          }).pipe(Effect.catch(catchToolError)),
         ),
       ),
     ),
@@ -626,7 +644,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     definition: {
       name: "synara_move_kanban_card",
       description:
-        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). Awaiting you is human-attention state and cannot be targeted; a card there reports alreadyInProgress with awaitingYou: true.',
+        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). A card already in the requested column reports a no-op (alreadyInProgress / alreadyDone). Prohibited moves fail with a tool error: Awaiting you is human-attention state and cannot be targeted, and "done" requires an in-flight turn to settle.',
       inputSchema: {
         type: "object",
         properties: {
@@ -695,14 +713,25 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               attention: cardView.attention,
             });
             if (target === "inProgress") {
-              if (currentColumn === "inProgress" || currentColumn === "awaitingYou") {
-                // No new dispatch; attention flags show a targeting caller why an
-                // awaiting-you card stayed put.
+              if (currentColumn === "awaitingYou") {
+                // Awaiting-you is human attention: starting a turn here would
+                // stomp it, so the prohibited move fails instead of silently
+                // reporting success.
+                return yield* Effect.fail(
+                  new GatewayToolError(
+                    "operation_failed",
+                    `Card "${threadId}" is Awaiting you; it cannot be driven until the human responds. Resolve the attention flag first.`,
+                    { threadId, target, column: currentColumn },
+                  ),
+                );
+              }
+              if (currentColumn === "inProgress") {
+                // Already in the requested column: an idempotent no-op, not a
+                // silent success for a refused move.
                 return mcpToolResultJson({
                   threadId,
                   target,
                   alreadyInProgress: true,
-                  awaitingYou: currentColumn === "awaitingYou",
                   card: cardPayload(currentColumn),
                 });
               }
@@ -736,14 +765,26 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 ),
               );
             }
-            const alreadyDone = !threadHasInFlightTurn(card) || currentColumn !== "inProgress";
-            if (alreadyDone) {
+            if (currentColumn === "done") {
+              // Already in the requested column: an idempotent no-op.
               return mcpToolResultJson({
                 threadId,
                 target,
                 alreadyDone: true,
                 card: cardPayload(currentColumn),
               });
+            }
+            if (!threadHasInFlightTurn(card)) {
+              // "done" settles a running turn; a card with no in-flight turn
+              // (a draft, or a stale in-progress view) cannot be completed, so
+              // the impossible transition fails loudly instead of no-op'ing.
+              return yield* Effect.fail(
+                new GatewayToolError(
+                  "operation_failed",
+                  `Card "${threadId}" has no in-flight turn to settle; only a running card can be moved to Done.`,
+                  { threadId, target, column: currentColumn },
+                ),
+              );
             }
             const dispatched = yield* interruptTurn({ threadId }).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
@@ -755,7 +796,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               eventSequence: dispatched.sequence,
               card: cardPayload(currentColumn),
             });
-          }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+          }).pipe(Effect.catch(catchToolError)),
         ),
       ),
     ),

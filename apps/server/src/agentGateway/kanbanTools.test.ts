@@ -751,6 +751,32 @@ describe("synara_move_kanban_card", () => {
     expect(interrupted).toHaveLength(0);
   });
 
+  it("rejects driving an awaiting-you card into a new turn", async () => {
+    const { tools, started } = makeTools({
+      threads: [
+        makeSessionShell("thread-waiting", "project-a", {
+          hasPendingApprovals: true,
+        }),
+      ],
+    });
+
+    const result = await move(tools, "thread-waiting", "inProgress");
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("Awaiting you");
+    expect(started).toHaveLength(0);
+  });
+
+  it("rejects moving a card with no in-flight turn to done", async () => {
+    const { tools, interrupted } = makeTools({
+      threads: [makeThreadShell("thread-draft")],
+    });
+
+    const result = await move(tools, "thread-draft", "done");
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("no in-flight turn");
+    expect(interrupted).toHaveLength(0);
+  });
+
   it.each([
     {
       label: "settled-without-message",
