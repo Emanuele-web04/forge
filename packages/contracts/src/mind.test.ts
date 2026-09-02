@@ -39,9 +39,11 @@ describe("Mind contracts", () => {
     expect(decodes(MindMemory, memory)).toBe(true);
     expect(decodes(MindMemory, { ...memory, type: "unknown" })).toBe(false);
     expect(decodes(MindMemory, { ...memory, weight: 1.01 })).toBe(false);
-    expect(decodes(MindMemory, { ...memory, sourceThreadId: null, sourceProvider: null })).toBe(
-      true,
-    );
+    expect(decodes(MindMemory, { ...memory, accessCount: -1 })).toBe(false);
+    expect(decodes(MindMemory, { ...memory, provenance: { kind: "user" } })).toBe(true);
+    expect(
+      decodes(MindMemory, { ...memory, provenance: { kind: "agent", threadId: "thread-1" } }),
+    ).toBe(false);
   });
 
   it("bounds remember text and requires a legal memory type", () => {
