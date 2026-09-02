@@ -180,4 +180,25 @@ describe("buildFeedbackSubmission", () => {
     expect(submission.details).not.toContain("/Users/kartik");
     expect(submission.details).toContain("~/scratch");
   });
+
+  it("sanitizes untrusted provider and model strings in the summary and diagnostics", () => {
+    const submission = buildFeedbackSubmission({
+      category: "bug",
+      details: "The model picker stopped listing models.",
+      context: {
+        ...CONTEXT,
+        model: "sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX fine-tune from /Users/kartik/leak",
+      },
+      now: new Date("2026-07-15T18:00:00.000Z"),
+      userAgent: "Synara test agent",
+      platform: "MacIntel",
+      language: "en-US",
+      viewport: { width: 1_440, height: 900 },
+    });
+
+    expect(submission.diagnostics.model).toBe("[REDACTED] fine-tune from ~/leak");
+    expect(submission.summary).not.toContain("sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX");
+    expect(submission.summary).not.toContain("/Users/kartik");
+    expect(submission.summary).toContain("Model: [REDACTED] fine-tune from ~/leak");
+  });
 });

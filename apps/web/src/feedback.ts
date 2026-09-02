@@ -77,8 +77,10 @@ const SECRET_PATTERNS = [
   /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
 ] as const;
 
+// Usernames may contain dots and other punctuation (john.doe), so the segment
+// after the home prefix stops only at path separators and whitespace.
 const HOME_PATH_PATTERN =
-  /(?<=^|[\s'"`=(])(\/Users\/[^/\s,.;:!?()"'`]+|\/home\/[^/\s,.;:!?()"'`]+|\/root\/[^/\s,.;:!?()"'`]+|C:\\Users\\[^/\\\s,.;:!?()"'`]+|C:\/Users\/[^/\s,.;:!?()"'`]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
+  /(?<=^|[\s'"`=(])(\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root\/[^/\s]+|C:\\Users\\[^/\\\s]+|C:\/Users\/[^/\s]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
 
 /** Masks high-confidence secrets with `[REDACTED]` and returns the count. */
 export function redactObviousSecrets(text: string): { text: string; redactedCount: number } {
@@ -101,6 +103,34 @@ export function normalizeHomePaths(text: string): string {
 /** Sanitizes user-supplied feedback text before it leaves the app. */
 export function sanitizeUntrustedText(text: string): string {
   return normalizeHomePaths(redactObviousSecrets(text).text);
+}
+
+function sanitizeOptionalText(value: string | null): string | null {
+  return value === null ? null : sanitizeUntrustedText(value);
+}
+
+/**
+ * Sanitizes every string field of the diagnostics payload: provider and model
+ * come from free-form thread state and must never leak secrets or home paths.
+ */
+function sanitizeDiagnostics(diagnostics: FeedbackDiagnostics): FeedbackDiagnostics {
+  return {
+    ...diagnostics,
+    provider: sanitizeOptionalText(diagnostics.provider),
+    model: sanitizeOptionalText(diagnostics.model),
+    projectKind: sanitizeOptionalText(diagnostics.projectKind),
+    environmentMode: sanitizeOptionalText(diagnostics.environmentMode),
+    runtimeMode: sanitizeOptionalText(diagnostics.runtimeMode),
+    interactionMode: sanitizeOptionalText(diagnostics.interactionMode),
+    sessionStatus: sanitizeOptionalText(diagnostics.sessionStatus),
+    latestTurnState: sanitizeOptionalText(diagnostics.latestTurnState),
+    appVersion: sanitizeUntrustedText(diagnostics.appVersion),
+    submittedAt: sanitizeUntrustedText(diagnostics.submittedAt),
+    userAgent: sanitizeUntrustedText(diagnostics.userAgent),
+    platform: sanitizeUntrustedText(diagnostics.platform),
+    language: sanitizeUntrustedText(diagnostics.language),
+    viewport: sanitizeUntrustedText(diagnostics.viewport),
+  };
 }
 
 function formatStateFlags(diagnostics: FeedbackThreadContext): string {
@@ -170,7 +200,7 @@ export function buildFeedbackSubmission(input: {
   viewport?: { width: number; height: number };
 }): FeedbackSubmission {
   const viewport = input.viewport ?? { width: window.innerWidth, height: window.innerHeight };
-  const diagnostics: FeedbackDiagnostics = {
+  const diagnostics = sanitizeDiagnostics({
     ...input.context,
     appVersion: APP_VERSION,
     submittedAt: (input.now ?? new Date()).toISOString(),
@@ -178,15 +208,17 @@ export function buildFeedbackSubmission(input: {
     platform: input.platform ?? navigator.platform,
     language: input.language ?? navigator.language,
     viewport: `${viewport.width}x${viewport.height}`,
-  };
+  });
 
   return {
     category: input.category,
     details: sanitizeUntrustedText(input.details.trim()),
-    summary: formatFeedbackSummary({
-      category: input.category,
-      diagnostics,
-    }),
+    summary: sanitizeUntrustedText(
+      formatFeedbackSummary({
+        category: input.category,
+        diagnostics,
+      }),
+    ),
     diagnostics,
   };
 }
