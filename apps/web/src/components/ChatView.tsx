@@ -5288,6 +5288,16 @@ export default function ChatView({
       isUserScrollDetachedRef.current = false;
       setIsUserScrollDetached(false);
     } else {
+      // Keyboard (Page-Up, arrows), scrollbar drags, and trackpad scrolling fire
+      // onScroll without any wheel/touch/pointer gesture, so scroll ownership
+      // has to move here too: leaving the end detaches follow mode until the
+      // user scrolls back (the isAtEnd branch above reattaches). The
+      // tail-anchor slide keeps ownership — these events can be the slide's own
+      // scroll output, and the hook clears that flag itself when it finishes.
+      autoFollowThreadIdRef.current = null;
+      animateNextAutoFollowScrollRef.current = false;
+      isUserScrollDetachedRef.current = true;
+      setIsUserScrollDetached(true);
       showScrollDebouncer.current.maybeExecute();
     }
   }, []);
