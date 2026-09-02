@@ -637,6 +637,148 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(yield* readTerminalRows(), liveRows);
     }),
   );
+
+  it.effect("keeps thread updatedAt at turn completion across projection rebuilds", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const threadId = ThreadId.makeUnsafe("thread-completion-updated-at");
+      const turnId = TurnId.makeUnsafe("turn-completion-updated-at");
+      const createdAt = "2026-09-01T00:00:00.000Z";
+      const requestedAt = "2026-09-01T00:00:01.000Z";
+      const startedAt = "2026-09-01T00:00:02.000Z";
+      const completedAt = "2026-09-01T00:00:03.000Z";
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-completion-updated-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-completion-updated"),
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-completion-updated-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-completion-updated-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-completion-updated"),
+          title: "Completion updated project",
+          workspaceRoot: "/tmp/project-completion-updated",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-completion-updated-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-completion-updated-thread"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-completion-updated-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.makeUnsafe("project-completion-updated"),
+          title: "Completion updated thread",
+          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-completion-updated-start"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        commandId: CommandId.makeUnsafe("cmd-completion-updated-start"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-completion-updated-start"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-completion-updated"),
+          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          createdAt: requestedAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.makeUnsafe("evt-completion-updated-running"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        commandId: CommandId.makeUnsafe("cmd-completion-updated-running"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-completion-updated-running"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: startedAt,
+          },
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.makeUnsafe("evt-completion-updated-ready"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: completedAt,
+        commandId: CommandId.makeUnsafe("cmd-completion-updated-ready"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-completion-updated-ready"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      const readThreadUpdatedAt = sql<{ readonly updatedAt: string }>`
+        SELECT updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+
+      // Projection repair resets projector cursors and replays from the journal;
+      // the rebuild must not regress the thread row back to the turn start.
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threads}
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+    }),
+  );
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-identity-scope-")))(

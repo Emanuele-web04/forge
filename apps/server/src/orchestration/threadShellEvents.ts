@@ -23,6 +23,8 @@ export const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.turn-start-requested",
+  "thread.session-set",
+  "thread.turn-diff-completed",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
