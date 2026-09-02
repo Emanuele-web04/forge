@@ -39,6 +39,10 @@ describe("Mind scoring", () => {
       ).map((x) => x.memory.memoryId),
     ).toEqual(["a", "b"]);
   });
+  it("returns zero weight for invalid dates instead of NaN", () => {
+    expect(effectiveWeight(row({ lastAccessedAt: "not-a-date" }), now)).toBe(0);
+    expect(effectiveWeight(row(), "not-a-date")).toBe(0);
+  });
   it("prunes only the approved conjunction and never pinned rows", () => {
     const stale = row({ peakWeight: 0.001, lastAccessedAt: "2025-01-01T00:00:00.000Z" });
     expect(shouldPrune(stale, now)).toBe(true);

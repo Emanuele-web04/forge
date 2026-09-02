@@ -29,6 +29,11 @@ const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const idleDays = (memory: ScoredMemory, nowIso: string) =>
   Math.max(0, (Date.parse(nowIso) - Date.parse(memory.lastAccessedAt)) / DAY_MS);
 export function effectiveWeight(memory: ScoredMemory, nowIso: string): number {
+  // Invalid dates must not produce NaN weights (and unspecified sort order);
+  // a zero weight just sinks the memory in ranking and pruning.
+  if (Number.isNaN(Date.parse(nowIso)) || Number.isNaN(Date.parse(memory.lastAccessedAt))) {
+    return 0;
+  }
   const peak = clamp(memory.peakWeight);
   if (memory.pinned) return peak;
   const stability =
