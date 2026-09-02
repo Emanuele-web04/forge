@@ -19,7 +19,6 @@ import {
   KanbanIcon,
   KeyboardIcon,
   BellIcon,
-  BotIcon,
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
@@ -219,7 +218,6 @@ import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
   SidebarThreadRowContent,
-  resolveSubagentRowDescription,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
@@ -362,11 +360,6 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import {
-  applySidebarSplitGroups,
-  buildSidebarSplitGroupIndex,
-  type SidebarSplitGroupInfo,
-} from "./sidebarSplitGroups";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
@@ -674,27 +667,17 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "automation" | "handoff" | "fork" | "worktree" | "synara-source";
+  id: "automation" | "handoff" | "fork" | "worktree";
   tooltip: string;
   icon: ReactNode;
 };
 
 /**
- * Left-to-right order: first = leftmost, last = rightmost.
- * Priority lowest -> highest: automation -> handoff -> fork -> worktree. Sidechats skip fork/temporary
- * badges because the "Sidechat:" title already identifies them.
+ * Back-to-front order: first = behind, last = in front.
+ * Priority lowest -> highest: handoff -> fork -> worktree.
  */
-export function resolveThreadRowMetaChips(input: {
-  thread: Pick<
-    Thread,
-    | "forkSourceThreadId"
-    | "sidechatSourceThreadId"
-    | "envMode"
-    | "worktreePath"
-    | "handoff"
-    | "creationSource"
-    | "sourceThreadId"
-  >;
+function resolveThreadRowMetaChips(input: {
+  thread: Pick<Thread, "forkSourceThreadId" | "envMode" | "worktreePath" | "handoff">;
   includeHandoffBadge: boolean;
   /**
    * When the leading provider avatar already renders the source → target handoff
@@ -705,16 +688,6 @@ export function resolveThreadRowMetaChips(input: {
   threadAutomations?: readonly AutomationDefinition[] | undefined;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
-  const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
-
-  if (input.thread.creationSource === "synara_mcp" && input.thread.sourceThreadId) {
-    chips.push({
-      id: "synara-source",
-      tooltip: "Sent by Synara from another thread",
-      icon: <SidebarGlyph icon={BotIcon} variant="meta" className="text-muted-foreground/55" />,
-    });
-  }
-
   const threadAutomations = input.threadAutomations;
   if (threadAutomations && threadAutomations.length > 0) {
     const anyEnabled = threadAutomations.some((automation) => automation.enabled);
@@ -771,13 +744,6 @@ export function resolveThreadRowMetaChips(input: {
   }
 
   return chips;
-}
-
-export function shouldShowTemporaryThreadIcon(input: {
-  isTemporaryThread: boolean;
-  sidechatSourceThreadId: Thread["sidechatSourceThreadId"];
-}): boolean {
-  return input.isTemporaryThread && !input.sidechatSourceThreadId;
 }
 
 function terminalStatusFromThreadState(input: {
@@ -1549,13 +1515,6 @@ export default function Sidebar() {
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
-  const splitViewIdBySourceThreadId = useSplitViewStore(
-    (store) => store.splitViewIdBySourceThreadId,
-  );
-  const splitGroupMembershipByThreadId = useMemo(
-    () => buildSidebarSplitGroupIndex({ splitViewsById, splitViewIdBySourceThreadId }),
-    [splitViewIdBySourceThreadId, splitViewsById],
-  );
 
   useEffect(() => {
     const api = readNativeApi();
@@ -4397,15 +4356,12 @@ export default function Sidebar() {
     if (!chatSectionExpanded) {
       return [];
     }
-    return applySidebarSplitGroups({
-      rows: buildProjectThreadTree({
-        threads: sortThreadsForSidebar(
-          chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
-          appSettings.sidebarThreadSortOrder,
-        ),
-        forceVisibleThreadId: activeSidebarThreadId ?? undefined,
-      }),
-      membershipByThreadId: splitGroupMembershipByThreadId,
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+        appSettings.sidebarThreadSortOrder,
+      ),
+      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
     });
   }, [
     activeSidebarThreadId,
@@ -4413,7 +4369,6 @@ export default function Sidebar() {
     chatSectionExpanded,
     chatProjects,
     sortedSidebarThreadsByProjectId,
-    splitGroupMembershipByThreadId,
   ]);
   const visibleChatThreadIds = useMemo(
     () => visibleChatThreadRows.map((row) => row.thread.id),
@@ -4427,20 +4382,17 @@ export default function Sidebar() {
     if (!isOnStudio) {
       return [];
     }
-    return applySidebarSplitGroups({
-      rows: buildProjectThreadTree({
-        threads: sortThreadsForSidebar(
-          getUnpinnedThreadsForSidebar(
-            studioProjects.flatMap(
-              (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
-            ),
-            pinnedThreadIds,
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        getUnpinnedThreadsForSidebar(
+          studioProjects.flatMap(
+            (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
           ),
-          appSettings.sidebarThreadSortOrder,
+          pinnedThreadIds,
         ),
-        forceVisibleThreadId: activeSidebarThreadId ?? undefined,
-      }),
-      membershipByThreadId: splitGroupMembershipByThreadId,
+        appSettings.sidebarThreadSortOrder,
+      ),
+      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
     });
   }, [
     activeSidebarThreadId,
@@ -4448,7 +4400,6 @@ export default function Sidebar() {
     isOnStudio,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
-    splitGroupMembershipByThreadId,
     studioProjects,
   ]);
   const studioChatThreadIds = useMemo(
@@ -4460,7 +4411,6 @@ export default function Sidebar() {
       visibleChatThreadRows.map((row) => ({
         rowId: row.thread.id,
         rootRowId: row.rootThreadId,
-        splitGroup: row.splitGroup,
         row,
       })),
     [visibleChatThreadRows],
@@ -4558,7 +4508,6 @@ export default function Sidebar() {
         projects: standardProjects,
         sortedSidebarThreadsByProjectId,
         pinnedThreadIds,
-        splitGroupMembershipByThreadId,
         threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4568,7 +4517,6 @@ export default function Sidebar() {
       }),
     [
       activeSidebarThreadId,
-      splitGroupMembershipByThreadId,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
@@ -4590,7 +4538,6 @@ export default function Sidebar() {
       projects: studioProjects,
       sortedSidebarThreadsByProjectId,
       pinnedThreadIds,
-      splitGroupMembershipByThreadId,
       threadListExtraPagesByProjectCwd,
       normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
@@ -4601,7 +4548,6 @@ export default function Sidebar() {
   }, [
     activeSidebarThreadId,
     isOnStudio,
-    splitGroupMembershipByThreadId,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
@@ -5094,15 +5040,8 @@ export default function Sidebar() {
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const subagentDescription = isSubagentThread
-      ? resolveSubagentRowDescription({
-          thread,
-          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
-        })
-      : undefined;
     const pr = prByThreadId.get(thread.id) ?? null;
-    const leadingPr =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
+    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5136,7 +5075,6 @@ export default function Sidebar() {
           <div
             role="button"
             tabIndex={0}
-            aria-description={subagentDescription}
             data-thread-item
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -5237,7 +5175,6 @@ export default function Sidebar() {
     // their top-level rows align flush like pinned rows instead of the indented
     // column used for project-nested threads.
     topLevel = false,
-    splitGroup: SidebarSplitGroupInfo | null = null,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -5268,26 +5205,10 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const subagentDescription = isSubagentThread
-      ? resolveSubagentRowDescription({
-          thread,
-          parentTitle: sidebarThreadSummaryById[thread.parentThreadId!]?.title,
-        })
-      : undefined;
-    // Subagents suppress their generic handoff/fork/worktree cluster to keep the
-    // nested row compact, but provenance is independent semantics and must stay
-    // visible when a parent agent created the child from another thread.
-    const visibleMetaChips = isSubagentThread
-      ? rightMetaChips.filter((chip) => chip.id === "synara-source")
-      : rightMetaChips;
-    const leadingPr =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId ? null : pr;
+    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
-    const showCompactMeta = visibleMetaChips.length > 0;
-    const showTemporaryThreadIcon = shouldShowTemporaryThreadIcon({
-      isTemporaryThread,
-      sidechatSourceThreadId: thread.sidechatSourceThreadId,
-    });
+    const showCompactMeta = !isSubagentThread;
+    const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5317,7 +5238,6 @@ export default function Sidebar() {
               <SidebarMenuSubButton
                 render={<div role="button" tabIndex={0} />}
                 data-thread-entry-point={threadEntryPoint}
-                aria-description={subagentDescription}
                 size="sm"
                 isActive={isActive}
                 className={cn(
@@ -5326,13 +5246,10 @@ export default function Sidebar() {
                     isSelected,
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  // Split rows carry a shared surface that bleeds into the inter-row gap to read as
-                  // one contained group; the row's default overflow-hidden would clip that bridge.
-                  splitGroup ? "overflow-visible" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? visibleMetaChips.length : 0,
+                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
                         hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
                       }),
                 )}
@@ -5415,10 +5332,6 @@ export default function Sidebar() {
               isActive={isActive}
               variant="standard"
               subagentIndentPx={subagentIndentPx}
-              splitGroup={splitGroup}
-              splitGroupActive={
-                splitGroup !== null && splitGroup.splitViewId === routeSearch.splitViewId
-              }
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -5444,7 +5357,7 @@ export default function Sidebar() {
                 isSubagentThread,
                 threadJumpLabel,
                 threadJumpLabelParts,
-                rightMetaChips: visibleMetaChips,
+                rightMetaChips: showCompactMeta ? rightMetaChips : [],
                 threadStatus,
                 timestampToneClassName: isSubagentThread
                   ? isHighlighted
@@ -5569,13 +5482,7 @@ export default function Sidebar() {
           <div className={DISCLOSURE_INNER_CLASS}>
             <div className={cn("pl-5", disclosureContentClassName(open))}>
               {entries.map((entry) =>
-                renderThreadRow(
-                  entry.thread,
-                  orderedProjectThreadIds,
-                  entry.depth,
-                  false,
-                  entry.splitGroup,
-                ),
+                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
               )}
             </div>
           </div>
@@ -5889,13 +5796,7 @@ export default function Sidebar() {
                 ),
               )}
               {rootVisibleEntries.map((entry) =>
-                renderThreadRow(
-                  entry.thread,
-                  orderedProjectThreadIds,
-                  entry.depth,
-                  false,
-                  entry.splitGroup,
-                ),
+                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
               )}
 
               {(canShowMoreThreads || canShowLessThreads) && (
@@ -6928,13 +6829,7 @@ export default function Sidebar() {
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                     {studioChatThreadRows.length > 0 ? (
                       studioChatThreadRows.map((row) =>
-                        renderThreadRow(
-                          row.thread,
-                          studioChatThreadIds,
-                          row.depth,
-                          true,
-                          row.splitGroup,
-                        ),
+                        renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
                       )
                     ) : (
                       <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
@@ -7175,7 +7070,6 @@ export default function Sidebar() {
                           visibleChatThreadIds,
                           entry.row.depth,
                           true,
-                          entry.row.splitGroup,
                         ),
                       )
                     ) : (
