@@ -970,9 +970,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
       await vi.waitFor(
         () => {
-          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-            requestCountBeforeApproval,
-          );
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(requestCountBeforeApproval);
           expect(document.body.textContent).toContain("Approve this command?");
           expect(
             getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0]?.requestId,

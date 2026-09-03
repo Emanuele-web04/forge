@@ -1828,11 +1828,7 @@ function EventRouter() {
       options?: { readonly queueIfInFlight?: boolean },
     ): Promise<void> => {
       const subscriptionGeneration = threadSubscriptionGenerationById.get(threadId);
-      if (
-        disposed ||
-        !subscribedThreadIds.has(threadId) ||
-        subscriptionGeneration === undefined
-      ) {
+      if (disposed || !subscribedThreadIds.has(threadId) || subscriptionGeneration === undefined) {
         return;
       }
       if (threadProjectionReconcileInFlight.has(threadId)) {
@@ -1922,9 +1918,7 @@ function EventRouter() {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
-          if (
-            threadProjectionReconcilePendingById.get(threadId) === subscriptionGeneration
-          ) {
+          if (threadProjectionReconcilePendingById.get(threadId) === subscriptionGeneration) {
             threadProjectionReconcilePendingById.delete(threadId);
             void reconcileThreadProjection(threadId).catch(() => undefined);
             return;
