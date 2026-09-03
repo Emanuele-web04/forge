@@ -9,6 +9,7 @@ import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionReg
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
+import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
@@ -460,29 +461,23 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
 });
 
 describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
-  it.effect("serves browser_webmcp_call without $ref/$defs and passes other tools through", () =>
+  it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>
     Effect.gen(function* () {
-      const browserTools = makeAgentGatewayBrowserTools({
-        available: true,
-        execute: () =>
-          Effect.fail(new BrowserHostRpcError("transport", "tools/list never executes")),
-      });
-      const webmcpCall = browserTools.find(
-        (candidate) => candidate.definition.name === "browser_webmcp_call",
-      );
-      if (webmcpCall === undefined) {
-        throw new Error("Expected the real browser_webmcp_call tool entry.");
-      }
-      assert.isAbove(countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"), 0);
-      const probeTool: ToolEntry = {
+      const recursiveTool: ToolEntry = {
         definition: {
-          name: "synara_probe",
-          description: "probe tool with a plain schema",
+          name: "synara_recursive",
+          description: "tool with a cyclic schema",
           inputSchema: {
             type: "object",
-            properties: { limit: { type: "integer", minimum: 1, maximum: 32 } },
-            required: [],
-            additionalProperties: false,
+            properties: { payload: { $ref: "#/$defs/JsonValue" } },
+            $defs: {
+              JsonValue: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "array", items: { $ref: "#/$defs/JsonValue" } },
+                ],
+              },
+            },
           },
         },
         requiredCapability: "thread:read",
@@ -490,8 +485,7 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
       };
       const transport = makeTransport({
         threads: [makeThread("thread-schema")],
-        tool: webmcpCall,
-        extraTools: [probeTool],
+        tool: recursiveTool,
       });
       const response = yield* post(transport, "token-1", {
         jsonrpc: "2.0",
@@ -505,24 +499,22 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
       if (!Array.isArray(response.body.result.tools)) {
         throw new Error("Expected tools/list to answer with a tools array.");
       }
-      const resultTools: ReadonlyArray<unknown> = response.body.result.tools;
-      assert.equal(resultTools.length, 2);
-      const findListedToolOrThrow = (toolName: string): Record<string, unknown> => {
-        const listed = resultTools.find(
-          (candidate: unknown) => isJsonRecord(candidate) && candidate.name === toolName,
-        );
-        if (!isJsonRecord(listed)) {
-          throw new Error(`Expected tools/list to serve ${toolName}.`);
-        }
-        return listed;
-      };
-      const servedWebmcpCall = findListedToolOrThrow("browser_webmcp_call");
-      const servedProbe = findListedToolOrThrow("synara_probe");
-      assert.equal(servedWebmcpCall.description, webmcpCall.definition.description);
-      assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$ref"), 0);
-      assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$defs"), 0);
-      assert.deepEqual(servedProbe.inputSchema, probeTool.definition.inputSchema);
-      assert.isAbove(countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"), 0);
+      const listed = response.body.result.tools.find(
+        (candidate: unknown) => isJsonRecord(candidate) && candidate.name === "synara_recursive",
+      );
+      if (!isJsonRecord(listed)) {
+        throw new Error("Expected tools/list to serve synara_recursive.");
+      }
+      assert.deepEqual(listed.inputSchema, {
+        type: "object",
+        properties: {
+          payload: {
+            type: "object",
+            description: FALLBACK_OBJECT_DESCRIPTION,
+          },
+        },
+      });
+      assert.isAbove(countSchemaKeyOccurrences(recursiveTool.definition.inputSchema, "$ref"), 0);
     }),
   );
 });

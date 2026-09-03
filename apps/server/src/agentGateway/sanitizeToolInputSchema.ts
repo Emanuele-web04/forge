@@ -9,8 +9,7 @@
  * free-form object. Runtime validation stays server-side (Effect decode,
  * depth 20 / 256 KiB).
  */
-const FALLBACK_OBJECT_DESCRIPTION = "Free-form JSON object (depth 20, 256 KiB max).";
-
+export const FALLBACK_OBJECT_DESCRIPTION = "Free-form JSON object (depth 20, 256 KiB max).";
 const DEFS_PREFIX = "#/$defs/";
 
 const isRecord = (node: unknown): node is Record<string, unknown> =>

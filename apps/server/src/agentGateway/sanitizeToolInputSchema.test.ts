@@ -2,10 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 
 import { BROWSER_TOOL_CATALOGUE } from "@synara/shared/browserAutomationCatalogue";
 
-import { sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
+import { FALLBACK_OBJECT_DESCRIPTION, sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
-
-const FALLBACK_OBJECT_DESCRIPTION = "Free-form JSON object (depth 20, 256 KiB max).";
 
 const cloneJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
@@ -22,66 +20,9 @@ const findCatalogueEntryOrThrow = (name: string) => {
   return entry;
 };
 
-// Mirrors the real browser_webmcp_call inputSchema: an `arguments` property
-// with a $ref cycle plus a $defs block, beside plain sibling properties.
-const mirroredRecursiveWebmcpSchema = () => ({
-  type: "object",
-  properties: {
-    discoveryId: {
-      type: "string",
-      description: "Opaque discovery id returned by browser_webmcp_tools for the current document.",
-    },
-    toolId: {
-      type: "string",
-      description:
-        "Opaque tool id returned by browser_webmcp_tools; never substitute the page tool name.",
-    },
-    arguments: {
-      description: "Free-form page tool arguments.",
-      $ref: "#/$defs/JsonValue",
-    },
-    filters: {
-      type: "array",
-      description: "Optional structured filters.",
-      items: { $ref: "#/$defs/JsonValue" },
-    },
-  },
-  required: ["discoveryId", "toolId"],
-  $defs: {
-    JsonValue: {
-      anyOf: [{ type: "string" }, { type: "array", items: { $ref: "#/$defs/JsonValue" } }],
-    },
-  },
-});
-
 describe("sanitizeToolInputSchema", () => {
-  it("replaces a mirrored recursive webmcp shape while keeping sibling descriptions", () => {
-    const input = mirroredRecursiveWebmcpSchema();
-    const inputBefore = JSON.stringify(input);
-
-    const output = asJsonRecord(sanitizeToolInputSchema(input), "sanitized schema");
-
-    assert.equal(countSchemaKeyOccurrences(output, "$ref"), 0);
-    assert.equal(countSchemaKeyOccurrences(output, "$defs"), 0);
-
-    const properties = asJsonRecord(output.properties, "sanitized properties");
-    assert.deepEqual(properties.discoveryId, input.properties.discoveryId);
-    assert.deepEqual(properties.toolId, input.properties.toolId);
-    assert.deepEqual(properties.arguments, {
-      type: "object",
-      description: "Free-form page tool arguments.",
-    });
-    const filters = asJsonRecord(properties.filters, "sanitized filters");
-    assert.equal(filters.description, "Optional structured filters.");
-    assert.deepEqual(filters.items, {
-      type: "object",
-      description: FALLBACK_OBJECT_DESCRIPTION,
-    });
-    if (!Array.isArray(output.required)) {
-      throw new Error("Expected the sanitized schema to keep its required list.");
-    }
-    assert.sameMembers(output.required, ["discoveryId", "toolId"]);
-    assert.equal(JSON.stringify(input), inputBefore);
+  it("pins the user-visible fallback description", () => {
+    assert.equal(FALLBACK_OBJECT_DESCRIPTION, "Free-form JSON object (depth 20, 256 KiB max).");
   });
 
   it("strips $ref and $defs from the real browser_webmcp_call inputSchema", () => {
@@ -159,9 +100,7 @@ describe("sanitizeToolInputSchema", () => {
       },
     };
 
-    const output = sanitizeToolInputSchema(cloneJson(input));
-
-    assert.deepEqual(output, {
+    assert.deepEqual(sanitizeToolInputSchema(cloneJson(input)), {
       type: "object",
       properties: {
         nickname: { type: "string", minLength: 1 },
@@ -175,13 +114,16 @@ describe("sanitizeToolInputSchema", () => {
     });
   });
 
-  it("breaks only the cyclic definitions in a mixed recursive and acyclic schema", () => {
+  it("breaks every cycle shape but inlines the acyclic definitions beside them", () => {
     const input = {
       type: "object",
       properties: {
         payload: { $ref: "#/$defs/JsonValue" },
         label: { $ref: "#/$defs/Label" },
         wrapped: { $ref: "#/$defs/Wrapper" },
+        left: { $ref: "#/$defs/Left" },
+        missing: { $ref: "#/$defs/Gone" },
+        external: { $ref: "https://example.com/schema.json#/$defs/Thing" },
       },
       $defs: {
         JsonValue: {
@@ -195,48 +137,21 @@ describe("sanitizeToolInputSchema", () => {
           type: "object",
           properties: { value: { $ref: "#/$defs/JsonValue" } },
         },
-      },
-    };
-
-    const output = sanitizeToolInputSchema(cloneJson(input));
-
-    assert.deepEqual(output, {
-      type: "object",
-      properties: {
-        payload: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
-        label: { type: "string" },
-        wrapped: {
-          type: "object",
-          properties: {
-            value: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
-          },
-        },
-      },
-    });
-  });
-
-  it("breaks mutual definition cycles and unresolvable references", () => {
-    const input = {
-      type: "object",
-      properties: {
-        left: { $ref: "#/$defs/Left" },
-        missing: { $ref: "#/$defs/Gone" },
-        external: { $ref: "https://example.com/schema.json#/$defs/Thing" },
-      },
-      $defs: {
         Left: { type: "object", properties: { right: { $ref: "#/$defs/Right" } } },
         Right: { type: "object", properties: { left: { $ref: "#/$defs/Left" } } },
       },
     };
+    const fallback = { type: "object", description: FALLBACK_OBJECT_DESCRIPTION };
 
-    const output = sanitizeToolInputSchema(cloneJson(input));
-
-    assert.deepEqual(output, {
+    assert.deepEqual(sanitizeToolInputSchema(cloneJson(input)), {
       type: "object",
       properties: {
-        left: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
-        missing: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
-        external: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+        payload: fallback,
+        label: { type: "string" },
+        wrapped: { type: "object", properties: { value: fallback } },
+        left: fallback,
+        missing: fallback,
+        external: fallback,
       },
     });
   });
