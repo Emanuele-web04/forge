@@ -99,8 +99,8 @@ export function buildThreadTitleConversationContext(
   messages: ReadonlyArray<{
     readonly role: "user" | "assistant" | "system";
     readonly text: string;
-    readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment>;
-    readonly streaming?: boolean;
+    readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment> | undefined;
+    readonly streaming?: boolean | undefined;
   }>,
 ): string | null {
   const eligible = messages.filter(
