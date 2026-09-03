@@ -64,10 +64,42 @@ function truncateConversationMessage(value: string): string {
   return `${normalized.slice(0, headLength)}...${normalized.slice(-tailLength)}`;
 }
 
+type ThreadTitleConversationAttachment =
+  | {
+      readonly type: "image" | "file";
+      readonly name: string;
+    }
+  | {
+      readonly type: "assistant-selection";
+      readonly text: string;
+    };
+
+function formatConversationAttachment(attachment: ThreadTitleConversationAttachment): string {
+  if (attachment.type === "assistant-selection") {
+    const selection = normalizeTitleWhitespace(attachment.text);
+    return selection.length > 0 ? `[assistant selection: ${selection}]` : "[assistant selection]";
+  }
+  const name = normalizeTitleWhitespace(attachment.name);
+  return name.length > 0 ? `[${attachment.type}: ${name}]` : `[${attachment.type}]`;
+}
+
+function threadTitleConversationMessageText(message: {
+  readonly text: string;
+  readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment>;
+}): string {
+  return [
+    normalizeTitleWhitespace(message.text),
+    ...(message.attachments ?? []).map(formatConversationAttachment),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
 export function buildThreadTitleConversationContext(
   messages: ReadonlyArray<{
     readonly role: "user" | "assistant" | "system";
     readonly text: string;
+    readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment>;
     readonly streaming?: boolean;
   }>,
 ): string | null {
@@ -75,7 +107,7 @@ export function buildThreadTitleConversationContext(
     (message) =>
       (message.role === "user" || message.role === "assistant") &&
       message.streaming !== true &&
-      normalizeTitleWhitespace(message.text).length > 0,
+      threadTitleConversationMessageText(message).length > 0,
   );
   const latestUserIndex = eligible.findLastIndex((message) => message.role === "user");
   if (latestUserIndex < 0) {
@@ -88,7 +120,7 @@ export function buildThreadTitleConversationContext(
 
   const candidateLines = candidates.map(
     (message) =>
-      `${message.role === "user" ? "User" : "Assistant"}: ${truncateConversationMessage(message.text)}`,
+      `${message.role === "user" ? "User" : "Assistant"}: ${truncateConversationMessage(threadTitleConversationMessageText(message))}`,
   );
   const requiredUserIndex = candidates.findLastIndex((message) => message.role === "user");
   const selectedIndexes = new Set([requiredUserIndex]);

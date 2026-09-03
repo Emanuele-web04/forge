@@ -46,7 +46,11 @@ import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
-import { dispatchThreadRename, dispatchThreadTitleRegeneration } from "../lib/threadRename";
+import {
+  buildDraftThreadRenameCreateInput,
+  dispatchThreadRename,
+  dispatchThreadTitleRegeneration,
+} from "../lib/threadRename";
 import {
   createOrJoinSidechat,
   createSidechatThread,
@@ -71,6 +75,7 @@ export function useComposerSlashCommands(input: {
   activeThread: Thread | undefined;
   activeRootBranch: string | null;
   isServerThread: boolean;
+  isLocalDraftThread: boolean;
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
   canOfferSideCommand: boolean;
@@ -123,6 +128,7 @@ export function useComposerSlashCommands(input: {
     activeThread,
     activeRootBranch,
     isServerThread,
+    isLocalDraftThread,
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferSideCommand,
@@ -373,20 +379,27 @@ export function useComposerSlashCommands(input: {
 
   const runRenameSlashCommand = useCallback(
     async (args: string) => {
-      if (!isServerThread || !activeThread) {
+      if (!activeThread) {
         toastManager.add({
           type: "warning",
           title: "Rename is unavailable",
-          description: "Open an existing thread before renaming it.",
+          description: "Open a thread before renaming it.",
         });
         return;
       }
       try {
         if (args.length > 0) {
+          if (!isServerThread && !isLocalDraftThread) {
+            toastManager.add({ type: "warning", title: "Rename is unavailable" });
+            return;
+          }
           const outcome = await dispatchThreadRename({
             threadId: activeThread.id,
             newTitle: args,
             unchangedTitles: [],
+            createIfMissing: isLocalDraftThread
+              ? buildDraftThreadRenameCreateInput(activeThread)
+              : undefined,
           });
           if (outcome === "renamed") {
             toastManager.add({ type: "success", title: "Thread renamed" });
@@ -395,6 +408,15 @@ export function useComposerSlashCommands(input: {
           } else {
             toastManager.add({ type: "info", title: "Thread title is unchanged" });
           }
+          return;
+        }
+
+        if (!isServerThread) {
+          toastManager.add({
+            type: "warning",
+            title: "Nothing to rename yet",
+            description: "Send a message before generating a thread title.",
+          });
           return;
         }
 
@@ -431,7 +453,7 @@ export function useComposerSlashCommands(input: {
         });
       }
     },
-    [activeThread, isServerThread],
+    [activeThread, isLocalDraftThread, isServerThread],
   );
 
   const createForkThreadFromSlashCommand = useCallback(

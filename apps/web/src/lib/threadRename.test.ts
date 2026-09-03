@@ -12,9 +12,37 @@ vi.mock("../nativeApi", () => ({
   }),
 }));
 
-import { dispatchThreadRename, dispatchThreadTitleRegeneration } from "./threadRename";
+import {
+  buildDraftThreadRenameCreateInput,
+  dispatchThreadRename,
+  dispatchThreadTitleRegeneration,
+} from "./threadRename";
 
 describe("dispatchThreadRename", () => {
+  it("maps local draft metadata into the rename promotion input", () => {
+    expect(
+      buildDraftThreadRenameCreateInput({
+        projectId: "project-chat" as never,
+        modelSelection: { provider: "codex", model: "gpt-5" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-04-18T00:00:00.000Z",
+      }),
+    ).toEqual({
+      projectId: "project-chat",
+      modelSelection: { provider: "codex", model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: null,
+      createdAt: "2026-04-18T00:00:00.000Z",
+    });
+  });
+
   it("updates existing server threads", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
     regenerateThreadTitle.mockReset();

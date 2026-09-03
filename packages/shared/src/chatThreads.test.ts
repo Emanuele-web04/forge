@@ -72,6 +72,23 @@ describe("chatThreads", () => {
     ).toBeNull();
   });
 
+  it("uses durable attachment metadata when a user turn has no text", () => {
+    const context = buildThreadTitleConversationContext([
+      {
+        role: "user",
+        text: "",
+        attachments: [
+          { type: "image", name: "auth-error.png" },
+          { type: "file", name: "callback.log" },
+        ],
+      },
+      { role: "assistant", text: "I inspected both attachments." },
+    ]);
+
+    expect(context).toContain("User: [image: auth-error.png] [file: callback.log]");
+    expect(context).toContain("Assistant: I inspected both attachments.");
+  });
+
   it("retains the latest user objective when long assistant output fills the budget", () => {
     const context = buildThreadTitleConversationContext([
       { role: "user", text: "Keep this current objective" },

@@ -1261,6 +1261,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   /** Apply the title update only while the durable title still has this value. */
   expectedTitle: Schema.optional(TrimmedNonEmptyString),
+  /** Apply the update only at this exact durable read-model revision. */
+  expectedSnapshotSequence: Schema.optional(NonNegativeInt),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
