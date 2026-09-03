@@ -24,7 +24,6 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
-  type ProjectFileChangeEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
@@ -1176,7 +1175,6 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: `projects.file-change:${input.cwd}\0${input.relativePath}` },
             watchWorkspaceFile(input).pipe(
-              Stream.map((event): ProjectFileChangeEvent => event),
               Stream.mapError(
                 (cause) =>
                   new WsRpcError({

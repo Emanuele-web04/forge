@@ -9,6 +9,7 @@ import * as NodePath from "node:path";
 import { Effect, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths";
 import { watchWorkspaceFile } from "./workspaceFileChanges";
 
 const temporaryRoots: string[] = [];
@@ -82,6 +83,6 @@ describe("watchWorkspaceFile", () => {
       ),
     );
 
-    expect(error._tag).toBe("WorkspacePathOutsideRootError");
+    expect(error).toBeInstanceOf(WorkspacePathOutsideRootError);
   });
 });
