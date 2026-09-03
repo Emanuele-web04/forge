@@ -128,7 +128,7 @@ export function resolveAvailableProviderPreference(input: {
   }
 
   const preferredStatus = findProviderStatus(input.statuses, input.preferredProvider);
-  if (preferredStatus?.available) {
+  if (isProviderUsable(preferredStatus)) {
     return input.preferredProvider;
   }
 

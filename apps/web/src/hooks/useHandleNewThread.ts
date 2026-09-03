@@ -13,8 +13,14 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "../lib/providerAvailability";
 import {
   buildDraftThreadContextPatch,
   createActiveDraftThreadSnapshot,
@@ -184,6 +190,46 @@ export function useHandleNewThread() {
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
+    const applyUsableStickyState = (threadId: ThreadId) => {
+      applyStickyState(threadId);
+      if (options?.provider || providerStatuses.length === 0) {
+        return;
+      }
+
+      const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const stickyProvider = draft?.activeProvider ?? null;
+      if (
+        !stickyProvider ||
+        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
+      ) {
+        return;
+      }
+
+      const fallbackProvider = resolveAvailableProviderPreference({
+        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+        statuses: providerStatuses,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
+      });
+      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
+        return;
+      }
+
+      setModelSelection(
+        threadId,
+        resolvePreferredComposerModelSelection({
+          draft: draft
+            ? {
+                modelSelectionByProvider: draft.modelSelectionByProvider,
+                activeProvider: fallbackProvider,
+              }
+            : null,
+          threadModelSelection: null,
+          projectModelSelection: projectDefaultModelSelection,
+          defaultProvider: fallbackProvider,
+        }),
+      );
+    };
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (
@@ -329,7 +375,7 @@ export function useHandleNewThread() {
           activateThreadEntryPoint(threadId);
           // Seed the draft from the sticky (last-used) selection so a new chat
           // reopens with the model and options used most recently.
-          applyStickyState(threadId);
+          applyUsableStickyState(threadId);
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route
