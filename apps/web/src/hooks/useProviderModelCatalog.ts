@@ -10,13 +10,14 @@ import type {
   ProviderModelDescriptor,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
   isInitialModelDiscoveryPending,
+  prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
@@ -132,77 +133,86 @@ export function useProviderModelCatalog(input: {
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
 
-  const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+  const modelQueryOptionsByProvider = {
+    claudeAgent: providerModelsQueryOptions({
       provider: "claudeAgent",
       binaryPath: settings.claudeBinaryPath || null,
       enabled: claudeModelDiscoveryEnabled,
+      priority: selectedProvider === "claudeAgent" ? "foreground" : "background",
     }),
-  );
-  const codexDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    codex: providerModelsQueryOptions({
       provider: "codex",
       enabled: codexModelDiscoveryEnabled,
+      priority: selectedProvider === "codex" ? "foreground" : "background",
     }),
-  );
-  const cursorDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    cursor: providerModelsQueryOptions({
       provider: "cursor",
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: cursorModelDiscoveryEnabled,
+      priority: selectedProvider === "cursor" ? "foreground" : "background",
     }),
-  );
-  const antigravityModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    antigravity: providerModelsQueryOptions({
       provider: "antigravity",
       binaryPath: settings.antigravityBinaryPath || null,
       cwd: discoveryCwd,
       enabled: antigravityModelDiscoveryEnabled,
+      priority: selectedProvider === "antigravity" ? "foreground" : "background",
     }),
-  );
-  const grokDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    grok: providerModelsQueryOptions({
       provider: "grok",
       binaryPath: settings.grokBinaryPath || null,
       enabled: grokModelDiscoveryEnabled,
+      priority: selectedProvider === "grok" ? "foreground" : "background",
     }),
-  );
-  const droidDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    droid: providerModelsQueryOptions({
       provider: "droid",
       binaryPath: settings.droidBinaryPath || null,
       cwd: discoveryCwd,
       // Droid probes every model through a disposable ACP session. Keep it
       // provider-scoped instead of warming it from unrelated picker/settings UI.
       enabled: droidModelDiscoveryEnabled,
+      priority: selectedProvider === "droid" ? "foreground" : "background",
     }),
-  );
-  const openCodeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    opencode: providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
+      priority: selectedProvider === "opencode" ? "foreground" : "background",
     }),
-  );
-  const piDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    pi: providerModelsQueryOptions({
       provider: "pi",
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+      priority: selectedProvider === "pi" ? "foreground" : "background",
     }),
-  );
-  const devinDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
+    devin: providerModelsQueryOptions({
       provider: "devin",
       binaryPath: settings.devinBinaryPath || null,
       cwd: discoveryCwd,
       enabled: devinModelDiscoveryEnabled,
+      priority: selectedProvider === "devin" ? "foreground" : "background",
     }),
-  );
+  } as const;
+
+  const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
+  const codexDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.codex);
+  const cursorDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.cursor);
+  const antigravityModelsQuery = useQuery(modelQueryOptionsByProvider.antigravity);
+  const grokDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.grok);
+  const droidDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.droid);
+  const openCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.opencode);
+  const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
+  const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
+
+  const selectedProviderModelsQueryKey = modelQueryOptionsByProvider[selectedProvider].queryKey;
+
+  useEffect(() => {
+    prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
+  }, [selectedProviderModelsQueryKey]);
 
   // Agent/mode discovery (opencode "Agent" picker, claude/codex subagents).
   const claudeDynamicAgentsQuery = useQuery(

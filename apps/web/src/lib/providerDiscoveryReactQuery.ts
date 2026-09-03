@@ -47,25 +47,98 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
 // The server admits at most two expensive reads at once, and agent discovery
 // uses the same budget. Keep model discovery to one request at a time so opening
 // the provider picker cannot reject most catalogs before their CLIs even run.
-let providerModelDiscoveryTail: Promise<void> = Promise.resolve();
+// Foreground requests may move ahead of queued warming, but never interrupt the
+// discovery that already owns the single model slot.
+type ProviderModelDiscoveryPriority = "background" | "foreground";
+
+interface ProviderModelDiscoveryTask {
+  readonly queryKey: readonly unknown[];
+  priority: ProviderModelDiscoveryPriority;
+  readonly signal: AbortSignal;
+  readonly discover: () => Promise<unknown>;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (reason: unknown) => void;
+  readonly abort: () => void;
+}
+
+const providerModelDiscoveryQueue: ProviderModelDiscoveryTask[] = [];
+let providerModelDiscoveryRunning = false;
+
+function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
+  return (
+    left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
+  );
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  try {
+    signal.throwIfAborted();
+  } catch (error) {
+    return error;
+  }
+  return new Error("Provider model discovery was cancelled.");
+}
+
+function drainProviderModelDiscoveryQueue(): void {
+  if (providerModelDiscoveryRunning) return;
+
+  const foregroundIndex = providerModelDiscoveryQueue.findIndex(
+    (task) => task.priority === "foreground",
+  );
+  const nextIndex = foregroundIndex >= 0 ? foregroundIndex : 0;
+  const task = providerModelDiscoveryQueue.splice(nextIndex, 1)[0];
+  if (!task) return;
+
+  task.signal.removeEventListener("abort", task.abort);
+  if (task.signal.aborted) {
+    task.reject(abortReason(task.signal));
+    drainProviderModelDiscoveryQueue();
+    return;
+  }
+
+  providerModelDiscoveryRunning = true;
+  void Promise.resolve()
+    .then(task.discover)
+    .then(task.resolve, task.reject)
+    .finally(() => {
+      providerModelDiscoveryRunning = false;
+      drainProviderModelDiscoveryQueue();
+    });
+}
+
+export function prioritizeProviderModelDiscovery(queryKey: readonly unknown[]): void {
+  for (const task of providerModelDiscoveryQueue) {
+    if (queryKeysMatch(task.queryKey, queryKey)) {
+      task.priority = "foreground";
+    }
+  }
+}
 
 function serializeProviderModelDiscovery<T>(
+  queryKey: readonly unknown[],
   signal: AbortSignal,
+  priority: ProviderModelDiscoveryPriority,
   discover: () => Promise<T>,
 ): Promise<T> {
-  const result = providerModelDiscoveryTail.then(() => {
-    // React Query aborts inactive hover prefetches when a newer project wins.
-    // Check only when this queued request reaches the front so stale work never
-    // consumes native admission; an already-running discovery remains bounded
-    // by its provider timeout.
-    signal.throwIfAborted();
-    return discover();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      const taskIndex = providerModelDiscoveryQueue.findIndex((task) => task.abort === abort);
+      if (taskIndex < 0) return;
+      providerModelDiscoveryQueue.splice(taskIndex, 1);
+      reject(abortReason(signal));
+    };
+    providerModelDiscoveryQueue.push({
+      queryKey,
+      priority,
+      signal,
+      discover,
+      resolve: (value) => resolve(value as T),
+      reject,
+      abort,
+    });
+    signal.addEventListener("abort", abort, { once: true });
+    drainProviderModelDiscoveryQueue();
   });
-  providerModelDiscoveryTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
 }
 
 function requireDiscoveredModels(
@@ -253,6 +326,7 @@ export function providerModelsQueryOptions(input: {
   agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
+  priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
@@ -264,18 +338,23 @@ export function providerModelsQueryOptions(input: {
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
     queryFn: ({ client, signal }): Promise<ProviderListModelsResult> =>
-      serializeProviderModelDiscovery(signal, async () => {
-        const api = ensureNativeApi();
-        const result = await api.provider.listModels({
-          provider: input.provider,
-          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-          ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
-          ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-          ...(input.cwd ? { cwd: input.cwd } : {}),
-        });
-        const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
-        return requireDiscoveredModels(input.provider, result, previous);
-      }),
+      serializeProviderModelDiscovery(
+        queryKey,
+        signal,
+        input.priority ?? "background",
+        async () => {
+          const api = ensureNativeApi();
+          const result = await api.provider.listModels({
+            provider: input.provider,
+            ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+            ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          });
+          const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
+          return requireDiscoveredModels(input.provider, result, previous);
+        },
+      ),
     enabled: input.enabled ?? true,
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its

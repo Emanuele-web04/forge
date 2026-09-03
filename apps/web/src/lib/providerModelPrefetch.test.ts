@@ -249,7 +249,21 @@ describe("prefetchModelsForNewThread", () => {
       queryKey: providerDiscoveryQueryKeys.modelsAll,
       type: "inactive",
       fetchStatus: "fetching",
+      predicate: expect.any(Function),
     });
+    const shouldCancel = cancelQueries.mock.calls[0]?.[0].predicate as (query: {
+      queryKey: readonly unknown[];
+    }) => boolean;
+    expect(
+      shouldCancel({
+        queryKey: providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
+      }),
+    ).toBe(false);
+    expect(
+      shouldCancel({
+        queryKey: providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/stale"),
+      }),
+    ).toBe(true);
     expect(cancelQueries.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY).toBeLessThan(
       prefetchQuery.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
     );
@@ -301,6 +315,7 @@ describe("prefetchModelsForNewThread", () => {
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
 
+    prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
       providerOverride: "droid",
@@ -311,6 +326,9 @@ describe("prefetchModelsForNewThread", () => {
     const modelKeys2 = prefetchQuery.mock.calls
       .map((call) => call[0].queryKey)
       .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys2[0]).toEqual(
+      providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
+    );
     expect(modelKeys2).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );

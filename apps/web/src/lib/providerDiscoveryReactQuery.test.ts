@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isInitialModelDiscoveryPending,
+  prioritizeProviderModelDiscovery,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
@@ -138,6 +139,43 @@ describe("providerModelsQueryOptions", () => {
     await Promise.all(requests);
 
     expect(maxActiveDiscoveries).toBe(1);
+  });
+
+  it("promotes a newly selected provider ahead of queued background discovery", async () => {
+    let releaseCurrent: (() => void) | undefined;
+    const listModels = mockListModels(
+      vi.fn().mockImplementation(
+        ({ provider }: { provider: string }) =>
+          new Promise((resolve) => {
+            releaseCurrent = () =>
+              resolve({
+                models: [{ slug: `${provider}-dynamic`, name: `${provider} dynamic` }],
+                source: `${provider}.dynamic`,
+                cached: false,
+              });
+          }),
+      ),
+    );
+    const queryClient = new QueryClient();
+    const activeOptions = providerModelsQueryOptions({ provider: "opencode" });
+    const backgroundOptions = providerModelsQueryOptions({ provider: "cursor" });
+    const selectedOptions = providerModelsQueryOptions({ provider: "pi" });
+    const requests = [
+      queryClient.fetchQuery(activeOptions),
+      queryClient.fetchQuery(backgroundOptions),
+      queryClient.fetchQuery(selectedOptions),
+    ];
+
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    prioritizeProviderModelDiscovery(selectedOptions.queryKey);
+    releaseCurrent?.();
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(2));
+    expect(listModels.mock.calls[1]?.[0]).toMatchObject({ provider: "pi" });
+    releaseCurrent?.();
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(3));
+    expect(listModels.mock.calls[2]?.[0]).toMatchObject({ provider: "cursor" });
+    releaseCurrent?.();
+    await Promise.all(requests);
   });
 
   it("skips a queued catalog when its inactive prefetch is cancelled", async () => {
