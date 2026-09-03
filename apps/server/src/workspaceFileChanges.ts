@@ -22,7 +22,7 @@ export class WorkspaceFileWatchError extends Error {
   constructor(
     readonly operation: "prepare" | "watch" | "stat",
     readonly filePath: string,
-    readonly cause: unknown,
+    override readonly cause: unknown,
   ) {
     super(
       `Failed to ${operation} workspace file watch for ${filePath}: ${
