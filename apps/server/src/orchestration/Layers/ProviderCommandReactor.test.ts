@@ -1072,7 +1072,7 @@ describe("ProviderCommandReactor", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           title: "Backend auth",
         })
-        .pipe(Effect.as({ title: "Generated stale title" })),
+        .pipe(Effect.orDie, Effect.as({ title: "Generated stale title" })),
     );
 
     const result = await Effect.runPromise(
