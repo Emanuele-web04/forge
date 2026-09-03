@@ -21,7 +21,6 @@ import {
   type ProviderTurnStartResult,
   type OrchestrationSession,
   type OrchestrationProjectShell,
-  type OrchestrationRegenerateThreadTitleResult,
   type OrchestrationThread,
   ThreadId,
   type ProviderSession,
@@ -99,7 +98,6 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
-import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
@@ -670,10 +668,6 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
-  const threadTitleRegenerationFlights = yield* makeKeyedSingleFlightCache<
-    OrchestrationRegenerateThreadTitleResult,
-    unknown
-  >({ maxEntries: 64, ttlMs: 0 });
   const deliverySourceLock = yield* Semaphore.make(1);
   let reconcileDeliveryRuntime: ProviderCommandReactorShape["reconcileDelivery"] | undefined;
 
@@ -5306,7 +5300,7 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
-  const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.gen(function* () {
       const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
         input.threadId,
@@ -5351,20 +5345,18 @@ const make = Effect.gen(function* () {
           detail: "The generated thread title was empty or generic.",
         });
       }
-      const titleSequenceAfterGeneration =
-        yield* orchestrationEngine.getThreadTitleHighWaterSequence(input.threadId);
-      const currentThread = (yield* orchestrationEngine.getReadModel()).threads.find(
-        (candidate) => candidate.id === input.threadId,
-      );
-      if (
-        titleSequenceAfterGeneration !== expectedTitleSequence ||
-        !currentThread ||
-        currentThread.title !== expectedTitle
-      ) {
-        return { status: "stale", title: null };
-      }
       if (generated.title === expectedTitle) {
-        return { status: "unchanged", title: expectedTitle };
+        const currentTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+          input.threadId,
+        );
+        const currentThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+          (candidate) => candidate.id === input.threadId,
+        );
+        const titleIsCurrent =
+          currentTitleSequence === expectedTitleSequence && currentThread?.title === expectedTitle;
+        return titleIsCurrent
+          ? { status: "unchanged", title: expectedTitle }
+          : { status: "stale", title: null };
       }
 
       const updated = yield* orchestrationEngine
@@ -5373,7 +5365,6 @@ const make = Effect.gen(function* () {
           commandId: serverCommandId("thread-title-regenerate"),
           threadId: input.threadId,
           title: generated.title,
-          expectedTitle,
           expectedTitleSequence,
         })
         .pipe(
@@ -5392,9 +5383,6 @@ const make = Effect.gen(function* () {
         ? { status: "renamed", title: generated.title }
         : { status: "stale", title: null };
     });
-
-  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
-    threadTitleRegenerationFlights.get(input.threadId, regenerateThreadTitleOnce(input));
 
   return {
     start,

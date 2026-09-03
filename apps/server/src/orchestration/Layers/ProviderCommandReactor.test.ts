@@ -33,7 +33,6 @@ import { PROVIDER_DELIVERY_BLOCK_SUMMARY } from "@synara/shared/providerDelivery
 import type { DeepPartial } from "@synara/shared/Struct";
 import {
   Duration,
-  Deferred,
   Effect,
   Exit,
   Layer,
@@ -1134,36 +1133,6 @@ describe("ProviderCommandReactor", () => {
 
     expect(result).toEqual({ status: "stale", title: null });
     expect((await readHarnessThread(harness))?.title).toBe("Thread");
-  });
-
-  it("coalesces concurrent title regeneration for the same thread", async () => {
-    const started = await Effect.runPromise(Deferred.make<void>());
-    const release = await Effect.runPromise(Deferred.make<void>());
-    const harness = await createHarness({
-      generateThreadTitle: () =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(started, undefined);
-          yield* Deferred.await(release);
-          return { title: "Backend auth callback" };
-        }),
-    });
-    await seedRenameConversation(harness);
-
-    const first = Effect.runPromise(
-      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
-    );
-    await Effect.runPromise(Deferred.await(started));
-    const second = Effect.runPromise(
-      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
-    );
-    await Promise.resolve();
-    await Effect.runPromise(Deferred.succeed(release, undefined));
-
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { status: "renamed", title: "Backend auth callback" },
-      { status: "renamed", title: "Backend auth callback" },
-    ]);
-    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the old title when regeneration fails", async () => {

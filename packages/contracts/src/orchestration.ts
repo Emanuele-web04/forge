@@ -1259,8 +1259,6 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
-  /** Apply the title update only while the durable title still has this value. */
-  expectedTitle: Schema.optional(TrimmedNonEmptyString),
   /** Apply the title only while no newer durable title event exists. */
   expectedTitleSequence: Schema.optional(NonNegativeInt),
   modelSelection: Schema.optional(ModelSelection),
