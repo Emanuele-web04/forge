@@ -324,16 +324,15 @@ describe("providerMaintenance", () => {
       });
     });
 
-    it("probes nothing when the supplied environment carries no PATH", async () => {
-      // Deliberately no fallback to process.env: the caller is asking about a child environment,
-      // and this process seeing a binary says nothing about whether that child would.
+    it("probes the native POSIX defaults when the supplied environment has no PATH", async () => {
+      // Do not fall back to process.env: Node itself uses /usr/bin:/bin when PATH is absent.
       const { probed } = await runWithVirtualFileSystem(new Set(), {
         binaryPath: "codex",
         platform: "darwin",
         env: { HOME: "/home/test" },
       });
 
-      assert.deepStrictEqual(probed, []);
+      assert.deepStrictEqual(probed, ["/usr/bin/codex", "/bin/codex"]);
     });
   });
 

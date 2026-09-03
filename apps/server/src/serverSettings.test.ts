@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { dirname } from "node:path";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
+import {
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
@@ -135,6 +139,63 @@ describe("ServerSettingsService", () => {
     );
   });
 
+  it("migrates a removed Kilo text-generation selection to OpenCode", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(dirname(settingsPath), { recursive: true });
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            revision: 3,
+            migrationVersion: 2,
+            settings: {
+              enableProviderUpdateChecks: false,
+              textGenerationModelSelection: {
+                provider: "kilo",
+                model: "kilo/kilo-auto/free",
+              },
+              providers: {
+                kilo: {
+                  enabled: true,
+                  binaryPath: "/opt/kilo",
+                  serverUrl: "http://127.0.0.1:4096",
+                  customModels: ["provider/shared-model"],
+                },
+                opencode: {
+                  enabled: false,
+                  binaryPath: "/opt/opencode",
+                  customModels: ["provider/opencode-model"],
+                },
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        const settingsFileExists = yield* fs.exists(settingsPath);
+        return { settings, settingsFileExists };
+      }),
+    );
+
+    // The rest of the settings and the OpenCode-compatible model survive.
+    expect(result.settingsFileExists).toBe(true);
+    expect(result.settings.enableProviderUpdateChecks).toBe(false);
+    expect(result.settings.textGenerationModelSelection).toMatchObject({
+      provider: "opencode",
+      model: "kilo/kilo-auto/free",
+    });
+    expect(result.settings.providers.opencode).toMatchObject({
+      enabled: true,
+      binaryPath: "/opt/opencode",
+      customModels: ["provider/opencode-model", "provider/shared-model"],
+    });
+    expect(result.settings.providers.opencode.serverUrl).toBe("");
+  });
+
   it("keeps provider passwords server-only and returns configured flags to clients", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {
@@ -144,7 +205,6 @@ describe("ServerSettingsService", () => {
         yield* service.start;
         const view = yield* service.updateSettingsView({
           providers: {
-            kilo: { serverPassword: "kilo-secret" },
             opencode: { serverPassword: "opencode-secret" },
           },
         });
@@ -154,16 +214,11 @@ describe("ServerSettingsService", () => {
       }),
     );
 
-    expect(result.internal.providers.kilo.serverPasswordConfigured).toBe(true);
     expect(result.internal.providers.opencode.serverPasswordConfigured).toBe(true);
-    expect(result.view.providers.kilo).toMatchObject({ serverPasswordConfigured: true });
     expect(result.view.providers.opencode).toMatchObject({ serverPasswordConfigured: true });
-    expect(JSON.stringify(result.internal)).not.toContain("kilo-secret");
     expect(JSON.stringify(result.internal)).not.toContain("opencode-secret");
-    expect(JSON.stringify(result.view)).not.toContain("kilo-secret");
     expect(JSON.stringify(result.view)).not.toContain("opencode-secret");
     expect(JSON.stringify(result.view)).not.toContain('"serverPassword"');
-    expect(result.persisted).not.toContain("kilo-secret");
     expect(result.persisted).not.toContain("opencode-secret");
   });
 
@@ -190,10 +245,10 @@ describe("ServerSettingsService", () => {
           codex: { enabled: false },
           claudeAgent: { enabled: true },
           cursor: { enabled: false },
-          kilo: { enabled: true },
+          opencode: { enabled: true },
         },
       },
-      expectedProvider: "kilo" as const,
+      expectedProvider: "opencode" as const,
     },
     {
       name: "normalizes enabled but unsupported Git text generation selections",
@@ -205,6 +260,22 @@ describe("ServerSettingsService", () => {
       },
       expectedProvider: "codex" as const,
     },
+    {
+      name: "falls back to droid when all ordered providers are disabled",
+      overrides: {
+        textGenerationModelSelection: {
+          provider: "opencode" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.opencode,
+        },
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          opencode: { enabled: false },
+          droid: { enabled: true },
+        },
+      },
+      expectedProvider: "droid" as const,
+    },
   ])("$name", async ({ overrides, expectedProvider }) => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
@@ -215,7 +286,9 @@ describe("ServerSettingsService", () => {
 
     expect(settings.textGenerationModelSelection.provider).toBe(expectedProvider);
     expect(settings.textGenerationModelSelection.model).toBe(
-      DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
+      expectedProvider === "droid"
+        ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
+        : DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
     );
   });
 });

@@ -80,8 +80,22 @@ import {
 } from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
-import { listLocalServers, stopLocalServer } from "./localServerMonitor";
-import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
+import { listLocalServers, resolveOwnListenerPorts, stopLocalServer } from "./localServerMonitor";
+import {
+  defaultManagedWorktreeSnapshotsDir,
+  listManagedWorktrees,
+  listManagedWorktreeRemovalCandidates,
+  pruneProjectedArchivedManagedWorktrees,
+  removeManagedWorktreeRemovalCandidate,
+} from "./managedWorktrees";
+import {
+  cancelResourceDiskScan,
+  killResourceProcessTree,
+  measureDirectoryBytes,
+  sampleResourceSnapshot,
+  scanResourceDiskUsage,
+} from "./resourceMonitor";
+import { listRegisteredProviderProcesses } from "./providerProcessRegistry";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -93,6 +107,7 @@ import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
+import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
 import { ProjectionStateIncompleteError } from "./persistence/Errors";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
@@ -103,8 +118,7 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
-import { ProviderAccountService } from "./providerAccounts";
-import { invalidateProviderUsageSnapshots, listProviderUsage } from "./providerUsage";
+import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
@@ -355,6 +369,7 @@ const makeWsRpcHandlersLayer = () =>
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerCommandReactor = yield* ProviderCommandReactor;
+      const sidechatExpiryReactor = yield* SidechatExpiryReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
@@ -363,7 +378,6 @@ const makeWsRpcHandlersLayer = () =>
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
       const providerService = yield* ProviderService;
-      const providerAccounts = yield* ProviderAccountService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
@@ -411,6 +425,14 @@ const makeWsRpcHandlersLayer = () =>
               ),
             ),
       });
+      const trackSidechatVisibility =
+        (threadId: ThreadId) =>
+        <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+          Stream.unwrap(
+            Effect.acquireRelease(sidechatExpiryReactor.viewStarted(threadId), () =>
+              sidechatExpiryReactor.viewEnded(threadId),
+            ).pipe(Effect.as(stream)),
+          );
       const recordThreadStreamDrop = (threadId: string, report: LiveUiStreamDropReport) =>
         threadDiagnostics
           .recordOperationalDiagnostic({
@@ -663,7 +685,7 @@ const makeWsRpcHandlersLayer = () =>
         port: number;
       }) {
         const localServer =
-          (yield* Effect.promise(() => listLocalServers())).servers.find(
+          (yield* Effect.promise(() => listLocalServers({ includeAll: true }))).servers.find(
             (server) => server.pid === input.pid && server.ports.includes(input.port),
           ) ?? null;
         const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
@@ -1132,6 +1154,7 @@ const makeWsRpcHandlersLayer = () =>
                       }),
                     );
               }),
+              trackSidechatVisibility(input.threadId),
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
@@ -1656,79 +1679,6 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(serverEnvironment.getDescriptor, "Failed to load server environment"),
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
-        [WS_METHODS.serverListProviderAccounts]: () =>
-          rpcEffect(
-            providerAccounts.list().pipe(Effect.map((providers) => ({ providers }))),
-            "Failed to load provider accounts",
-          ),
-        [WS_METHODS.serverCreateProviderAccount]: (input) =>
-          rpcEffect(providerAccounts.create(input), "Failed to create provider account"),
-        [WS_METHODS.serverSetActiveProviderAccount]: (input) =>
-          rpcEffect(
-            Effect.gen(function* () {
-              const accounts = yield* providerAccounts.list();
-              const collection = accounts.find((entry) => entry.provider === input.provider);
-              const requestedAccount = collection?.accounts.find(
-                (account) => account.id === input.accountId,
-              );
-              if (!requestedAccount) {
-                return yield* Effect.fail(new Error("Provider account was not found."));
-              }
-              if (requestedAccount.active) return collection!;
-              if (
-                requestedAccount.kind === "managed" &&
-                requestedAccount.authStatus !== "authenticated"
-              ) {
-                return yield* Effect.fail(
-                  new Error("Authenticate this provider account before selecting it."),
-                );
-              }
-              const sessions = yield* providerService.listSessions();
-              yield* Effect.forEach(
-                sessions.filter((session) => session.provider === input.provider),
-                (session) => providerService.stopSession({ threadId: session.threadId }),
-                { concurrency: "unbounded", discard: true },
-              );
-              const adapter = yield* providerAdapterRegistry.getByProvider(input.provider);
-              yield* adapter.stopAll();
-              const result = yield* providerAccounts.setActive(input);
-              invalidateProviderUsageSnapshots([input.provider]);
-              yield* providerHealth.refresh;
-              return result;
-            }),
-            "Failed to switch provider account",
-          ),
-        [WS_METHODS.serverReauthenticateProviderAccount]: (input) =>
-          rpcEffect(
-            providerAccounts.reauthenticate(input),
-            "Failed to reauthenticate provider account",
-          ),
-        [WS_METHODS.serverDeleteProviderAccount]: (input) =>
-          rpcEffect(
-            Effect.gen(function* () {
-              const accounts = yield* providerAccounts.list();
-              const active = accounts
-                .find((entry) => entry.provider === input.provider)
-                ?.accounts.find((account) => account.id === input.accountId)?.active;
-              if (active) {
-                const sessions = yield* providerService.listSessions();
-                yield* Effect.forEach(
-                  sessions.filter((session) => session.provider === input.provider),
-                  (session) => providerService.stopSession({ threadId: session.threadId }),
-                  { concurrency: "unbounded", discard: true },
-                );
-                const adapter = yield* providerAdapterRegistry.getByProvider(input.provider);
-                yield* adapter.stopAll();
-              }
-              const result = yield* providerAccounts.delete(input);
-              if (active) {
-                invalidateProviderUsageSnapshots([input.provider]);
-                yield* providerHealth.refresh;
-              }
-              return result;
-            }),
-            "Failed to delete provider account",
-          ),
         [WS_METHODS.serverUpdateSettings]: (input) =>
           rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
         [WS_METHODS.serverRefreshProviders]: () =>
@@ -1765,9 +1715,14 @@ const makeWsRpcHandlersLayer = () =>
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
             "Failed to list managed worktrees",
           ),
-        [WS_METHODS.serverListLocalServers]: () =>
+        [WS_METHODS.serverListLocalServers]: (input) =>
           rpcEffect(
-            Effect.promise(() => listLocalServers()),
+            Effect.promise(() =>
+              listLocalServers({
+                includeAll: input.includeAll ?? false,
+                excludePorts: input.includeAll ? resolveOwnListenerPorts() : undefined,
+              }),
+            ),
             "Failed to list local servers",
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
@@ -1783,6 +1738,255 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.resourceGetSnapshot]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const terminals = yield* terminalManager.listActiveSessions();
+              const inventory = yield* listManagedWorktrees({
+                worktreesDir: config.worktreesDir,
+                git,
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("resource snapshot worktree inventory failed", {
+                    cause: String(cause),
+                  }).pipe(Effect.as([])),
+                ),
+              );
+              // Thread -> worktree attribution for single-owner provider
+              // runtimes. Best effort: unknown threads land in Providers/Shared.
+              const threadWorktrees = yield* projectionReadModelQuery
+                .listManagedWorktreeThreads()
+                .pipe(
+                  Effect.map((threads) => {
+                    const byThread = new Map<string, string>();
+                    for (const thread of threads) {
+                      const worktreePath = thread.associatedWorktreePath ?? thread.worktreePath;
+                      if (worktreePath) byThread.set(thread.id, worktreePath);
+                    }
+                    return byThread;
+                  }),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource snapshot thread worktrees failed", {
+                      cause: String(cause),
+                    }).pipe(Effect.as(new Map<string, string>())),
+                  ),
+                );
+              const providers = listRegisteredProviderProcesses().map((entry) => ({
+                pid: entry.pid,
+                provider: entry.provider,
+                threadIds: [...entry.threadIds],
+                commandBaseline: entry.commandBaseline,
+              }));
+              return yield* Effect.promise(() =>
+                sampleResourceSnapshot({
+                  terminals,
+                  worktrees: inventory,
+                  providers,
+                  threadWorktrees,
+                }),
+              );
+            }),
+            "Failed to load resource snapshot",
+          ),
+        [WS_METHODS.resourceKillSession]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              if (!input.terminalId && !input.pid) {
+                return yield* Effect.fail(new Error("Provide a terminalId or pid to kill."));
+              }
+              if (input.terminalId) {
+                const terminals = yield* terminalManager.listActiveSessions();
+                const match = terminals.find((session) => session.terminalId === input.terminalId);
+                if (!match) {
+                  return yield* Effect.fail(
+                    new Error(`Terminal session '${input.terminalId}' was not found.`),
+                  );
+                }
+                if (match.status !== "exited" && match.pid !== null) {
+                  yield* terminalManager.close({
+                    threadId: match.threadId,
+                    terminalId: match.terminalId,
+                  });
+                  return { pid: match.pid, killed: true as const };
+                }
+              }
+              // Exited/unknown session, or explicit pid kill (orphans): drop to
+              // the reuse-guarded process-tree killer.
+              const pid = input.pid;
+              if (!pid) {
+                return yield* Effect.fail(new Error("Terminal session already exited."));
+              }
+              return yield* Effect.promise(() => killResourceProcessTree(pid));
+            }),
+            "Failed to kill session",
+          ),
+        [WS_METHODS.resourceKillAllSessions]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const terminals = yield* terminalManager.listActiveSessions();
+              const live = terminals.filter(
+                (session) => session.status !== "exited" && session.pid !== null,
+              );
+              yield* Effect.forEach(
+                live,
+                (session) =>
+                  terminalManager
+                    .close({ threadId: session.threadId, terminalId: session.terminalId })
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("resource kill-all could not close a session", {
+                          threadId: session.threadId,
+                          terminalId: session.terminalId,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    ),
+                { concurrency: 4, discard: true },
+              );
+              const remaining = yield* terminalManager.listActiveSessions();
+              const remainingKeys = new Set(
+                remaining.map((session) => `${session.threadId}${session.terminalId}`),
+              );
+              const killed = live.filter(
+                (session) => !remainingKeys.has(`${session.threadId}${session.terminalId}`),
+              );
+              return {
+                killedCount: killed.length,
+                pids: killed.flatMap((session) => (session.pid !== null ? [session.pid] : [])),
+              };
+            }),
+            "Failed to kill all sessions",
+          ),
+        [WS_METHODS.resourceCleanWorkspaces]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const listCandidates = Effect.gen(function* () {
+                const threads = yield* projectionReadModelQuery.listManagedWorktreeThreads();
+                return yield* listManagedWorktreeRemovalCandidates({
+                  worktreesDir: config.worktreesDir,
+                  threads,
+                  git,
+                });
+              });
+              const withSizes = (candidates: ReadonlyArray<{ entry: { path: string } }>) =>
+                Effect.forEach(
+                  candidates,
+                  (candidate) =>
+                    Effect.promise(() => measureDirectoryBytes(candidate.entry.path)).pipe(
+                      Effect.map((bytes) => ({ candidate, bytes: bytes ?? 0 })),
+                    ),
+                  { concurrency: 2 },
+                );
+              const describe = (
+                sized: ReadonlyArray<{ candidate: { entry: { path: string } }; bytes: number }>,
+              ) =>
+                sized.map(({ candidate, bytes }) => ({
+                  path: candidate.entry.path,
+                  name: path.basename(candidate.entry.path),
+                  bytes,
+                  protected: false,
+                }));
+              const candidates = yield* listCandidates;
+              const sized = yield* withSizes(candidates);
+              const resourceCandidates = describe(sized);
+              if (input.dryRun) {
+                return {
+                  dryRun: true as const,
+                  candidates: resourceCandidates,
+                  reclaimedBytes: sized.reduce((sum, entry) => sum + entry.bytes, 0),
+                  removedPaths: [],
+                };
+              }
+              // Re-derive at execute time and intersect with the confirmed paths
+              // so a stale dry-run can never delete a revived worktree.
+              const fresh = yield* listCandidates;
+              const wanted = new Set(input.paths ?? fresh.map((entry) => entry.entry.path));
+              const selected = fresh.filter((entry) => wanted.has(entry.entry.path));
+              const snapshotsDir = defaultManagedWorktreeSnapshotsDir(config.homeDir);
+              const removedPaths: string[] = [];
+              let reclaimedBytes = 0;
+              for (const candidate of selected) {
+                const removed = yield* removeManagedWorktreeRemovalCandidate({
+                  snapshotsDir,
+                  candidate,
+                  git,
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource workspace cleanup skipped an unsafe removal", {
+                      worktreePath: candidate.entry.path,
+                      cause: String(cause),
+                    }).pipe(Effect.as(false)),
+                  ),
+                );
+                if (removed) {
+                  removedPaths.push(candidate.entry.path);
+                  reclaimedBytes +=
+                    sized.find((entry) => entry.candidate.entry.path === candidate.entry.path)
+                      ?.bytes ?? 0;
+                }
+              }
+              return {
+                dryRun: false as const,
+                candidates: resourceCandidates,
+                reclaimedBytes,
+                removedPaths,
+              };
+            }),
+            "Failed to clean workspaces",
+          ),
+        [WS_METHODS.resourceScanDisk]: (input) =>
+          rpcEffect(
+            Effect.promise(() => scanResourceDiskUsage(input.paths ?? [config.worktreesDir])),
+            "Failed to scan disk usage",
+          ),
+        [WS_METHODS.resourceCancelDiskScan]: () =>
+          rpcEffect(
+            Effect.sync(() => cancelResourceDiskScan()),
+            "Failed to cancel disk scan",
+          ),
+        [WS_METHODS.resourceRestartDaemon]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              // Restart = stop every provider session and adapter runtime; they
+              // respawn lazily on the next turn. The Synara server itself is
+              // never touched.
+              const sessions = yield* providerService.listSessions();
+              yield* Effect.forEach(
+                sessions,
+                (session) =>
+                  providerService.stopSession({ threadId: session.threadId }).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("resource restart could not stop a provider session", {
+                        threadId: session.threadId,
+                        provider: session.provider,
+                        cause: String(cause),
+                      }).pipe(Effect.asVoid),
+                    ),
+                  ),
+                { concurrency: "unbounded", discard: true },
+              );
+              const providers = [...new Set(sessions.map((session) => session.provider))];
+              yield* Effect.forEach(
+                providers,
+                (provider) =>
+                  providerAdapterRegistry
+                    .getByProvider(provider)
+                    .pipe(Effect.flatMap((adapter) => adapter.stopAll()))
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("resource restart could not stop a provider runtime", {
+                          provider,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    ),
+                { concurrency: "unbounded", discard: true },
+              );
+              yield* providerHealth.refresh;
+              return { restarted: true as const };
+            }),
+            "Failed to restart provider runtime",
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {

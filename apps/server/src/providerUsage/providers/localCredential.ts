@@ -1,6 +1,6 @@
 // FILE: providerUsage/providers/localCredential.ts
 // Purpose: Usage fetchers for providers that expose a local login but no
-// individual live quota API (Droid, Kilo, Pi). Connected accounts still appear
+// individual live quota API (Droid, Pi). Connected accounts still appear
 // in Settings → Usage; unsigned ones stay needs-auth.
 
 import nodePath from "node:path";
@@ -8,7 +8,6 @@ import nodePath from "node:path";
 import type { ProviderKind } from "@synara/contracts";
 
 import { getDroidApiKeyEnv } from "../../provider/acp/DroidAcpSupport";
-import { resolveOpenCodeCompatibleAuthPaths } from "../../provider/openCodeAuthPaths";
 import { credentialFingerprint, readJsonFile } from "../credentials";
 import { asRecord, buildSnapshot, needsAuthSnapshot } from "../parse";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
@@ -27,21 +26,6 @@ async function resolveDroidSignedIn(ctx: ProviderUsageContext): Promise<string |
     if (await jsonObjectHasKeys(filePath)) {
       return `file:${fileName}`;
     }
-  }
-  return null;
-}
-
-async function resolveOpenCodeCompatibleSignedIn(
-  ctx: ProviderUsageContext,
-  dataDirectoryName: string,
-): Promise<string | null> {
-  for (const authPath of resolveOpenCodeCompatibleAuthPaths({
-    homeDir: ctx.homeDir,
-    env: ctx.env,
-    platform: ctx.platform,
-    dataDirectoryName,
-  })) {
-    if (await jsonObjectHasKeys(authPath)) return `file:${authPath}`;
   }
   return null;
 }
@@ -85,14 +69,6 @@ export const droidUsageFetcher = localCredentialFetcher({
   detail:
     "Droid is signed in locally. Individual rate limits stay in the Droid `/limits` command; Factory has no public personal quota API.",
   resolveSignedIn: resolveDroidSignedIn,
-});
-
-export const kiloUsageFetcher = localCredentialFetcher({
-  provider: "kilo",
-  source: "kilo-local",
-  detail:
-    "Kilo is signed in locally. It does not expose a live personal quota API, so remaining limits stay in the Kilo CLI.",
-  resolveSignedIn: (ctx) => resolveOpenCodeCompatibleSignedIn(ctx, "kilo"),
 });
 
 export const piUsageFetcher = localCredentialFetcher({

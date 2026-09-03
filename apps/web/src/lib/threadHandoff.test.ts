@@ -161,10 +161,10 @@ describe("threadHandoff", () => {
           readyStatus("cursor", { available: false, status: "error" }),
           readyStatus("antigravity"),
           readyStatus("grok", { authStatus: "unauthenticated" }),
-          readyStatus("kilo", { authStatus: "unknown" }),
+          readyStatus("opencode", { authStatus: "unknown" }),
         ],
       }),
-    ).toEqual(["claudeAgent", "kilo"]);
+    ).toEqual(["claudeAgent", "opencode"]);
   });
 
   it("does not expose targets before enabled-provider settings are available", () => {

@@ -850,6 +850,14 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
+      // A settled assistant message whose streamed text interleaved with tool
+      // rows renders as message-segment slices. They are still this turn's
+      // narration, so they fold too instead of stranding everything earlier
+      // outside the disclosure.
+      if (prev.kind === "message-segment" && !prev.message.streaming) {
+        foldIndices.push(scan);
+        continue;
+      }
       if (prev.kind === "proposed-plan") {
         // The plan card stays visible, but it should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
@@ -866,11 +874,24 @@ function collapseSettledTurns(
     // (e.g. a failed attempt before a retry), which would report only the tail
     // of the turn instead of the full run.
     let collapsedStart = row.durationStart;
+    // All slices of one segmented message share the same ChatMessage, so the
+    // message folds once (at its first slice) to keep narration identity stable.
+    const foldedSegmentMessageIds = new Set<string>();
     for (const index of foldIndices) {
       const folded = rows[index]!;
       if (folded.kind === "work") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         collectWorkItems(folded.groupedEntries, collapsedItems);
+      } else if (folded.kind === "message-segment") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
+        if (!foldedSegmentMessageIds.has(folded.message.id)) {
+          foldedSegmentMessageIds.add(folded.message.id);
+          collapsedItems.push({
+            kind: "narration",
+            id: folded.message.id,
+            message: folded.message,
+          });
+        }
       } else if (folded.kind === "message" && folded.message.role === "assistant") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.durationStart);
         if (folded.assistantTurnDiffSummary) {

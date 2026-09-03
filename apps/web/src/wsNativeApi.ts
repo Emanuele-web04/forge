@@ -33,6 +33,7 @@ import {
   type ServerProviderStatusesUpdatedPayload,
   type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
+  type ServerListLocalServersInput,
   type ServerSettingsUpdatedPayload,
   type ServerVoiceTranscriptionResult,
   type TerminalEvent,
@@ -665,15 +666,6 @@ export function createWsNativeApi(): NativeApi {
       getEnvironment: () => transport.request(WS_METHODS.serverGetEnvironment),
       getSettings: () => transport.request(WS_METHODS.serverGetSettings),
       updateSettings: (input) => transport.request(WS_METHODS.serverUpdateSettings, input),
-      listProviderAccounts: () => transport.request(WS_METHODS.serverListProviderAccounts),
-      createProviderAccount: (input) =>
-        transport.request(WS_METHODS.serverCreateProviderAccount, input),
-      setActiveProviderAccount: (input) =>
-        transport.request(WS_METHODS.serverSetActiveProviderAccount, input, { timeoutMs: null }),
-      reauthenticateProviderAccount: (input) =>
-        transport.request(WS_METHODS.serverReauthenticateProviderAccount, input),
-      deleteProviderAccount: (input) =>
-        transport.request(WS_METHODS.serverDeleteProviderAccount, input, { timeoutMs: null }),
       getAuthSession: () => requestAuthJson<AuthSessionState>("/api/auth/session"),
       bootstrapAuth: (input: AuthBootstrapInput) =>
         requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {
@@ -730,12 +722,22 @@ export function createWsNativeApi(): NativeApi {
       updateProvider: (input) =>
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
-      listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      listLocalServers: (input?: ServerListLocalServersInput) =>
+        transport.request(WS_METHODS.serverListLocalServers, input ?? {}),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      getResourceSnapshot: () => transport.request(WS_METHODS.resourceGetSnapshot),
+      killResourceSession: (input) => transport.request(WS_METHODS.resourceKillSession, input),
+      killAllResourceSessions: () => transport.request(WS_METHODS.resourceKillAllSessions),
+      cleanResourceWorkspaces: (input) =>
+        transport.request(WS_METHODS.resourceCleanWorkspaces, input, { timeoutMs: null }),
+      scanResourceDisk: (input) =>
+        transport.request(WS_METHODS.resourceScanDisk, input, { timeoutMs: null }),
+      cancelResourceDiskScan: () => transport.request(WS_METHODS.resourceCancelDiskScan),
+      restartResourceDaemon: () => transport.request(WS_METHODS.resourceRestartDaemon),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,

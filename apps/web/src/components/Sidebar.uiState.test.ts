@@ -4,6 +4,7 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  resolveProjectThreadListExtraPages,
 } from "./Sidebar.uiState";
 
 describe("Sidebar.uiState", () => {
@@ -39,6 +40,7 @@ describe("Sidebar.uiState", () => {
       chatSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},
+      projectThreadListExtraPagesById: {},
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
@@ -53,6 +55,9 @@ describe("Sidebar.uiState", () => {
         "/Users/tester/Code/demo": 1,
         "/Users/tester/Code/demo/": 3,
         "/Users/tester/Code/other": 2,
+      },
+      projectThreadListExtraPagesById: {
+        "project-demo": 2,
       },
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Plan Ready:turn-1",
@@ -71,6 +76,9 @@ describe("Sidebar.uiState", () => {
         // Duplicate cwds that normalize to the same key keep the deepest paging.
         [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 3,
         [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other")]: 2,
+      },
+      projectThreadListExtraPagesById: {
+        "project-demo": 2,
       },
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Plan Ready:turn-1",
@@ -114,6 +122,7 @@ describe("Sidebar.uiState", () => {
       projectThreadListExtraPagesByCwd: {
         [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 2,
       },
+      projectThreadListExtraPagesById: {},
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Awaiting Input:turn-2",
       },
@@ -158,9 +167,45 @@ describe("Sidebar.uiState", () => {
       chatSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},
+      projectThreadListExtraPagesById: {},
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
     });
+  });
+
+  it("prefers project-id paging over legacy cwd paging", () => {
+    const legacyCwd = normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo");
+    expect(
+      resolveProjectThreadListExtraPages({
+        extraPagesById: { "project-demo": 3 },
+        legacyExtraPagesByCwd: { [legacyCwd]: 1 },
+        projectId: "project-demo",
+        projectCwd: "/Users/tester/Code/demo",
+      }),
+    ).toBe(3);
+  });
+
+  it("falls back to legacy cwd paging when no id entry exists", () => {
+    const legacyCwd = normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo");
+    expect(
+      resolveProjectThreadListExtraPages({
+        extraPagesById: {},
+        legacyExtraPagesByCwd: { [legacyCwd]: 2 },
+        projectId: "project-demo",
+        projectCwd: "/Users/tester/Code/demo/",
+      }),
+    ).toBe(2);
+  });
+
+  it("returns zero paging when neither id nor cwd entries exist", () => {
+    expect(
+      resolveProjectThreadListExtraPages({
+        extraPagesById: new Map(),
+        legacyExtraPagesByCwd: new Map(),
+        projectId: "project-demo",
+        projectCwd: "/Users/tester/Code/demo",
+      }),
+    ).toBe(0);
   });
 });

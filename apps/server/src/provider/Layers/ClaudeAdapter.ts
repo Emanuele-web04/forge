@@ -6,7 +6,7 @@
  *
  * @module ClaudeAdapterLive
  */
-import { execFile, spawn as spawnChildProcess } from "node:child_process";
+import { execProcessFile, spawnProcess } from "@synara/shared/processRuntime";
 import type {
   AgentInfo,
   CanUseTool,
@@ -71,7 +71,6 @@ import {
   trimOrNull,
 } from "@synara/shared/model";
 import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -515,18 +514,12 @@ interface ClaudeProcessOwner {
 }
 
 function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
-  const prepared = prepareWindowsSafeProcess(options.command, options.args, {
-    cwd: options.cwd,
-    env: options.env,
-  });
-  return spawnChildProcess(prepared.command, prepared.args, {
+  return spawnProcess(options.command, options.args, {
+    requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
     signal: options.signal,
-    shell: prepared.shell,
-    ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     stdio: ["pipe", "pipe", "inherit"],
-    windowsHide: true,
   }) as unknown as ClaudeOwnedProcess;
 }
 
@@ -535,20 +528,14 @@ async function readInstalledClaudeCliVersion(input: {
   readonly cwd?: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<string | null> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
   return new Promise((resolve, reject) => {
-    execFile(
-      prepared.command,
-      prepared.args,
+    execProcessFile(
+      input.binaryPath,
+      ["--version"],
       {
+        requireExecutable: true,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         env: input.env,
-        shell: prepared.shell,
-        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-        windowsHide: true,
         timeout: 10_000,
         maxBuffer: 64 * 1024,
         encoding: "utf8",
@@ -565,10 +552,6 @@ async function readInstalledClaudeCliVersion(input: {
 }
 
 export interface ClaudeAdapterLiveOptions {
-  readonly resolveProcessEnvironment?: () => Promise<{
-    readonly accountId: string;
-    readonly env: NodeJS.ProcessEnv;
-  }>;
   // Async because the default implementation lazily imports the Claude Agent
   // SDK; test doubles may still return a runtime synchronously.
   readonly createQuery?: (input: {
@@ -1874,9 +1857,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
-    let cachedAccountId: string | null = null;
-    let commandsCache: { result: ProviderListCommandsResult; cwd: string } | null = null;
-    let pendingCommandDiscovery: Promise<ProviderListCommandsResult> | null = null;
     const verifyClaudeAutoModelSupport = (input: {
       readonly queryRuntime: ClaudeQueryRuntime;
       readonly selectedModel: string | undefined;
@@ -1951,21 +1931,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
     const withSessionLifecycleLock = sessionLifecycleLock.withLock;
-    const resolveClaudeSdkEnv = Effect.tryPromise(async () => {
-      const resolved = options?.resolveProcessEnvironment
-        ? await options.resolveProcessEnvironment()
-        : {
-            accountId: "system",
-            env: buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
-          };
-      if (cachedAccountId !== null && cachedAccountId !== resolved.accountId) {
-        cachedModels = null;
-        cachedAgents = null;
-        commandsCache = null;
-      }
-      cachedAccountId = resolved.accountId;
-      return resolved.env;
-    }).pipe(Effect.orDie);
+    const resolveClaudeSdkEnv = Effect.sync(() =>
+      buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
+    );
 
     const bindClaudeProcessOwner =
       (owner: ClaudeProcessOwner) =>
@@ -6272,6 +6240,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       });
 
     // Native discovery caches — avoid spawning a process per query.
+    let commandsCache: { result: ProviderListCommandsResult; cwd: string } | null = null;
+    let pendingCommandDiscovery: Promise<ProviderListCommandsResult> | null = null;
     let pendingModelDiscovery: Promise<ProviderListModelsResult> | null = null;
 
     async function discoverViaTemporaryProcess<T>(

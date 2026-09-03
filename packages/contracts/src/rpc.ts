@@ -138,13 +138,6 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
-  ServerCreateProviderAccountInput,
-  ServerListProviderAccountsResult,
-  ServerProviderAccountInput,
-  ServerProviderAccountMutationResult,
-  ServerSetActiveProviderAccountInput,
-} from "./providerAccounts";
-import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -196,6 +189,16 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -208,6 +211,7 @@ import {
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
   ServerKeepAwakeUpdatedPayload,
+  ServerListLocalServersInput,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
@@ -942,42 +946,6 @@ export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   error: WsRpcError,
 });
 
-export const WsServerListProviderAccountsRpc = Rpc.make(WS_METHODS.serverListProviderAccounts, {
-  payload: Schema.Struct({}),
-  success: ServerListProviderAccountsResult,
-  error: WsRpcError,
-});
-
-export const WsServerCreateProviderAccountRpc = Rpc.make(WS_METHODS.serverCreateProviderAccount, {
-  payload: ServerCreateProviderAccountInput,
-  success: ServerProviderAccountMutationResult,
-  error: WsRpcError,
-});
-
-export const WsServerSetActiveProviderAccountRpc = Rpc.make(
-  WS_METHODS.serverSetActiveProviderAccount,
-  {
-    payload: ServerSetActiveProviderAccountInput,
-    success: ServerProviderAccountMutationResult,
-    error: WsRpcError,
-  },
-);
-
-export const WsServerReauthenticateProviderAccountRpc = Rpc.make(
-  WS_METHODS.serverReauthenticateProviderAccount,
-  {
-    payload: ServerProviderAccountInput,
-    success: ServerProviderAccountMutationResult,
-    error: WsRpcError,
-  },
-);
-
-export const WsServerDeleteProviderAccountRpc = Rpc.make(WS_METHODS.serverDeleteProviderAccount, {
-  payload: ServerProviderAccountInput,
-  success: ServerProviderAccountMutationResult,
-  error: WsRpcError,
-});
-
 export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: ServerUpdateSettingsInput,
   success: ServerUpdateSettingsResult,
@@ -1039,7 +1007,7 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
 });
 
 export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
-  payload: Schema.Struct({}),
+  payload: ServerListLocalServersInput,
   success: ServerListLocalServersResult,
   error: WsRpcError,
 });
@@ -1080,6 +1048,48 @@ export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfil
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
+  error: WsRpcError,
+});
+
+export const WsResourceGetSnapshotRpc = Rpc.make(WS_METHODS.resourceGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: ResourceGetSnapshotResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillSessionRpc = Rpc.make(WS_METHODS.resourceKillSession, {
+  payload: ResourceKillSessionInput,
+  success: ResourceKillSessionResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillAllSessionsRpc = Rpc.make(WS_METHODS.resourceKillAllSessions, {
+  payload: Schema.Struct({}),
+  success: ResourceKillAllSessionsResult,
+  error: WsRpcError,
+});
+
+export const WsResourceCleanWorkspacesRpc = Rpc.make(WS_METHODS.resourceCleanWorkspaces, {
+  payload: ResourceCleanWorkspacesInput,
+  success: ResourceCleanWorkspacesResult,
+  error: WsRpcError,
+});
+
+export const WsResourceScanDiskRpc = Rpc.make(WS_METHODS.resourceScanDisk, {
+  payload: ResourceScanDiskInput,
+  success: ResourceDiskUsageReport,
+  error: WsRpcError,
+});
+
+export const WsResourceCancelDiskScanRpc = Rpc.make(WS_METHODS.resourceCancelDiskScan, {
+  payload: Schema.Struct({}),
+  success: ResourceCancelDiskScanResult,
+  error: WsRpcError,
+});
+
+export const WsResourceRestartDaemonRpc = Rpc.make(WS_METHODS.resourceRestartDaemon, {
+  payload: Schema.Struct({}),
+  success: ResourceRestartDaemonResult,
   error: WsRpcError,
 });
 
@@ -1359,11 +1369,6 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
   WsServerGetSettingsRpc,
-  WsServerListProviderAccountsRpc,
-  WsServerCreateProviderAccountRpc,
-  WsServerSetActiveProviderAccountRpc,
-  WsServerReauthenticateProviderAccountRpc,
-  WsServerDeleteProviderAccountRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
@@ -1379,6 +1384,13 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsResourceGetSnapshotRpc,
+  WsResourceKillSessionRpc,
+  WsResourceKillAllSessionsRpc,
+  WsResourceCleanWorkspacesRpc,
+  WsResourceScanDiskRpc,
+  WsResourceCancelDiskScanRpc,
+  WsResourceRestartDaemonRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,

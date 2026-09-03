@@ -383,3 +383,47 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
     });
   });
 }
+
+/**
+ * Snapshots dir shared by retention pruning and explicit workspace cleanup.
+ */
+export function defaultManagedWorktreeSnapshotsDir(homeDir: string): string {
+  return path.join(homeDir, "worktree-snapshots");
+}
+
+/**
+ * List removal candidates without deleting anything. Powers the resource
+ * manager's "Clean up workspaces" dry-run: same classification as retention,
+ * surfaced for explicit user confirmation instead of silent pruning.
+ */
+export function listManagedWorktreeRemovalCandidates(input: {
+  readonly worktreesDir: string;
+  readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
+  readonly git: GitCoreShape;
+}): Effect.Effect<ReadonlyArray<ManagedWorktreeRemovalCandidate>, Error> {
+  return Effect.gen(function* () {
+    const inventory = yield* listManagedWorktrees({
+      worktreesDir: input.worktreesDir,
+      git: input.git,
+    });
+    const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(input.threads);
+    return classifyManagedWorktreeRemovalCandidates({
+      inventory,
+      threads: input.threads,
+      canonicalByRecordedPath,
+    });
+  });
+}
+
+/**
+ * Remove a single candidate through the safe path (snapshot + dirty check).
+ * Callers must re-derive candidates at execute time and intersect with the
+ * user-confirmed paths so a stale dry-run can never delete a revived worktree.
+ */
+export function removeManagedWorktreeRemovalCandidate(input: {
+  readonly snapshotsDir: string;
+  readonly candidate: ManagedWorktreeRemovalCandidate;
+  readonly git: GitCoreShape;
+}): Effect.Effect<boolean, Error> {
+  return removeManagedWorktreeSafely(input);
+}

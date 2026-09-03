@@ -3,7 +3,6 @@
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -106,6 +105,24 @@ function readJson(path) {
   }
 }
 
+export function copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath) {
+  const copyResult = spawnSync("ditto", [sourceAppBundlePath, targetAppBundlePath], {
+    encoding: "utf8",
+  });
+  if (copyResult.error) {
+    throw new Error(
+      `Failed to copy macOS Electron app bundle from ${sourceAppBundlePath} to ${targetAppBundlePath}: ${copyResult.error.message}`,
+      { cause: copyResult.error },
+    );
+  }
+  if (copyResult.status !== 0) {
+    const details = [copyResult.stderr, copyResult.stdout].filter(Boolean).join("\n").trim();
+    throw new Error(
+      `Failed to copy macOS Electron app bundle from ${sourceAppBundlePath} to ${targetAppBundlePath} (ditto exit ${copyResult.status}): ${details}`.trim(),
+    );
+  }
+}
+
 function buildMacLauncher(electronBinaryPath) {
   const sourceAppBundlePath = resolve(electronBinaryPath, "../../..");
   const runtimeDir = join(desktopDir, ".electron-runtime");
@@ -133,7 +150,7 @@ function buildMacLauncher(electronBinaryPath) {
   }
 
   rmSync(targetAppBundlePath, { recursive: true, force: true });
-  cpSync(sourceAppBundlePath, targetAppBundlePath, { recursive: true });
+  copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath);
   patchMainBundleInfoPlist(targetAppBundlePath, iconPath);
   patchHelperBundleInfoPlists(targetAppBundlePath);
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);

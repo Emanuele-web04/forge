@@ -9,10 +9,10 @@ Synara treats provider integrations as adapters behind server-owned orchestratio
 - `codex`
 - `claudeAgent`
 - `cursor`
+- `devin`
 - `antigravity`
 - `grok`
 - `droid`
-- `kilo`
 - `opencode`
 - `pi`
 
@@ -67,13 +67,9 @@ Capability and discovery data should be authoritative. UI surfaces should consum
 
 ## Shared provider families
 
-### OpenCode-compatible providers
-
-OpenCode and Kilo share the OpenCode-compatible runtime/adapter family while remaining distinct provider kinds. Shared transport code belongs in that family; provider-specific defaults, health/configuration, model discovery, and presentation stay explicit.
-
 ### ACP providers
 
-Cursor, Droid, and Grok share the Agent Client Protocol infrastructure under `provider/acp`, including `AcpSessionRuntime` and common adapter/session/event helpers. Provider-specific ACP support should extend that shared lifecycle and protocol machinery rather than duplicating it. Individual providers can still layer their own spawn, authentication, model-selection, or compatibility behavior around the shared ACP runtime.
+Cursor, Devin, Droid, and Grok share the Agent Client Protocol infrastructure under `provider/acp`, including `AcpSessionRuntime` and common adapter/session/event helpers. Provider-specific ACP support should extend that shared lifecycle and protocol machinery rather than duplicating it. Individual providers can still layer their own spawn, authentication, model-selection, or compatibility behavior around the shared ACP runtime.
 
 Codex, Claude, Antigravity, and Pi retain provider-specific integration paths where their native runtimes expose semantics that are not represented by the shared OpenCode or ACP families.
 

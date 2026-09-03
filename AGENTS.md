@@ -9,6 +9,14 @@
 - If the user asks to focus on code only, do not run `bun fmt`, `bun lint`, or `bun typecheck` automatically. In that mode, make the code changes first and only run verification if the user explicitly asks for it.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
 
+## Flujo de ramas y PRs
+
+- Cada feature debe desarrollarse en una rama propia llamada `feature/<slug>`.
+- La rama se integra primero mediante un PR contra `nacho/integration` para probarla localmente.
+- Si después hay trabajo adicional relacionado, el conjunto completo de commits, incluido el PR original ya integrado y los commits posteriores, se propone mediante un PR de `nacho/integration` hacia `main` de Synara.
+- No se desarrolla directamente sobre `nacho/integration` ni sobre `main`.
+- Los PRs intermedios contra `nacho/integration` son de integración y prueba; el PR posterior contra `main` es la promoción del conjunto.
+
 ## Project Snapshot
 
 Synara is a minimal web GUI for using coding agents like Codex and Claude.

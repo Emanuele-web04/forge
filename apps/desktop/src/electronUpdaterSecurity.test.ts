@@ -50,7 +50,7 @@ describe("electronUpdaterSecurity", () => {
     ]);
   });
 
-  it("validates a matching full distinguished name with shell-free execFile options", async () => {
+  it("validates a matching full distinguished name through the injected execFile seam", async () => {
     const execFile = vi.fn((file, args, options, callback) => {
       callback(
         null,
@@ -81,8 +81,7 @@ describe("electronUpdaterSecurity", () => {
       expect.arrayContaining(["-NoProfile", "-NonInteractive", "-Command"]),
       expect.objectContaining({
         encoding: "utf8",
-        shell: false,
-        windowsHide: true,
+        timeout: 20_000,
         env: expect.objectContaining({ PSModulePath: "" }),
       }),
       expect.any(Function),

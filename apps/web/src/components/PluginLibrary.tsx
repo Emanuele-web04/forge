@@ -392,9 +392,9 @@ export function PluginLibrary() {
   );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
-  const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
+  const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
 
   const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
     codex: {
@@ -409,6 +409,10 @@ export function PluginLibrary() {
       plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
     },
+    devin: {
+      plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(devinCapabilitiesQuery.data),
+    },
     antigravity: {
       plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
@@ -420,10 +424,6 @@ export function PluginLibrary() {
     droid: {
       plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
-    },
-    kilo: {
-      plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
-      skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
     },
     opencode: {
       plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),

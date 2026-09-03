@@ -78,6 +78,10 @@ describe("isLocalAbsolutePath", () => {
     expect(isLocalAbsolutePath("C:\\Users\\dev\\file.txt")).toBe(true);
   });
 
+  it("rejects a drive-relative Windows path", () => {
+    expect(isLocalAbsolutePath("C:")).toBe(false);
+  });
+
   it("can disable Windows path recognition for native POSIX server reads", () => {
     expect(isLocalAbsolutePath("C:\\Users\\dev\\file.txt", { allowWindowsPaths: false })).toBe(
       false,

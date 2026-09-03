@@ -33,10 +33,10 @@ function makeSettings(
     claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
+    devinBinaryPath: "",
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
-    kiloBinaryPath: "",
     openCodeBinaryPath: "",
     piBinaryPath: "",
     piAgentDir: "",
@@ -201,6 +201,15 @@ describe("providerModelsPrefetchQueryOptions", () => {
         .queryKey,
     ).toEqual(
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
+    );
+
+    const devinOptions = providerModelsPrefetchQueryOptions({
+      provider: "devin",
+      settings: makeSettings({ devinBinaryPath: "/bin/devin" }),
+      cwd: "/tmp/project",
+    });
+    expect(devinOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("devin", "/bin/devin", null, null, "/tmp/project"),
     );
 
     expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
@@ -432,8 +441,8 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     });
 
     const calls = prefetchQuery.mock.calls.map((call) => call[0]);
-    // 8 models + 8 capabilities + 4 agents (claudeAgent, codex, kilo, opencode).
-    expect(calls).toHaveLength(8 + 8 + 4);
+    // 8 models + 8 capabilities + 3 agents (claudeAgent, codex, opencode).
+    expect(calls).toHaveLength(8 + 8 + 3);
     for (const options of calls) {
       expect(options.retry).toBe(0);
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);

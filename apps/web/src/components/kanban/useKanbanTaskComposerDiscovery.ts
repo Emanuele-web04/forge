@@ -124,15 +124,11 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
       binaryPath:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.binaryPath
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.binaryPath
-            : null) ?? null,
+          : null) ?? null,
       serverUrl:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverUrl
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.serverUrl
-            : null) ?? null,
+          : null) ?? null,
       experimentalWebSockets:
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets

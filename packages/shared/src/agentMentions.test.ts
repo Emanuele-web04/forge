@@ -33,6 +33,11 @@ describe("parseAgentMentionInvocations", () => {
     expect(parsed[0]?.task).toBe("check fn(a, b) and the SQL migration");
     expect(parsed[0]?.definition.kind).toBe("claude-subagent");
   });
+
+  it("ignores empty and whitespace-only agent tasks", () => {
+    expect(parseAgentMentionInvocations("Please @review()", "claudeAgent")).toEqual([]);
+    expect(parseAgentMentionInvocations("Please @review(   )", "claudeAgent")).toEqual([]);
+  });
 });
 
 describe("buildClaudeSubagentPrompt", () => {
@@ -41,6 +46,11 @@ describe("buildClaudeSubagentPrompt", () => {
       prompt: "Just answer directly",
       invocations: [],
     });
+  });
+
+  it("leaves empty Claude directives untouched instead of creating an empty Agent task", () => {
+    const prompt = "Please @review()";
+    expect(buildClaudeSubagentPrompt(prompt)).toEqual({ prompt, invocations: [] });
   });
 
   it("rewrites Claude mentions into explicit Agent-tool instructions", () => {

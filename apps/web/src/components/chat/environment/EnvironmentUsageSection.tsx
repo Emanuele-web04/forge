@@ -1,9 +1,10 @@
 // FILE: EnvironmentUsageSection.tsx
 // Purpose: "Usage" section of the Environment panel — one compact menu per enabled provider.
 
-import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ProviderUsageMenuPopup,
@@ -25,20 +26,45 @@ import {
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
 
-function EnvironmentProviderUsageRow({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
-  const provider = snapshot.provider;
-  const providerName = providerUsageDisplayName(provider);
-  // The parent owns the one batch query. Supplying its snapshot prevents every row from
-  // starting another batch plus provider-scoped request while retaining thread-derived fallback.
+function EnvironmentProviderUsageRow({
+  provider,
+  snapshot,
+  onVisibilityChange,
+}: {
+  provider: ProviderKind;
+  snapshot: ServerProviderUsageSnapshot | undefined;
+  onVisibilityChange: (provider: ProviderKind, visible: boolean) => void;
+}) {
+  const settingsQuery = useQuery(serverSettingsQueryOptions());
+  // The batch snapshot is an enrichment, not a gate: when the provider's live fetch fails or is
+  // missing from the batch, the menu model still blends local archives and thread rate limits, so
+  // the row must render regardless. Only an explicitly disabled provider hides the row.
   const model = useProviderUsageMenuModel(provider, { providerSnapshot: snapshot });
+
+  const enabled = settingsQuery.data?.providers[provider].enabled !== false;
+  // Nothing displayable yet (first fetch still running, sign-in required, or the provider
+  // exposes no usage): hide the row — it appears once any source yields data.
+  const visible = enabled && (model.rows.length > 0 || model.usageLines.length > 0);
+
+  useEffect(() => {
+    onVisibilityChange(provider, visible);
+    return () => onVisibilityChange(provider, false);
+  }, [provider, visible, onVisibilityChange]);
+
+  if (!visible) {
+    return null;
+  }
+
+  const providerName = providerUsageDisplayName(provider);
   const summary = resolveEnvironmentProviderUsageSummary({
     providerName,
     rows: model.rows,
     snapshot,
+    hasUsageLines: model.usageLines.length > 0,
   });
 
   return (
-    <ProviderUsageMenuPopup provider={provider} model={model} align="start">
+    <ProviderUsageMenuPopup provider={provider} model={model} align="start" showUsageLines={true}>
       <MenuTrigger
         render={
           <button
@@ -89,21 +115,62 @@ function EnvironmentProviderUsageRow({ snapshot }: { snapshot: ServerProviderUsa
 export function EnvironmentUsageSection() {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
-  // The server already filters the batch. Rechecking the live settings projection prevents a
-  // just-disabled provider from lingering while React Query refreshes the previous batch.
-  const snapshots = (usageQuery.data ?? []).filter(
-    (snapshot) => settingsQuery.data?.providers[snapshot.provider].enabled !== false,
-  );
+  const [visibleProviders, setVisibleProviders] = useState<ReadonlySet<ProviderKind>>(new Set());
 
-  if (snapshots.length === 0) {
+  const handleVisibilityChange = useCallback((provider: ProviderKind, visible: boolean) => {
+    setVisibleProviders((prev) => {
+      if (prev.has(provider) === visible) {
+        return prev;
+      }
+      const next = new Set(prev);
+      if (visible) {
+        next.add(provider);
+      } else {
+        next.delete(provider);
+      }
+      return next;
+    });
+  }, []);
+
+  const snapshotsByProvider = useMemo(() => {
+    const map = new Map<ProviderKind, ServerProviderUsageSnapshot>();
+    for (const entry of usageQuery.data ?? []) {
+      if (!map.has(entry.provider)) {
+        map.set(entry.provider, entry);
+      }
+    }
+    return map;
+  }, [usageQuery.data]);
+
+  const providers = settingsQuery.data?.providers;
+  const enabledProviders = useMemo<ProviderKind[]>(() => {
+    // While settings are still loading the batch defines the row set; each row rechecks the
+    // live settings projection once it arrives so a just-disabled provider stops lingering.
+    if (!providers) {
+      return (usageQuery.data ?? []).map((entry) => entry.provider);
+    }
+    return (Object.keys(providers) as ProviderKind[]).filter(
+      (provider) => providers[provider].enabled !== false,
+    );
+  }, [providers, usageQuery.data]);
+
+  const rows = enabledProviders.map((provider) => (
+    <EnvironmentProviderUsageRow
+      key={provider}
+      provider={provider}
+      snapshot={snapshotsByProvider.get(provider)}
+      onVisibilityChange={handleVisibilityChange}
+    />
+  ));
+
+  if (enabledProviders.length === 0) {
     return null;
   }
+  // Rows stay mounted while invisible so they can report once any source yields data; only the
+  // labeled section itself is gated, so an all-empty state never renders a dangling "Usage" label.
+  if (!enabledProviders.some((provider) => visibleProviders.has(provider))) {
+    return <>{rows}</>;
+  }
 
-  return (
-    <EnvironmentLabeledSection label="Usage">
-      {snapshots.map((snapshot) => (
-        <EnvironmentProviderUsageRow key={snapshot.provider} snapshot={snapshot} />
-      ))}
-    </EnvironmentLabeledSection>
-  );
+  return <EnvironmentLabeledSection label="Usage">{rows}</EnvironmentLabeledSection>;
 }
