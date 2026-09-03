@@ -638,7 +638,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     }
   };
   const previewSelectionAction = useCodeSelectionAction({
-    enabled: Boolean(onReferenceInChat && filePath) && !editableDocument,
+    enabled: Boolean(onReferenceInChat && filePath) && (showMarkdownPreview || !editableDocument),
     readSelection: readPreviewSelection,
     onCommit: commitPreviewSelection,
   });

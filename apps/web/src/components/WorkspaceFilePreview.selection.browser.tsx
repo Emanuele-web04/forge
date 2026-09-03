@@ -73,7 +73,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("offers Add to chat for a rendered-markdown selection and references the snippet", async () => {
+it("offers Add to chat for an editable rendered-markdown selection", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedMarkdown());
   const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
   const onReferenceInChat = vi.fn<(reference: ChatFileReference) => void>();
@@ -85,6 +85,7 @@ it("offers Add to chat for a rendered-markdown selection and references the snip
           workspaceRoot={WORKSPACE_ROOT}
           filePath={MARKDOWN_PATH}
           markdownPreviewDefault
+          editable
           onReferenceInChat={onReferenceInChat}
         />
       </QueryClientProvider>,
