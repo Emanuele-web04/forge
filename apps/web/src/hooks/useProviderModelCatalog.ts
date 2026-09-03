@@ -458,10 +458,7 @@ export function useProviderModelCatalog(input: {
         antigravityModelsQuery.data?.error,
         antigravityModelsQuery.error,
       ),
-      grok: modelDiscoveryError(
-        grokDynamicModelsQuery.data?.error,
-        grokDynamicModelsQuery.error,
-      ),
+      grok: modelDiscoveryError(grokDynamicModelsQuery.data?.error, grokDynamicModelsQuery.error),
       droid: modelDiscoveryError(
         droidDynamicModelsQuery.data?.error,
         droidDynamicModelsQuery.error,
