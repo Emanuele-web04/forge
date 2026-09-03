@@ -5306,9 +5306,7 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
-  const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (
-    input,
-  ) =>
+  const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.gen(function* () {
       const startedAtSequence = (yield* orchestrationEngine.getReadModel()).snapshotSequence;
       const thread = yield* resolveThread(input.threadId);
@@ -5372,9 +5370,7 @@ const make = Effect.gen(function* () {
           );
           auditedThroughSequence = snapshot.snapshotSequence;
         }
-        const currentThread = snapshot.threads.find(
-          (candidate) => candidate.id === input.threadId,
-        );
+        const currentThread = snapshot.threads.find((candidate) => candidate.id === input.threadId);
         if (titleChanged || !currentThread || currentThread.title !== expectedTitle) {
           return { status: "stale", title: null };
         }
