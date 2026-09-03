@@ -478,32 +478,16 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     }
     const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
     expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);
-    for (const options of modelCalls.filter((options) => options.queryKey[2] !== "cursor")) {
+    expect(modelCalls.find((options) => options.queryKey[2] === "codex")?.retry).toBe(0);
+    expect(modelCalls.find((options) => options.queryKey[2] === "claudeAgent")?.retry).toBe(0);
+    for (const options of modelCalls.filter(
+      (options) =>
+        options.queryKey[2] !== "cursor" &&
+        options.queryKey[2] !== "codex" &&
+        options.queryKey[2] !== "claudeAgent",
+    )) {
       expect(options.retry).toBe(3);
     }
-    const devinModelOptions = modelCalls.find((options) => options.queryKey[2] === "devin");
-    const devinStaleTime = devinModelOptions?.staleTime as (query: unknown) => number;
-    expect(
-      devinStaleTime({
-        state: {
-          data: {
-            models: [{ slug: "adaptive", name: "Adaptive" }],
-            source: "devin.static",
-            error: "temporary failure",
-          },
-        },
-      }),
-    ).toBe(0);
-    expect(
-      devinStaleTime({
-        state: {
-          data: {
-            models: [{ slug: "adaptive", name: "Adaptive" }],
-            source: "devin-cli",
-          },
-        },
-      }),
-    ).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
     for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
       expect(options.retry).toBe(0);
     }

@@ -229,6 +229,7 @@ export function prefetchProviderModelsForNewThread(
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
+      retry: provider === "codex" || provider === "claudeAgent" ? 0 : modelsOptions.retry,
       staleTime:
         provider === "devin"
           ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)

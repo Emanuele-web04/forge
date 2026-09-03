@@ -448,14 +448,8 @@ export function useProviderModelCatalog(input: {
   // model pickers.
   const discoveryErrorsByProvider = useMemo(
     () => ({
-      claudeAgent: modelDiscoveryError(
-        claudeDynamicModelsQuery.data?.error,
-        claudeDynamicModelsQuery.error,
-      ),
-      codex: modelDiscoveryError(
-        codexDynamicModelsQuery.data?.error,
-        codexDynamicModelsQuery.error,
-      ),
+      claudeAgent: claudeDynamicModelsQuery.data?.error,
+      codex: codexDynamicModelsQuery.data?.error,
       cursor: modelDiscoveryError(
         cursorDynamicModelsQuery.data?.error,
         cursorDynamicModelsQuery.error,
@@ -483,9 +477,7 @@ export function useProviderModelCatalog(input: {
       antigravityModelsQuery.data?.error,
       antigravityModelsQuery.error,
       claudeDynamicModelsQuery.data?.error,
-      claudeDynamicModelsQuery.error,
       codexDynamicModelsQuery.data?.error,
-      codexDynamicModelsQuery.error,
       cursorDynamicModelsQuery.data?.error,
       cursorDynamicModelsQuery.error,
       devinDynamicModelsQuery.data?.error,

@@ -187,18 +187,27 @@ function requireDiscoveredModels(
   // Initial degraded discovery can still expose an adapter's usable static
   // fallback. During a background refresh, however, keep a previously good
   // dynamic catalog and let React Query retry the transient failure.
-  if (result.error && previous && !previous.error && previous.models.length > 0) {
+  if (
+    provider === "devin" &&
+    result.error &&
+    previous &&
+    !previous.error &&
+    previous.models.length > 0
+  ) {
     throw new Error(result.error);
   }
   const isAuthoritativeEmptyCatalog =
     result.source === "disabled" ||
     result.source === "unsupported" ||
-    (provider === "codex" && result.source === "codex-app-server") ||
-    (provider === "claudeAgent" && result.source === "sdk") ||
     (provider === "opencode" &&
       (result.source === "opencode" || result.source === "opencode-cli")) ||
     (provider === "pi" && result.source?.startsWith("pi.sdk") === true);
-  if (result.models.length === 0 && !isAuthoritativeEmptyCatalog) {
+  if (
+    provider !== "codex" &&
+    provider !== "claudeAgent" &&
+    result.models.length === 0 &&
+    !isAuthoritativeEmptyCatalog
+  ) {
     throw new Error(`${provider} model discovery returned no models.`);
   }
   return result;
