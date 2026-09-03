@@ -7,7 +7,41 @@ import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
 
 import { Effect, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const trackedWatchers = vi.hoisted(() => new Set<object>());
+const realpathGate = vi.hoisted(() => ({
+  enabled: false,
+  onStart: () => undefined,
+  wait: Promise.resolve(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    watch: (...args: Parameters<typeof actual.watch>) => {
+      const watcher = Reflect.apply(actual.watch, actual, args);
+      trackedWatchers.add(watcher);
+      watcher.once("close", () => trackedWatchers.delete(watcher));
+      return watcher;
+    },
+  };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    realpath: async (...args: Parameters<typeof actual.realpath>) => {
+      if (realpathGate.enabled) {
+        realpathGate.onStart();
+        await realpathGate.wait;
+      }
+      return Reflect.apply(actual.realpath, actual, args);
+    },
+  };
+});
 
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths";
 import { watchWorkspaceFile } from "./workspaceFileChanges";
@@ -31,6 +65,64 @@ afterEach(async () => {
 });
 
 describe("watchWorkspaceFile", () => {
+  it("does not reopen a watcher when target resolution finishes after teardown", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const relativePath = "src/example.ts";
+    const absolutePath = NodePath.join(workspaceRoot, relativePath);
+    await NodeFileSystem.mkdir(NodePath.dirname(absolutePath), { recursive: true });
+    await NodeFileSystem.writeFile(absolutePath, "first\n");
+
+    let resolveInitialEvent!: () => void;
+    const initialEvent = new Promise<void>((resolve) => {
+      resolveInitialEvent = resolve;
+    });
+    const abortController = new AbortController();
+    const streamResult = Effect.runPromise(
+      watchWorkspaceFile({ cwd: workspaceRoot, relativePath }).pipe(
+        Stream.tap(() => Effect.sync(resolveInitialEvent)),
+        Stream.runDrain,
+      ),
+      { signal: abortController.signal },
+    );
+    void streamResult.catch(() => undefined);
+
+    let releaseRealpath!: () => void;
+    let resolveRealpathStarted!: () => void;
+    const realpathStarted = new Promise<void>((resolve) => {
+      resolveRealpathStarted = resolve;
+    });
+    realpathGate.wait = new Promise<void>((resolve) => {
+      releaseRealpath = resolve;
+    });
+    realpathGate.onStart = resolveRealpathStarted;
+
+    try {
+      await initialEvent;
+      realpathGate.enabled = true;
+      await NodeFileSystem.writeFile(absolutePath, "second\n");
+      await Promise.race([
+        realpathStarted,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("file watch refresh did not start")), 5_000),
+        ),
+      ]);
+
+      abortController.abort();
+      await vi.waitFor(() => expect(trackedWatchers.size).toBe(0));
+      releaseRealpath();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      expect(trackedWatchers.size).toBe(0);
+    } finally {
+      realpathGate.enabled = false;
+      realpathGate.onStart = () => undefined;
+      realpathGate.wait = Promise.resolve();
+      releaseRealpath();
+      abortController.abort();
+      await streamResult.catch(() => undefined);
+    }
+  });
+
   it("emits the initial state and survives delete-and-recreate saves", async () => {
     const workspaceRoot = await makeWorkspace();
     const relativePath = "src/example.ts";

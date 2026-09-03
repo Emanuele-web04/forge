@@ -279,6 +279,10 @@ function watchTargetDirectories(
                   fail(outsideRootError(input));
                   return;
                 }
+                // Teardown can race the asynchronous path resolution above.
+                // Never recreate native watcher handles after the resource has
+                // already been released.
+                if (closed) return;
                 refreshTargets(targetPaths);
                 const event = await readFileChangeState(input);
                 if (!closed) Queue.offerUnsafe(queue, event);
