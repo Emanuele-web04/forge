@@ -848,7 +848,10 @@ export function ChatHeader({
           <GitActionsControl
             gitCwd={gitCwd}
             activeThreadId={activeThreadId}
-            hideQuickActionLabel={compact}
+            // Icon-only: keeps the worktree cluster at a fixed 28px/square footprint
+            // beside EnvironmentToggle instead of widening under the transparent
+            // desktop window controls when pull becomes available.
+            hideQuickActionLabel
             visibleWhen="pull-available"
           />
         ) : null}
