@@ -890,6 +890,11 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
           rpcEffect(importThread(input), "Failed to import thread"),
+        [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
+          rpcEffect(
+            providerCommandReactor.regenerateThreadTitle(input),
+            "Failed to regenerate thread title",
+          ),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
           rpcEffect(
             projectionReadModelQuery.getSnapshot(),

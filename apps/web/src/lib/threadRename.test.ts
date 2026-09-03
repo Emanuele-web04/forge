@@ -1,20 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
 const dispatchCommand = vi.fn<(command: unknown) => Promise<void>>();
+const regenerateThreadTitle = vi.fn<() => Promise<unknown>>();
 
 vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     orchestration: {
       dispatchCommand,
+      regenerateThreadTitle,
     },
   }),
 }));
 
-import { dispatchThreadRename } from "./threadRename";
+import { dispatchThreadRename, dispatchThreadTitleRegeneration } from "./threadRename";
 
 describe("dispatchThreadRename", () => {
   it("updates existing server threads", async () => {
     dispatchCommand.mockReset().mockResolvedValue(undefined);
+    regenerateThreadTitle.mockReset();
 
     const outcome = await dispatchThreadRename({
       threadId: "thread-server" as never,
@@ -29,6 +32,7 @@ describe("dispatchThreadRename", () => {
       threadId: "thread-server",
       title: "Renamed server thread",
     });
+    expect(regenerateThreadTitle).not.toHaveBeenCalled();
   });
 
   it("promotes local drafts by creating the thread with the chosen title", async () => {
@@ -63,5 +67,17 @@ describe("dispatchThreadRename", () => {
       title: "Inbox cleanup",
       createdAt: "2026-04-18T00:00:00.000Z",
     });
+  });
+
+  it("requests server-side title regeneration for an existing thread", async () => {
+    regenerateThreadTitle.mockReset().mockResolvedValue({
+      status: "renamed",
+      title: "Backend auth",
+    });
+
+    const outcome = await dispatchThreadTitleRegeneration("thread-server" as never);
+
+    expect(outcome).toEqual({ status: "renamed", title: "Backend auth" });
+    expect(regenerateThreadTitle).toHaveBeenCalledWith({ threadId: "thread-server" });
   });
 });

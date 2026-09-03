@@ -7,6 +7,7 @@
 import {
   type ModelSelection,
   type OrchestrationThreadPullRequest,
+  type OrchestrationRegenerateThreadTitleResult,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -18,6 +19,19 @@ import { promoteThreadCreate } from "./threadCreatePromotion";
 import { newCommandId } from "./utils";
 
 type ThreadRenameOutcome = "empty" | "unchanged" | "unavailable" | "renamed";
+export type ThreadTitleRegenerationOutcome =
+  | OrchestrationRegenerateThreadTitleResult
+  | { readonly status: "unavailable"; readonly title: null };
+
+export async function dispatchThreadTitleRegeneration(
+  threadId: ThreadId,
+): Promise<ThreadTitleRegenerationOutcome> {
+  const api = readNativeApi();
+  if (!api) {
+    return { status: "unavailable", title: null };
+  }
+  return api.orchestration.regenerateThreadTitle({ threadId });
+}
 
 export async function dispatchThreadRename(input: {
   threadId: ThreadId;

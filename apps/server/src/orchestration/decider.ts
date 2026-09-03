@@ -1415,6 +1415,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.expectedTitle !== undefined && thread.title !== command.expectedTitle) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' title changed before the conditional update.`,
+        });
+      }
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.

@@ -44,7 +44,9 @@ import {
 } from "effect";
 import {
   buildPromptThreadTitleFallback,
+  buildThreadTitleConversationContext,
   isGenericChatThreadTitle,
+  isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
 import {
   collectTailTurnIds,
@@ -94,6 +96,7 @@ import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
 } from "../../git/Services/TextGeneration.ts";
+import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
@@ -5297,11 +5300,80 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
+  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+    Effect.gen(function* () {
+      const thread = yield* resolveThread(input.threadId);
+      if (!thread) {
+        return yield* Effect.fail(new Error("Thread is unavailable."));
+      }
+      const context = buildThreadTitleConversationContext(thread.messages);
+      if (!context) {
+        return { status: "no-context", title: null };
+      }
+
+      const expectedTitle = thread.title;
+      const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+      const textGenerationInput = yield* resolveThreadTextGenerationInput({
+        threadId: input.threadId,
+        useConfiguredFallback: true,
+      });
+      if (!textGenerationInput) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "No enabled text-generation provider is available for this thread.",
+        });
+      }
+
+      const generated = yield* textGeneration.generateThreadTitle({
+        cwd: cwd ?? process.cwd(),
+        message: context,
+        context: "conversation",
+        modelSelection: textGenerationInput.modelSelection,
+        ...(textGenerationInput.providerOptions
+          ? { providerOptions: textGenerationInput.providerOptions }
+          : {}),
+      });
+      if (!isUsableGeneratedThreadTitle(generated.title)) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "The generated thread title was empty or generic.",
+        });
+      }
+      if (generated.title === expectedTitle) {
+        return { status: "unchanged", title: expectedTitle };
+      }
+
+      const updated = yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: serverCommandId("thread-title-regenerate"),
+          threadId: input.threadId,
+          title: generated.title,
+          expectedTitle,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.catch((error) => {
+            if (
+              error._tag === "OrchestrationCommandInvariantError" &&
+              error.commandType === "thread.meta.update"
+            ) {
+              return Effect.succeed(false);
+            }
+            return Effect.fail(error);
+          }),
+        );
+      return updated
+        ? { status: "renamed", title: generated.title }
+        : { status: "stale", title: null };
+    });
+
   return {
     start,
     drain,
     listBlockingDeliveries,
     reconcileDelivery,
+    regenerateThreadTitle,
   } satisfies ProviderCommandReactorShape;
 });
 
