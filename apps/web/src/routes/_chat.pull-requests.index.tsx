@@ -166,6 +166,7 @@ function PullRequestsRouteView() {
   const { settings } = useAppSettings();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
+  const navigateToSettings = useNavigate();
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((store) => store.projects);
@@ -193,9 +194,7 @@ function PullRequestsRouteView() {
             state: next.state,
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
-            ...(next.selectedRepo
-              ? { selectedProvider: next.selectedProvider ?? "github" }
-              : {}),
+            ...(next.selectedRepo ? { selectedProvider: next.selectedProvider ?? "github" } : {}),
             ...(next.selectedRepo ? { selectedRepo: next.selectedRepo } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.q ? { q: next.q } : {}),
@@ -400,6 +399,18 @@ function PullRequestsRouteView() {
 
   const truncatedRepositoryCount =
     activeListData?.repositoryBatches.filter((batch) => batch.truncated).length ?? 0;
+  // One restrained prompt when Bitbucket remotes are eligible but Paraty is not connected:
+  // the GitHub results stay visible below it, and there is never one card per repository.
+  const bitbucketConnectRequired = (activeListData?.providerRequirements ?? []).some(
+    (requirement) =>
+      requirement.provider === "bitbucket" &&
+      (requirement.status === "not-connected" || requirement.status === "reconnect-required"),
+  );
+  const showBitbucketConnectPrompt =
+    bitbucketConnectRequired && !initialListError && !initialExactInvolvementError;
+  const openIntegrations = useCallback(() => {
+    void navigateToSettings({ to: "/settings", search: { section: "integrations" } });
+  }, [navigateToSettings]);
 
   return (
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
@@ -530,6 +541,14 @@ function PullRequestsRouteView() {
                   onTogglePinned={handleTogglePinned}
                 />
               )}
+              {showBitbucketConnectPrompt ? (
+                <PullRequestWarningNote shape="callout" role="status">
+                  Connect Paraty MCP to include Bitbucket pull requests.{" "}
+                  <Button variant="outline" size="sm" className="ml-2" onClick={openIntegrations}>
+                    Open integrations
+                  </Button>
+                </PullRequestWarningNote>
+              ) : null}
               {!exactInvolvementPending &&
               !initialExactInvolvementError &&
               truncatedRepositoryCount > 0 ? (

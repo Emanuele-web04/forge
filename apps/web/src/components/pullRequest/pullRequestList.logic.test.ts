@@ -17,7 +17,7 @@ function makeActor(login: string): PullRequestActor {
 }
 
 function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry: PullRequestListEntry = {
+  const entry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     provider: "github",
@@ -52,7 +52,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
         isPinned: entry.isPinned ?? false,
       },
     ],
-  };
+  } as PullRequestListEntry;
 }
 
 describe("groupPullRequestEntriesByInvolvement", () => {
@@ -296,6 +296,16 @@ describe("filterPullRequestEntriesByInvolvement", () => {
     expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "all")).toEqual([entry]);
     expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "reviewing")).toEqual([]);
     expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "authored")).toEqual([]);
+  });
+
+  it("keeps Bitbucket rows in all while involvement filters exclude them", () => {
+    const bitbucket = makeEntry({ provider: "bitbucket", viewerInvolvement: "unknown" });
+
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "all")).toEqual([
+      bitbucket,
+    ]);
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "reviewing")).toEqual([]);
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "authored")).toEqual([]);
   });
 });
 
