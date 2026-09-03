@@ -27,7 +27,9 @@ describe("chatThreads", () => {
 
   it("uses the first usable title line after reasoning wrappers", () => {
     expect(
-      sanitizeGeneratedThreadTitle("<think>compare several options</think>\n```\n\"Fix OAuth callback race.\"\n```"),
+      sanitizeGeneratedThreadTitle(
+        "<think>compare several options</think>\n```\n\"Fix OAuth callback race.\"\n```",
+      ),
     ).toBe("Fix OAuth callback race");
   });
 

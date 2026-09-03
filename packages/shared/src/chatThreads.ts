@@ -41,15 +41,20 @@ function titleWords(value: string): string[] {
 
 function removeReasoningWrappers(value: string): string {
   return value
-    .replace(/<(?:analysis|reasoning|think)>[\s\S]*?<\/(?:analysis|reasoning|think)>/gi, "")
+    .replace(
+      /<(?:analysis|reasoning|think)>[\s\S]*?<\/(?:analysis|reasoning|think)>/gi,
+      "",
+    )
     .replace(/<(?:analysis|reasoning|think)>[\s\S]*$/gi, "");
 }
 
 function firstGeneratedTitleLine(value: string): string {
-  return removeReasoningWrappers(value)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0 && !/^```/.test(line)) ?? "";
+  return (
+    removeReasoningWrappers(value)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0 && !/^```/.test(line)) ?? ""
+  );
 }
 
 function truncateConversationMessage(value: string): string {
