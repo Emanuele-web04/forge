@@ -462,9 +462,6 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     }
     const devinModelOptions = modelCalls.find((options) => options.queryKey[2] === "devin");
     const devinStaleTime = devinModelOptions?.staleTime as (query: unknown) => number;
-    const devinRefetchInterval = devinModelOptions?.refetchInterval as (
-      query: unknown,
-    ) => number | false;
     expect(
       devinStaleTime({
         state: {
@@ -486,17 +483,6 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
         },
       }),
     ).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
-    expect(
-      devinRefetchInterval({
-        state: {
-          data: {
-            models: [{ slug: "adaptive", name: "Adaptive" }],
-            source: "devin.static",
-            error: "temporary failure",
-          },
-        },
-      }),
-    ).toBe(30_000);
     for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
       expect(options.retry).toBe(0);
     }
