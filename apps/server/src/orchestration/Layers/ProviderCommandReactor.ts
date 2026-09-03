@@ -5309,7 +5309,9 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
-  const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+  const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (
+    input,
+  ) =>
     Effect.gen(function* () {
       const startedAtSequence = (yield* orchestrationEngine.getReadModel()).snapshotSequence;
       const thread = yield* resolveThread(input.threadId);
