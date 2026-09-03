@@ -59,12 +59,27 @@ const makeThreadEventReadMethods = (
   events: ReadonlyArray<OrchestrationEvent>,
 ): Pick<
   OrchestrationEventStoreShape,
-  "getThreadHighWaterSequence" | "readThreadEvents" | "readThreadEventsFromSequence"
+  | "getThreadHighWaterSequence"
+  | "getThreadTitleHighWaterSequence"
+  | "readThreadEvents"
+  | "readThreadEventsFromSequence"
 > => ({
   getThreadHighWaterSequence: (threadId) =>
     Effect.succeed(
       events
         .filter((event) => event.aggregateKind === "thread" && event.aggregateId === threadId)
+        .at(-1)?.sequence ?? 0,
+    ),
+  getThreadTitleHighWaterSequence: (threadId) =>
+    Effect.succeed(
+      events
+        .filter(
+          (event) =>
+            event.aggregateKind === "thread" &&
+            event.aggregateId === threadId &&
+            (event.type === "thread.created" ||
+              (event.type === "thread.meta-updated" && event.payload.title !== undefined)),
+        )
         .at(-1)?.sequence ?? 0,
     ),
   readThreadEvents: (input) =>

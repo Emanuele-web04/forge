@@ -5308,7 +5308,9 @@ const make = Effect.gen(function* () {
 
   const regenerateThreadTitleOnce: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.gen(function* () {
-      const startedAtSequence = (yield* orchestrationEngine.getReadModel()).snapshotSequence;
+      const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+        input.threadId,
+      );
       const thread = yield* resolveThread(input.threadId);
       if (!thread) {
         return yield* Effect.fail(new Error("Thread is unavailable."));
@@ -5349,61 +5351,46 @@ const make = Effect.gen(function* () {
           detail: "The generated thread title was empty or generic.",
         });
       }
-      let auditedThroughSequence = startedAtSequence;
-      for (let attempt = 0; attempt < 16; attempt += 1) {
-        const snapshot = yield* orchestrationEngine.getReadModel();
-        let titleChanged = false;
-        if (snapshot.snapshotSequence > auditedThroughSequence) {
-          yield* Stream.runForEach(
-            orchestrationEngine.readThreadEventsThrough(
-              input.threadId,
-              auditedThroughSequence,
-              snapshot.snapshotSequence,
-              ["thread.meta-updated"],
-            ),
-            (event) =>
-              Effect.sync(() => {
-                if (event.type === "thread.meta-updated" && event.payload.title !== undefined) {
-                  titleChanged = true;
-                }
-              }),
-          );
-          auditedThroughSequence = snapshot.snapshotSequence;
-        }
-        const currentThread = snapshot.threads.find((candidate) => candidate.id === input.threadId);
-        if (titleChanged || !currentThread || currentThread.title !== expectedTitle) {
-          return { status: "stale", title: null };
-        }
-        if (generated.title === expectedTitle) {
-          return { status: "unchanged", title: expectedTitle };
-        }
-
-        const updated = yield* orchestrationEngine
-          .dispatch({
-            type: "thread.meta.update",
-            commandId: serverCommandId("thread-title-regenerate"),
-            threadId: input.threadId,
-            title: generated.title,
-            expectedTitle,
-            expectedSnapshotSequence: snapshot.snapshotSequence,
-          })
-          .pipe(
-            Effect.as(true),
-            Effect.catch((error) => {
-              if (
-                error._tag === "OrchestrationCommandInvariantError" &&
-                error.commandType === "thread.meta.update"
-              ) {
-                return Effect.succeed(false);
-              }
-              return Effect.fail(error);
-            }),
-          );
-        if (updated) {
-          return { status: "renamed", title: generated.title };
-        }
+      const titleSequenceAfterGeneration =
+        yield* orchestrationEngine.getThreadTitleHighWaterSequence(input.threadId);
+      const currentThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (candidate) => candidate.id === input.threadId,
+      );
+      if (
+        titleSequenceAfterGeneration !== expectedTitleSequence ||
+        !currentThread ||
+        currentThread.title !== expectedTitle
+      ) {
+        return { status: "stale", title: null };
       }
-      return { status: "stale", title: null };
+      if (generated.title === expectedTitle) {
+        return { status: "unchanged", title: expectedTitle };
+      }
+
+      const updated = yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: serverCommandId("thread-title-regenerate"),
+          threadId: input.threadId,
+          title: generated.title,
+          expectedTitle,
+          expectedTitleSequence,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.catch((error) => {
+            if (
+              error._tag === "OrchestrationCommandInvariantError" &&
+              error.commandType === "thread.meta.update"
+            ) {
+              return Effect.succeed(false);
+            }
+            return Effect.fail(error);
+          }),
+        );
+      return updated
+        ? { status: "renamed", title: generated.title }
+        : { status: "stale", title: null };
     });
 
   const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>

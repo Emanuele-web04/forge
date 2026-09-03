@@ -517,6 +517,25 @@ const makeEventStore = Effect.gen(function* () {
       `,
   });
 
+  const readThreadTitleHighWaterSequenceRow = SqlSchema.findOne({
+    Request: ThreadHighWaterRequestSchema,
+    Result: HighWaterSequenceRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "highWaterSequence"
+        FROM orchestration_events
+        WHERE aggregate_kind = 'thread'
+          AND stream_id = ${threadId}
+          AND (
+            event_type = 'thread.created'
+            OR (
+              event_type = 'thread.meta-updated'
+              AND json_type(payload_json, '$.title') = 'text'
+            )
+          )
+      `,
+  });
+
   const readThreadEventRows = SqlSchema.findAll({
     Request: ReadThreadEventsRequestSchema,
     Result: RawPersistedEventRowSchema,
@@ -715,6 +734,18 @@ const makeEventStore = Effect.gen(function* () {
       Effect.map((row) => row.highWaterSequence),
     );
 
+  const getThreadTitleHighWaterSequence: OrchestrationEventStoreShape["getThreadTitleHighWaterSequence"] =
+    (threadId) =>
+      readThreadTitleHighWaterSequenceRow({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.getThreadTitleHighWaterSequence:query",
+            "OrchestrationEventStore.getThreadTitleHighWaterSequence:decodeRow",
+          ),
+        ),
+        Effect.map((row) => row.highWaterSequence),
+      );
+
   const readThreadEvents: OrchestrationEventStoreShape["readThreadEvents"] = (input) => {
     const limit = Math.max(0, Math.floor(input.limit));
     if (limit === 0) return Effect.succeed([]);
@@ -746,6 +777,7 @@ const makeEventStore = Effect.gen(function* () {
     append,
     getHighWaterSequence,
     getThreadHighWaterSequence,
+    getThreadTitleHighWaterSequence,
     readThreadEvents,
     readThreadEventsFromSequence,
     readFromSequence,

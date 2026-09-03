@@ -146,6 +146,18 @@ layer("OrchestrationEventStore", (it) => {
         metadata: {},
         payload: { threadId, deletedAt: now },
       });
+      const titleUpdate = yield* eventStore.append({
+        type: "thread.meta-updated",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-title"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, title: "Renamed thread", updatedAt: now },
+      });
       const second = yield* eventStore.append({
         type: "thread.unarchived",
         eventId: EventId.makeUnsafe("evt-thread-diagnostic-second"),
@@ -160,6 +172,10 @@ layer("OrchestrationEventStore", (it) => {
       });
 
       assert.equal(yield* eventStore.getThreadHighWaterSequence(threadId), second.sequence);
+      assert.equal(
+        yield* eventStore.getThreadTitleHighWaterSequence(threadId),
+        titleUpdate.sequence,
+      );
       const latest = yield* eventStore.readThreadEvents({
         threadId,
         throughSequenceInclusive: second.sequence,
@@ -185,7 +201,7 @@ layer("OrchestrationEventStore", (it) => {
       ).pipe(Effect.map((events) => Array.from(events)));
       assert.deepEqual(
         catchup.map((event) => event.sequence),
-        [sameThreadNonDetail.sequence, second.sequence],
+        [sameThreadNonDetail.sequence, titleUpdate.sequence, second.sequence],
       );
       const detailCatchup = yield* Stream.runCollect(
         eventStore.readThreadEventsFromSequence(threadId, first.sequence, 1, second.sequence, [
@@ -403,7 +419,7 @@ layer("OrchestrationEventStore", (it) => {
         )
       `;
 
-      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
+      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 20)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
       );
       const projectCreated = replayed.find(

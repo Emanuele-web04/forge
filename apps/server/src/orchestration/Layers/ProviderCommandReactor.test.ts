@@ -1017,15 +1017,34 @@ describe("ProviderCommandReactor", () => {
   }
 
   it("regenerates a title from durable conversation context without steering an active turn", async () => {
-    const harness = await createHarness({
-      generateThreadTitle: (input) =>
-        Effect.succeed({
-          title: input.message.includes("backend authentication")
-            ? "Backend auth callback"
-            : "Unexpected title",
-        }),
-    });
+    const harness = await createHarness();
     await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockImplementationOnce((input) =>
+      harness.engine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe("cmd-activity-during-title-generation"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          activity: {
+            id: EventId.makeUnsafe("activity-during-title-generation"),
+            tone: "info",
+            kind: "provider.notice",
+            summary: "Active turn produced durable progress",
+            payload: {},
+            turnId: null,
+            createdAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        })
+        .pipe(
+          Effect.orDie,
+          Effect.as({
+            title: input.message.includes("backend authentication")
+              ? "Backend auth callback"
+              : "Unexpected title",
+          }),
+        ),
+    );
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
       status: "running",

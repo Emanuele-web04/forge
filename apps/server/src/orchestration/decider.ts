@@ -1415,15 +1415,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (
-        command.expectedSnapshotSequence !== undefined &&
-        readModel.snapshotSequence !== command.expectedSnapshotSequence
-      ) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Thread '${command.threadId}' changed before the conditional update.`,
-        });
-      }
       if (command.expectedTitle !== undefined && thread.title !== command.expectedTitle) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
