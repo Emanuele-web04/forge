@@ -85,7 +85,7 @@ function formatConversationAttachment(attachment: ThreadTitleConversationAttachm
 
 function threadTitleConversationMessageText(message: {
   readonly text: string;
-  readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment>;
+  readonly attachments?: ReadonlyArray<ThreadTitleConversationAttachment> | undefined;
 }): string {
   return [
     normalizeTitleWhitespace(message.text),
