@@ -54,6 +54,7 @@ type ProviderModelDiscoveryPriority = "background" | "prefetch" | "foreground";
 interface ProviderModelDiscoveryTask {
   readonly queryKey: readonly unknown[];
   priority: ProviderModelDiscoveryPriority;
+  priorityOrder: number;
   readonly signal: AbortSignal;
   readonly discover: () => Promise<unknown>;
   readonly resolve: (value: unknown) => void;
@@ -63,6 +64,13 @@ interface ProviderModelDiscoveryTask {
 
 const providerModelDiscoveryQueue: ProviderModelDiscoveryTask[] = [];
 let providerModelDiscoveryRunning = false;
+let providerModelDiscoveryPriorityOrder = 0;
+
+const PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK: Record<ProviderModelDiscoveryPriority, number> = {
+  background: 0,
+  prefetch: 1,
+  foreground: 2,
+};
 
 function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
   return (
@@ -82,13 +90,22 @@ function abortReason(signal: AbortSignal): unknown {
 function drainProviderModelDiscoveryQueue(): void {
   if (providerModelDiscoveryRunning) return;
 
-  const foregroundIndex = providerModelDiscoveryQueue.findIndex(
-    (task) => task.priority === "foreground",
-  );
-  const prefetchIndex = providerModelDiscoveryQueue.findIndex(
-    (task) => task.priority === "prefetch",
-  );
-  const nextIndex = foregroundIndex >= 0 ? foregroundIndex : prefetchIndex >= 0 ? prefetchIndex : 0;
+  let nextIndex = 0;
+  for (let index = 1; index < providerModelDiscoveryQueue.length; index += 1) {
+    const candidate = providerModelDiscoveryQueue[index];
+    const current = providerModelDiscoveryQueue[nextIndex];
+    if (!candidate || !current) continue;
+    const candidateRank = PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK[candidate.priority];
+    const currentRank = PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK[current.priority];
+    if (
+      candidateRank > currentRank ||
+      (candidateRank === currentRank &&
+        candidate.priority !== "background" &&
+        candidate.priorityOrder > current.priorityOrder)
+    ) {
+      nextIndex = index;
+    }
+  }
   const task = providerModelDiscoveryQueue.splice(nextIndex, 1)[0];
   if (!task) return;
 
@@ -115,17 +132,23 @@ export function prioritizeProviderModelDiscovery(
 ): void {
   for (const task of providerModelDiscoveryQueue) {
     const matches = queryKeysMatch(task.queryKey, queryKey);
-    if (!matches && task.priority === priority) {
-      // Selection is exclusive within its priority class: switching providers
-      // demotes the stale choice without letting hover prefetches demote an
-      // actively observed foreground catalog.
+    if (!matches && priority === "prefetch" && task.priority === "prefetch") {
+      // Only the newest hover target remains prefetch-priority. Foreground
+      // catalogs are not exclusive: split-view panes can observe distinct
+      // selected providers at the same time.
       task.priority = "background";
-    } else if (
-      matches &&
-      (task.priority === "background" ||
-        (task.priority === "prefetch" && priority === "foreground"))
-    ) {
-      task.priority = priority;
+    } else if (matches) {
+      if (
+        task.priority === "background" ||
+        (task.priority === "prefetch" && priority === "foreground")
+      ) {
+        task.priority = priority;
+      }
+      if (priority !== "background") {
+        // A newly selected pane goes first without demoting catalogs selected
+        // in other active panes below speculative prefetch work.
+        task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
+      }
     }
   }
 }
@@ -146,6 +169,7 @@ function serializeProviderModelDiscovery<T>(
     providerModelDiscoveryQueue.push({
       queryKey,
       priority,
+      priorityOrder: priority === "background" ? 0 : ++providerModelDiscoveryPriorityOrder,
       signal,
       discover,
       resolve: (value) => resolve(value as T),

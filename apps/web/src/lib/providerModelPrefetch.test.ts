@@ -248,7 +248,6 @@ describe("prefetchModelsForNewThread", () => {
     expect(cancelQueries).toHaveBeenCalledWith({
       queryKey: providerDiscoveryQueryKeys.modelsAll,
       type: "inactive",
-      fetchStatus: "fetching",
       predicate: expect.any(Function),
     });
     const cancelFilters = cancelQueries.mock.calls[0]?.[0];

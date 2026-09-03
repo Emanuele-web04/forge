@@ -416,12 +416,12 @@ export function prefetchModelsForNewThread(
   }
 
   // Hovering another project supersedes only inactive model prefetches. Active
-  // composer queries and exact-key prefetches keep running, while genuinely
-  // stale queued hover work is removed before it can consume native admission.
+  // composer queries and exact-key prefetches keep running. Include both
+  // fetching and offline-paused queries so stale hover work cannot revive on
+  // reconnect and consume native admission.
   void queryClient.cancelQueries({
     queryKey: providerDiscoveryQueryKeys.modelsAll,
     type: "inactive",
-    fetchStatus: "fetching",
     predicate: (query) =>
       !desiredModelQueryKeys.some(
         (queryKey) =>

@@ -141,7 +141,7 @@ describe("providerModelsQueryOptions", () => {
     expect(maxActiveDiscoveries).toBe(1);
   });
 
-  it("promotes a newly selected provider ahead of queued background discovery", async () => {
+  it("keeps every active pane selection ahead of speculative prefetch", async () => {
     let releaseCurrent: (() => void) | undefined;
     const listModels = mockListModels(
       vi.fn().mockImplementation(
@@ -158,23 +158,29 @@ describe("providerModelsQueryOptions", () => {
     );
     const queryClient = new QueryClient();
     const activeOptions = providerModelsQueryOptions({ provider: "opencode" });
-    const backgroundOptions = providerModelsQueryOptions({ provider: "cursor" });
-    const selectedOptions = providerModelsQueryOptions({ provider: "pi" });
+    const firstPaneOptions = providerModelsQueryOptions({ provider: "cursor" });
+    const secondPaneOptions = providerModelsQueryOptions({ provider: "pi" });
+    const hoverOptions = providerModelsQueryOptions({ provider: "devin" });
     const requests = [
       queryClient.fetchQuery(activeOptions),
-      queryClient.fetchQuery(backgroundOptions),
-      queryClient.fetchQuery(selectedOptions),
+      queryClient.fetchQuery(firstPaneOptions),
+      queryClient.fetchQuery(secondPaneOptions),
+      queryClient.fetchQuery(hoverOptions),
     ];
 
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
-    prioritizeProviderModelDiscovery(backgroundOptions.queryKey);
-    prioritizeProviderModelDiscovery(selectedOptions.queryKey);
+    prioritizeProviderModelDiscovery(firstPaneOptions.queryKey);
+    prioritizeProviderModelDiscovery(secondPaneOptions.queryKey);
+    prioritizeProviderModelDiscovery(hoverOptions.queryKey, "prefetch");
     releaseCurrent?.();
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(2));
     expect(listModels.mock.calls[1]?.[0]).toMatchObject({ provider: "pi" });
     releaseCurrent?.();
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(3));
     expect(listModels.mock.calls[2]?.[0]).toMatchObject({ provider: "cursor" });
+    releaseCurrent?.();
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(4));
+    expect(listModels.mock.calls[3]?.[0]).toMatchObject({ provider: "devin" });
     releaseCurrent?.();
     await Promise.all(requests);
   });
