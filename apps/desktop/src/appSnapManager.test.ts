@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import { SYNARA_DEVELOPMENT_BUNDLE_ID } from "@synara/shared/desktopIdentity";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   DesktopAppSnapManager,
@@ -972,6 +972,8 @@ describe("AppSnap window picker requests", () => {
     manager: DesktopAppSnapManager;
     watchChild: FakeChildProcess;
     captureDirectory: string;
+    onCaptured: Mock;
+    onError: Mock;
     dispose: () => void;
   }> {
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-picker-"));
@@ -981,6 +983,8 @@ describe("AppSnap window picker requests", () => {
       .fn()
       .mockReturnValueOnce(checkChild)
       .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const onCaptured = vi.fn();
+    const onError = vi.fn();
     const manager = new DesktopAppSnapManager({
       platform: "darwin",
       helperPath: process.execPath,
@@ -991,8 +995,8 @@ describe("AppSnap window picker requests", () => {
       onPermissionGuideState: vi.fn(),
       spawn,
       onState: vi.fn(),
-      onCaptured: vi.fn(),
-      onError: vi.fn(),
+      onCaptured,
+      onError,
     });
     const enable = manager.setEnabled(true);
     await flushPromises();
@@ -1006,6 +1010,8 @@ describe("AppSnap window picker requests", () => {
       manager,
       watchChild,
       captureDirectory,
+      onCaptured,
+      onError,
       dispose: () => {
         manager.dispose();
         rmSync(captureDirectory, { recursive: true, force: true });
@@ -1097,6 +1103,55 @@ describe("AppSnap window picker requests", () => {
       expect(await manager.listPendingCaptures()).toHaveLength(0);
     } finally {
       dispose();
+    }
+  });
+
+  it("drops a late capture that arrives after the captureWindow timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { manager, watchChild, captureDirectory, onCaptured, onError, dispose } =
+        await createEnabledManager();
+      try {
+        const capturing = manager.captureWindow(77);
+        await flushPromises();
+        const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+        const assertion = expect(capturing).rejects.toThrow(
+          "Timed out while capturing the requested window.",
+        );
+        await vi.advanceTimersByTimeAsync(20_000);
+        await assertion;
+        const capturePath = join(captureDirectory, "late-capture.png");
+        writeFileSync(
+          capturePath,
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]),
+        );
+        watchChild.stdout.write(
+          `${JSON.stringify({
+            type: "captured",
+            id: requestId,
+            path: capturePath,
+            name: "late-capture.png",
+            sourceAppName: "Safari",
+          })}\n`,
+        );
+        watchChild.stdout.write(
+          `${JSON.stringify({
+            type: "error",
+            id: requestId,
+            code: "capture-failed",
+            message: "late helper error",
+          })}\n`,
+        );
+        await vi.waitFor(() => expect(FS.existsSync(capturePath)).toBe(false));
+        await flushPromises();
+        expect(onCaptured).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+        expect(await manager.listPendingCaptures()).toHaveLength(0);
+      } finally {
+        dispose();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 

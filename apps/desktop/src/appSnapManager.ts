@@ -43,6 +43,10 @@ const HELPER_CAPTURE_IMAGE_PATTERN =
   /^appsnap-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.png$/;
 const LIST_WINDOWS_TIMEOUT_MS = 5_000;
 const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
+// Late helper answers to a timed-out capture request are dropped instead of
+// being consumed as unsolicited hotkey captures. Entries are unique UUIDs and
+// self-expire so the map stays bounded.
+const CAPTURE_REQUEST_TOMBSTONE_TTL_MS = 60_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
@@ -420,6 +424,7 @@ export class DesktopAppSnapManager {
   #registeredAccelerator: string | null = null;
   #pendingWindowRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapWindowEntry[]>>();
   #pendingCaptureRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapCapture>>();
+  #timedOutCaptureRequestIds = new Map<string, NodeJS.Timeout>();
   #guideProcess: AppSnapHelperProcess | null = null;
   #guideOutputLines: Readline.Interface | null = null;
   #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
@@ -585,6 +590,7 @@ export class DesktopAppSnapManager {
     return await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pendingCaptureRequests.delete(requestId);
+        this.#tombstoneCaptureRequest(requestId);
         reject(new Error("Timed out while capturing the requested window."));
       }, CAPTURE_WINDOW_TIMEOUT_MS);
       this.#pendingCaptureRequests.set(requestId, { resolve, reject, timer });
@@ -705,6 +711,23 @@ export class DesktopAppSnapManager {
       request.reject(new Error("The AppSnap helper returned no capture."));
     }
   }
+  #tombstoneCaptureRequest(requestId: string): void {
+    clearTimeout(this.#timedOutCaptureRequestIds.get(requestId));
+    const timer = setTimeout(() => {
+      this.#timedOutCaptureRequestIds.delete(requestId);
+    }, CAPTURE_REQUEST_TOMBSTONE_TTL_MS);
+    this.#timedOutCaptureRequestIds.set(requestId, timer);
+  }
+
+  async #dropLateRequestCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
+    const capturePath = Path.resolve(message.path);
+    if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
+      return;
+    }
+    await FS.promises.unlink(capturePath).catch(() => undefined);
+  }
 
   #rejectPendingRequests(message: string): void {
     const windowRequests = [...this.#pendingWindowRequests.values()];
@@ -729,6 +752,10 @@ export class DesktopAppSnapManager {
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
     this.#pendingCaptures = [];
+    for (const timer of this.#timedOutCaptureRequestIds.values()) {
+      clearTimeout(timer);
+    }
+    this.#timedOutCaptureRequestIds.clear();
   }
 
   async #ensurePendingCapturesLoaded(): Promise<void> {
@@ -1234,6 +1261,14 @@ export class DesktopAppSnapManager {
           });
         return;
       }
+      if (this.#timedOutCaptureRequestIds.has(message.id)) {
+        // The request already failed with a timeout, so the caller was told.
+        // Drop the late file instead of consuming it as a hotkey capture.
+        this.#captureReadQueue = this.#captureReadQueue
+          .then(() => this.#dropLateRequestCapture(message))
+          .catch(() => undefined);
+        return;
+      }
       this.#captureReadQueue = this.#captureReadQueue
         .then(() => this.#consumeCapture(message))
         .catch((error) => {
@@ -1255,6 +1290,16 @@ export class DesktopAppSnapManager {
       );
       return;
     }
+    if (
+      message.type === "error" &&
+      message.id !== undefined &&
+      this.#timedOutCaptureRequestIds.has(message.id)
+    ) {
+      // The request already failed with a timeout; a late error must not
+      // surface a second, spurious failure toast.
+      return;
+    }
+
     if (
       message.type === "error" &&
       message.id !== undefined &&
