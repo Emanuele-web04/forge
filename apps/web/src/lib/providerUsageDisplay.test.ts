@@ -87,4 +87,49 @@ describe("providerUsageDisplay", () => {
       etaText: "Lasts until reset",
     });
   });
+
+  it("keeps standard and Core windows as separate usage rows", () => {
+    vi.setSystemTime("2026-09-03T20:00:00.000Z");
+
+    const rows = deriveProviderUsageDisplayRows([
+      {
+        provider: "droid",
+        updatedAt: "2026-09-03T20:00:00.000Z",
+        limits: [
+          {
+            window: "5h",
+            usedPercent: 24,
+            resetsAt: "2026-09-04T02:36:34.535Z",
+            windowDurationMins: 300,
+          },
+          {
+            window: "Core 5h",
+            usedPercent: 5,
+            resetsAt: "2026-09-04T03:00:00.000Z",
+            windowDurationMins: 300,
+          },
+          {
+            window: "Weekly",
+            usedPercent: 11,
+            resetsAt: "2026-09-06T19:23:10.458Z",
+            windowDurationMins: 10_080,
+          },
+          {
+            window: "Core Weekly",
+            usedPercent: 2,
+            resetsAt: "2026-09-07T00:00:00.000Z",
+            windowDurationMins: 10_080,
+          },
+        ],
+      },
+    ]);
+
+    expect(rows.map((row) => row.label)).toEqual([
+      "5h",
+      "Weekly",
+      "Core 5h",
+      "Core Weekly",
+    ]);
+    expect(rows.find((row) => row.label === "Core 5h")?.resetText).toContain("Resets in");
+  });
 });

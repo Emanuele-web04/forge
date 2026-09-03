@@ -99,14 +99,19 @@ export function normalizeRateLimitLabel(
   label: string | undefined,
   windowDurationMins?: number,
 ): string {
-  const durationLabel = windowLabelFromDuration(windowDurationMins);
-  if (durationLabel) return durationLabel;
   if (!label) return "Current";
 
   const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[_\s-]+/g, "_");
+  // Named pools can share the same duration as standard limits. Keep the pool prefix so
+  // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
+  if (normalized.startsWith("core_")) {
+    return humanizeLabel(label);
+  }
+  const durationLabel = windowLabelFromDuration(windowDurationMins);
+  if (durationLabel) return durationLabel;
   if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
     return "5h";
   }
