@@ -116,7 +116,7 @@ export function providerModelsPrefetchQueryOptions(input: {
   provider: ProviderKind;
   settings: ProviderModelPrefetchSettings;
   cwd?: string | null;
-  priority?: "background" | "foreground" | undefined;
+  priority?: "background" | "prefetch" | undefined;
 }) {
   const { priority, provider, settings } = input;
   const cwd = input.cwd ?? null;
@@ -225,8 +225,7 @@ export function prefetchProviderModelsForNewThread(
       provider,
       settings: input.settings,
       cwd,
-      priority:
-        provider === (input.foregroundProvider ?? providers[0]) ? "foreground" : "background",
+      priority: provider === (input.foregroundProvider ?? providers[0]) ? "prefetch" : "background",
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
@@ -282,7 +281,7 @@ export function prefetchDroidModelsForNewThread(
       provider: "droid",
       settings: input.settings,
       cwd,
-      priority: "foreground",
+      priority: "prefetch",
     }),
     staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
@@ -413,7 +412,7 @@ export function prefetchModelsForNewThread(
     (queryKey) => queryKey[2] === selectedProvider,
   );
   if (selectedModelQueryKey) {
-    prioritizeProviderModelDiscovery(selectedModelQueryKey);
+    prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
   // Hovering another project supersedes only inactive model prefetches. Active

@@ -179,6 +179,44 @@ describe("providerModelsQueryOptions", () => {
     await Promise.all(requests);
   });
 
+  it("keeps an active picker selection ahead of newer hover prefetches", async () => {
+    let releaseCurrent: (() => void) | undefined;
+    const listModels = mockListModels(
+      vi.fn().mockImplementation(
+        ({ provider }: { provider: string }) =>
+          new Promise((resolve) => {
+            releaseCurrent = () =>
+              resolve({
+                models: [{ slug: `${provider}-dynamic`, name: `${provider} dynamic` }],
+                source: `${provider}.dynamic`,
+                cached: false,
+              });
+          }),
+      ),
+    );
+    const queryClient = new QueryClient();
+    const activeOptions = providerModelsQueryOptions({ provider: "opencode" });
+    const pickerOptions = providerModelsQueryOptions({ provider: "cursor" });
+    const hoverOptions = providerModelsQueryOptions({ provider: "pi" });
+    const requests = [
+      queryClient.fetchQuery(activeOptions),
+      queryClient.fetchQuery(pickerOptions),
+      queryClient.fetchQuery(hoverOptions),
+    ];
+
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    prioritizeProviderModelDiscovery(pickerOptions.queryKey);
+    prioritizeProviderModelDiscovery(hoverOptions.queryKey, "prefetch");
+    releaseCurrent?.();
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(2));
+    expect(listModels.mock.calls[1]?.[0]).toMatchObject({ provider: "cursor" });
+    releaseCurrent?.();
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(3));
+    expect(listModels.mock.calls[2]?.[0]).toMatchObject({ provider: "pi" });
+    releaseCurrent?.();
+    await Promise.all(requests);
+  });
+
   it("skips a queued catalog when its inactive prefetch is cancelled", async () => {
     let releaseFirst: (() => void) | undefined;
     const listModels = mockListModels(

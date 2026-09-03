@@ -49,7 +49,7 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
 // the provider picker cannot reject most catalogs before their CLIs even run.
 // Foreground requests may move ahead of queued warming, but never interrupt the
 // discovery that already owns the single model slot.
-type ProviderModelDiscoveryPriority = "background" | "foreground";
+type ProviderModelDiscoveryPriority = "background" | "prefetch" | "foreground";
 
 interface ProviderModelDiscoveryTask {
   readonly queryKey: readonly unknown[];
@@ -85,7 +85,10 @@ function drainProviderModelDiscoveryQueue(): void {
   const foregroundIndex = providerModelDiscoveryQueue.findIndex(
     (task) => task.priority === "foreground",
   );
-  const nextIndex = foregroundIndex >= 0 ? foregroundIndex : 0;
+  const prefetchIndex = providerModelDiscoveryQueue.findIndex(
+    (task) => task.priority === "prefetch",
+  );
+  const nextIndex = foregroundIndex >= 0 ? foregroundIndex : prefetchIndex >= 0 ? prefetchIndex : 0;
   const task = providerModelDiscoveryQueue.splice(nextIndex, 1)[0];
   if (!task) return;
 
@@ -106,11 +109,24 @@ function drainProviderModelDiscoveryQueue(): void {
     });
 }
 
-export function prioritizeProviderModelDiscovery(queryKey: readonly unknown[]): void {
+export function prioritizeProviderModelDiscovery(
+  queryKey: readonly unknown[],
+  priority: Exclude<ProviderModelDiscoveryPriority, "background"> = "foreground",
+): void {
   for (const task of providerModelDiscoveryQueue) {
-    // Selection is exclusive: switching providers must demote the previous
-    // foreground task, otherwise FIFO order can still favor the stale choice.
-    task.priority = queryKeysMatch(task.queryKey, queryKey) ? "foreground" : "background";
+    const matches = queryKeysMatch(task.queryKey, queryKey);
+    if (!matches && task.priority === priority) {
+      // Selection is exclusive within its priority class: switching providers
+      // demotes the stale choice without letting hover prefetches demote an
+      // actively observed foreground catalog.
+      task.priority = "background";
+    } else if (
+      matches &&
+      (task.priority === "background" ||
+        (task.priority === "prefetch" && priority === "foreground"))
+    ) {
+      task.priority = priority;
+    }
   }
 }
 
