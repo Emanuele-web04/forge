@@ -251,7 +251,11 @@ describe("prefetchModelsForNewThread", () => {
       fetchStatus: "fetching",
       predicate: expect.any(Function),
     });
-    const shouldCancel = cancelQueries.mock.calls[0]?.[0].predicate as (query: {
+    const cancelFilters = cancelQueries.mock.calls[0]?.[0];
+    if (!cancelFilters?.predicate) {
+      throw new Error("Expected stale model prefetch cancellation predicate.");
+    }
+    const shouldCancel = cancelFilters.predicate as (query: {
       queryKey: readonly unknown[];
     }) => boolean;
     expect(
