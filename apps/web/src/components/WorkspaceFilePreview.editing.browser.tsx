@@ -190,44 +190,38 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
   }
 });
 
-it("subscribes before a missing workspace file is created", async () => {
-  const readFile = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("File not found"))
-    .mockResolvedValueOnce(loadedFile());
-  const fileChangeSubscription: {
-    listener?: (event: ProjectFileChangeEvent) => void;
-  } = {};
-  const onFileChange = vi.fn(
-    (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
-      fileChangeSubscription.listener = callback;
-      return vi.fn();
-    },
-  );
+it("stops revalidation when a kept-mounted preview becomes hidden", async () => {
+  const unsubscribe = vi.fn();
+  const onFileChange = vi.fn(() => unsubscribe);
   const restoreNativeApi = installNativeApi({
-    projects: { readFile, onFileChange },
+    projects: { readFile: vi.fn().mockResolvedValue(loadedFile()), onFileChange },
   } as unknown as NativeApi);
+  const queryClient = makeQueryClient();
 
   try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
         <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
       </QueryClientProvider>,
     );
 
-    await expect.element(page.getByText("File not found")).toBeVisible();
-    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
-
-    fileChangeSubscription.listener?.({
-      type: "changed",
-      relativePath: FILE_PATH,
-      mtimeMs: Date.now(),
-    });
-
-    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
       .toHaveValue("export const value = 1;\n");
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+
+    await screen.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceFilePreview
+          workspaceRoot={WORKSPACE_ROOT}
+          filePath={FILE_PATH}
+          editable
+          liveRevalidationEnabled={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
   } finally {
     restoreNativeApi();
   }

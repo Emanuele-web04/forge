@@ -308,6 +308,8 @@ export interface WorkspaceFilePreviewProps {
   markdownPreviewDefault?: boolean;
   /** Enables guarded editing for complete, supported files inside the workspace. */
   editable?: boolean;
+  /** Keeps the file watcher bounded to a currently visible preview surface. */
+  liveRevalidationEnabled?: boolean;
   /** Shown when no file is selected yet. */
   emptyState?: ReactNode;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
@@ -361,6 +363,7 @@ function readFileSaveError(error: unknown): string {
 }
 
 export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
+  const liveRevalidationEnabled = props.liveRevalidationEnabled ?? true;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const contentsRef = useRef<HTMLDivElement>(null);
@@ -435,6 +438,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       // Images and PDFs are binary: they stream through the local-image HTTP
       // route instead of the text file-read RPC.
       enabled:
+        liveRevalidationEnabled &&
         filePath !== null &&
         !fileIsImage &&
         !fileIsPdf &&
@@ -447,7 +451,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       : null;
   const watchedWorkspaceRelativePath =
     resolvedWorkspaceRelativePath ??
-    (workspaceRoot && requestedFilePath && isWorkspaceRelativePathSafe(requestedFilePath)
+    ((fileIsImage || fileIsPdf) &&
+    workspaceRoot &&
+    requestedFilePath &&
+    isWorkspaceRelativePathSafe(requestedFilePath)
       ? requestedFilePath
       : null);
   const handleWatchedFileChange = useCallback(
@@ -459,6 +466,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       });
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
+        refetchType: "none",
       });
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
@@ -484,7 +492,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   useProjectFileChangeSubscription({
     cwd: workspaceRoot,
     relativePath: watchedWorkspaceRelativePath,
-    enabled: watchedWorkspaceRelativePath !== null,
+    enabled: liveRevalidationEnabled && watchedWorkspaceRelativePath !== null,
     onChange: handleWatchedFileChange,
   });
 

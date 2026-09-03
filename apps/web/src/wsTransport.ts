@@ -972,11 +972,7 @@ export class WsTransport {
     if (isNewSubscription) {
       void this.getClient()
         .then((client) => this.startProjectFileChangeStream(client, key, desiredSubscription))
-        .catch((error) => {
-          if (!this.disposed && this.projectFileSubscriptions.get(key) === desiredSubscription) {
-            console.warn("WebSocket RPC project file stream failed to start", error);
-          }
-        });
+        .catch(() => undefined);
     }
 
     return () => {
@@ -1741,9 +1737,7 @@ export class WsTransport {
       if (this.projectFileSubscriptions.get(key) !== subscription) return;
       void this.getClient()
         .then((nextClient) => this.startProjectFileChangeStream(nextClient, key, subscription))
-        .catch((error) =>
-          console.warn("WebSocket RPC project file stream failed to restart", error),
-        );
+        .catch(() => undefined);
     };
     this.startStream<ProjectFileChangeEvent>(
       client,
