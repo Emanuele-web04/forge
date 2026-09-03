@@ -5180,7 +5180,7 @@ describe("ProviderCommandReactor", () => {
       releaseStartSession = resolve;
     });
 
-    harness.startSession.mockImplementationOnce((threadId: unknown, input: unknown) =>
+    harness.startSession.mockImplementationOnce((threadId, input) =>
       Effect.promise(() => startSessionGate).pipe(
         Effect.flatMap(() => defaultStartSession(threadId, input)),
       ),
