@@ -20,7 +20,7 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChatBubbleIcon, GitBranchIcon, UsersIcon } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { ensureNativeApi } from "~/nativeApi";
-import { describePullRequestState } from "./pullRequestDetail.logic";
+import { describePullRequestState, buildPullRequestDetailModel } from "./pullRequestDetail.logic";
 import { PullRequestActorLabel } from "./PullRequestActorLabel";
 import { PullRequestCheckStatusIcon } from "./PullRequestCheckStatusIcon";
 import { PullRequestConflictIcon } from "./pullRequestStatePresentation";
@@ -93,7 +93,7 @@ function DisclosureSection({
   defaultOpen: defaultOpenProp,
 }: {
   label: string;
-  count?: number;
+  count?: number | undefined;
   children: ReactNode;
   defaultOpen?: boolean;
 }) {
@@ -127,6 +127,7 @@ function DisclosureSection({
 export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
   const checks = detail.checks ?? [];
   const commentsWarning = commentsAvailabilityWarning(detail);
+  const detailModel = buildPullRequestDetailModel(detail);
   return (
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
@@ -253,13 +254,13 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
                   comment={comment}
                   prUrl={detail.url}
                   workspaceRoot={detail.workspaceRoot}
-                  canReply={detail.capabilities.comment}
+                  canReply={detailModel.showCommentComposer}
                   defaultOpen={index >= detail.comments.length - 2}
                 />
               ))}
             </div>
           )}
-          {detail.capabilities.comment ? <PullRequestCommentComposer detail={detail} /> : null}
+          {detailModel.showCommentComposer ? <PullRequestCommentComposer detail={detail} /> : null}
         </div>
       </DisclosureSection>
     </div>

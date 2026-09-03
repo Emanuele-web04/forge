@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
+import { pullRequestDiffQueryOptions, pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 
 vi.mock("~/appSettings", async (importOriginal) => {
@@ -106,10 +106,13 @@ function detailFixture(overrides: Partial<PullRequestDetail> = {}): PullRequestD
     stack: null,
     stackMetadataIncomplete: false,
     ...overrides,
-  };
+  } as PullRequestDetail;
 }
 
-async function renderDetail(detail: PullRequestDetail) {
+async function renderDetail(
+  detail: PullRequestDetail,
+  options: { initialTab?: "summary" | "timeline" | "code"; patch?: string } = {},
+) {
   const input: PullRequestDetailInput = {
     projectId: detail.projectId,
     provider: detail.provider,
@@ -118,9 +121,19 @@ async function renderDetail(detail: PullRequestDetail) {
   };
   const queryClient = new QueryClient();
   queryClient.setQueryData(pullRequestQueryKeys.detail(input), detail);
+  if (options.patch !== undefined) {
+    queryClient.setQueryData(pullRequestDiffQueryOptions(input).queryKey, {
+      patch: options.patch,
+      truncated: false,
+    });
+  }
   return render(
     <QueryClientProvider client={queryClient}>
-      <PullRequestDetailPanel input={input} pollingEnabled={false} />
+      <PullRequestDetailPanel
+        input={input}
+        {...(options.initialTab ? { initialTab: options.initialTab } : {})}
+        pollingEnabled={false}
+      />
     </QueryClientProvider>,
   );
 }
@@ -221,5 +234,20 @@ describe("PullRequestDetailPanel capabilities", () => {
     expect(document.body.textContent).toContain("Close pull request");
     expect(document.body.textContent).toContain("Draft");
     expect(document.body.textContent).toContain("Ready for review");
+  });
+
+  it("renders the Bitbucket unified diff without mutation controls on the Code tab", async () => {
+    await renderDetail(detailFixture(), {
+      initialTab: "code",
+      patch:
+        "diff --git a/widget.ts b/widget.ts\n--- a/widget.ts\n+++ b/widget.ts\n@@ -1 +1 @@\n-const widget = 1;\n+const widget = 2;\n",
+    });
+
+    await vi.waitFor(() => {
+      expect(page.getByText("widget.ts").first()).toBeVisible();
+    });
+    expect(visibleButtonLabels()).not.toContain("Merge");
+    expect(visibleButtonLabels()).not.toContain("Reply");
+    expect(document.querySelector('textarea[aria-label="Leave a comment"]')).toBeNull();
   });
 });

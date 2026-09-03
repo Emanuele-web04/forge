@@ -80,6 +80,7 @@ import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 import { assessPullRequestStack, pullRequestMergeBlocker } from "./pullRequestStack.logic";
+import { buildPullRequestDetailModel } from "./pullRequestDetail.logic";
 
 type DetailTab = "summary" | "timeline" | "code";
 
@@ -185,9 +186,14 @@ export function PullRequestDetailPanel({
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
-  const canMutatePullRequestState = detail?.capabilities.stateMutation === true;
-  const canMergePullRequest = detail?.capabilities.merge === true;
-  const canResolvePullRequestComments = detail?.capabilities.resolveComment === true;
+  // Every mutation affordance in this panel derives from the capability-driven detail model,
+  // so a read-only provider hides Merge/Ready/Draft/Close/Reopen/Resolve everywhere at once
+  // instead of each call site re-checking capabilities.
+  const detailModel = detail ? buildPullRequestDetailModel(detail) : null;
+  const canMutatePullRequestState =
+    detailModel?.actions.some((action) => action !== "merge") ?? false;
+  const canMergePullRequest = detailModel?.actions.includes("merge") ?? false;
+  const canResolvePullRequestComments = detailModel?.showResolveControls ?? false;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
   // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
   // invalidate exactly like every other prepare-thread flow in the app.
