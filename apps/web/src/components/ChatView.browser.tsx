@@ -49,6 +49,7 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
+import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -113,6 +114,7 @@ interface WsRequestEnvelope {
 interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
+  providerStatusesSnapshot: ServerConfig["providers"] | null;
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
 }
@@ -495,6 +497,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    providerStatusesSnapshot: null,
     gitBranchByCwd: {},
     welcome: {
       cwd: "/repo/project",
@@ -1422,8 +1425,15 @@ const worker = setupWorker(
         });
         return;
       }
+      if (method === WS_METHODS.subscribeServerProviderStatuses) {
+        if (fixture.providerStatusesSnapshot) {
+          sendEffectRpcChunk(client, parsed.request.id, {
+            providers: fixture.providerStatusesSnapshot,
+          });
+        }
+        return;
+      }
       if (
-        method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
@@ -7342,23 +7352,30 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "sticky claude model test",
       }),
       configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
         nextFixture.serverConfig = {
           ...nextFixture.serverConfig,
-          providers: [
-            ...nextFixture.serverConfig.providers,
-            {
-              provider: "claudeAgent",
-              status: "ready",
-              available: true,
-              authStatus: "authenticated",
-              checkedAt: NOW_ISO,
-            },
-          ],
+          providers,
         };
+        nextFixture.providerStatusesSnapshot = providers;
       },
     });
 
     try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
       const newThreadButton = page.getByTestId("new-thread-button");
       await expect.element(newThreadButton).toBeInTheDocument();
 
@@ -7411,23 +7428,30 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "unavailable sticky claude test",
       }),
       configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unauthenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
         nextFixture.serverConfig = {
           ...nextFixture.serverConfig,
-          providers: [
-            ...nextFixture.serverConfig.providers,
-            {
-              provider: "claudeAgent",
-              status: "warning",
-              available: true,
-              authStatus: "unauthenticated",
-              checkedAt: NOW_ISO,
-            },
-          ],
+          providers,
         };
+        nextFixture.providerStatusesSnapshot = providers;
       },
     });
 
     try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
       const newThreadButton = page.getByTestId("new-thread-button");
       await expect.element(newThreadButton).toBeInTheDocument();
 

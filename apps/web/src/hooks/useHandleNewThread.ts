@@ -192,7 +192,7 @@ export function useHandleNewThread() {
         ?.defaultModelSelection ?? null;
     const applyUsableStickyState = (threadId: ThreadId) => {
       applyStickyState(threadId);
-      if (options?.provider || providerStatuses.length === 0) {
+      if (options?.provider || !hasReconciledServerProviderStatuses(queryClient)) {
         return;
       }
 
