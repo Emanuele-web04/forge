@@ -756,10 +756,7 @@ export class WsTransport {
   // is absorbed (bootstrap coalescing).
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
-  private readonly projectFileSubscriptions = new Map<
-    string,
-    ProjectFileChangeSubscription
-  >();
+  private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
   // Tracks the last server generation this transport observed so cross-restart

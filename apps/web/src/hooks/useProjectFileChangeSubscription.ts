@@ -2,10 +2,7 @@
 // Purpose: Keep one visible workspace-file watcher subscribed for a panel.
 // Layer: Web query invalidation hook
 
-import {
-  WS_PROJECT_FILE_WATCH_CAPABILITY,
-  type ProjectFileChangeEvent,
-} from "@synara/contracts";
+import { WS_PROJECT_FILE_WATCH_CAPABILITY, type ProjectFileChangeEvent } from "@synara/contracts";
 import { useEffect, useSyncExternalStore } from "react";
 
 import {
@@ -41,11 +38,5 @@ export function useProjectFileChangeSubscription(input: {
       { cwd: input.cwd, relativePath: input.relativePath },
       input.onChange,
     );
-  }, [
-    capabilityAvailable,
-    input.cwd,
-    input.enabled,
-    input.onChange,
-    input.relativePath,
-  ]);
+  }, [capabilityAvailable, input.cwd, input.enabled, input.onChange, input.relativePath]);
 }

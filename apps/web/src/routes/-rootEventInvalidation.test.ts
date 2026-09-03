@@ -110,13 +110,11 @@ describe("root event invalidation", () => {
     const threadId = ThreadId.makeUnsafe("thread-checkpoint");
 
     expect(
-      getProjectFileInvalidationThreadIdForEvent(
-        event("thread.turn-diff-completed", { threadId }),
-      ),
+      getProjectFileInvalidationThreadIdForEvent(event("thread.turn-diff-completed", { threadId })),
     ).toBe(threadId);
-    expect(
-      getProjectFileInvalidationThreadIdForEvent(event("thread.reverted", { threadId })),
-    ).toBe(threadId);
+    expect(getProjectFileInvalidationThreadIdForEvent(event("thread.reverted", { threadId }))).toBe(
+      threadId,
+    );
   });
 
   it("extracts affected thread ids for scoped git invalidation", () => {

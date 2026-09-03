@@ -722,9 +722,7 @@ export default function DiffPanel({
   const activeDiffIsFetching =
     diffViewKind === "repo" ? repoDiffQuery.isFetching : activeCheckpointDiffQuery.isFetching;
   const handleDiffReload = useCallback(() => {
-    void (diffViewKind === "repo"
-      ? repoDiffQuery.refetch()
-      : activeCheckpointDiffQuery.refetch());
+    void (diffViewKind === "repo" ? repoDiffQuery.refetch() : activeCheckpointDiffQuery.refetch());
   }, [activeCheckpointDiffQuery, diffViewKind, repoDiffQuery]);
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
@@ -742,8 +740,7 @@ export default function DiffPanel({
   }, [renderablePatch]);
   const watchedRepoFilePath =
     diffViewKind === "repo"
-      ? (selectedFilePath ??
-        (renderableFiles[0] ? resolveFileDiffPath(renderableFiles[0]) : null))
+      ? (selectedFilePath ?? (renderableFiles[0] ? resolveFileDiffPath(renderableFiles[0]) : null))
       : null;
   const handleWatchedRepoFileChange = useCallback(() => {
     if (!activeCwd) {

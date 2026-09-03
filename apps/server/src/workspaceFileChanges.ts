@@ -106,10 +106,7 @@ async function readFileChangeState(
 
 export function watchWorkspaceFile(
   input: ProjectWatchFileInput,
-): Stream.Stream<
-  ProjectFileChangeEvent,
-  WorkspaceFileWatchError | WorkspacePathOutsideRootError
-> {
+): Stream.Stream<ProjectFileChangeEvent, WorkspaceFileWatchError | WorkspacePathOutsideRootError> {
   return Stream.unwrap(
     Effect.tryPromise({
       try: () =>

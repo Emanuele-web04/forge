@@ -23,9 +23,9 @@ async function makeWorkspace(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(
-    temporaryRoots.splice(0).map((workspaceRoot) =>
-      NodeFileSystem.rm(workspaceRoot, { recursive: true, force: true }),
-    ),
+    temporaryRoots
+      .splice(0)
+      .map((workspaceRoot) => NodeFileSystem.rm(workspaceRoot, { recursive: true, force: true })),
   );
 });
 

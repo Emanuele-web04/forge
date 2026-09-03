@@ -212,9 +212,7 @@ export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
 export const ProjectWatchFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH),
-  ),
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });
 export type ProjectWatchFileInput = typeof ProjectWatchFileInput.Type;
 

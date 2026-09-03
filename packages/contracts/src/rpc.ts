@@ -438,15 +438,12 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   error: WsRpcError,
 });
 
-export const WsProjectsSubscribeFileChangeRpc = Rpc.make(
-  WS_METHODS.projectsSubscribeFileChange,
-  {
-    payload: ProjectWatchFileInput,
-    success: ProjectFileChangeEvent,
-    error: WsRpcError,
-    stream: true,
-  },
-);
+export const WsProjectsSubscribeFileChangeRpc = Rpc.make(WS_METHODS.projectsSubscribeFileChange, {
+  payload: ProjectWatchFileInput,
+  success: ProjectFileChangeEvent,
+  error: WsRpcError,
+  stream: true,
+});
 
 export const WsProjectsResolveWorkspaceFileReferencesRpc = Rpc.make(
   WS_METHODS.projectsResolveWorkspaceFileReferences,
