@@ -254,14 +254,15 @@ export function providerModelsQueryOptions(input: {
   cwd?: string | null;
   enabled?: boolean;
 }) {
-  return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.models(
-      input.provider,
-      input.binaryPath ?? null,
-      input.apiEndpoint ?? null,
-      input.agentDir ?? null,
-      input.cwd ?? null,
-    ),
+  const queryKey = providerDiscoveryQueryKeys.models(
+    input.provider,
+    input.binaryPath ?? null,
+    input.apiEndpoint ?? null,
+    input.agentDir ?? null,
+    input.cwd ?? null,
+  );
+  return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
+    queryKey,
     queryFn: ({ client, signal }): Promise<ProviderListModelsResult> =>
       serializeProviderModelDiscovery(signal, async () => {
         const api = ensureNativeApi();
@@ -272,15 +273,7 @@ export function providerModelsQueryOptions(input: {
           ...(input.agentDir ? { agentDir: input.agentDir } : {}),
           ...(input.cwd ? { cwd: input.cwd } : {}),
         });
-        const previous = client.getQueryData<ProviderListModelsResult>(
-          providerDiscoveryQueryKeys.models(
-            input.provider,
-            input.binaryPath ?? null,
-            input.apiEndpoint ?? null,
-            input.agentDir ?? null,
-            input.cwd ?? null,
-          ),
-        );
+        const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
         return requireDiscoveredModels(input.provider, result, previous);
       }),
     enabled: input.enabled ?? true,
