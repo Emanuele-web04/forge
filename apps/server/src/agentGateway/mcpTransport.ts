@@ -17,6 +17,7 @@ import {
   type JsonRpcId,
   type JsonRpcRequest,
 } from "./protocol.ts";
+import { sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
 import {
   GatewayToolError,
   gatewayToolErrorResult,
@@ -84,7 +85,13 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {});
         case "tools/list":
           return jsonRpcResult(request.id, {
-            tools: input.tools.map((tool) => tool.definition),
+            tools: input.tools.map((tool) => ({
+              ...tool.definition,
+              inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                string,
+                unknown
+              >,
+            })),
           });
         case "tools/call": {
           const toolName = request.params.name;

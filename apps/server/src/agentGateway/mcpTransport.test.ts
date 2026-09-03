@@ -56,6 +56,7 @@ function makeThread(threadId: string): OrchestrationThreadShell {
 
 function makeTransport(input: {
   readonly tool: ToolEntry;
+  readonly extraTools?: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
@@ -132,7 +133,7 @@ function makeTransport(input: {
   const transport = makeAgentGatewayMcpTransport({
     credentials,
     snapshotQuery,
-    tools: [input.tool],
+    tools: [input.tool, ...(input.extraTools ?? [])],
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -454,5 +455,96 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         assert.equal(response.status, 200);
         assert.deepEqual(response.body, [{ jsonrpc: "2.0", id: "fast-batch", result: {} }]);
       }).pipe(Effect.timeout("2 seconds")),
+  );
+});
+
+const isJsonRecord = (node: unknown): node is Record<string, unknown> =>
+  node !== null && typeof node === "object" && !Array.isArray(node);
+
+const countSchemaKeyOccurrences = (node: unknown, key: string): number => {
+  if (Array.isArray(node)) {
+    return node.reduce<number>(
+      (total, child) => total + countSchemaKeyOccurrences(child, key),
+      0,
+    );
+  }
+  if (isJsonRecord(node)) {
+    return Object.entries(node).reduce<number>(
+      (total, [entryKey, child]) =>
+        total + (entryKey === key ? 1 : 0) + countSchemaKeyOccurrences(child, key),
+      0,
+    );
+  }
+  return 0;
+};
+
+describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
+  it.effect("serves browser_webmcp_call without $ref/$defs and passes other tools through", () =>
+    Effect.gen(function* () {
+      const browserTools = makeAgentGatewayBrowserTools({
+        available: true,
+        execute: () =>
+          Effect.fail(new BrowserHostRpcError("transport", "tools/list never executes")),
+      });
+      const webmcpCall = browserTools.find(
+        (candidate) => candidate.definition.name === "browser_webmcp_call",
+      );
+      if (webmcpCall === undefined) {
+        throw new Error("Expected the real browser_webmcp_call tool entry.");
+      }
+      assert.isAbove(countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"), 0);
+      const probeTool: ToolEntry = {
+        definition: {
+          name: "synara_probe",
+          description: "probe tool with a plain schema",
+          inputSchema: {
+            type: "object",
+            properties: { limit: { type: "integer", minimum: 1, maximum: 32 } },
+            required: [],
+            additionalProperties: false,
+          },
+        },
+        requiredCapability: "thread:read",
+        handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] }),
+      };
+      const transport = makeTransport({
+        threads: [makeThread("thread-schema")],
+        tool: webmcpCall,
+        extraTools: [probeTool],
+      });
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-schemas",
+        method: "tools/list",
+      });
+      assert.equal(response.status, 200);
+      if (!isJsonRecord(response.body) || !isJsonRecord(response.body.result)) {
+        throw new Error("Expected tools/list to answer with a result object.");
+      }
+      if (!Array.isArray(response.body.result.tools)) {
+        throw new Error("Expected tools/list to answer with a tools array.");
+      }
+      const resultTools: ReadonlyArray<unknown> = response.body.result.tools;
+      assert.equal(resultTools.length, 2);
+      const findListedToolOrThrow = (toolName: string): Record<string, unknown> => {
+        const listed = resultTools.find(
+          (candidate: unknown) => isJsonRecord(candidate) && candidate.name === toolName,
+        );
+        if (!isJsonRecord(listed)) {
+          throw new Error(`Expected tools/list to serve ${toolName}.`);
+        }
+        return listed;
+      };
+      const servedWebmcpCall = findListedToolOrThrow("browser_webmcp_call");
+      const servedProbe = findListedToolOrThrow("synara_probe");
+      assert.equal(servedWebmcpCall.description, webmcpCall.definition.description);
+      assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$ref"), 0);
+      assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$defs"), 0);
+      assert.deepEqual(servedProbe.inputSchema, probeTool.definition.inputSchema);
+      assert.isAbove(
+        countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"),
+        0,
+      );
+    }),
   );
 });
