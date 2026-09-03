@@ -3,31 +3,15 @@ import { assert, describe, it } from "@effect/vitest";
 import { BROWSER_TOOL_CATALOGUE } from "@synara/shared/browserAutomationCatalogue";
 
 import { sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
+import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 
 const FALLBACK_OBJECT_DESCRIPTION = "Free-form JSON object (depth 20, 256 KiB max).";
 
 const cloneJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
-const isJsonRecord = (node: unknown): node is Record<string, unknown> =>
-  node !== null && typeof node === "object" && !Array.isArray(node);
-
 const asJsonRecord = (node: unknown, label: string): Record<string, unknown> => {
   if (isJsonRecord(node)) return node;
   throw new Error(`Expected ${label} to be an object schema.`);
-};
-
-const countSchemaKeyOccurrences = (node: unknown, key: string): number => {
-  if (Array.isArray(node)) {
-    return node.reduce<number>((total, child) => total + countSchemaKeyOccurrences(child, key), 0);
-  }
-  if (isJsonRecord(node)) {
-    return Object.entries(node).reduce<number>(
-      (total, [entryKey, child]) =>
-        total + (entryKey === key ? 1 : 0) + countSchemaKeyOccurrences(child, key),
-      0,
-    );
-  }
-  return 0;
 };
 
 const findCatalogueEntryOrThrow = (name: string) => {
@@ -154,5 +138,106 @@ describe("sanitizeToolInputSchema", () => {
       { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
       { type: "string" },
     ]);
+  });
+
+  it("inlines acyclic string, array, and enum references with their true schema", () => {
+    const input = {
+      type: "object",
+      properties: {
+        nickname: { $ref: "#/$defs/Nickname" },
+        tags: { $ref: "#/$defs/TagList" },
+        mode: { $ref: "#/$defs/Mode", description: "Call-site description wins." },
+      },
+      $defs: {
+        Nickname: { type: "string", minLength: 1 },
+        TagList: { type: "array", items: { type: "string" } },
+        Mode: {
+          type: "string",
+          enum: ["fast", "careful"],
+          description: "Catalogue description.",
+        },
+      },
+    };
+
+    const output = sanitizeToolInputSchema(cloneJson(input));
+
+    assert.deepEqual(output, {
+      type: "object",
+      properties: {
+        nickname: { type: "string", minLength: 1 },
+        tags: { type: "array", items: { type: "string" } },
+        mode: {
+          type: "string",
+          enum: ["fast", "careful"],
+          description: "Call-site description wins.",
+        },
+      },
+    });
+  });
+
+  it("breaks only the cyclic definitions in a mixed recursive and acyclic schema", () => {
+    const input = {
+      type: "object",
+      properties: {
+        payload: { $ref: "#/$defs/JsonValue" },
+        label: { $ref: "#/$defs/Label" },
+        wrapped: { $ref: "#/$defs/Wrapper" },
+      },
+      $defs: {
+        JsonValue: {
+          anyOf: [
+            { type: "object", additionalProperties: { $ref: "#/$defs/JsonValue" } },
+            { type: "string" },
+          ],
+        },
+        Label: { type: "string" },
+        Wrapper: {
+          type: "object",
+          properties: { value: { $ref: "#/$defs/JsonValue" } },
+        },
+      },
+    };
+
+    const output = sanitizeToolInputSchema(cloneJson(input));
+
+    assert.deepEqual(output, {
+      type: "object",
+      properties: {
+        payload: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+        label: { type: "string" },
+        wrapped: {
+          type: "object",
+          properties: {
+            value: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+          },
+        },
+      },
+    });
+  });
+
+  it("breaks mutual definition cycles and unresolvable references", () => {
+    const input = {
+      type: "object",
+      properties: {
+        left: { $ref: "#/$defs/Left" },
+        missing: { $ref: "#/$defs/Gone" },
+        external: { $ref: "https://example.com/schema.json#/$defs/Thing" },
+      },
+      $defs: {
+        Left: { type: "object", properties: { right: { $ref: "#/$defs/Right" } } },
+        Right: { type: "object", properties: { left: { $ref: "#/$defs/Left" } } },
+      },
+    };
+
+    const output = sanitizeToolInputSchema(cloneJson(input));
+
+    assert.deepEqual(output, {
+      type: "object",
+      properties: {
+        left: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+        missing: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+        external: { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+      },
+    });
   });
 });

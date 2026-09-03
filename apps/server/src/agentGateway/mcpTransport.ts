@@ -87,6 +87,8 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {
             tools: input.tools.map((tool) => ({
               ...tool.definition,
+              // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
+              // returns a fresh object for object input, so this restores the static type.
               inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
                 string,
                 unknown

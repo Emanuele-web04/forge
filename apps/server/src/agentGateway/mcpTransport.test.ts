@@ -9,6 +9,7 @@ import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionReg
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
+import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
 
@@ -457,23 +458,6 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
       }).pipe(Effect.timeout("2 seconds")),
   );
 });
-
-const isJsonRecord = (node: unknown): node is Record<string, unknown> =>
-  node !== null && typeof node === "object" && !Array.isArray(node);
-
-const countSchemaKeyOccurrences = (node: unknown, key: string): number => {
-  if (Array.isArray(node)) {
-    return node.reduce<number>((total, child) => total + countSchemaKeyOccurrences(child, key), 0);
-  }
-  if (isJsonRecord(node)) {
-    return Object.entries(node).reduce<number>(
-      (total, [entryKey, child]) =>
-        total + (entryKey === key ? 1 : 0) + countSchemaKeyOccurrences(child, key),
-      0,
-    );
-  }
-  return 0;
-};
 
 describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
   it.effect("serves browser_webmcp_call without $ref/$defs and passes other tools through", () =>
