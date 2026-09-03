@@ -35,6 +35,10 @@ import {
 } from "~/components/pullRequest/pullRequestFocus";
 import { PullRequestList } from "~/components/pullRequest/PullRequestList";
 import {
+  needsBitbucketConnection,
+  PullRequestBitbucketConnectPrompt,
+} from "~/components/pullRequest/PullRequestBitbucketConnectPrompt";
+import {
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
   matchesPullRequestSearchQuery,
@@ -401,13 +405,10 @@ function PullRequestsRouteView() {
     activeListData?.repositoryBatches.filter((batch) => batch.truncated).length ?? 0;
   // One restrained prompt when Bitbucket remotes are eligible but Paraty is not connected:
   // the GitHub results stay visible below it, and there is never one card per repository.
-  const bitbucketConnectRequired = (activeListData?.providerRequirements ?? []).some(
-    (requirement) =>
-      requirement.provider === "bitbucket" &&
-      (requirement.status === "not-connected" || requirement.status === "reconnect-required"),
-  );
   const showBitbucketConnectPrompt =
-    bitbucketConnectRequired && !initialListError && !initialExactInvolvementError;
+    needsBitbucketConnection(activeListData?.providerRequirements) &&
+    !initialListError &&
+    !initialExactInvolvementError;
   const openIntegrations = useCallback(() => {
     void navigateToSettings({ to: "/settings", search: { section: "integrations" } });
   }, [navigateToSettings]);
@@ -542,12 +543,7 @@ function PullRequestsRouteView() {
                 />
               )}
               {showBitbucketConnectPrompt ? (
-                <PullRequestWarningNote shape="callout" role="status">
-                  Connect Paraty MCP to include Bitbucket pull requests.{" "}
-                  <Button variant="outline" size="sm" className="ml-2" onClick={openIntegrations}>
-                    Open integrations
-                  </Button>
-                </PullRequestWarningNote>
+                <PullRequestBitbucketConnectPrompt onOpenIntegrations={openIntegrations} />
               ) : null}
               {!exactInvolvementPending &&
               !initialExactInvolvementError &&
