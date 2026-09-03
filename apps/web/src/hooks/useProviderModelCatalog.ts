@@ -51,17 +51,17 @@ export interface ProviderModelCatalog {
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
-function modelDiscoveryError(query: {
-  readonly data?: { readonly error?: string };
-  readonly error?: unknown;
-}): string | undefined {
-  if (query.data?.error) {
-    return query.data.error;
+function modelDiscoveryError(
+  resultError: string | undefined,
+  queryError: unknown,
+): string | undefined {
+  if (resultError) {
+    return resultError;
   }
-  if (query.error instanceof Error) {
-    return query.error.message;
+  if (queryError instanceof Error) {
+    return queryError.message;
   }
-  return typeof query.error === "string" ? query.error : undefined;
+  return typeof queryError === "string" ? queryError : undefined;
 }
 
 export function useProviderModelCatalog(input: {
@@ -438,15 +438,39 @@ export function useProviderModelCatalog(input: {
   // model pickers.
   const discoveryErrorsByProvider = useMemo(
     () => ({
-      claudeAgent: modelDiscoveryError(claudeDynamicModelsQuery),
-      codex: modelDiscoveryError(codexDynamicModelsQuery),
-      cursor: modelDiscoveryError(cursorDynamicModelsQuery),
-      devin: modelDiscoveryError(devinDynamicModelsQuery),
-      antigravity: modelDiscoveryError(antigravityModelsQuery),
-      grok: modelDiscoveryError(grokDynamicModelsQuery),
-      droid: modelDiscoveryError(droidDynamicModelsQuery),
-      opencode: modelDiscoveryError(openCodeDynamicModelsQuery),
-      pi: modelDiscoveryError(piDynamicModelsQuery),
+      claudeAgent: modelDiscoveryError(
+        claudeDynamicModelsQuery.data?.error,
+        claudeDynamicModelsQuery.error,
+      ),
+      codex: modelDiscoveryError(
+        codexDynamicModelsQuery.data?.error,
+        codexDynamicModelsQuery.error,
+      ),
+      cursor: modelDiscoveryError(
+        cursorDynamicModelsQuery.data?.error,
+        cursorDynamicModelsQuery.error,
+      ),
+      devin: modelDiscoveryError(
+        devinDynamicModelsQuery.data?.error,
+        devinDynamicModelsQuery.error,
+      ),
+      antigravity: modelDiscoveryError(
+        antigravityModelsQuery.data?.error,
+        antigravityModelsQuery.error,
+      ),
+      grok: modelDiscoveryError(
+        grokDynamicModelsQuery.data?.error,
+        grokDynamicModelsQuery.error,
+      ),
+      droid: modelDiscoveryError(
+        droidDynamicModelsQuery.data?.error,
+        droidDynamicModelsQuery.error,
+      ),
+      opencode: modelDiscoveryError(
+        openCodeDynamicModelsQuery.data?.error,
+        openCodeDynamicModelsQuery.error,
+      ),
+      pi: modelDiscoveryError(piDynamicModelsQuery.data?.error, piDynamicModelsQuery.error),
     }),
     [
       antigravityModelsQuery.data?.error,
