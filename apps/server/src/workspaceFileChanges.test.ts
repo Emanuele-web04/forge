@@ -253,6 +253,60 @@ describe("watchWorkspaceFile", () => {
     }
   });
 
+  it("keeps watching an absolute target spelled through an aliased workspace root", async () => {
+    const containerPath = await makeWorkspace();
+    const realWorkspaceRoot = NodePath.join(containerPath, "real");
+    const aliasedWorkspaceRoot = NodePath.join(containerPath, "workspace");
+    await NodeFileSystem.mkdir(realWorkspaceRoot);
+    await NodeFileSystem.symlink("real", aliasedWorkspaceRoot);
+    const targetPath = NodePath.join(aliasedWorkspaceRoot, "targets/live.ts");
+    const aliasPath = NodePath.join(aliasedWorkspaceRoot, "alias.ts");
+    await NodeFileSystem.mkdir(NodePath.dirname(targetPath), { recursive: true });
+    await NodeFileSystem.writeFile(targetPath, "first\n");
+    await NodeFileSystem.symlink(targetPath, aliasPath);
+
+    let resolveInitialEvent!: () => void;
+    const initialEvent = new Promise<void>((resolve) => {
+      resolveInitialEvent = resolve;
+    });
+    let previousEventType: "changed" | "deleted" | null = null;
+    const abortController = new AbortController();
+    const collectedEvents = Effect.runPromise(
+      watchWorkspaceFile({ cwd: aliasedWorkspaceRoot, relativePath: "alias.ts" }).pipe(
+        Stream.tap(() => Effect.sync(resolveInitialEvent)),
+        Stream.filter((event) => {
+          if (event.type === previousEventType) return false;
+          previousEventType = event.type;
+          return true;
+        }),
+        Stream.take(3),
+        Stream.runCollect,
+      ),
+      { signal: abortController.signal },
+    );
+
+    try {
+      await initialEvent;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await NodeFileSystem.unlink(targetPath);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await NodeFileSystem.writeFile(targetPath, "restored\n");
+
+      const events = Array.from(
+        await Promise.race([
+          collectedEvents,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("aliased-root watch timed out")), 5_000),
+          ),
+        ]),
+      );
+
+      expect(events.map((event) => event.type)).toEqual(["changed", "deleted", "changed"]);
+    } finally {
+      abortController.abort();
+    }
+  });
+
   it("follows a symlink retargeted to a file that does not exist yet", async () => {
     const workspaceRoot = await makeWorkspace();
     const initialTargetPath = NodePath.join(workspaceRoot, "targets/initial.ts");

@@ -65,6 +65,21 @@ async function resolveNearestWatchableTargetPath(targetPath: string): Promise<st
   }
 }
 
+async function resolveCreateTargetWithinWorkspace(
+  input: ProjectWatchFileInput,
+  targetPath: string,
+): Promise<string | null> {
+  const lexicalRootResult = await resolveRealPathForCreateWithinRoot(input.cwd, targetPath);
+  if (lexicalRootResult !== null) {
+    return lexicalRootResult;
+  }
+  // Absolute symlink targets may spell the same workspace through an alias
+  // (for example /tmp versus /private/tmp). Accept the canonical spelling too,
+  // while both containment checks still reject genuinely external targets.
+  const realWorkspaceRoot = await NodeFileSystem.realpath(input.cwd);
+  return resolveRealPathForCreateWithinRoot(realWorkspaceRoot, targetPath);
+}
+
 async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string[] | null> {
   const lexicalTargetPath = NodePath.resolve(input.cwd, input.relativePath);
   const lexicalParentPath = NodePath.dirname(lexicalTargetPath);
@@ -92,11 +107,7 @@ async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string
     const intendedTargetPath = NodePath.isAbsolute(linkTarget)
       ? linkTarget
       : NodePath.resolve(entryParentPath, linkTarget);
-    const realWorkspaceRoot = await NodeFileSystem.realpath(input.cwd);
-    resolvedTargetPath = await resolveRealPathForCreateWithinRoot(
-      realWorkspaceRoot,
-      intendedTargetPath,
-    );
+    resolvedTargetPath = await resolveCreateTargetWithinWorkspace(input, intendedTargetPath);
   }
   if (resolvedTargetPath === null) {
     return null;
