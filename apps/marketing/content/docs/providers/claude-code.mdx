@@ -1,0 +1,150 @@
+---
+title: Claude Code
+description: Install, authenticate, verify, and run Claude Code through Synara.
+---
+
+Synara connects to the Claude Code runtime installed on your machine. Claude owns the account, model access, tools, and authentication; Synara owns the task, working environment, transcript, approvals, review surfaces, and Git lifecycle around the session.
+
+## Install
+
+Use Anthropic’s current setup instructions. A common package-manager installation is:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Synara looks for the `claude` executable. It can also use a native or Homebrew installation when that executable is available to the desktop process.
+
+Verify the installation:
+
+```bash
+claude --version
+```
+
+Do not use `sudo npm install -g`. Fix the package-manager permissions or use an official alternative instead.
+
+## Authenticate
+
+Start Claude Code in a terminal:
+
+```bash
+claude
+```
+
+Complete the authentication path appropriate to your setup. Claude Code supports Claude account subscriptions, Anthropic Console access, and supported enterprise backends such as Amazon Bedrock or Google Vertex AI.
+
+Where supported by your installed version, inspect authentication directly:
+
+```bash
+claude auth status
+```
+
+Synara does not copy or replace Claude credentials.
+
+## Verify
+
+Before opening Synara, verify Claude Code from a fresh terminal in a test repository:
+
+```bash
+cd /path/to/test-repository
+claude --version
+claude
+```
+
+Ask a harmless read-only question, then exit. This checks the binary, authentication, repository access, and provider service independently of Synara.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Open provider settings
+
+Enable Claude Code and confirm that Synara detects the runtime.
+
+</Step>
+<Step>
+
+### Check the executable
+
+Automatic discovery should resolve `claude`. Configure a custom binary path only when you intentionally use another installation.
+
+</Step>
+<Step>
+
+### Refresh models
+
+Confirm that the model picker shows the models and effort options exposed by your account and installed runtime.
+
+In Synara 0.8.1 and later, Claude Fable 5.1 appears as `Claude Fable 5.1` when your account can use it. The plain `fable` selection resolves to Fable 5.1; an explicit Fable 5 selection remains available for backward compatibility.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a small objective in a clean repository before enabling broader permissions or parallel work.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Claude Code sessions can expose provider-specific behavior through Synara, including:
+
+- Model and effort selection
+- Plan and execution modes
+- Tool calls, file changes, and command output
+- Approval requests and user questions
+- Resumable sessions
+- Claude subagents and tracked tasks where supported
+- Context-usage information where available
+- Native steering of a running turn
+
+Native steering means a follow-up can be delivered to supported live Claude sessions without first cancelling the active turn. The provider still decides when and how to act on it.
+
+Claude capabilities change with the installed CLI and account. Treat the controls shown in your current Synara session as authoritative for that runtime.
+
+### Fable 5.1 controls and usage
+
+Synara models Fable 5.1 with always-on thinking and Low through Max effort. It does not expose a separate thinking toggle, a fast-mode lane, or the legacy ultrathink prompt option. These controls describe Synara's current integration; model access still depends on the Claude account and runtime.
+
+When Anthropic returns a model-scoped weekly allowance, Synara shows a separate **Fable** window in Claude usage directly after the general weekly window. A missing Fable row means the authenticated account response did not provide that limit; it does not by itself mean the model is unavailable.
+
+## Updating
+
+Synara can recognize common npm, Homebrew, and native Claude installations. Depending on the installation source, update Claude Code through its package manager or:
+
+```bash
+claude update
+```
+
+Restart Synara after replacing the executable.
+
+## Troubleshooting
+
+### Claude is not detected
+
+1. Run `claude --version` from a fresh terminal.
+2. Compare the resolved executable with the custom binary path in Synara.
+3. Restart Synara after changing `PATH` or installing Claude.
+4. Remove an obsolete custom path rather than pointing Synara at a wrapper that no longer exists.
+
+### Claude is detected but not authenticated
+
+Run `claude` directly and complete the provider’s own login flow. For enterprise backends, verify the required cloud credentials and environment variables in the same shell environment.
+
+### Models or effort options are missing
+
+Update Claude Code, confirm the account exposes the expected model, and refresh provider status. For Fable 5.1, start a new task after refreshing so the current model catalog and capability ladder are applied. Model availability is account- and runtime-dependent.
+
+### A session behaves differently from the Claude terminal
+
+Compare the selected model, permission mode, project settings, local instructions, and executable path. A different Claude installation or configuration source can produce different behavior.
+
+## Official documentation
+
+- [Set up Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)
+- [Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

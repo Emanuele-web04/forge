@@ -500,6 +500,7 @@ describe("EventRouter scoped orchestration sync", () => {
       projectDraftThreadIdByProjectId: {},
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
       projects: [],
       threadIds: [],
       threadShellById: {},

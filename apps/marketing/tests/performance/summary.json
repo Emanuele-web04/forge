@@ -1,0 +1,78 @@
+{
+  "head": "c7f51cf15118311415102caed93693a27cd8878f",
+  "capturedAt": "2026-08-04",
+  "environment": {
+    "runtime": "Node v24.14.1",
+    "next": "16.2.3",
+    "lighthouse": "13.4.1",
+    "playwright": "1.62.1",
+    "browser": "Playwright Chromium 1234",
+    "server": "next start --webpack",
+    "fixtureMode": "VISUAL_TEST=1",
+    "url": "http://127.0.0.1:3212/"
+  },
+  "command": "PERFORMANCE_RUNS=3 npm run test:performance",
+  "warmup": {
+    "performance": 100,
+    "accessibility": 100,
+    "bestPractices": 96,
+    "seo": 100,
+    "lcpMs": 226,
+    "cls": 0
+  },
+  "runs": [
+    {
+      "performance": 100,
+      "accessibility": 100,
+      "bestPractices": 96,
+      "seo": 100,
+      "lcpMs": 140,
+      "cls": 0
+    },
+    {
+      "performance": 100,
+      "accessibility": 100,
+      "bestPractices": 96,
+      "seo": 100,
+      "lcpMs": 160,
+      "cls": 0
+    },
+    {
+      "performance": 100,
+      "accessibility": 100,
+      "bestPractices": 96,
+      "seo": 100,
+      "lcpMs": 165,
+      "cls": 0
+    }
+  ],
+  "targets": {
+    "performanceAtLeast": 90,
+    "accessibilityAtLeast": 95,
+    "bestPracticesAtLeast": 95,
+    "seoAtLeast": 95,
+    "lcpMsBelow": 2500,
+    "clsBelow": 0.1
+  },
+  "payloadComparison": {
+    "baselineHead": "9aef7de31047f98728fd93f085f17c30f8d92917",
+    "publicBytes": {
+      "baseline": 4523258,
+      "final": 4523258,
+      "delta": 0
+    },
+    "imageBytes": {
+      "baseline": 4516099,
+      "final": 4516099,
+      "delta": 0,
+      "imageFiles": 13
+    },
+    "nextStaticJavaScriptBytes": {
+      "baseline": 1560844,
+      "final": 1565335,
+      "delta": 4491,
+      "deltaPercent": 0.29
+    },
+    "publicDiff": "No public assets changed."
+  }
+}

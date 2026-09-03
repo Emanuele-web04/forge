@@ -1,0 +1,153 @@
+---
+title: Tasks and runtime
+description: Diagnose waiting, stuck, interrupted, failed, or inconsistent Synara tasks without losing the working state.
+---
+
+A task can be blocked on user action, actively working, interrupted, idle, or in an error state. Read the task state before deciding that the provider is stuck.
+
+## Understand the task status
+
+| Status                   | Meaning                                                    | First action                                              |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------- |
+| `working`                | The provider session or latest turn is starting or running | Inspect recent activity and wait for evidence of progress |
+| `waiting-for-approval`   | A tool or action requires approval                         | Read the request and approve or reject deliberately       |
+| `waiting-for-user-input` | The provider asked a question                              | Answer precisely or interrupt the turn                    |
+| `interrupted`            | The latest turn was stopped                                | Inspect partial changes before retrying                   |
+| `error`                  | The session or latest turn failed                          | Preserve evidence and read the exact failure              |
+| `idle`                   | No turn is currently running                               | Review the result or send a new instruction               |
+
+Pending approvals and user-input requests take precedence over a generic running state. A task blocked on a gate is not making progress until that gate is handled.
+
+## Task appears stuck
+
+Do not begin by repeatedly sending follow-ups.
+
+1. Check for an approval or user-input request.
+2. Inspect the latest transcript activity and terminal output.
+3. Check whether the provider process is still present and producing events.
+4. Inspect the diff for partial work.
+5. Wait long enough for the specific operation; installs, builds, and large repository scans can be slow.
+6. Interrupt only when there is no useful progress or the work is unsafe.
+7. Preserve the current state before starting another provider session.
+
+A quiet transcript is not by itself proof of a dead process. Use [Diagnostics](/docs/troubleshooting/diagnostics) when the visible state and runtime behavior disagree.
+
+## Task is waiting for approval
+
+Read the requested command or operation in full.
+
+Before approving, verify:
+
+- The task is operating in the expected project and environment
+- The command matches the objective
+- The path is inside the intended worktree or checkout
+- The action does not expose secrets or mutate unrelated systems
+- The provider is not following untrusted instructions from issue text, web content, or repository files
+
+Reject or interrupt when the action is broader than necessary. Approval is authorization, not confirmation that the action is correct.
+
+## Task is waiting for user input
+
+Answer the actual question rather than restating the whole objective.
+
+Good response:
+
+```text
+Use the existing retry helper. Do not change the public API. Run only the focused queue tests first.
+```
+
+When the question reveals a wrong assumption, correct the assumption before allowing the provider to continue.
+
+## Turn was interrupted
+
+An interrupted turn may have already changed files or started commands.
+
+1. Inspect `git status --short`.
+2. Read the diff and untracked files.
+3. Check whether child processes are still running.
+4. Preserve useful work.
+5. Decide whether to continue the same task, hand it off, or create a clean task.
+
+Do not assume interruption rolled back filesystem changes.
+
+## Provider reports completion but the task is not complete
+
+The final provider message is a report, not proof.
+
+Verify:
+
+- The original objective is satisfied
+- Every changed file is understood
+- Focused tests pass
+- Broader checks pass when shared behavior changed
+- Visible behavior was tested when applicable
+- No unrelated files or generated artifacts remain
+- The final Git head is the head you tested
+
+Continue with [Best practices](/docs/workflows/best-practices) for the full verification model.
+
+## Session failed to resume
+
+Provider-native session identifiers, resume rules, and context formats differ.
+
+Try this sequence:
+
+1. Preserve the working tree.
+2. Record the provider, model, task ID, and last successful turn.
+3. Retry resume once after confirming the provider is healthy.
+4. Start a new provider session in the same task when Synara supports that recovery path.
+5. Use a [provider handoff](/docs/workflows/handoffs) when another provider should continue the same environment.
+6. Create a new task only when you want a new ownership and review boundary.
+
+A new provider session may preserve the Synara task and working environment without preserving every provider-native internal state.
+
+## Repeated runtime errors
+
+When the same error repeats:
+
+- Stop automatic retries
+- Capture the first and latest exact error
+- Record whether any filesystem or remote effect committed
+- Compare a new minimal task in the same repository
+- Compare a disposable repository with the same provider
+- Update the provider only after recording the failing version
+- Remove one optional extension, hook, MCP server, or custom option at a time
+
+This separates a repository-specific failure from a provider-wide or Synara-wide failure.
+
+## Journal or event-delivery warnings
+
+Synara persists orchestration state and provider runtime events. A warning about a journal, delivery, or quarantined provider event should be treated as an operational failure, not dismissed as cosmetic.
+
+1. Stop adding new work to the affected task.
+2. Preserve the working tree and final visible response.
+3. Record the exact warning and time.
+4. Use `synara_diagnose_thread` when an authorized Agent Gateway session is available.
+5. Inspect durable thread events and provider-runtime coverage.
+6. Start a new task only after the current work is safely preserved.
+
+Do not claim that an event was absent unless the diagnostic source reports complete coverage.
+
+## Two tasks touched the same checkout
+
+Stop both writers.
+
+1. Record each task and provider.
+2. Inspect the checkout diff and Git status.
+3. Identify which task owns each intended change.
+4. Preserve the combined state before reverting anything.
+5. Move future work into separate worktrees.
+6. Assign one integration owner to resolve the current diff.
+
+Do not ask both providers to “fix the conflict” in the same checkout.
+
+## Runtime recovery checklist
+
+- [ ] The current task status was identified
+- [ ] Pending approvals or input were handled explicitly
+- [ ] Partial filesystem changes were inspected
+- [ ] Child processes were checked after interruption
+- [ ] The exact error and time were recorded
+- [ ] Diagnostic coverage was considered before claiming an event was missing
+- [ ] Only one task owns the recovery
+- [ ] The final result will be independently verified
