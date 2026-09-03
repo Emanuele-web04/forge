@@ -387,70 +387,61 @@ export function useComposerSlashCommands(input: {
         });
         return;
       }
-      try {
-        if (args.length > 0) {
-          if (!isServerThread && !isLocalDraftThread) {
-            toastManager.add({ type: "warning", title: "Rename is unavailable" });
-            return;
-          }
-          const outcome = await dispatchThreadRename({
-            threadId: activeThread.id,
-            newTitle: args,
-            unchangedTitles: [],
-            createIfMissing: isLocalDraftThread
-              ? buildDraftThreadRenameCreateInput(activeThread)
-              : undefined,
-          });
-          if (outcome === "renamed") {
-            toastManager.add({ type: "success", title: "Thread renamed" });
-          } else if (outcome === "unavailable") {
-            toastManager.add({ type: "warning", title: "Rename is unavailable" });
-          } else {
-            toastManager.add({ type: "info", title: "Thread title is unchanged" });
-          }
+      if (args.length > 0) {
+        if (!isServerThread && !isLocalDraftThread) {
+          toastManager.add({ type: "warning", title: "Rename is unavailable" });
           return;
         }
-
-        if (!isServerThread) {
-          toastManager.add({
-            type: "warning",
-            title: "Nothing to rename yet",
-            description: "Send a message before generating a thread title.",
-          });
-          return;
-        }
-
-        const outcome = await dispatchThreadTitleRegeneration(activeThread.id);
-        if (outcome.status === "renamed") {
-          toastManager.add({
-            type: "success",
-            title: "Thread renamed",
-            description: outcome.title,
-          });
-        } else if (outcome.status === "no-context") {
-          toastManager.add({
-            type: "warning",
-            title: "Nothing to rename yet",
-            description: "Send a message before generating a thread title.",
-          });
-        } else if (outcome.status === "stale") {
-          toastManager.add({
-            type: "info",
-            title: "Newer thread title kept",
-            description: "The generated title was discarded because the title changed.",
-          });
-        } else if (outcome.status === "unavailable") {
+        const outcome = await dispatchThreadRename({
+          threadId: activeThread.id,
+          newTitle: args,
+          unchangedTitles: [],
+          createIfMissing: isLocalDraftThread
+            ? buildDraftThreadRenameCreateInput(activeThread)
+            : undefined,
+        });
+        if (outcome === "renamed") {
+          toastManager.add({ type: "success", title: "Thread renamed" });
+        } else if (outcome === "unavailable") {
           toastManager.add({ type: "warning", title: "Rename is unavailable" });
         } else {
           toastManager.add({ type: "info", title: "Thread title is unchanged" });
         }
-      } catch (error) {
+        return;
+      }
+
+      if (!isServerThread) {
         toastManager.add({
-          type: "error",
-          title: "Could not rename thread",
-          description:
-            error instanceof Error ? error.message : "An error occurred while renaming the thread.",
+          type: "warning",
+          title: "Nothing to rename yet",
+          description: "Send a message before generating a thread title.",
         });
+        return;
+      }
+
+      const outcome = await dispatchThreadTitleRegeneration(activeThread.id);
+      if (outcome.status === "renamed") {
+        toastManager.add({
+          type: "success",
+          title: "Thread renamed",
+          description: outcome.title,
+        });
+      } else if (outcome.status === "no-context") {
+        toastManager.add({
+          type: "warning",
+          title: "Nothing to rename yet",
+          description: "Send a message before generating a thread title.",
+        });
+      } else if (outcome.status === "stale") {
+        toastManager.add({
+          type: "info",
+          title: "Newer thread title kept",
+          description: "The generated title was discarded because the title changed.",
+        });
+      } else if (outcome.status === "unavailable") {
+        toastManager.add({ type: "warning", title: "Rename is unavailable" });
+      } else {
+        toastManager.add({ type: "info", title: "Thread title is unchanged" });
       }
     },
     [activeThread, isLocalDraftThread, isServerThread],
@@ -924,7 +915,16 @@ export function useComposerSlashCommands(input: {
       }
       if (slashInvocation.command === "rename") {
         editorActions.clearComposerSlashDraft();
-        void runRenameSlashCommand(slashInvocation.args);
+        void runRenameSlashCommand(slashInvocation.args).catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not rename thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while renaming the thread.",
+          });
+        });
         return true;
       }
       if (slashInvocation.command === "subagents") {
