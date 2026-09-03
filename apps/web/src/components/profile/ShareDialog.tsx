@@ -9,8 +9,9 @@ import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
 import type { AccountProfile } from "@synara/contracts";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
-import { CopyIcon, DownloadIcon } from "~/lib/icons";
-import { profileShareUrl } from "~/lib/accountLogic";
+import { CopyIcon, DownloadIcon, LinkIcon } from "~/lib/icons";
+import { profileShareUrl, publicProfileDisplayUrl } from "~/lib/accountLogic";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { localDayKey } from "~/lib/accountUsageAdapter";
 import { cn } from "~/lib/utils";
 import type { ShareCardStats } from "./profileSelectors";
@@ -149,8 +150,20 @@ export function ShareDialog({
       });
   };
 
+  const handleCopyProfileLink = (url: string) => {
+    setStatus(null);
+    return copyTextToClipboard(url)
+      .then(() => {
+        setStatus("Profile link copied to clipboard.");
+      })
+      .catch(() => {
+        setStatus("Could not copy the profile link.");
+      });
+  };
+
   const previewScale = previewWidth / SHARE_CARD_WIDTH;
   const actionsDisabled = busy !== null;
+  const publicUrl = profileShareUrl(accountProfile);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -225,6 +238,22 @@ export function ShareDialog({
               <DownloadIcon className="size-5" />
             </ShareButton>
           </div>
+
+          {accountProfile &&
+            (publicUrl ? (
+              <button
+                type="button"
+                onClick={() => void handleCopyProfileLink(publicUrl)}
+                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <LinkIcon className="size-3.5" />
+                {publicProfileDisplayUrl(accountProfile.handle)}
+              </button>
+            ) : (
+              <p className="text-center text-xs leading-snug text-muted-foreground">
+                Your profile is private. Make it public in Edit profile to share a link to it.
+              </p>
+            ))}
 
           <p className="min-h-4 text-center text-xs leading-snug text-muted-foreground">
             {status ?? ""}
