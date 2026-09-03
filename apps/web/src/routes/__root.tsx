@@ -99,10 +99,7 @@ import {
   setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
 import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
-import {
-  derivePendingApprovals,
-  derivePendingUserInputs,
-} from "../pendingInteractionDerivation";
+import { derivePendingApprovals, derivePendingUserInputs } from "../pendingInteractionDerivation";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import {
   doesSnapshotSatisfyTerminalFence,
