@@ -537,10 +537,14 @@ const CLAUDE_EXTENDED_THINKING_CAPABILITIES: ModelCapabilities = {
     claudeApiEffortOption("max", "Max"),
     claudePromptModeOption("ultrathink", "Ultrathink"),
   ],
+  contextWindowTokens: 200_000,
 };
 
 // Sonnet 5 adds xhigh for long agentic work, while staying in the Sonnet no-fast-mode lane.
-const CLAUDE_SONNET_5_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
+const CLAUDE_SONNET_5_CAPABILITIES: ModelCapabilities = {
+  ...CLAUDE_NO_FAST_XHIGH_CAPABILITIES,
+  contextWindowTokens: 1_000_000,
+};
 
 type ModelDefinition = {
   readonly slug: string;

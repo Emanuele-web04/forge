@@ -261,7 +261,10 @@ export function getDefaultAutoCompactWindow(
   caps: ModelCapabilities,
   model: string | null | undefined,
 ): string | null {
-  if (getClaudeContextWindowSuffix(model) === "1m" && hasAutoCompactWindowOption(caps, "1m")) {
+  const usesMillionTokenContext =
+    getClaudeContextWindowSuffix(model) === "1m" ||
+    (caps.contextWindowTokens !== undefined && caps.contextWindowTokens >= 1_000_000);
+  if (usesMillionTokenContext && hasAutoCompactWindowOption(caps, "1m")) {
     return "1m";
   }
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
@@ -713,6 +716,11 @@ export function normalizeCodexModelOptions(
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,

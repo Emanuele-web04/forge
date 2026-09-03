@@ -152,11 +152,13 @@ describe("Claude context selection", () => {
   );
 
   it.each([
-    ["claude-opus-4-6", "200k", 200_000],
+    ["claude-opus-4-6", undefined, undefined],
+    ["claude-opus-4-6", "200k", undefined],
     ["claude-opus-4-6", "1m", 1_000_000],
-    ["claude-opus-4-6", undefined, 200_000],
-    ["claude-fable-5-1[1m]", undefined, 1_000_000],
-    ["claude-fable-5-1[1M]", undefined, 1_000_000],
+    ["claude-fable-5-1", undefined, undefined],
+    ["claude-fable-5-1", "1m", undefined],
+    ["claude-fable-5-1", "200k", 200_000],
+    ["claude-fable-5-1[1m]", undefined, undefined],
     ["claude-fable-5-1[1m]", "200k", 200_000],
     ["claude-opus-4-5", "1m", undefined],
     ["claude-opus-4-6", "2m", undefined],
@@ -165,11 +167,8 @@ describe("Claude context selection", () => {
   });
 
   it("preserves known 1m model capacity when result metadata reports a stale 200k window", () => {
-    expect(
-      resolveClaudeApiModelIdContextWindowMaxTokens(
-        "claude-opus-4-6[thinking=true,context=1m,effort=high,fast=false]",
-      ),
-    ).toBe(1_000_000);
+    expect(resolveClaudeApiModelIdContextWindowMaxTokens("claude-opus-4-6[1m]")).toBe(1_000_000);
+    expect(resolveClaudeApiModelIdContextWindowMaxTokens("claude-sonnet-5")).toBe(1_000_000);
     expect(
       resolveEffectiveClaudeContextWindow({
         reportedContextWindow: 200_000,

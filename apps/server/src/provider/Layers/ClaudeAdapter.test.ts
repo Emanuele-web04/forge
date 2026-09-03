@@ -974,7 +974,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("forwards Sonnet 5 xhigh effort and a 1m auto-compact budget", () => {
+  it.effect("forwards Sonnet 5 xhigh effort without pinning its native window", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -994,7 +994,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.model, "claude-sonnet-5");
-      assert.equal(autoCompactWindowFromOptions(createInput?.options), 1_000_000);
+      assert.isUndefined(autoCompactWindowFromOptions(createInput?.options));
       assert.equal(createInput?.options.effort, undefined);
       assert.equal(effortLevelFromOptions(createInput?.options), "xhigh");
     }).pipe(
@@ -1058,7 +1058,6 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.effort, undefined);
       assert.deepEqual(createInput?.options.settings, {
         autoCompactEnabled: true,
-        autoCompactWindow: 200_000,
         effortLevel: "xhigh",
         ultracode: true,
       });
@@ -1166,7 +1165,6 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settings, {
         autoCompactEnabled: true,
-        autoCompactWindow: 200_000,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1194,7 +1192,6 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settings, {
         autoCompactEnabled: true,
-        autoCompactWindow: 200_000,
         fastMode: true,
       });
     }).pipe(
@@ -1223,7 +1220,6 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settings, {
         autoCompactEnabled: true,
-        autoCompactWindow: 200_000,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -6274,7 +6270,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           usage: {
             usedTokens: 321,
             lastUsedTokens: 321,
-            maxTokens: 200_000,
+            maxTokens: 1_000_000,
             toolUses: 2,
             durationMs: 654,
           },
@@ -6347,7 +6343,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             lastUsedTokens: 24542,
             inputTokens: 23863,
             outputTokens: 679,
-            maxTokens: 200000,
+            maxTokens: 1_000_000,
             totalProcessedTokens: 24542,
           },
         });
@@ -6372,6 +6368,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
       });
 
       yield* adapter.sendTurn({
@@ -6437,6 +6434,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           threadId: THREAD_ID,
           provider: "claudeAgent",
           runtimeMode: "full-access",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         });
 
         yield* adapter.sendTurn({
@@ -6516,6 +6514,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
       });
 
       yield* adapter.sendTurn({
@@ -6594,6 +6593,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
       });
 
       yield* adapter.sendTurn({
@@ -8013,10 +8013,14 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("applies the 1M default while switching live to a 1M model variant", () => {
+  it.effect("follows the model's native window across an unpinned live switch", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      const configuredEventsFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.configured",
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -8024,7 +8028,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
-          model: "claude-opus-4-8",
+          model: "claude-opus-4-6",
         },
       });
       yield* adapter.sendTurn({
@@ -8037,8 +8041,16 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
+      // Neither model is pinned, so no flag setting is sent, but the effective
+      // budget still changes with the model and must be re-announced.
       assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5-1[1m]"]);
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 1_000_000 }]);
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, []);
+      const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
+      const switchedEvent = configuredEvents[1];
+      assert.equal(switchedEvent?.type, "session.configured");
+      if (switchedEvent?.type === "session.configured") {
+        assert.deepEqual(switchedEvent.payload.config, { contextWindow: 1_000_000 });
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8052,7 +8064,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const configuredEventsFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "session.configured",
-      ).pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -8073,27 +8085,52 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
         attachments: [],
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "switch to a discovered model",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude/custom-opus",
-        },
-        attachments: [],
-      });
-
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
-        { autoCompactWindow: 200_000 },
-        { autoCompactWindow: null },
-      ]);
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: null }]);
       const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
       assert.deepEqual(
         configuredEvents.map((event) =>
           event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
         ),
-        [1_000_000, 200_000, null],
+        [1_000_000, undefined],
       );
+      assert.deepEqual(
+        configuredEvents.map((event) =>
+          event.type === "session.configured" ? event.payload.config.contextWindow : undefined,
+        ),
+        [undefined, 200_000],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("clears a pinned 200k override when a 1M model returns to its native window", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5-1[1m]",
+          options: { autoCompactWindow: "200k" },
+        },
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "use the native window",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5-1[1m]",
+        },
+        attachments: [],
+      });
+
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: null }]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8314,7 +8351,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("always enables auto-compaction in the query settings", () => {
+  it.effect("enables auto-compaction without pinning the model-native window", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8332,12 +8369,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const settings = harness.getLastCreateQueryInput()?.options.settings;
       assert.ok(settings && typeof settings === "object");
       assert.equal((settings as { autoCompactEnabled?: boolean }).autoCompactEnabled, true);
-      assert.equal((settings as { autoCompactWindow?: number }).autoCompactWindow, 200_000);
+      assert.isUndefined((settings as { autoCompactWindow?: number }).autoCompactWindow);
 
       const configuredEvent = yield* Fiber.join(configuredEventFiber);
       assert.equal(configuredEvent._tag, "Some");
       if (configuredEvent._tag === "Some" && configuredEvent.value.type === "session.configured") {
-        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 200_000);
+        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, null);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -8345,7 +8382,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("defaults a 1M model variant to the 1M auto-compact budget", () => {
+  it.effect("leaves a 1M model variant's native window to Claude Code", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8366,12 +8403,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       assert.equal(
         autoCompactWindowFromOptions(harness.getLastCreateQueryInput()?.options),
-        1_000_000,
+        undefined,
       );
       const configuredEvent = yield* Fiber.join(configuredEventFiber);
       assert.equal(configuredEvent._tag, "Some");
       if (configuredEvent._tag === "Some" && configuredEvent.value.type === "session.configured") {
-        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 1_000_000);
+        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, null);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -8540,7 +8577,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.ok(secondQuery);
       assert.equal(firstQuery.closeCalls, 1);
       assert.equal(harness.createInputs[1]?.options.model, "claude-fable-5");
-      assert.equal(autoCompactWindowFromOptions(harness.createInputs[1]?.options), 1_000_000);
+      assert.isUndefined(autoCompactWindowFromOptions(harness.createInputs[1]?.options));
       assert.equal(yield* adapter.hasSession(THREAD_ID), true);
       assert.equal((yield* adapter.listSessions()).length, 1);
 
@@ -9009,7 +9046,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         usedTokens: 20_000,
         lastUsedTokens: 20_000,
         totalProcessedTokens: 370_000,
-        maxTokens: 200_000,
+        maxTokens: 1_000_000,
         inputTokens: 20_000,
       });
       assertTokenUsageEvent(usageEvents[1]);
@@ -9102,6 +9139,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-sonnet-5",
+          options: { autoCompactWindow: "200k" },
+        },
       });
       yield* adapter.sendTurn({
         threadId: session.threadId,
@@ -9171,8 +9213,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
-          model: "claude-opus-4-6",
-          options: { autoCompactWindow: "1m" },
+          model: "claude-fable-5-1",
         },
       });
       yield* adapter.sendTurn({
@@ -9212,7 +9253,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("uses the requested Claude auto-compact budget for in-flight usage snapshots", () => {
+  it.effect("clamps the requested auto-compact budget to the model capacity", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -9260,7 +9301,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           usage: {
             usedTokens: 23_000,
             lastUsedTokens: 23_000,
-            maxTokens: 1_000_000,
+            maxTokens: 200_000,
           },
         });
       }
@@ -9270,7 +9311,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("preserves the 1m auto-compact budget when final model usage reports 200k", () => {
+  it.effect("preserves native 1M capacity when final model usage reports 200k", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -9290,10 +9331,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "hello",
         modelSelection: {
           provider: "claudeAgent",
-          model: "claude-opus-4-6",
-          options: {
-            autoCompactWindow: "1m",
-          },
+          model: "claude-opus-4-6[1m]",
         },
         attachments: [],
       });

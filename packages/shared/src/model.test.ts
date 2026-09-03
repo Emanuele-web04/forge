@@ -687,6 +687,24 @@ describe("provider option descriptor helpers", () => {
     });
     expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
   });
+
+  it("marks 1M as the default auto-compact option for native 1M Claude models", () => {
+    const model = "claude-fable-5-1";
+    const descriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      model,
+      caps: getModelCapabilities("claudeAgent", model),
+    }).find((candidate) => candidate.id === "autoCompactWindow");
+
+    expect(descriptor).toMatchObject({
+      type: "select",
+      currentValue: "1m",
+      options: [
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M", isDefault: true },
+      ],
+    });
+  });
 });
 
 describe("context window helpers", () => {
@@ -696,13 +714,16 @@ describe("context window helpers", () => {
     expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6")).toBe("200k");
     expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1m]")).toBe("1m");
     expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1M]")).toBe("1m");
-    expect(opusCaps.contextWindowTokens).toBe(1_000_000);
+    expect(opusCaps.contextWindowTokens).toBe(200_000);
     expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
       200_000,
     );
     const opus5Caps = getModelCapabilities("claudeAgent", "claude-opus-5");
     expect(opus5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(opus5Caps, "claude-opus-5")).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opus5Caps, "claude-opus-5")).toBe("1m");
+    const sonnet5Caps = getModelCapabilities("claudeAgent", "claude-sonnet-5");
+    expect(sonnet5Caps.contextWindowTokens).toBe(1_000_000);
+    expect(getDefaultAutoCompactWindow(sonnet5Caps, "claude-sonnet-5")).toBe("1m");
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
   });
 
@@ -799,6 +820,16 @@ describe("normalizeClaudeModelOptions", () => {
     ).toBeUndefined();
     expect(
       normalizeClaudeModelOptions("claude-fable-5-1[1M]", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
+        autoCompactWindow: "1m",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
         autoCompactWindow: "200k",
       }),
     ).toEqual({ autoCompactWindow: "200k" });

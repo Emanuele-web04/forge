@@ -680,7 +680,24 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("shows 1M as the default auto-compact window for a 1M Claude variant", () => {
+  it.each([
+    ["claude-fable-5-1", "1m"],
+    ["claude-opus-5", "1m"],
+    ["claude-opus-4-8", "1m"],
+    ["claude-sonnet-5", "1m"],
+    ["claude-opus-4-6", "200k"],
+    ["claude-sonnet-4-6", "200k"],
+  ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
+    const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
+
+    expect(selection.defaultContextWindow).toBe(expectedDefault);
+    expect(selection.contextWindow).toBe(expectedDefault);
+    expect(
+      selection.contextWindowOptions.find((option) => option.value === expectedDefault)?.isDefault,
+    ).toBe(true);
+  });
+
+  it("shows 1M as the default auto-compact window for a 1M Claude suffix", () => {
     const defaults = getComposerTraitSelection(
       "claudeAgent",
       "claude-fable-5-1[1M]",
@@ -704,7 +721,7 @@ describe("getComposerProviderState", () => {
     expect(
       getComposerProviderState({
         provider: "claudeAgent",
-        model: "claude-fable-5-1[1m]",
+        model: "claude-fable-5-1",
         prompt: "",
         modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
       }).modelOptionsForDispatch,
@@ -712,7 +729,7 @@ describe("getComposerProviderState", () => {
     expect(
       getComposerProviderState({
         provider: "claudeAgent",
-        model: "claude-fable-5-1[1m]",
+        model: "claude-fable-5-1",
         prompt: "",
         modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
       }).modelOptionsForDispatch,

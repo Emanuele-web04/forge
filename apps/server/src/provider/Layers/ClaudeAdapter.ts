@@ -5239,6 +5239,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : (toPermissionMode(providerOptions?.permissionMode) ??
               (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
         const settings = {
+          // Pin only explicit non-native overrides. Otherwise Claude Code owns
+          // resolution via server tuning, settings.json, and
+          // CLAUDE_CODE_AUTO_COMPACT_WINDOW.
           autoCompactEnabled: true,
           ...(requestedAutoCompactWindowTokens !== undefined
             ? { autoCompactWindow: requestedAutoCompactWindowTokens }
@@ -5683,9 +5686,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           yield* updateResumeCursor(context);
         }
 
+        let apiModelChanged = false;
         if (modelSelection?.model) {
           const apiModelId = resolveApiModelId(modelSelection);
           if (apiModelId !== context.currentApiModelId) {
+            apiModelChanged = true;
             if (context.session.runtimeMode === "auto") {
               yield* verifyClaudeAutoModelSupport({
                 queryRuntime: context.query,
@@ -5706,7 +5711,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           yield* updateResumeCursor(context);
         }
 
-        if (modelSelection && requestedAutoCompactWindow !== context.currentAutoCompactWindow) {
+        const autoCompactWindowChanged =
+          requestedAutoCompactWindow !== context.currentAutoCompactWindow;
+        if (modelSelection && autoCompactWindowChanged) {
           yield* Effect.tryPromise({
             try: () =>
               context.query.applyFlagSettings({
@@ -5716,6 +5723,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
           context.currentAutoCompactWindow = requestedAutoCompactWindow;
           context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
+        }
+        // An unpinned window follows the model, so a model switch changes the
+        // effective budget even when no flag setting was sent.
+        if (modelSelection && (autoCompactWindowChanged || apiModelChanged)) {
           context.emittedContextUsageWarnings.delete("near-window");
           context.emittedContextUsageWarnings.delete("large-prompt");
 

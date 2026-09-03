@@ -5,6 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 import {
+  getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getModelCapabilities,
   hasAutoCompactWindowOption,
@@ -18,6 +19,12 @@ export const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
   "200k": 200_000,
   "1m": 1_000_000,
 } as const;
+
+function claudeContextWindowTokensForOption(value: string | null): number | undefined {
+  return value !== null && Object.hasOwn(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, value)
+    ? CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[value as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS]
+    : undefined;
+}
 
 const CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const CLAUDE_CONTEXT_WARNING_RATIO = 0.8;
@@ -157,9 +164,12 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
   if (!apiModelId) {
     return undefined;
   }
-  return positiveFiniteNumber(
-    getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
-      .contextWindowTokens,
+  return (
+    claudeContextWindowTokensForOption(getClaudeContextWindowSuffix(apiModelId)) ??
+    positiveFiniteNumber(
+      getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
+        .contextWindowTokens,
+    )
   );
 }
 
@@ -168,22 +178,17 @@ export function resolveSelectedClaudeAutoCompactWindow(
   selectedAutoCompactWindow: string | null | undefined,
 ): number | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
-  const resolvedAutoCompactWindow =
-    trimOrNull(selectedAutoCompactWindow) ?? getDefaultAutoCompactWindow(caps, model) ?? null;
+  const selected = trimOrNull(selectedAutoCompactWindow);
+  // Only an explicit override is pinned; the model-native window is left to
+  // Claude Code's own resolution (server tuning, settings.json, env override).
   if (
-    !resolvedAutoCompactWindow ||
-    !hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) ||
-    !Object.prototype.hasOwnProperty.call(
-      CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
-      resolvedAutoCompactWindow,
-    )
+    !selected ||
+    selected === getDefaultAutoCompactWindow(caps, model) ||
+    !hasAutoCompactWindowOption(caps, selected)
   ) {
     return undefined;
   }
-
-  return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[
-    resolvedAutoCompactWindow as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS
-  ];
+  return claudeContextWindowTokensForOption(selected);
 }
 
 export function resolveEffectiveClaudeContextWindow(input: {
