@@ -144,11 +144,9 @@ export function prioritizeProviderModelDiscovery(
       ) {
         task.priority = priority;
       }
-      if (priority !== "background") {
-        // A newly selected pane goes first without demoting catalogs selected
-        // in other active panes below speculative prefetch work.
-        task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
-      }
+      // A newly selected pane goes first without demoting catalogs selected
+      // in other active panes below speculative prefetch work.
+      task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
     }
   }
 }
