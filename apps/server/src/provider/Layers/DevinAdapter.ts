@@ -941,6 +941,7 @@ export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelD
       optionDescriptors: getProviderOptionDescriptors({
         provider: PROVIDER,
         caps,
+        model: modelDefinition.slug,
       }),
       supportsFastMode: caps.supportsFastMode,
       supportsThinkingToggle: caps.supportsThinkingToggle,

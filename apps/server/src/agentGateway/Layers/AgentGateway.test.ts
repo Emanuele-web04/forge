@@ -1561,21 +1561,21 @@ describe("AgentGateway", () => {
       assert.deepEqual(setThreadPullRequest?.inputSchema.required, ["reference"]);
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
-      assert.include(createAutomation?.description ?? "", "self-contained brief");
+      assert.include(createAutomation?.description ?? "", "self-contained future-run brief");
       const createAutomationProperties = createAutomation?.inputSchema.properties as
         | Record<string, { description?: string }>
         | undefined;
       assert.include(
         createAutomationProperties?.name?.description ?? "",
-        "3–8 word outcome-oriented",
+        "specific 3–8 word outcome label",
       );
       assert.include(
         createAutomationProperties?.prompt?.description ?? "",
-        "no assumed chat context",
+        "Assume no chat context",
       );
       assert.include(
         createAutomationProperties?.prompt?.description ?? "",
-        "notifying the user versus staying silent",
+        "notify-versus-silent criteria",
       );
       assert.property(createAutomationProperties, "stopAfterConsecutiveFailures");
       const updateAutomationMemory = tools.find(

@@ -1129,6 +1129,7 @@ function ModelOptionRows({
   const descriptors = getProviderOptionDescriptors({
     provider,
     caps,
+    model,
     selections: modelSelection.options as Record<string, unknown> | undefined,
   });
   if (descriptors.length === 0) {

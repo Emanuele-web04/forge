@@ -8,6 +8,7 @@ import {
   getDefaultAutoCompactWindow,
   getModelCapabilities,
   hasAutoCompactWindowOption,
+  stripClaudeContextWindowSuffix,
   trimOrNull,
 } from "@synara/shared/model";
 
@@ -79,10 +80,6 @@ export function resolveClaudeEffectiveContextBudget(
     return Math.min(autoCompactBudget, lastKnownContextWindow);
   }
   return autoCompactBudget ?? lastKnownContextWindow;
-}
-
-export function stripClaudeContextWindowSuffix(apiModelId: string): string {
-  return apiModelId.replace(/\[[^\]]+\]$/u, "");
 }
 
 export function normalizeClaudeTokenUsage(
@@ -172,7 +169,7 @@ export function resolveSelectedClaudeAutoCompactWindow(
 ): number | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const resolvedAutoCompactWindow =
-    trimOrNull(selectedAutoCompactWindow) ?? getDefaultAutoCompactWindow(caps) ?? null;
+    trimOrNull(selectedAutoCompactWindow) ?? getDefaultAutoCompactWindow(caps, model) ?? null;
   if (
     !resolvedAutoCompactWindow ||
     !hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) ||

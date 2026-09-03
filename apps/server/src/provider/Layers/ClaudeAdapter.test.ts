@@ -64,6 +64,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
   public readonly applyFlagSettingsCalls: Array<Record<string, unknown>> = [];
   public getContextUsageCalls = 0;
+  public getContextUsageDetails: Array<"summary" | "full" | undefined> = [];
   public iteratorNextCalls = 0;
   private contextUsageResponse: SDKControlGetContextUsageResponse | undefined;
   private contextUsageNeverResolves = false;
@@ -140,8 +141,11 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.contextUsageNeverResolves = true;
   }
 
-  readonly getContextUsage = async (): Promise<SDKControlGetContextUsageResponse> => {
+  readonly getContextUsage = async (options?: {
+    readonly detail?: "summary" | "full";
+  }): Promise<SDKControlGetContextUsageResponse> => {
     this.getContextUsageCalls += 1;
+    this.getContextUsageDetails.push(options?.detail);
     if (this.contextUsageNeverResolves) {
       return new Promise<SDKControlGetContextUsageResponse>(() => {});
     }
@@ -667,8 +671,8 @@ describe("Claude Synara harness policy", () => {
   it("advertises scoped MCP additively when credentials are available", () => {
     const text = buildEmbeddedClaudeSystemPromptAppend(true);
     assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
-    assert.include(text, "Make every final response self-contained");
-    assert.include(text, "contain all context the user needs to decide");
+    assert.include(text, "Final responses must restate every needed scope");
+    assert.include(text, "include all decision context");
     assert.include(text, "Use the synara_* tools");
     assert.notInclude(text, "Synara MCP control is unavailable");
   });
@@ -676,8 +680,8 @@ describe("Claude Synara harness policy", () => {
   it("stays truthful when scoped MCP credentials are absent", () => {
     const text = buildEmbeddedClaudeSystemPromptAppend(false);
     assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
-    assert.include(text, "Make every final response self-contained");
-    assert.include(text, "contain all context the user needs to decide");
+    assert.include(text, "Final responses must restate every needed scope");
+    assert.include(text, "include all decision context");
     assert.include(text, "Synara MCP control is unavailable");
   });
 });
@@ -763,11 +767,8 @@ describe("ClaudeAdapterLive", () => {
       ) {
         return assert.fail("Expected Claude preset system prompt.");
       }
-      assert.include(systemPrompt.append ?? "", "Use the browser_* tools autonomously");
-      assert.include(
-        systemPrompt.append ?? "",
-        "exact thread-scoped Electron page Synara surfaces to the user",
-      );
+      assert.include(systemPrompt.append ?? "", "use browser_* autonomously");
+      assert.include(systemPrompt.append ?? "", "canonical, complete control surface");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -7472,7 +7473,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(workerHigh?.model, undefined);
       const systemPrompt = createInput?.options.systemPrompt;
       const append =
-        systemPrompt && !Array.isArray(systemPrompt) && typeof systemPrompt === "object"
+        systemPrompt &&
+        !Array.isArray(systemPrompt) &&
+        typeof systemPrompt === "object" &&
+        systemPrompt.type === "preset"
           ? systemPrompt.append
           : undefined;
       assert.include(append ?? "", "worker-xhigh");
@@ -8009,6 +8013,38 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("applies the 1M default while switching live to a 1M model variant", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "switch to Fable 1M",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5-1[1m]",
+        },
+        attachments: [],
+      });
+
+      assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5-1[1m]"]);
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 1_000_000 }]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits the configured window when the auto-compact budget changes live", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -8309,13 +8345,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("warns immediately when a thread starts with the 1M auto-compact budget", () => {
+  it.effect("defaults a 1M model variant to the 1M auto-compact budget", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const warningFiber = yield* Stream.filter(
+      const configuredEventFiber = yield* Stream.filter(
         adapter.streamEvents,
-        (event) => event.type === "runtime.warning" && event.payload.message.includes("1M limit"),
+        (event) => event.type === "session.configured",
       ).pipe(Stream.runHead, Effect.forkChild);
 
       yield* adapter.startSession({
@@ -8324,16 +8360,44 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
-          model: "claude-opus-4-8",
-          options: { autoCompactWindow: "1m" },
+          model: "claude-fable-5-1[1m]",
         },
       });
 
-      const warning = yield* Fiber.join(warningFiber);
-      assert.equal(warning._tag, "Some");
-      if (warning._tag === "Some" && warning.value.type === "runtime.warning") {
-        assert.ok(warning.value.payload.message.includes("switch Auto-compact to 200k"));
+      assert.equal(
+        autoCompactWindowFromOptions(harness.getLastCreateQueryInput()?.options),
+        1_000_000,
+      );
+      const configuredEvent = yield* Fiber.join(configuredEventFiber);
+      assert.equal(configuredEvent._tag, "Some");
+      if (configuredEvent._tag === "Some" && configuredEvent.value.type === "session.configured") {
+        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 1_000_000);
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps an explicit 200k budget on a 1M model variant", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5-1[1m]",
+          options: { autoCompactWindow: "200k" },
+        },
+      });
+
+      assert.equal(
+        autoCompactWindowFromOptions(harness.getLastCreateQueryInput()?.options),
+        200_000,
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -9344,6 +9408,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         assert.equal(usageEvent.value.payload.usage.compactsAutomatically, true);
       }
       assert.equal(harness.query.getContextUsageCalls, 1);
+      assert.deepEqual(harness.query.getContextUsageDetails, ["summary"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -9383,6 +9448,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const completed = yield* Fiber.join(completedFiber);
       assert.equal(completed._tag, "Some");
       assert.equal(harness.query.getContextUsageCalls, 1);
+      assert.deepEqual(harness.query.getContextUsageDetails, ["summary"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

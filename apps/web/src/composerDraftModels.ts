@@ -19,6 +19,7 @@ import {
 import * as Schema from "effect/Schema";
 
 import {
+  getClaudeContextWindowSuffix,
   getDefaultModel,
   normalizeGrokModelOptions,
   normalizeModelSlug,
@@ -448,7 +449,9 @@ export function normalizeModelSelection(
       ? antigravityLegacyMatch[1]!.trim()
       : rawModel;
   const inferredClaudeAutoCompactWindow =
-    provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(rawModel) === "1m"
+      ? "1m"
+      : undefined;
   const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;

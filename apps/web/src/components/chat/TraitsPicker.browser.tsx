@@ -316,7 +316,7 @@ describe("TraitsPicker (Claude)", () => {
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "1M (model default)" }).click();
+    await page.getByRole("menuitemradio", { name: "1M" }).click();
 
     // A 1M thread can grow far beyond the normal compaction point: keep the explicit
     // thread choice, but never leak it into sticky defaults for future threads.

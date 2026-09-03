@@ -680,6 +680,45 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("shows 1M as the default auto-compact window for a 1M Claude variant", () => {
+    const defaults = getComposerTraitSelection(
+      "claudeAgent",
+      "claude-fable-5-1[1M]",
+      "",
+      undefined,
+    );
+    const explicit200k = getComposerTraitSelection("claudeAgent", "claude-fable-5-1[1m]", "", {
+      autoCompactWindow: "200k",
+    });
+
+    expect(defaults.defaultContextWindow).toBe("1m");
+    expect(defaults.contextWindow).toBe("1m");
+    expect(defaults.contextWindowOptions).toEqual([
+      { value: "200k", label: "200k" },
+      { value: "1m", label: "1M", isDefault: true },
+    ]);
+    expect(explicit200k.contextWindow).toBe("200k");
+  });
+
+  it("normalizes Claude auto-compact dispatch against the model-aware default", () => {
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1[1m]",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
+      }).modelOptionsForDispatch,
+    ).toBeUndefined();
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1[1m]",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "200k" });
+  });
+
   it("tracks Claude ultrathink from the prompt without changing dispatch effort", () => {
     const state = getComposerProviderState({
       provider: "claudeAgent",

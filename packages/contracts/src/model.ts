@@ -454,7 +454,7 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
   { value: "200k", label: "200k", isDefault: true },
-  { value: "1m", label: "1M (model default)" },
+  { value: "1m", label: "1M" },
 ];
 
 function claudeApiEffortOption(

@@ -20,6 +20,7 @@ import {
   applyClaudePromptEffortPrefix,
   claudeSelectionRequiresRestart,
   formatModelDisplayName,
+  getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
@@ -208,6 +209,9 @@ describe("resolveModelSlug", () => {
     expect(resolveModelSlugForProvider("claudeAgent", "fable")).toBe("claude-fable-5-1");
     expect(resolveModelSlugForProvider("claudeAgent", "fable-5.1")).toBe("claude-fable-5-1");
     expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1M]")).toBe(
       "claude-fable-5-1",
     );
     expect(resolveModelSlugForProvider("claudeAgent", "fable-5")).toBe("claude-fable-5");
@@ -658,21 +662,54 @@ describe("provider option descriptor helpers", () => {
       { id: "reasoningDepth", value: "deep" },
     ]);
   });
+
+  it("marks 1M as the default auto-compact option for a 1M Claude variant", () => {
+    const caps = getModelCapabilities("claudeAgent", "claude-fable-5-1[1m]");
+    const defaultDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      model: "claude-fable-5-1[1m]",
+      caps,
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+    const explicitDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      model: "claude-fable-5-1[1M]",
+      caps,
+      selections: { autoCompactWindow: "200k" },
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+
+    expect(defaultDescriptor).toMatchObject({
+      type: "select",
+      currentValue: "1m",
+      options: [
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M", isDefault: true },
+      ],
+    });
+    expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
+  });
 });
 
 describe("context window helpers", () => {
   it("separates Claude's real context capacity from its auto-compact budget", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
     expect(getDefaultContextWindow(opusCaps)).toBeNull();
-    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6")).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1m]")).toBe("1m");
+    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1M]")).toBe("1m");
     expect(opusCaps.contextWindowTokens).toBe(1_000_000);
     expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
       200_000,
     );
     const opus5Caps = getModelCapabilities("claudeAgent", "claude-opus-5");
     expect(opus5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opus5Caps, "claude-opus-5")).toBe("200k");
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
+  });
+
+  it("reads Claude context-window suffixes case-insensitively", () => {
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1m]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1M]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1")).toBeNull();
   });
 
   it("validates auto-compact budgets against model capabilities", () => {
@@ -752,6 +789,19 @@ describe("normalizeClaudeModelOptions", () => {
     ).toEqual({
       autoCompactWindow: "1m",
     });
+  });
+
+  it("strips Claude auto-compact budgets relative to the model variant default", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1m]", {
+        autoCompactWindow: "1m",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1M]", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
   });
 
   it("migrates the legacy context-window field to the auto-compact budget", () => {
