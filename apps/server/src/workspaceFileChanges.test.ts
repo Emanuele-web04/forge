@@ -86,6 +86,80 @@ describe("watchWorkspaceFile", () => {
     expect(error).toBeInstanceOf(WorkspacePathOutsideRootError);
   });
 
+  it("advances through missing parent directories until the requested file is created", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const relativePath = "generated/report/output.md";
+    const generatedPath = NodePath.join(workspaceRoot, "generated");
+    const reportPath = NodePath.join(generatedPath, "report");
+    const filePath = NodePath.join(reportPath, "output.md");
+    let phase: "initial" | "generated" | "report" | "file" = "initial";
+    let resolveInitialEvent!: () => void;
+    const initialEvent = new Promise<void>((resolve) => {
+      resolveInitialEvent = resolve;
+    });
+    let resolveGeneratedEvent!: () => void;
+    const generatedEvent = new Promise<void>((resolve) => {
+      resolveGeneratedEvent = resolve;
+    });
+    let resolveReportEvent!: () => void;
+    const reportEvent = new Promise<void>((resolve) => {
+      resolveReportEvent = resolve;
+    });
+    const abortController = new AbortController();
+    const collectedEvents = Effect.runPromise(
+      watchWorkspaceFile({ cwd: workspaceRoot, relativePath }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            resolveInitialEvent();
+            if (event.type !== "deleted") return;
+            if (phase === "generated") resolveGeneratedEvent();
+            if (phase === "report") resolveReportEvent();
+          }),
+        ),
+        Stream.takeUntil((event) => phase === "file" && event.type === "changed"),
+        Stream.runCollect,
+      ),
+      { signal: abortController.signal },
+    );
+
+    try {
+      await initialEvent;
+      phase = "generated";
+      await NodeFileSystem.mkdir(generatedPath);
+      await Promise.race([
+        generatedEvent,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("generated directory watch timed out")), 5_000),
+        ),
+      ]);
+      phase = "report";
+      await NodeFileSystem.mkdir(reportPath);
+      await Promise.race([
+        reportEvent,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("report directory watch timed out")), 5_000),
+        ),
+      ]);
+      phase = "file";
+      await NodeFileSystem.writeFile(filePath, "created\n");
+
+      const events = Array.from(
+        await Promise.race([
+          collectedEvents,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("nested file watch timed out")), 5_000),
+          ),
+        ]),
+      );
+
+      expect(events.at(0)?.type).toBe("deleted");
+      expect(events.at(-1)?.type).toBe("changed");
+      expect(events.every((event) => event.relativePath === relativePath)).toBe(true);
+    } finally {
+      abortController.abort();
+    }
+  });
+
   it("watches both a symlink entry and its current in-workspace target", async () => {
     const workspaceRoot = await makeWorkspace();
     const firstTarget = NodePath.join(workspaceRoot, "targets/first.ts");

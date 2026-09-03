@@ -67,10 +67,14 @@ async function resolveNearestWatchableTargetPath(targetPath: string): Promise<st
 
 async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string[] | null> {
   const lexicalTargetPath = NodePath.resolve(input.cwd, input.relativePath);
-  const entryParentPath = await resolveRealPathWithinRoot(
-    input.cwd,
-    NodePath.dirname(lexicalTargetPath),
-  );
+  const lexicalParentPath = NodePath.dirname(lexicalTargetPath);
+  let entryParentPath: string | null;
+  try {
+    entryParentPath = await resolveRealPathWithinRoot(input.cwd, lexicalParentPath);
+  } catch (cause) {
+    if (!isFileNotFoundError(cause)) throw cause;
+    entryParentPath = await resolveRealPathForCreateWithinRoot(input.cwd, lexicalParentPath);
+  }
   if (entryParentPath === null) {
     return null;
   }
@@ -103,8 +107,9 @@ async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string
   // retarget operations. Canonicalizing the parent avoids duplicate watchers
   // when the workspace root itself is reached through a symlink.
   const entryPath = NodePath.join(entryParentPath, NodePath.basename(lexicalTargetPath));
+  const watchableEntryPath = await resolveNearestWatchableTargetPath(entryPath);
   const watchableTargetPath = await resolveNearestWatchableTargetPath(resolvedTargetPath);
-  return [...new Set([entryPath, watchableTargetPath])];
+  return [...new Set([watchableEntryPath, watchableTargetPath])];
 }
 
 async function readFileChangeState(input: ProjectWatchFileInput): Promise<ProjectFileChangeEvent> {
