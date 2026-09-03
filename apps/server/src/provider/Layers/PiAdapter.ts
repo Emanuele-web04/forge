@@ -464,6 +464,35 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 }
 
 /**
+ * Console Go rejects recursive tool `parameters` schemas (400
+ * "Recursive JSON schemas are not currently supported"). Only
+ * `browser_webmcp_call.arguments` (Schema.Json) emits `$ref` cycles today,
+ * but sanitize every gateway tool so future recursive schemas fail safe.
+ * Runtime validation stays server-side (Effect decode, depth 20 / 256 KiB).
+ */
+function sanitizePiToolParameters(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(sanitizePiToolParameters);
+  if (schema !== null && typeof schema === "object") {
+    const record = schema as Record<string, unknown>;
+    if (typeof record.$ref === "string") {
+      return {
+        type: "object",
+        description:
+          typeof record.description === "string"
+            ? record.description
+            : "Free-form JSON object (depth 20, 256 KiB max).",
+      };
+    }
+    return Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => key !== "$defs")
+        .map(([key, value]) => [key, sanitizePiToolParameters(value)]),
+    );
+  }
+  return schema;
+}
+
+/**
  * Project the canonical MCP catalog into Pi's native custom-tool API. Tool
  * schemas and execution both remain owned by the gateway; Pi only adapts the
  * provider boundary.
@@ -485,7 +514,7 @@ export async function buildPiAgentGatewayCustomTools(input: {
       name: tool.name,
       label: tool.name,
       description: tool.description,
-      parameters: tool.inputSchema as ToolDefinition["parameters"],
+      parameters: sanitizePiToolParameters(tool.inputSchema) as ToolDefinition["parameters"],
       execute: async (_toolCallId, params, signal) =>
         piGatewayToolResult(
           await callAgentGatewayMcpTool({

@@ -143,6 +143,65 @@ describe("Pi native Synara gateway tools", () => {
     expect(callSignal).toBe(controller.signal);
     expect(controller.signal.aborted).toBe(true);
   });
+
+  it("strips recursive $ref schemas so Console Go accepts tool parameters", async () => {
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [
+            {
+              name: "browser_webmcp_call",
+              description: "Call a page-declared WebMCP tool.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  arguments: {
+                    anyOf: [
+                      { $ref: "#/$defs/Suspend_" },
+                      { type: "object", additionalProperties: { $ref: "#/$defs/Suspend_" } },
+                    ],
+                  },
+                },
+                $defs: {
+                  Suspend_: { anyOf: [{ type: "string" }, { $ref: "#/$defs/Arrays_" }] },
+                  Arrays_: { type: "array", items: { $ref: "#/$defs/Suspend_" } },
+                },
+              },
+            },
+          ],
+        },
+      });
+    };
+    const tools = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+      defineTool: (tool) => tool,
+      fetch,
+    });
+    const parameters: unknown = tools[0]?.parameters;
+    expect(parameters).toBeDefined();
+    // Every surviving node is $ref-free and $defs-free.
+    const pending: Array<unknown> = [parameters];
+    while (pending.length > 0) {
+      const node = pending.pop();
+      if (Array.isArray(node)) {
+        pending.push(...node);
+        continue;
+      }
+      if (node !== null && typeof node === "object") {
+        expect(node).not.toHaveProperty("$ref");
+        expect(node).not.toHaveProperty("$defs");
+        pending.push(...Object.values(node));
+      }
+    }
+    // Shape survives: arguments still offers two object variants.
+    expect(parameters).toMatchObject({
+      type: "object",
+      properties: { arguments: { anyOf: [{ type: "object" }, { type: "object" }] } },
+    });
+  });
 });
 
 describe("Pi Bash process supervision", () => {
