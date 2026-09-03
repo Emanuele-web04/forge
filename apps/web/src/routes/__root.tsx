@@ -994,18 +994,64 @@ function isPendingInteractionDetailMissing(threadId: ThreadId): boolean {
   const options = {
     latestTurnId: thread.latestTurn?.turnId,
   };
-  return (
-    (thread.hasPendingApprovals === true &&
-      derivePendingApprovals(thread.activities, thread.pendingInteractions, {
+  const hasMatchingSettlement = (
+    interactionKind: "approval" | "userInput",
+    request: { readonly requestId: string; readonly lifecycleGeneration?: string },
+  ) =>
+    thread.pendingInteractions?.some(
+      (interaction) =>
+        interaction.interactionKind === interactionKind &&
+        interaction.requestId === request.requestId &&
+        (interaction.lifecycleGeneration ?? undefined) === request.lifecycleGeneration,
+    ) === true;
+
+  if (thread.hasPendingApprovals === true) {
+    const actionableApprovals = derivePendingApprovals(
+      thread.activities,
+      thread.pendingInteractions,
+      {
         ...options,
         authoritativeHasPending: true,
-      }).length === 0) ||
-    (thread.hasPendingUserInput === true &&
-      derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
+      },
+    );
+    if (actionableApprovals.length === 0) {
+      const replayedApprovals = derivePendingApprovals(thread.activities, undefined, {
         ...options,
         authoritativeHasPending: true,
-      }).length === 0)
-  );
+      });
+      if (
+        replayedApprovals.length === 0 ||
+        replayedApprovals.some((request) => !hasMatchingSettlement("approval", request))
+      ) {
+        return true;
+      }
+    }
+  }
+
+  if (thread.hasPendingUserInput === true) {
+    const actionableUserInputs = derivePendingUserInputs(
+      thread.activities,
+      thread.pendingInteractions,
+      {
+        ...options,
+        authoritativeHasPending: true,
+      },
+    );
+    if (actionableUserInputs.length === 0) {
+      const replayedUserInputs = derivePendingUserInputs(thread.activities, undefined, {
+        ...options,
+        authoritativeHasPending: true,
+      });
+      if (
+        replayedUserInputs.length === 0 ||
+        replayedUserInputs.some((request) => !hasMatchingSettlement("userInput", request))
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
@@ -1163,6 +1209,7 @@ function EventRouter() {
     const threadSnapshotNotFoundRetryAttempted = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
     const threadProjectionReconcileInFlight = new Map<ThreadId, number>();
+    const threadProjectionReconcilePendingById = new Map<ThreadId, number>();
     const threadProjectionTerminalFencePending = new Set<ThreadId>();
     // Sequence of the session-set / shell upsert that armed each terminal fence.
     // Cleared only once a detail snapshot proves post-settle assistant finals
@@ -1282,6 +1329,7 @@ function EventRouter() {
       threadSnapshotRefreshPending.delete(threadId);
       threadSnapshotNotFoundRetryAttempted.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
+      threadProjectionReconcilePendingById.delete(threadId);
       clearThreadProjectionTerminalFence(threadId);
       threadCatchupBackoffById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
@@ -1363,6 +1411,7 @@ function EventRouter() {
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         threadProjectionReconcileInFlight.delete(threadId);
+        threadProjectionReconcilePendingById.delete(threadId);
         clearThreadProjectionTerminalFence(threadId);
         threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
@@ -1774,14 +1823,22 @@ function EventRouter() {
         });
     };
 
-    const reconcileThreadProjection = async (threadId: ThreadId): Promise<void> => {
+    const reconcileThreadProjection = async (
+      threadId: ThreadId,
+      options?: { readonly queueIfInFlight?: boolean },
+    ): Promise<void> => {
       const subscriptionGeneration = threadSubscriptionGenerationById.get(threadId);
       if (
         disposed ||
         !subscribedThreadIds.has(threadId) ||
-        subscriptionGeneration === undefined ||
-        threadProjectionReconcileInFlight.has(threadId)
+        subscriptionGeneration === undefined
       ) {
+        return;
+      }
+      if (threadProjectionReconcileInFlight.has(threadId)) {
+        if (options?.queueIfInFlight === true) {
+          threadProjectionReconcilePendingById.set(threadId, subscriptionGeneration);
+        }
         return;
       }
       threadProjectionReconcileInFlight.set(threadId, subscriptionGeneration);
@@ -1865,6 +1922,13 @@ function EventRouter() {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
+          if (
+            threadProjectionReconcilePendingById.get(threadId) === subscriptionGeneration
+          ) {
+            threadProjectionReconcilePendingById.delete(threadId);
+            void reconcileThreadProjection(threadId).catch(() => undefined);
+            return;
+          }
           if (projectionAttemptFailed) {
             // A failed reconcile is not evidence of a quiet healthy stream.
             // Retry it at the base cadence, while preserving backoff when the
@@ -1968,7 +2032,9 @@ function EventRouter() {
         // the client (notably for orchestrator-created threads with no projected
         // session or turn yet). Fetch the authoritative detail immediately so
         // the composer does not remain an empty, unactionable conversation.
-        void reconcileThreadProjection(item.thread.id).catch(() => undefined);
+        void reconcileThreadProjection(item.thread.id, { queueIfInFlight: true }).catch(
+          () => undefined,
+        );
       }
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);

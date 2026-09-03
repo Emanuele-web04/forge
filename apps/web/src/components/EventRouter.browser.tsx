@@ -2,6 +2,7 @@ import "../index.css";
 
 import {
   ApprovalRequestId,
+  CommandId,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -172,6 +173,57 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
     ],
     updatedAt: NOW_ISO,
   } satisfies OrchestrationReadModel;
+}
+
+function withApprovalRequest(
+  thread: OrchestrationThread,
+  input: {
+    readonly requestId: ApprovalRequestId;
+    readonly status?: "pending" | "responding" | "uncertain";
+  },
+): OrchestrationThread {
+  const createdAt = "2026-03-04T12:00:05.000Z";
+  const lifecycleGeneration = `generation:${input.requestId}`;
+  const status = input.status ?? "pending";
+  return {
+    ...thread,
+    updatedAt: createdAt,
+    hasPendingApprovals: true,
+    activities: [
+      {
+        id: EventId.makeUnsafe(`event:${input.requestId}`),
+        createdAt,
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: input.requestId,
+          lifecycleGeneration,
+          requestKind: "command",
+          requestType: "command_execution_approval",
+          detail: "Command: git status",
+        },
+        turnId: null,
+        sequence: 2,
+      },
+    ],
+    pendingInteractions: [
+      {
+        interactionKind: "approval",
+        requestId: input.requestId,
+        threadId: thread.id,
+        turnId: null,
+        lifecycleGeneration,
+        status,
+        decision: status === "pending" ? null : "accept",
+        responseCommandId:
+          status === "pending" ? null : CommandId.makeUnsafe(`response:${input.requestId}`),
+        responseRequestedAt: status === "pending" ? null : createdAt,
+        createdAt,
+        resolvedAt: null,
+      },
+    ],
+  };
 }
 
 function buildFixture(): TestFixture {
@@ -813,47 +865,14 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       const requestId = ApprovalRequestId.makeUnsafe("approval-orchestrator-thread");
-      const approvalActivity = {
-        id: EventId.makeUnsafe("event-orchestrator-approval"),
-        createdAt: "2026-03-04T12:00:05.000Z",
-        tone: "approval",
-        kind: "approval.requested",
-        summary: "Command approval requested",
-        payload: {
-          requestId,
-          requestKind: "command",
-          requestType: "command_execution_approval",
-          detail: "Command: git status",
-        },
-        turnId: null,
-        sequence: 2,
-      } as const;
       fixture = {
         ...fixture,
         snapshot: {
           ...fixture.snapshot,
           snapshotSequence: 2,
-          threads: fixture.snapshot.threads.map((thread) => ({
-            ...thread,
-            updatedAt: "2026-03-04T12:00:05.000Z",
-            hasPendingApprovals: true,
-            activities: [approvalActivity],
-            pendingInteractions: [
-              {
-                interactionKind: "approval" as const,
-                requestId,
-                threadId: THREAD_ID,
-                turnId: null,
-                lifecycleGeneration: null,
-                status: "pending" as const,
-                decision: null,
-                responseCommandId: null,
-                responseRequestedAt: null,
-                createdAt: approvalActivity.createdAt,
-                resolvedAt: null,
-              },
-            ],
-          })),
+          threads: fixture.snapshot.threads.map((thread) =>
+            withApprovalRequest(thread, { requestId }),
+          ),
           updatedAt: "2026-03-04T12:00:05.000Z",
         },
       };
@@ -879,6 +898,124 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
+
+  it("queues a pending approval repair behind an older projection read", async () => {
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        creationSource: "synara_mcp",
+        sourceThreadId: OTHER_THREAD_ID,
+        messages: [],
+        latestTurn: null,
+        session: {
+          threadId: THREAD_ID,
+          status: "starting",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      const delayedResponse = pendingThreadDetailSnapshotResponse!;
+      const staleThread = {
+        ...fixture.snapshot.threads[0]!,
+        session: null,
+        hasPendingApprovals: false,
+      };
+      pendingThreadDetailSnapshotResponse = {
+        ...delayedResponse,
+        result: {
+          snapshotSequence: 1,
+          thread: staleThread,
+        },
+      };
+
+      const requestId = ApprovalRequestId.makeUnsafe("approval-after-stale-projection");
+      const currentThread = withApprovalRequest(staleThread, { requestId });
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          threads: [currentThread],
+          updatedAt: currentThread.updatedAt,
+        },
+      };
+      const requestCountBeforeApproval = getThreadDetailSnapshotRequestCount;
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+      });
+      await vi.waitFor(() =>
+        expect(getThreadFromState(useStore.getState(), THREAD_ID)?.hasPendingApprovals).toBe(true),
+      );
+
+      sendPendingThreadDetailSnapshotResponse();
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            requestCountBeforeApproval,
+          );
+          expect(document.body.textContent).toContain("Approve this command?");
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0]?.requestId,
+          ).toBe(requestId);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("does not poll a hydrated non-actionable approval", async () => {
+    const baseSnapshot = createSnapshot({
+      creationSource: "synara_mcp",
+      sourceThreadId: OTHER_THREAD_ID,
+      messages: [],
+      session: null,
+    });
+    fixture = {
+      ...fixture,
+      snapshot: {
+        ...baseSnapshot,
+        threads: [
+          withApprovalRequest(baseSnapshot.threads[0]!, {
+            requestId: ApprovalRequestId.makeUnsafe("approval-response-uncertain"),
+            status: "uncertain",
+          }),
+        ],
+      },
+    };
+    const mounted = await mountApp();
+
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 5_200));
+      expect(getThreadDetailSnapshotRequestCount).toBe(0);
+      expect(document.body.textContent).not.toContain("Approve this command?");
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
 
   it("polls a subscribed running thread to recover missed detail events", async () => {
     const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
