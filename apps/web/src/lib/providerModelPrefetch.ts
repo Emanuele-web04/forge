@@ -216,7 +216,6 @@ export function prefetchProviderModelsForNewThread(
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
-      retry: 0,
       staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     });
@@ -267,7 +266,6 @@ export function prefetchDroidModelsForNewThread(
       settings: input.settings,
       cwd,
     }),
-    retry: 0,
     staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
   });

@@ -42,6 +42,7 @@ interface QueryResultLike {
     readonly models?: ReadonlyArray<ProviderModelDescriptor>;
     readonly source?: string;
   };
+  readonly error?: unknown;
   readonly isFetching: boolean;
   readonly isLoading: boolean;
   readonly isPlaceholderData: boolean;
@@ -313,5 +314,23 @@ describe("useProviderModelCatalog", () => {
     }).at(-1);
 
     expect(catalog?.discoveryErrorsByProvider.devin).toBe("Devin CLI failed");
+  });
+
+  it("surfaces a rejected discovery after retries are exhausted", () => {
+    modelQueries.set("opencode", {
+      error: new Error("OpenCode model discovery temporarily unavailable"),
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "opencode",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.discoveryErrorsByProvider.opencode).toBe(
+      "OpenCode model discovery temporarily unavailable",
+    );
   });
 });

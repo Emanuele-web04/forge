@@ -431,7 +431,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
 });
 
 describe("prefetchModelsForNewThread — warm-option invariants", () => {
-  it("applies retry: 0 and 30-minute gcTime to every warm call; capabilities once per provider; droid capabilities only on explicit intent", async () => {
+  it("preserves model retry policies while keeping ancillary warming fail-fast", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
@@ -444,8 +444,15 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     // 8 models + 8 capabilities + 3 agents (claudeAgent, codex, opencode).
     expect(calls).toHaveLength(8 + 8 + 3);
     for (const options of calls) {
-      expect(options.retry).toBe(0);
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
+    }
+    const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
+    expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);
+    for (const options of modelCalls.filter((options) => options.queryKey[2] !== "cursor")) {
+      expect(options.retry).toBe(3);
+    }
+    for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
+      expect(options.retry).toBe(0);
     }
     const capabilityKeys = calls
       .map((options) => options.queryKey)
@@ -463,10 +470,16 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       projectCwd: "/tmp/project",
       includeDroid: true,
     });
-    const droidKeys = prefetchQuery.mock.calls.map((call) => call[0].queryKey);
+    const droidCalls = prefetchQuery.mock.calls.map((call) => call[0]);
+    const droidKeys = droidCalls.map((options) => options.queryKey);
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
     expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid"));
+    expect(
+      droidCalls.find(
+        (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
+      )?.retry,
+    ).toBe(2);
   });
 });
