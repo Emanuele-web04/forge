@@ -2,23 +2,27 @@
 // Purpose: Shared provider→model option catalog (static + custom + runtime-discovered)
 //          for composer-like surfaces outside ChatView, e.g. the kanban new-task dialog.
 // Layer: Web hooks
-// Exports: useProviderModelCatalog, ProviderModelCatalog
+// Exports: useProviderModelCatalog, ProviderModelCatalog, MODEL_CATALOG_PROVIDERS
 
 import type {
   ProviderAgentDescriptor,
   ProviderKind,
+  ProviderListModelsResult,
   ProviderModelDescriptor,
 } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
+  hasResolvedModelCatalog,
   isInitialModelDiscoveryPending,
   providerAgentsQueryOptions,
   providerModelsQueryOptions,
+  resolveModelDiscoveryError,
+  resolveProviderModelsQueryInput,
 } from "../lib/providerDiscoveryReactQuery";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
 
@@ -49,7 +53,71 @@ export interface ProviderModelCatalog {
   discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
 }
 
+/** Fixed hook-call order for the per-provider model queries. */
+export const MODEL_CATALOG_PROVIDERS: ReadonlyArray<ProviderKind> = [
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "opencode",
+  "pi",
+  "devin",
+];
+
+/**
+ * Providers whose static list is a thin fallback, so the picker shows a
+ * skeleton until runtime discovery settles. Codex/Claude/Grok ship a complete
+ * static catalog and paint it immediately while discovery refines it.
+ */
+const SKELETON_WHILE_DISCOVERING: ReadonlySet<ProviderKind> = new Set<ProviderKind>([
+  "antigravity",
+  "cursor",
+  "droid",
+  "opencode",
+  "pi",
+  "devin",
+]);
+
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
+const EMPTY_MODELS: ReadonlyArray<ProviderModelDescriptor> = [];
+
+interface ModelCatalogQueryView {
+  readonly data: ProviderListModelsResult | undefined;
+  readonly error: unknown;
+  readonly isFetching: boolean;
+  readonly isLoading: boolean;
+  readonly isPlaceholderData: boolean;
+}
+
+/**
+ * Project the useQueries result array onto a provider-keyed record of plain
+ * objects. TanStack structurally shares the combined value, so the record (and
+ * every memo downstream of it) keeps its identity while nothing changed.
+ */
+function combineModelCatalogQueries(
+  results: ReadonlyArray<{
+    readonly data: ProviderListModelsResult | undefined;
+    readonly error: unknown;
+    readonly isFetching: boolean;
+    readonly isLoading: boolean;
+    readonly isPlaceholderData: boolean;
+  }>,
+): Record<ProviderKind, ModelCatalogQueryView> {
+  const byProvider = {} as Record<ProviderKind, ModelCatalogQueryView>;
+  MODEL_CATALOG_PROVIDERS.forEach((provider, index) => {
+    const query = results[index];
+    byProvider[provider] = {
+      data: query?.data,
+      error: query?.error ?? null,
+      isFetching: query?.isFetching ?? false,
+      isLoading: query?.isLoading ?? false,
+      isPlaceholderData: query?.isPlaceholderData ?? false,
+    };
+  });
+  return byProvider;
+}
 
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
@@ -85,123 +153,78 @@ export function useProviderModelCatalog(input: {
       input.prefetchProviders === undefined ? null : new Set<ProviderKind>(input.prefetchProviders),
     [input.prefetchProviders],
   );
-  const shouldDiscoverProvider = (
-    provider: ProviderKind,
-    prefetchRequested = discoveryEnabled,
-  ): boolean => {
-    // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
-    // undefined while the settings query is in flight and stays undefined if it
-    // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
-    // that as "disabled" would silence discovery for every provider, including the
-    // selected one, which is precisely the "my model disappeared" symptom. Mirrors
-    // the server-side fallback in ProviderDiscoveryService.listModels.
-    if (serverSettings?.providers[provider]?.enabled === false) {
-      return false;
+  const discoveryPlan = useMemo(() => {
+    const shouldDiscoverProvider = (
+      provider: ProviderKind,
+      prefetchRequested: boolean,
+    ): boolean => {
+      // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
+      // undefined while the settings query is in flight and stays undefined if it
+      // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
+      // that as "disabled" would silence discovery for every provider, including the
+      // selected one, which is precisely the "my model disappeared" symptom. Mirrors
+      // the server-side fallback in ProviderDiscoveryService.listModels.
+      if (serverSettings?.providers[provider]?.enabled === false) {
+        return false;
+      }
+      if (provider === selectedProvider) {
+        return true;
+      }
+      if (!prefetchRequested) {
+        return false;
+      }
+      return prefetchProviderSet?.has(provider) ?? !hiddenProviderSet.has(provider);
+    };
+    const models = {} as Record<ProviderKind, boolean>;
+    for (const provider of MODEL_CATALOG_PROVIDERS) {
+      models[provider] =
+        provider === "droid"
+          ? // Droid probes every model through a disposable ACP session. Keep it
+            // provider-scoped: explicit prefetch only, picker surfaces stay cold.
+            shouldDiscoverProvider(
+              "droid",
+              discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false),
+            )
+          : shouldDiscoverProvider(provider, discoveryEnabled);
     }
-    if (provider === selectedProvider) {
-      return true;
-    }
-    if (!prefetchRequested) {
-      return false;
-    }
-    return prefetchProviderSet?.has(provider) ?? !hiddenProviderSet.has(provider);
-  };
+    const eagerCoreAgents = agentDiscoveryPolicy === "eager-core";
+    return {
+      models,
+      coreAgents: {
+        claudeAgent: shouldDiscoverProvider("claudeAgent", eagerCoreAgents),
+        codex: shouldDiscoverProvider("codex", eagerCoreAgents),
+      },
+    };
+  }, [
+    agentDiscoveryPolicy,
+    discoveryEnabled,
+    hiddenProviderSet,
+    prefetchProviderSet,
+    selectedProvider,
+    serverSettings,
+  ]);
 
-  const claudeModelDiscoveryEnabled = shouldDiscoverProvider("claudeAgent");
-  const codexModelDiscoveryEnabled = shouldDiscoverProvider("codex");
-  const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
-  const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
-  const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
-  // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
-  const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
-  const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
-  const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
-  const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
-  const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
-
-  const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "claudeAgent",
-      binaryPath: settings.claudeBinaryPath || null,
-      enabled: claudeModelDiscoveryEnabled,
-    }),
-  );
-  const codexDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "codex",
-      enabled: codexModelDiscoveryEnabled,
-    }),
-  );
-  const cursorDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "cursor",
-      binaryPath: settings.cursorBinaryPath || null,
-      apiEndpoint: settings.cursorApiEndpoint || null,
-      enabled: cursorModelDiscoveryEnabled,
-    }),
-  );
-  const antigravityModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "antigravity",
-      binaryPath: settings.antigravityBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: antigravityModelDiscoveryEnabled,
-    }),
-  );
-  const grokDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "grok",
-      binaryPath: settings.grokBinaryPath || null,
-      enabled: grokModelDiscoveryEnabled,
-    }),
-  );
-  const droidDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "droid",
-      binaryPath: settings.droidBinaryPath || null,
-      cwd: discoveryCwd,
-      // Droid probes every model through a disposable ACP session. Keep it
-      // provider-scoped instead of warming it from unrelated picker/settings UI.
-      enabled: droidModelDiscoveryEnabled,
-    }),
-  );
-  const openCodeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "opencode",
-      binaryPath: settings.openCodeBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: openCodeModelDiscoveryEnabled,
-    }),
-  );
-  const piDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "pi",
-      binaryPath: settings.piBinaryPath || null,
-      agentDir: settings.piAgentDir || null,
-      cwd: discoveryCwd,
-      enabled: piModelDiscoveryEnabled,
-    }),
-  );
-  const devinDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "devin",
-      binaryPath: settings.devinBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: devinModelDiscoveryEnabled,
-    }),
-  );
+  const modelQueries = useQueries({
+    queries: MODEL_CATALOG_PROVIDERS.map((provider) =>
+      providerModelsQueryOptions({
+        ...resolveProviderModelsQueryInput({ provider, settings, cwd: discoveryCwd }),
+        enabled: discoveryPlan.models[provider],
+      }),
+    ),
+    combine: combineModelCatalogQueries,
+  });
 
   // Agent/mode discovery (opencode "Agent" picker, claude/codex subagents).
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
-      enabled: shouldDiscoverProvider("claudeAgent", agentDiscoveryPolicy === "eager-core"),
+      enabled: discoveryPlan.coreAgents.claudeAgent,
     }),
   );
   const codexDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "codex",
-      enabled: shouldDiscoverProvider("codex", agentDiscoveryPolicy === "eager-core"),
+      enabled: discoveryPlan.coreAgents.codex,
     }),
   );
   const openCodeDynamicAgentsQuery = useQuery(
@@ -209,191 +232,54 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: openCodeModelDiscoveryEnabled,
+      enabled: discoveryPlan.models.opencode,
     }),
-  );
-
-  const cursorRuntimeModels = useMemo(
-    () => collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
-    [cursorDynamicModelsQuery.data?.models],
-  );
-
-  const hasResolvedCursorModelDiscovery =
-    (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
-      cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
-    (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const cursorModelDiscoveryPending =
-    cursorModelDiscoveryEnabled &&
-    !hasResolvedCursorModelDiscovery &&
-    isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
-  const hasResolvedDroidModelDiscovery =
-    droidDynamicModelsQuery.data?.source === "droid-acp" &&
-    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const droidModelDiscoveryPending =
-    droidModelDiscoveryEnabled &&
-    !hasResolvedDroidModelDiscovery &&
-    isInitialModelDiscoveryPending(droidDynamicModelsQuery);
-  const hasResolvedOpenCodeModelDiscovery =
-    (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
-      openCodeDynamicModelsQuery.data?.source === "opencode") &&
-    (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const openCodeModelDiscoveryPending =
-    openCodeModelDiscoveryEnabled &&
-    !hasResolvedOpenCodeModelDiscovery &&
-    isInitialModelDiscoveryPending(openCodeDynamicModelsQuery);
-  const hasResolvedPiModelDiscovery =
-    piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
-    (piDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const piModelDiscoveryPending =
-    piModelDiscoveryEnabled &&
-    !hasResolvedPiModelDiscovery &&
-    isInitialModelDiscoveryPending(piDynamicModelsQuery);
-  const hasResolvedDevinModelDiscovery =
-    (devinDynamicModelsQuery.data?.source === "devin-cli" ||
-      // Static fallback descriptors are a valid resolved catalog: the adapter
-      // serves its built-in matrix when CLI discovery is unavailable, so the
-      // picker must render them instead of spinning (or banner-ing) forever.
-      devinDynamicModelsQuery.data?.source === "devin.static") &&
-    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const devinModelDiscoveryPending =
-    devinModelDiscoveryEnabled &&
-    !hasResolvedDevinModelDiscovery &&
-    isInitialModelDiscoveryPending(devinDynamicModelsQuery);
-  const antigravityModelDiscoveryPending =
-    antigravityModelDiscoveryEnabled &&
-    !(
-      antigravityModelsQuery.data?.source === "antigravity.cli" &&
-      (antigravityModelsQuery.data.models.length ?? 0) > 0
-    ) &&
-    isInitialModelDiscoveryPending(antigravityModelsQuery);
-
-  const modelOptionsByProvider = useMemo(() => {
-    const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
-      codex: getAppModelOptions("codex", customModelsByProvider.codex, modelHintByProvider?.codex),
-      claudeAgent: getAppModelOptions(
-        "claudeAgent",
-        customModelsByProvider.claudeAgent,
-        modelHintByProvider?.claudeAgent,
-      ),
-      cursor: getAppModelOptions(
-        "cursor",
-        customModelsByProvider.cursor,
-        modelHintByProvider?.cursor,
-      ),
-      antigravity: getAppModelOptions(
-        "antigravity",
-        customModelsByProvider.antigravity,
-        modelHintByProvider?.antigravity,
-      ),
-      grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
-      droid: getAppModelOptions("droid", customModelsByProvider.droid, modelHintByProvider?.droid),
-      opencode: getAppModelOptions(
-        "opencode",
-        customModelsByProvider.opencode,
-        modelHintByProvider?.opencode,
-      ),
-      pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
-      devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
-    };
-    const result: Record<
-      ProviderKind,
-      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
-    > = { ...staticOptions };
-    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
-      claudeAgent: claudeDynamicModelsQuery.data,
-      codex: codexDynamicModelsQuery.data,
-      cursor:
-        cursorDynamicModelsQuery.data === undefined
-          ? undefined
-          : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      antigravity: antigravityModelsQuery.data,
-      grok: grokDynamicModelsQuery.data,
-      droid: droidDynamicModelsQuery.data,
-      opencode: openCodeDynamicModelsQuery.data,
-      pi: piDynamicModelsQuery.data,
-      devin: devinDynamicModelsQuery.data,
-    };
-    for (const provider of [
-      "claudeAgent",
-      "codex",
-      "cursor",
-      "antigravity",
-      "grok",
-      "droid",
-      "opencode",
-      "pi",
-      "devin",
-    ] as const) {
-      const dynamicModels = dynamicSources[provider]?.models;
-      if (dynamicModels && dynamicModels.length > 0) {
-        result[provider] = mergeDynamicModelOptions({
-          provider,
-          staticOptions: staticOptions[provider],
-          dynamicModels,
-        });
-      }
-    }
-    return result;
-  }, [
-    antigravityModelsQuery.data,
-    claudeDynamicModelsQuery.data,
-    codexDynamicModelsQuery.data,
-    cursorDynamicModelsQuery.data,
-    cursorRuntimeModels,
-    customModelsByProvider,
-    droidDynamicModelsQuery.data,
-    grokDynamicModelsQuery.data,
-    modelHintByProvider,
-    openCodeDynamicModelsQuery.data,
-    piDynamicModelsQuery.data,
-    devinDynamicModelsQuery.data,
-  ]);
-
-  const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
-    () => ({
-      antigravity: antigravityModelDiscoveryPending,
-      cursor: cursorModelDiscoveryPending,
-      droid: droidModelDiscoveryPending,
-      opencode: openCodeModelDiscoveryPending,
-      pi: piModelDiscoveryPending,
-      devin: devinModelDiscoveryPending,
-    }),
-    [
-      antigravityModelDiscoveryPending,
-      cursorModelDiscoveryPending,
-      droidModelDiscoveryPending,
-      openCodeModelDiscoveryPending,
-      piModelDiscoveryPending,
-      devinModelDiscoveryPending,
-    ],
   );
 
   const runtimeModelsByProvider = useMemo<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>
-  >(
-    () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
-      codex: codexDynamicModelsQuery.data?.models ?? [],
-      cursor: cursorRuntimeModels,
-      antigravity: antigravityModelsQuery.data?.models ?? [],
-      grok: grokDynamicModelsQuery.data?.models ?? [],
-      droid: droidDynamicModelsQuery.data?.models ?? [],
-      opencode: openCodeDynamicModelsQuery.data?.models ?? [],
-      pi: piDynamicModelsQuery.data?.models ?? [],
-      devin: devinDynamicModelsQuery.data?.models ?? [],
-    }),
-    [
-      antigravityModelsQuery.data?.models,
-      claudeDynamicModelsQuery.data?.models,
-      codexDynamicModelsQuery.data?.models,
-      cursorRuntimeModels,
-      droidDynamicModelsQuery.data?.models,
-      grokDynamicModelsQuery.data?.models,
-      openCodeDynamicModelsQuery.data?.models,
-      piDynamicModelsQuery.data?.models,
-      devinDynamicModelsQuery.data?.models,
-    ],
-  );
+  >(() => {
+    const result = {} as Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
+    for (const provider of MODEL_CATALOG_PROVIDERS) {
+      const models = modelQueries[provider].data?.models ?? EMPTY_MODELS;
+      result[provider] = provider === "cursor" ? collapseCursorModelVariants(models) : models;
+    }
+    return result;
+  }, [modelQueries]);
+
+  const modelOptionsByProvider = useMemo(() => {
+    const result = {} as Record<
+      ProviderKind,
+      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
+    >;
+    for (const provider of MODEL_CATALOG_PROVIDERS) {
+      const staticOptions = getAppModelOptions(
+        provider,
+        customModelsByProvider[provider],
+        modelHintByProvider?.[provider],
+      );
+      const dynamicModels = runtimeModelsByProvider[provider];
+      result[provider] =
+        dynamicModels.length > 0
+          ? mergeDynamicModelOptions({ provider, staticOptions, dynamicModels })
+          : staticOptions;
+    }
+    return result;
+  }, [customModelsByProvider, modelHintByProvider, runtimeModelsByProvider]);
+
+  const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(() => {
+    const result: Partial<Record<ProviderKind, boolean>> = {};
+    for (const provider of SKELETON_WHILE_DISCOVERING) {
+      const query = modelQueries[provider];
+      // A settled catalog (including adapter static fallbacks such as
+      // `devin.static`) never re-blanks the picker during background refetches.
+      result[provider] =
+        discoveryPlan.models[provider] &&
+        !hasResolvedModelCatalog(query.data) &&
+        isInitialModelDiscoveryPending(query);
+    }
+    return result;
+  }, [discoveryPlan, modelQueries]);
 
   const selectedRuntimeModel = useMemo(
     () =>
@@ -422,52 +308,19 @@ export function useProviderModelCatalog(input: {
   );
 
   // Discovery failures per provider, surfaced as a subtle inline note by the
-  // model pickers.
-  const discoveryErrorsByProvider = useMemo(
-    () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.error,
-      codex: codexDynamicModelsQuery.data?.error,
-      cursor: cursorDynamicModelsQuery.data?.error,
-      devin: devinDynamicModelsQuery.data?.error,
-      antigravity: antigravityModelsQuery.data?.error,
-      grok: grokDynamicModelsQuery.data?.error,
-      droid: droidDynamicModelsQuery.data?.error,
-      opencode: openCodeDynamicModelsQuery.data?.error,
-      pi: piDynamicModelsQuery.data?.error,
-    }),
-    [
-      antigravityModelsQuery.data?.error,
-      claudeDynamicModelsQuery.data?.error,
-      codexDynamicModelsQuery.data?.error,
-      cursorDynamicModelsQuery.data?.error,
-      devinDynamicModelsQuery.data?.error,
-      droidDynamicModelsQuery.data?.error,
-      grokDynamicModelsQuery.data?.error,
-      openCodeDynamicModelsQuery.data?.error,
-      piDynamicModelsQuery.data?.error,
-    ],
-  );
+  // model pickers. Includes rejected queries so a missing CLI or a timeout is
+  // visible instead of silently rendering the static list as authoritative.
+  const discoveryErrorsByProvider = useMemo(() => {
+    const result: Partial<Record<ProviderKind, string | undefined>> = {};
+    for (const provider of MODEL_CATALOG_PROVIDERS) {
+      result[provider] = resolveModelDiscoveryError(modelQueries[provider]);
+    }
+    return result;
+  }, [modelQueries]);
 
   const selectedProviderRuntimeModelDiscoveryPending =
     loadingModelProviders[selectedProvider] ?? false;
-  const selectedProviderModelsQuery =
-    selectedProvider === "claudeAgent"
-      ? claudeDynamicModelsQuery
-      : selectedProvider === "codex"
-        ? codexDynamicModelsQuery
-        : selectedProvider === "cursor"
-          ? cursorDynamicModelsQuery
-          : selectedProvider === "antigravity"
-            ? antigravityModelsQuery
-            : selectedProvider === "grok"
-              ? grokDynamicModelsQuery
-              : selectedProvider === "droid"
-                ? droidDynamicModelsQuery
-                : selectedProvider === "opencode"
-                  ? openCodeDynamicModelsQuery
-                  : selectedProvider === "pi"
-                    ? piDynamicModelsQuery
-                    : devinDynamicModelsQuery;
+  const selectedProviderModelsQuery = modelQueries[selectedProvider];
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

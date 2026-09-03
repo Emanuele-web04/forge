@@ -7,6 +7,7 @@ import {
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
+import { replaceEqualDeep } from "@tanstack/react-query";
 import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,12 +17,13 @@ import { useProviderModelCatalog } from "./useProviderModelCatalog";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
+  useQueries: vi.fn(),
   useQuery: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useQuery: mocks.useQuery };
+  return { ...actual, useQueries: mocks.useQueries, useQuery: mocks.useQuery };
 });
 
 vi.mock("../appSettings", async (importOriginal) => {
@@ -34,7 +36,13 @@ interface QueryOptionsLike {
   readonly enabled?: boolean;
 }
 
+interface QueriesOptionsLike {
+  readonly queries: ReadonlyArray<QueryOptionsLike>;
+  readonly combine?: (results: ReadonlyArray<QueryResultLike>) => unknown;
+}
+
 interface QueryResultLike {
+  readonly error?: unknown;
   readonly data?: {
     readonly agents?: ReadonlyArray<{ name: string; displayName: string }>;
     readonly cached?: boolean;
@@ -103,11 +111,13 @@ function readAgentQueryEnabled(provider: ProviderKind): boolean | undefined {
 }
 
 function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
-  const call = mocks.useQuery.mock.calls.find(([value]) => {
-    const queryKey = (value as QueryOptionsLike).queryKey;
-    return queryKey[1] === "models" && queryKey[2] === provider;
-  });
-  return call ? (call[0] as QueryOptionsLike).enabled : undefined;
+  for (const [value] of mocks.useQueries.mock.calls) {
+    const match = (value as QueriesOptionsLike).queries.find(
+      (query) => query.queryKey[1] === "models" && query.queryKey[2] === provider,
+    );
+    if (match) return match.enabled;
+  }
+  return undefined;
 }
 
 beforeEach(() => {
@@ -116,11 +126,22 @@ beforeEach(() => {
   mocks.useAppSettings
     .mockReset()
     .mockReturnValue({ settings: SETTINGS, serverSettings: DEFAULT_SERVER_SETTINGS });
+  // Mirrors QueriesObserver: the combined value is structurally shared across renders.
+  let lastCombined: unknown;
+  mocks.useQueries.mockReset().mockImplementation((value: QueriesOptionsLike) => {
+    const results = value.queries.map((query) => {
+      const [, resource, provider] = query.queryKey;
+      if (resource !== "models") {
+        throw new Error(`Unexpected provider catalog query: ${String(resource)}`);
+      }
+      return modelQueries.get(provider as ProviderKind) ?? EMPTY_QUERY;
+    });
+    if (!value.combine) return results;
+    lastCombined = replaceEqualDeep(lastCombined, value.combine(results));
+    return lastCombined;
+  });
   mocks.useQuery.mockReset().mockImplementation((value: QueryOptionsLike) => {
     const [, resource, provider] = value.queryKey;
-    if (resource === "models") {
-      return modelQueries.get(provider as ProviderKind) ?? EMPTY_QUERY;
-    }
     if (resource === "agents") {
       return agentQueries.get(provider as ProviderKind) ?? EMPTY_QUERY;
     }
@@ -150,6 +171,7 @@ describe("useProviderModelCatalog", () => {
     expect(readAgentQueryEnabled("codex")).toBe(false);
 
     mocks.useQuery.mockClear();
+    mocks.useQueries.mockClear();
     readCatalogRenders({
       selectedProvider: "cursor",
       discoveryEnabled: false,
@@ -251,6 +273,7 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("droid")).toBe(true);
 
     mocks.useQuery.mockClear();
+    mocks.useQueries.mockClear();
     readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
     expect(readModelQueryEnabled("droid")).toBe(false);
   });
@@ -313,5 +336,64 @@ describe("useProviderModelCatalog", () => {
     }).at(-1);
 
     expect(catalog?.discoveryErrorsByProvider.devin).toBe("Devin CLI failed");
+  });
+
+  it("surfaces a rejected discovery query instead of silently showing the static list", () => {
+    modelQueries.set("opencode", {
+      error: new Error("Model discovery timed out after 45s."),
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "opencode",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.discoveryErrorsByProvider.opencode).toBe(
+      "Model discovery timed out after 45s.",
+    );
+    expect(catalog?.loadingModelProviders.opencode).toBe(false);
+  });
+
+  it("treats a devin.static fallback with models as resolved, not loading", () => {
+    modelQueries.set("devin", {
+      data: {
+        models: [{ slug: "devin-static", name: "Devin" }],
+        source: "devin.static",
+        cached: false,
+        error: "Devin CLI failed",
+      },
+      isFetching: true,
+      isLoading: false,
+      isPlaceholderData: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "devin",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.devin).toBe(false);
+    expect(catalog?.selectedProviderModelsLoading).toBe(false);
+  });
+
+  it("shows the skeleton only for the first fetch of an on-demand provider", () => {
+    modelQueries.set("pi", {
+      data: { models: [], source: "empty", cached: false },
+      isFetching: true,
+      isLoading: false,
+      isPlaceholderData: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "pi",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.pi).toBe(true);
+    expect(catalog?.selectedProviderRuntimeModelDiscoveryPending).toBe(true);
+    expect(catalog?.loadingModelProviders.codex).toBeUndefined();
   });
 });

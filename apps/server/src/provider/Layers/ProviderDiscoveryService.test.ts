@@ -332,6 +332,49 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(1);
   });
 
+  it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
+    let adapterCalls = 0;
+    const baseLayer = Layer.mergeAll(
+      makeConfigLayer(),
+      ServerSettingsService.layerTest(),
+      makeRegistryLayer({
+        listModels: () => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      }),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+    const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const first = yield* discovery.listModels({ provider: "cursor", cwd });
+        const second = yield* discovery.listModels({ provider: "cursor", cwd });
+        const otherCwd = yield* discovery.listModels({ provider: "cursor", cwd: homeDir });
+        return { first, second, otherCwd };
+      }).pipe(Effect.provide(testLayer)) as Effect.Effect<
+        Record<"first" | "second" | "otherCwd", ProviderListModelsResult>,
+        never,
+        never
+      >,
+    );
+
+    expect(results.first.cached).toBe(false);
+    expect(results.second).toEqual({ ...results.first, cached: true });
+    // A new cwd reuses the known runtime catalog instead of cold-starting the picker.
+    expect(results.otherCwd.models).toEqual(results.first.models);
+    expect(results.otherCwd.cached).toBe(true);
+    // The sibling answer never blocks on the adapter; the cwd refresh runs detached.
+    expect(adapterCalls).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(adapterCalls).toBe(2);
+  });
+
   it("omits malformed model descriptors while preserving valid entries", async () => {
     const result = await runListModels({
       adapter: {
