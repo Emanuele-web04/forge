@@ -18,10 +18,7 @@ const asJsonRecord = (node: unknown, label: string): Record<string, unknown> => 
 
 const countSchemaKeyOccurrences = (node: unknown, key: string): number => {
   if (Array.isArray(node)) {
-    return node.reduce<number>(
-      (total, child) => total + countSchemaKeyOccurrences(child, key),
-      0,
-    );
+    return node.reduce<number>((total, child) => total + countSchemaKeyOccurrences(child, key), 0);
   }
   if (isJsonRecord(node)) {
     return Object.entries(node).reduce<number>(
@@ -123,10 +120,7 @@ describe("sanitizeToolInputSchema", () => {
       if (propertyName === "arguments") continue;
       assert.deepEqual(outputProperties[propertyName], inputProperties[propertyName]);
     }
-    assert.include(
-      JSON.stringify(outputProperties.toolId),
-      "never substitute the page tool name",
-    );
+    assert.include(JSON.stringify(outputProperties.toolId), "never substitute the page tool name");
     if (!Array.isArray(output.required)) {
       throw new Error("Expected the sanitized webmcp schema to keep its required list.");
     }
@@ -156,9 +150,9 @@ describe("sanitizeToolInputSchema", () => {
     assert.strictEqual(sanitizeToolInputSchema("free-form"), "free-form");
     assert.strictEqual(sanitizeToolInputSchema(32), 32);
     assert.strictEqual(sanitizeToolInputSchema(null), null);
-    assert.deepEqual(
-      sanitizeToolInputSchema([{ $ref: "#/$defs/JsonValue" }, { type: "string" }]),
-      [{ type: "object", description: FALLBACK_OBJECT_DESCRIPTION }, { type: "string" }],
-    );
+    assert.deepEqual(sanitizeToolInputSchema([{ $ref: "#/$defs/JsonValue" }, { type: "string" }]), [
+      { type: "object", description: FALLBACK_OBJECT_DESCRIPTION },
+      { type: "string" },
+    ]);
   });
 });

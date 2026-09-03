@@ -463,10 +463,7 @@ const isJsonRecord = (node: unknown): node is Record<string, unknown> =>
 
 const countSchemaKeyOccurrences = (node: unknown, key: string): number => {
   if (Array.isArray(node)) {
-    return node.reduce<number>(
-      (total, child) => total + countSchemaKeyOccurrences(child, key),
-      0,
-    );
+    return node.reduce<number>((total, child) => total + countSchemaKeyOccurrences(child, key), 0);
   }
   if (isJsonRecord(node)) {
     return Object.entries(node).reduce<number>(
@@ -541,10 +538,7 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
       assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$ref"), 0);
       assert.equal(countSchemaKeyOccurrences(servedWebmcpCall.inputSchema, "$defs"), 0);
       assert.deepEqual(servedProbe.inputSchema, probeTool.definition.inputSchema);
-      assert.isAbove(
-        countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"),
-        0,
-      );
+      assert.isAbove(countSchemaKeyOccurrences(webmcpCall.definition.inputSchema, "$ref"), 0);
     }),
   );
 });
