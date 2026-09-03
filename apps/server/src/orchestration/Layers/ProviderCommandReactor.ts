@@ -673,10 +673,7 @@ const make = Effect.gen(function* () {
   const threadTitleRegenerationFlights = yield* makeKeyedSingleFlightCache<
     OrchestrationRegenerateThreadTitleResult,
     unknown
-  >({
-    maxEntries: 64,
-    ttlMs: 0,
-  });
+  >({ maxEntries: 64, ttlMs: 0 });
   const deliverySourceLock = yield* Semaphore.make(1);
   let reconcileDeliveryRuntime: ProviderCommandReactorShape["reconcileDelivery"] | undefined;
 
