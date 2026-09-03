@@ -70,6 +70,17 @@ const approvedAttributions: readonly ApprovedAttribution[] = [
     path: "apps/web/src/whatsNew/entries.ts",
     line: `"A review of the Synara codebase found an analytics configuration that came from the original ${retiredFirstSpacedDisplayName} codebase when Synara was created as a clone in March.",`,
   },
+  {
+    // The website's copy of the same published disclosure as CHANGELOG.md.
+    path: "apps/marketing/src/data/changelog.ts",
+    line: `"A review of the Synara codebase found an analytics configuration that came from the original ${retiredFirstDisplayName.slice(0, 2)} Code codebase when Synara was created as a clone in March.",`,
+  },
+  {
+    // A real user's words, quoted verbatim on the homepage. The retired name
+    // here refers to someone else's product, not to Synara's own identity.
+    path: "apps/marketing/src/data/testimonials.ts",
+    line: `"I've been using @trySynara for a few hours now. I'm really impressed. I'd already tried ${retiredFirstDisplayName.slice(0, 2)} Chat, Orca, and Terax, but none of them managed to grab my attention quite like Synara did.",`,
+  },
 ];
 
 // Raster images cannot be searched for embedded text. Keep the user-facing
@@ -81,8 +92,8 @@ const approvedVisualAssetDigests = new Map<string, string>([
     "0b4be139f13dd08885a1aac26fc1f7c623697db157777d16360e985c93d47bcf",
   ],
   [
-    "assets/prod/readme-screenshot.jpeg",
-    "0b4be139f13dd08885a1aac26fc1f7c623697db157777d16360e985c93d47bcf",
+    "assets/prod/synara-hero.jpeg",
+    "07fbd00bde259b5ed2c69f404c00c1347de2fa46fa4a5e2aa70f016912dc2490",
   ],
 ]);
 

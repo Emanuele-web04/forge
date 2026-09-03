@@ -1,0 +1,202 @@
+---
+title: Provider troubleshooting
+description: Diagnose provider detection, authentication, model discovery, executable paths, versions, and account-specific behavior.
+---
+
+Verify the provider outside Synara first. Synara can discover and operate a provider runtime, but it cannot repair a missing executable, expired provider session, unavailable model, or account restriction inside that provider.
+
+## Provider is not detected
+
+<Steps>
+<Step>
+
+### Open a fresh terminal
+
+Do not reuse a shell that was open before the provider was installed or `PATH` changed.
+
+</Step>
+<Step>
+
+### Run the provider executable
+
+Use the command documented in the relevant [provider guide](/docs/providers). For example:
+
+```bash
+claude --version
+codex --version
+opencode --version
+cursor-agent --version
+```
+
+</Step>
+<Step>
+
+### Check the resolved path
+
+On macOS or Linux:
+
+```bash
+command -v <provider-command>
+```
+
+On Windows PowerShell:
+
+```powershell
+Get-Command <provider-command>
+```
+
+Confirm the result is the installation you intend Synara to use.
+
+</Step>
+<Step>
+
+### Check Synara provider settings
+
+Enable the provider and inspect any configured custom binary path. Remove an obsolete path rather than preserving it “just in case.”
+
+</Step>
+<Step>
+
+### Restart Synara
+
+Desktop applications do not always inherit shell changes made after they start. Fully restart Synara after installing a runtime or changing `PATH`.
+
+</Step>
+</Steps>
+
+## Provider is detected but not authenticated
+
+Run the provider’s own status or login flow outside Synara. Examples include:
+
+```bash
+claude auth status
+codex login status
+cursor-agent status
+```
+
+Other providers authenticate through an interactive command, a device flow, a secure keyring, configured model-provider credentials, or an environment variable.
+
+Check:
+
+- The same executable is used inside and outside Synara
+- The authenticated account is the intended account
+- Required environment variables reach the process that launches Synara
+- A cached account session is not taking precedence over an API key
+- Enterprise or cloud-provider credentials are available in the same environment
+
+Never paste an API key into a task to “test” authentication.
+
+## Authentication state is unknown or stale
+
+Provider-health checks are bounded and can time out. A timeout is not proof that authentication failed.
+
+1. Test the provider directly.
+2. Wait for the provider’s own command to complete.
+3. Refresh provider status in Synara.
+4. Restart Synara if the executable or credentials changed.
+5. Record the exact provider command and output when the discrepancy remains.
+
+## Models are missing
+
+Model discovery can depend on:
+
+- Provider CLI version
+- Account or subscription
+- Region
+- Organization policy
+- Global and project-level configuration
+- Custom model-provider credentials
+- Working directory
+- Provider service availability
+
+Compare the model list from the exact provider executable in the same repository. Do not assume that a model visible in a web app, editor, or different CLI installation must appear in Synara.
+
+## The wrong executable is used
+
+This is common when several installation methods coexist.
+
+Examples:
+
+- npm and Homebrew installations
+- Native and package-manager installations
+- Stable and development builds
+- A generic command name shadowing the intended provider
+- A custom binary path left over from an older machine
+
+Record:
+
+```bash
+command -v <provider-command>
+<provider-command> --version
+```
+
+Then point Synara at the intended executable or remove the custom path to restore automatic discovery.
+
+## Provider is outdated
+
+Synara recognizes common installation sources and may present an appropriate update action. The update method still belongs to the provider installation.
+
+Use the provider’s documented update path, then:
+
+1. Verify the new version in a fresh terminal.
+2. Restart Synara.
+3. Refresh model and health state.
+4. Start a new task when protocol negotiation or model options changed.
+
+Do not run a package-manager update against an installation owned by a different package manager.
+
+## Provider works directly but fails in Synara
+
+Compare these variables:
+
+| Variable              | Why it matters                                         |
+| --------------------- | ------------------------------------------------------ |
+| Executable path       | You may be testing a different installation            |
+| Working directory     | Project configuration can change provider behavior     |
+| Account               | Model access and limits differ                         |
+| Model and options     | A valid model can still reject an unsupported option   |
+| Permission mode       | Tool and approval behavior changes                     |
+| Environment variables | Desktop apps may inherit a different environment       |
+| Provider version      | ACP, resume, compaction, and event behavior can change |
+| Project instructions  | Repository-local rules can alter the session           |
+
+Create a small new task using the simplest model and default options. If that works, add one custom variable at a time.
+
+## Provider process exits immediately
+
+Run the provider directly from the task’s working directory. Look for:
+
+- Invalid configuration
+- Missing credentials
+- Unsupported flags or model options
+- A broken extension, plugin, hook, or MCP server
+- Permission errors
+- A provider-side outage
+- A version too old for the integration Synara expects
+
+Disable optional provider extensions only when you can restore them. Preserve the failing configuration and exact output for the report.
+
+## Provider-specific guides
+
+Use the dedicated guide for exact commands and behavior:
+
+- [Claude Code](/docs/providers/claude-code)
+- [Codex](/docs/providers/codex)
+- [OpenCode](/docs/providers/opencode)
+- [Cursor](/docs/providers/cursor)
+- [Antigravity](/docs/providers/antigravity)
+- [Grok Build](/docs/providers/grok)
+- [Devin CLI](/docs/providers/devin)
+- [Pi](/docs/providers/pi)
+- [Factory Droid](/docs/providers/factory-droid)
+
+## Provider troubleshooting checklist
+
+- [ ] The exact executable runs in a fresh terminal
+- [ ] The resolved path and version were recorded
+- [ ] Authentication succeeds outside Synara
+- [ ] The intended model works directly
+- [ ] Custom binary paths were checked
+- [ ] Synara was restarted after environment changes
+- [ ] Optional provider configuration was isolated one variable at a time
+- [ ] Secrets were removed from every shared log or screenshot

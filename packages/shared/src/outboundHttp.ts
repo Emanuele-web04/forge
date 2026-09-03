@@ -10,6 +10,7 @@ import * as Https from "node:https";
 import * as Net from "node:net";
 
 import {
+  assertExactLoopbackIpAddress,
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
   assertPublicIpAddress,
@@ -51,6 +52,8 @@ export interface OutboundHttpPolicy {
   readonly maxConcurrent: number;
   readonly maxQueued: number;
   readonly requirePublicAddress?: boolean;
+  /** Permits HTTP only for localhost, 127.0.0.1, or ::1. */
+  readonly allowLoopbackHttp?: boolean;
 }
 
 export interface OutboundHttpRequest {
@@ -262,19 +265,29 @@ function requestHeaders(headers: Headers): Record<string, string> {
 async function resolvePinnedAddress(
   url: URL,
   requirePublicAddress: boolean,
+  allowLoopbackHttp: boolean,
   signal: AbortSignal,
 ): Promise<{ readonly address: string; readonly family: 4 | 6 }> {
   if (signal.aborted) throw abortedError(signal.reason);
-  const literalFamily = Net.isIP(url.hostname);
+  const hostname =
+    url.hostname.startsWith("[") && url.hostname.endsWith("]")
+      ? url.hostname.slice(1, -1)
+      : url.hostname;
+  const requireLoopbackAddress = allowLoopbackHttp && url.protocol === "http:";
+  const assertAddressAllowed = (address: string) => {
+    if (requireLoopbackAddress) assertExactLoopbackIpAddress(address);
+    else if (requirePublicAddress) assertPublicIpAddress(address);
+  };
+  const literalFamily = Net.isIP(hostname);
   if (literalFamily === 4 || literalFamily === 6) {
-    if (requirePublicAddress) assertPublicIpAddress(url.hostname);
-    return { address: url.hostname, family: literalFamily };
+    assertAddressAllowed(hostname);
+    return { address: hostname, family: literalFamily };
   }
 
   let addresses: ReadonlyArray<{ readonly address: string; readonly family: 4 | 6 }>;
   try {
     addresses = (await Promise.race([
-      Dns.lookup(url.hostname, { all: true, verbatim: true }),
+      Dns.lookup(hostname, { all: true, verbatim: true }),
       new Promise<never>((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(abortedError(signal.reason)), {
           once: true,
@@ -288,9 +301,7 @@ async function resolvePinnedAddress(
   if (addresses.length === 0) {
     throw new OutboundHttpError("dns", "Outbound destination DNS lookup returned no addresses.");
   }
-  if (requirePublicAddress) {
-    for (const result of addresses) assertPublicIpAddress(result.address);
-  }
+  for (const result of addresses) assertAddressAllowed(result.address);
   const selected = addresses[0];
   if (!selected) {
     throw new OutboundHttpError("dns", "Outbound destination DNS lookup returned no addresses.");
@@ -328,9 +339,15 @@ async function requestHop(input: {
   readonly body?: Uint8Array;
   readonly maxResponseBytes: number;
   readonly requirePublicAddress: boolean;
+  readonly allowLoopbackHttp: boolean;
   readonly signal: AbortSignal;
 }): Promise<OutboundHttpResponse> {
-  const pinned = await resolvePinnedAddress(input.url, input.requirePublicAddress, input.signal);
+  const pinned = await resolvePinnedAddress(
+    input.url,
+    input.requirePublicAddress,
+    input.allowLoopbackHttp,
+    input.signal,
+  );
 
   return await new Promise<OutboundHttpResponse>((resolve, reject) => {
     let settled = false;
@@ -440,8 +457,16 @@ function isRedirectStatus(status: number): boolean {
 export class OutboundHttpClient {
   async request(input: OutboundHttpRequest): Promise<OutboundHttpResponse> {
     const policy = input.policy;
-    const allowedOrigins = policy.allowedOrigins.map(normalizeOutboundOrigin);
-    let url = assertOutboundUrlAllowed({ url: input.url, allowedOrigins });
+    const allowLoopbackHttp = policy.allowLoopbackHttp === true;
+    const originOptions = allowLoopbackHttp ? { allowLoopbackHttp: true } : {};
+    const allowedOrigins = policy.allowedOrigins.map((origin) =>
+      normalizeOutboundOrigin(origin, originOptions),
+    );
+    let url = assertOutboundUrlAllowed({
+      url: input.url,
+      allowedOrigins,
+      ...originOptions,
+    });
     let method = input.method ?? "GET";
     let body = bodyBytes(input.body);
     if ((body?.byteLength ?? 0) > policy.maxRequestBytes) {
@@ -483,6 +508,7 @@ export class OutboundHttpClient {
           ...(body ? { body } : {}),
           maxResponseBytes: policy.maxResponseBytes,
           requirePublicAddress: policy.requirePublicAddress ?? true,
+          allowLoopbackHttp,
           signal: controller.signal,
         });
         if (!isRedirectStatus(response.status)) return response;
@@ -502,8 +528,15 @@ export class OutboundHttpClient {
         const nextUrl = assertOutboundUrlAllowed({
           url: new URL(location, url),
           allowedOrigins,
+          ...originOptions,
         });
         if (nextUrl.origin !== url.origin) {
+          if (allowLoopbackHttp) {
+            throw new OutboundHttpError(
+              "invalid-redirect",
+              "Loopback HTTP redirects must remain on the original origin.",
+            );
+          }
           headers = stripOutboundSensitiveHeaders(headers);
         }
         if (response.status === 303) {

@@ -1,5 +1,6 @@
 import {
   EventId,
+  RuntimeItemId,
   RuntimeTaskId,
   ThreadId,
   TurnId,
@@ -15,7 +16,10 @@ import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
 } from "../Services/ProviderRuntimeEvents.ts";
-import { ProviderRuntimeEventRepositoryLive } from "./ProviderRuntimeEvents.ts";
+import {
+  ProviderRuntimeEventRepositoryLive,
+  truncateUtf8ToBytes,
+} from "./ProviderRuntimeEvents.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { assignDerivedProviderRuntimeEventIds } from "../../provider/providerRuntimeEventIdentity.ts";
 
@@ -35,6 +39,26 @@ const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => (
     delta,
   },
 });
+
+const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+      VALUES (${threadId}, 'project-runtime-journal', 'Runtime journal', ${createdAt}, ${createdAt})
+    `;
+  });
+
+const readOpenTurnReplayCount = (threadId: string) =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const rows = yield* repository.readAcceptedOpenTurnEvents({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      sequenceExclusive: 0,
+      limit: 50,
+    });
+    return rows.filter((row) => row.event.threadId === threadId).length;
+  });
 
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
@@ -179,6 +203,7 @@ layer("ProviderRuntimeEventRepository", (it) => {
           updatedAt: "2026-07-14T00:01:00.000Z",
         }),
       );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
       yield* sql`
         INSERT INTO projection_turns (
           thread_id, turn_id, state, requested_at, checkpoint_files_json
@@ -213,6 +238,76 @@ layer("ProviderRuntimeEventRepository", (it) => {
         }),
         0,
       );
+    }),
+  );
+
+  it.effect("prunes replay rows whose thread is purged, deleted, or archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const orphanThreadId = ThreadId.makeUnsafe("thread-runtime-orphaned");
+      const orphanTurnId = TurnId.makeUnsafe("turn-runtime-orphaned");
+      const event: ProviderRuntimeEvent = {
+        ...runtimeEvent("runtime-event-orphaned-turn", "orphaned replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      };
+      const persisted = yield* repository.append(event);
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // No projection thread row at all (hard-purged): the open turn is dead.
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
+
+      // Re-open the turn under a live thread: the replay row must survive.
+      const reopened = yield* repository.append({
+        ...runtimeEvent("runtime-event-orphaned-turn-2", "live replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: reopened.sequence,
+          updatedAt: "2026-07-14T00:01:01.000Z",
+        }),
+      );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // Archiving does not interrupt a turn the projection still considers
+      // running, so that replay row must survive the archive.
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${orphanThreadId}, ${orphanTurnId}, 'running', ${event.createdAt}, '[]'
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = ${"2026-07-14T00:02:00.000Z"}
+        WHERE thread_id = ${event.threadId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // An archived thread whose turn the projection never tracked (or has
+      // settled) has nothing left to replay.
+      yield* sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${orphanThreadId} AND turn_id = ${orphanTurnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
     }),
   );
 
@@ -253,6 +348,120 @@ layer("ProviderRuntimeEventRepository", (it) => {
       assert.isNumber(compactedRaw?.originalBytes);
     }),
   );
+
+  it.effect("journals an oversized Pi item.completed by truncating payload string leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedResult = "x".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES * 2);
+      const oversizedEvent = {
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("runtime-event-oversized-pi"),
+        provider: "pi",
+        createdAt: "2026-07-14T00:03:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        itemId: RuntimeItemId.makeUnsafe("item-oversized-pi"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Run bash",
+          detail: oversizedResult,
+          data: { toolCallId: "call-1", toolName: "bash", result: oversizedResult },
+        },
+        raw: {
+          source: "pi.sdk.event",
+          messageType: "tool_result",
+          payload: { result: oversizedResult },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const persisted = yield* repository.append(oversizedEvent);
+      assert.strictEqual(persisted.event.eventId, oversizedEvent.eventId);
+      if (persisted.event.type === "item.completed") {
+        const detail = persisted.event.payload.detail;
+        assert.isString(detail);
+        if (typeof detail === "string") {
+          assert.isBelow(detail.length, oversizedResult.length);
+        }
+        const data = persisted.event.payload.data as { readonly result?: string } | undefined;
+        const dataResult = data?.result;
+        assert.isString(dataResult);
+        if (typeof dataResult === "string") {
+          assert.isBelow(dataResult.length, oversizedResult.length);
+        }
+      }
+      const rawPayload = persisted.event.raw?.payload as
+        | {
+            readonly synaraTruncated?: unknown;
+            readonly originalBytes?: unknown;
+          }
+        | undefined;
+      assert.deepInclude(rawPayload, { synaraTruncated: true });
+      const originalBytes = rawPayload?.originalBytes;
+      assert.isNumber(originalBytes);
+      if (typeof originalBytes === "number") {
+        assert.isAbove(originalBytes, PROVIDER_RUNTIME_EVENT_MAX_BYTES);
+      }
+
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: persisted.sequence - 1,
+        throughSequenceInclusive: persisted.sequence,
+        limit: 1,
+      });
+      assert.strictEqual(rows[0]?.event.eventId, "runtime-event-oversized-pi");
+
+      const duplicate = yield* repository.append(oversizedEvent);
+      assert.strictEqual(duplicate.sequence, persisted.sequence);
+    }),
+  );
+
+  it.effect("journals an oversized raw-less event by truncating its payload leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedDelta = "y".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES * 2);
+      const oversizedEvent = runtimeEvent("runtime-event-oversized-payload", oversizedDelta);
+
+      const persisted = yield* repository.append(oversizedEvent);
+      assert.strictEqual(persisted.event.eventId, oversizedEvent.eventId);
+      assert.strictEqual(persisted.event.raw, undefined);
+      if (persisted.event.type === "content.delta") {
+        assert.isBelow(persisted.event.payload.delta.length, oversizedDelta.length);
+      }
+    }),
+  );
+
+  it.effect("still rejects an event whose oversized bulk is not string leaves", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversizedEvent = {
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("runtime-event-oversized-numbers"),
+        provider: "pi",
+        createdAt: "2026-07-14T00:04:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Number flood",
+          data: {
+            values: Array.from({ length: PROVIDER_RUNTIME_EVENT_MAX_BYTES / 5 }, (_, i) => i),
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const failure = yield* Effect.flip(repository.append(oversizedEvent));
+      assert.strictEqual(failure._tag, "PersistenceDecodeError");
+    }),
+  );
+
+  it("truncateUtf8ToBytes never splits a UTF-8 code point", () => {
+    const emoji = "🙂".repeat(10_000);
+    const truncated = truncateUtf8ToBytes(emoji, 999);
+    assert.isBelow(Buffer.byteLength(truncated, "utf8"), 1_000);
+    assert.isFalse(truncated.includes("\uFFFD"));
+    assert.strictEqual(Buffer.from(truncated, "utf8").toString("utf8"), truncated);
+  });
 
   it.effect("journals every canonical event derived from one provider notification", () =>
     Effect.gen(function* () {

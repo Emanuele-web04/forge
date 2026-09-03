@@ -14,6 +14,10 @@ export const BrowserOperationId = BrowserUuidId("BrowserOperationId");
 export const BrowserProviderSessionId = BrowserUuidId("BrowserProviderSessionId");
 export const BrowserTabId = BrowserUuidId("BrowserTabId");
 export const BrowserSnapshotId = BrowserUuidId("BrowserSnapshotId");
+export const BrowserWebMcpDiscoveryId = BrowserUuidId("BrowserWebMcpDiscoveryId");
+export const BrowserWebMcpToolId = Schema.String.check(
+  Schema.isPattern(/^w[1-9][0-9]{0,2}$/u),
+).pipe(Schema.brand("BrowserWebMcpToolId"));
 export const BrowserElementRef = Schema.String.check(Schema.isPattern(/^e[1-9][0-9]{0,3}$/u)).pipe(
   Schema.brand("BrowserElementRef"),
 );
@@ -55,6 +59,8 @@ export type BrowserOperationId = typeof BrowserOperationId.Type;
 export type BrowserProviderSessionId = typeof BrowserProviderSessionId.Type;
 export type BrowserTabId = typeof BrowserTabId.Type;
 export type BrowserSnapshotId = typeof BrowserSnapshotId.Type;
+export type BrowserWebMcpDiscoveryId = typeof BrowserWebMcpDiscoveryId.Type;
+export type BrowserWebMcpToolId = typeof BrowserWebMcpToolId.Type;
 export type BrowserElementRef = typeof BrowserElementRef.Type;
 export type BrowserIdempotencyKey = typeof BrowserIdempotencyKey.Type;
 export type BrowserEnvironmentId = typeof BrowserEnvironmentId.Type;

@@ -113,6 +113,32 @@ describe("createOrRecoverProjectFromPath", () => {
     });
   });
 
+  it("seeds the new project's default model selection from the persisted default provider (Devin)", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      defaultProvider: "devin",
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        defaultModelSelection: {
+          provider: "devin",
+          model: "adaptive",
+        },
+      }),
+    );
+  });
+
   it("preserves an optimistically selected space before the shell snapshot catches up", async () => {
     const activeSpaceId = SpaceId.makeUnsafe("space-new");
     useSpacesUiStore.getState().setActiveSpaceId(activeSpaceId);

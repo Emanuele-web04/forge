@@ -1,0 +1,62 @@
+---
+title: Slash commands
+description: Every composer command — thread control, modes, delegation, export, and automation.
+---
+
+Type `/` in the composer to open the command menu. Provider-native commands (like Claude's own `/review`) are merged into the same menu; the commands below are Synara's.
+
+## Thread control
+
+| Command                     | What it does                                                            |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `/clear` (`/reset`, `/new`) | Start a fresh thread and clear context                                  |
+| `/compact`                  | Compact the current thread's context to free space                      |
+| `/status`                   | Show context usage and rate-limit status                                |
+| `/model`                    | Switch the response model for this thread                               |
+| `/fast`                     | Toggle fast mode for this thread                                        |
+| `/export`                   | Download the thread as a ZIP (`thread.json` + readable `transcript.md`) |
+
+## Modes
+
+| Command    | What it does                                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `/plan`    | Switch the thread into plan mode — the agent proposes before executing, and can pause to ask you multi-select questions      |
+| `/debug`   | Switch into the evidence-first [Debug workflow](/docs/workflows/debugging): observe, reproduce, investigate, fix, and verify |
+| `/default` | Return to normal chat mode                                                                                                   |
+| `/review`  | Start a code review of the current changes                                                                                   |
+
+## Branch and delegate
+
+| Command                     | What it does                                                               |
+| --------------------------- | -------------------------------------------------------------------------- |
+| `/fork` (`/branch`)         | Fork the thread into the local checkout or a new worktree                  |
+| `/side [provider] [prompt]` | Open a guarded side-thread, optionally on another available provider       |
+| `/subagents`                | Ask the assistant to delegate independent work to parallel subagents       |
+| `/automation`               | Turn this prompt into a scheduled [automation](/docs/features/automations) |
+
+Read [Thread forks](/docs/workflows/forks) for message-level forks, native provider coverage, and environment ownership.
+
+For a cross-provider side chat, put the provider kind or display name first—for example, `/side codex review the current diff` or `/side Claude Code investigate the failing test`. Synara removes that provider token from the child prompt and accepts it only when the target runtime is available. Without a provider token, `/side` continues on the current provider.
+
+## Persistent goals
+
+| Command                        | What it does                                            |
+| ------------------------------ | ------------------------------------------------------- |
+| `/goal`                        | Show the current persistent goal                        |
+| `/goal <objective>`            | Set or replace the goal                                 |
+| `/goal edit`                   | Reopen the current goal in the composer                 |
+| `/goal pause` / `/goal resume` | Pause or resume autonomous pursuit and its timer        |
+| `/goal clear`                  | Remove the active goal without recording an achievement |
+
+Goals are deliberate durable task state, not an automatic label for every prompt. See [Thread goals](/docs/features/thread-goals) for continuation priority, achievement, and blocked-goal behavior.
+
+## App
+
+| Command              | What it does                     |
+| -------------------- | -------------------------------- |
+| `/feedback` (`/bug`) | Send feedback to the Synara team |
+
+<Callout type="info" title="The ones worth memorizing">
+  `/plan` before big changes, `/debug` for an unknown defect, `/goal` for a durable multi-turn
+  objective, `/fork` when a conversation should branch, and `/export` to share a session.
+</Callout>

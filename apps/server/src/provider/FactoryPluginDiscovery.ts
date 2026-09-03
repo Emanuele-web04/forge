@@ -121,7 +121,10 @@ function resolvePluginPath(marketplacePath: string, source: string): string | nu
   const resolvedMarketplace = nodePath.resolve(marketplacePath);
   const resolvedPlugin = nodePath.resolve(resolvedMarketplace, source);
   const relative = nodePath.relative(resolvedMarketplace, resolvedPlugin);
-  return relative === "" || relative.startsWith("..") || nodePath.isAbsolute(relative)
+  return relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${nodePath.sep}`) ||
+    nodePath.isAbsolute(relative)
     ? null
     : resolvedPlugin;
 }

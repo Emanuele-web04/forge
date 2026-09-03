@@ -1,7 +1,7 @@
 // FILE: providerUsageSnapshot.ts
 // Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
-import type { Dirent, Stats } from "node:fs";
+import { createReadStream, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -25,6 +25,9 @@ const USAGE_CACHE_TTL_MS = 30_000;
 // for heavy local usage without scanning the full historical archive every refresh.
 const MAX_RECENT_USAGE_FILES = 2_000;
 const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
+const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_CODEX_SESSION_LINE_BYTES = 1024 * 1024;
+const MAX_CLAUDE_TRANSCRIPT_LINE_BYTES = 1024 * 1024;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -281,55 +284,123 @@ async function listRecentCodexSessionFiles(sessionsRoot: string): Promise<Readon
   return listRecentFiles(candidates);
 }
 
-async function readCodexSessionSummary(path: string): Promise<CodexSessionSummary | null> {
-  let fileContents: string;
+async function readFileRange(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(length);
+  let bytesRead = 0;
+  while (bytesRead < length) {
+    const result = await handle.read(buffer, bytesRead, length - bytesRead, position + bytesRead);
+    if (result.bytesRead === 0) {
+      break;
+    }
+    bytesRead += result.bytesRead;
+  }
+  return buffer.subarray(0, bytesRead);
+}
+
+function parseCodexSessionSummaryLine(line: string): CodexSessionSummary | null {
+  if (!line.trim()) {
+    return null;
+  }
+
+  let parsed: unknown;
   try {
-    fileContents = await fs.readFile(path, "utf8");
+    parsed = JSON.parse(line);
   } catch {
     return null;
   }
 
-  const lines = fileContents.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    const record = asRecord(parsed);
-    if (!record || record.type !== "event_msg") {
-      continue;
-    }
-
-    const payload = asRecord(record.payload);
-    if (!payload || payload.type !== "token_count") {
-      continue;
-    }
-
-    const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
-    if (timestampMs === null) {
-      continue;
-    }
-
-    const summary = {
-      timestampMs,
-      totalTokens: readCodexTotalTokens(payload),
-      limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
-    } satisfies CodexSessionSummary;
-
-    // Codex session JSONL is chronological; only the final token_count event is
-    // needed for lifetime accounting and the latest quota snapshot per file.
-    return summary;
+  const record = asRecord(parsed);
+  if (!record || record.type !== "event_msg") {
+    return null;
   }
 
-  return null;
+  const payload = asRecord(record.payload);
+  if (!payload || payload.type !== "token_count") {
+    return null;
+  }
+
+  const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
+  if (timestampMs === null) {
+    return null;
+  }
+
+  return {
+    timestampMs,
+    totalTokens: readCodexTotalTokens(payload),
+    limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
+  };
+}
+
+export async function readCodexSessionSummary(path: string): Promise<CodexSessionSummary | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(path, "r");
+  } catch {
+    return null;
+  }
+
+  try {
+    const { size } = await handle.stat();
+    let position = size;
+    let partialLine = Buffer.alloc(0);
+    let skippingOversizedLine = false;
+
+    while (position > 0) {
+      const length = Math.min(CODEX_SESSION_READ_CHUNK_BYTES, position);
+      position -= length;
+      const bytes = await readFileRange(handle, position, length);
+      let lineEnd = bytes.length;
+
+      for (let index = bytes.length - 1; index >= 0; index -= 1) {
+        if (bytes[index] !== 0x0a) {
+          continue;
+        }
+
+        const linePrefix = bytes.subarray(index + 1, lineEnd);
+        if (skippingOversizedLine) {
+          skippingOversizedLine = false;
+        } else {
+          const lineLength = linePrefix.length + partialLine.length;
+          if (lineLength <= MAX_CODEX_SESSION_LINE_BYTES) {
+            const summary = parseCodexSessionSummaryLine(
+              Buffer.concat([linePrefix, partialLine], lineLength).toString("utf8"),
+            );
+            if (summary) {
+              return summary;
+            }
+          }
+        }
+
+        partialLine = Buffer.alloc(0);
+        lineEnd = index;
+      }
+
+      if (skippingOversizedLine) {
+        continue;
+      }
+
+      const linePrefix = bytes.subarray(0, lineEnd);
+      const lineLength = linePrefix.length + partialLine.length;
+      if (lineLength > MAX_CODEX_SESSION_LINE_BYTES) {
+        partialLine = Buffer.alloc(0);
+        skippingOversizedLine = true;
+        continue;
+      }
+      partialLine = Buffer.concat([linePrefix, partialLine], lineLength);
+    }
+
+    return skippingOversizedLine
+      ? null
+      : parseCodexSessionSummaryLine(partialLine.toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 function readClaudeTotalTokens(value: unknown): number {
@@ -445,34 +516,44 @@ async function listRecentClaudeTranscriptFiles(
   return listRecentFiles(candidates, maxFiles);
 }
 
-async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<ClaudeUsageSample>> {
-  let fileContents: string;
-  try {
-    fileContents = await fs.readFile(path, "utf8");
-  } catch {
-    return [];
-  }
-
+/**
+ * Claude transcripts are unbounded: a long-running session writes hundreds of megabytes
+ * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
+ * once. Reading one into a string costs its full size in the heap plus a second copy for
+ * the line split, so a few large transcripts are enough to exhaust old space and abort the
+ * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
+ * recreate the same problem inside a line reader.
+ */
+export async function readClaudeUsageSamples(
+  path: string,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
   const samples: ClaudeUsageSample[] = [];
   const seenKeys = new Set<string>();
-  const lines = fileContents.split(/\r?\n/u);
+  const stream = createReadStream(path);
+  let lineChunks: Buffer[] = [];
+  let lineBytes = 0;
+  let lineIndex = 0;
+  let skippingOversizedLine = false;
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
+  const collectLine = (line: Buffer, index: number): void => {
+    if (line.length === 0) {
+      return;
+    }
+    const contents = line.toString("utf8");
+    if (!contents.trim()) {
+      return;
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(contents);
     } catch {
-      continue;
+      return;
     }
 
     const record = asRecord(parsed);
     if (!record) {
-      continue;
+      return;
     }
 
     const fallbackKey = `${path}:${index}`;
@@ -487,6 +568,55 @@ async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<Claud
       seenKeys.add(toolResultSample.dedupeKey);
       samples.push(toolResultSample.sample);
     }
+  };
+
+  const appendLineChunk = (chunk: Buffer): void => {
+    if (skippingOversizedLine || chunk.length === 0) {
+      return;
+    }
+    if (lineBytes + chunk.length > MAX_CLAUDE_TRANSCRIPT_LINE_BYTES) {
+      lineChunks = [];
+      lineBytes = 0;
+      skippingOversizedLine = true;
+      return;
+    }
+    lineChunks.push(chunk);
+    lineBytes += chunk.length;
+  };
+
+  const finishLine = (): void => {
+    if (!skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+    }
+    lineChunks = [];
+    lineBytes = 0;
+    lineIndex += 1;
+    skippingOversizedLine = false;
+  };
+
+  try {
+    for await (const chunk of stream) {
+      let lineStart = 0;
+      for (let index = 0; index < chunk.length; index += 1) {
+        if (chunk[index] !== 0x0a) {
+          continue;
+        }
+        appendLineChunk(chunk.subarray(lineStart, index));
+        finishLine();
+        lineStart = index + 1;
+      }
+      appendLineChunk(chunk.subarray(lineStart));
+    }
+
+    // Match readFile/split behavior for a final record that has not been newline-terminated.
+    if (lineBytes > 0 && !skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+    }
+  } catch {
+    // A transcript that vanishes or fails partway through yields what was read by then,
+    // which is the same outcome as a truncated archive.
+  } finally {
+    stream.destroy();
   }
 
   return samples;

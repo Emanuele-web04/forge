@@ -1,0 +1,33 @@
+---
+title: Features on main
+description: Understand important Synara capabilities on main — and where earlier preview-track features shipped in stable releases.
+---
+
+<Callout type="info" title="Preview track: main">
+  Synara ships a stable desktop release. This page follows the active `main` branch and gives an
+  early look at capabilities newer than the latest stable release (v0.7.0); those details can change
+  before the next release. Preview-track features that have since shipped in stable releases are
+  covered by the [changelog](/changelog) instead.
+</Callout>
+
+The public documentation tracks the user-facing parts of `main` without presenting them as stable release behavior.
+
+## Shipped in stable releases
+
+Several capabilities this page previously presented as main-only have shipped in the 0.6.x stable releases. Each is documented on its own page and in the [changelog](/changelog):
+
+- **Agent Gateway and app control** — an app-owned MCP tool surface that lets capable agents create and steer Synara tasks under the app's project and worktree rules. → [Parallel agents](/docs/workflows/parallel-agents) · shipped in 0.6.0
+- **External MCP integrations** — pair Codex, Claude Code, Claude Desktop, or any other MCP client through **Settings → Integrations** with a guided pairing flow and a scoped, revocable Synara tool surface. → [External MCP](/docs/workflows/external-mcp) · shipped in 0.6.0
+- **Project spaces** — organize threads into named spaces per project, with a switcher tab bar and `mod+alt+←` / `mod+alt+→` navigation. → [Features overview](/docs/features/overview) · shipped in 0.6.0
+- **Native subagents and workflows** — subagents appear as child threads with their own usage meters, and workflow run cards show live agent rows, workflow phases, and pause/resume/stop controls. → [Parallel agents](/docs/workflows/parallel-agents) · shipped in 0.6.0
+- **Provider and model updates** — Claude Fable 5 and Opus 4.8 in Pi, namespaced Cursor and Grok model identifiers, prefetched provider model choices, and safer provider update paths. → [Changelog](/changelog) · shipped in 0.6.0
+
+## Canary workflow for contributors
+
+Contributors can build an isolated **Synara Canary** from a selected remote Git ref. Canary uses its own app identity, data directory, Electron profile, source checkout, logs, and update path, so it can run beside Stable or a development instance without sharing user data.
+
+See the repository's [`docs/canary.md`](https://github.com/Emanuele-web04/synara/blob/main/docs/canary.md) for the current setup, update, rollback, and isolation commands.
+
+## Source of truth
+
+Use the [Synara `main` branch](https://github.com/Emanuele-web04/synara) for implementation status and the [website changelog](/changelog) for stable release notes.

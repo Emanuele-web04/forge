@@ -56,6 +56,30 @@
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
     },
+    "./executable": {
+      "types": "./src/executable.ts",
+      "import": "./src/executable.ts"
+    },
+    "./platformProcess": {
+      "types": "./src/platformProcess.ts",
+      "import": "./src/platformProcess.ts"
+    },
+    "./processRuntime": {
+      "types": "./src/processRuntime.ts",
+      "import": "./src/processRuntime.ts"
+    },
+    "./filesystemPlatform": {
+      "types": "./src/filesystemPlatform.ts",
+      "import": "./src/filesystemPlatform.ts"
+    },
+    "./platformEnvironment": {
+      "types": "./src/platformEnvironment.ts",
+      "import": "./src/platformEnvironment.ts"
+    },
+    "./wslBridge": {
+      "types": "./src/wslBridge.ts",
+      "import": "./src/wslBridge.ts"
+    },
     "./windowsCertificate": {
       "types": "./src/windowsCertificate.ts",
       "import": "./src/windowsCertificate.ts"
@@ -67,6 +91,10 @@
     "./desktopChrome": {
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
+    },
+    "./desktopTitleBar": {
+      "types": "./src/desktopTitleBar.ts",
+      "import": "./src/desktopTitleBar.ts"
     },
     "./desktopIdentity": {
       "types": "./src/desktopIdentity.ts",
@@ -127,6 +155,10 @@
     "./threadDetailEvents": {
       "types": "./src/threadDetailEvents.ts",
       "import": "./src/threadDetailEvents.ts"
+    },
+    "./sidechatExpiry": {
+      "types": "./src/sidechatExpiry.ts",
+      "import": "./src/sidechatExpiry.ts"
     },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
@@ -295,6 +327,10 @@
     "./hostSecrets": {
       "types": "./src/hostSecrets.ts",
       "import": "./src/hostSecrets.ts"
+    },
+    "./searchQuery": {
+      "types": "./src/searchQuery.ts",
+      "import": "./src/searchQuery.ts"
     }
   },
   "scripts": {

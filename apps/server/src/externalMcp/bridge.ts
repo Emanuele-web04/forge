@@ -14,7 +14,11 @@ import {
 
 import type { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { ensurePrivateDirectorySync } from "../privatePathPermissions.ts";
-import { computeExternalMcpRuntimeProof, runtimeProofsMatch } from "./runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+  runtimeProofsMatch,
+} from "./runtimeProof.ts";
 
 const CLIENT_STORE_VERSION = 1;
 const CLIENT_STORE_DIRECTORY = path.join("mcp", "credentials");
@@ -148,7 +152,11 @@ export function externalMcpClientStorePath(baseDir: string, integrationId: strin
   return path.join(baseDir, CLIENT_STORE_DIRECTORY, `${safeIntegrationId(integrationId)}.json`);
 }
 
-function parseRuntimeState(raw: string, sourcePath: string): PersistedServerRuntimeState {
+function parseRuntimeState(
+  raw: string,
+  sourcePath: string,
+  options: { readonly requireLoopback: boolean },
+): PersistedServerRuntimeState {
   try {
     const state = JSON.parse(raw) as Partial<PersistedServerRuntimeState>;
     if (
@@ -163,8 +171,11 @@ function parseRuntimeState(raw: string, sourcePath: string): PersistedServerRunt
       throw new Error("invalid runtime-state shape");
     }
     const origin = new URL(state.origin);
+    if (origin.protocol !== "http:") {
+      throw new Error("runtime origin is not HTTP");
+    }
     if (
-      origin.protocol !== "http:" ||
+      options.requireLoopback &&
       !["127.0.0.1", "localhost", "[::1]", "::1"].includes(origin.hostname)
     ) {
       throw new Error("runtime origin is not loopback HTTP");
@@ -287,14 +298,17 @@ function readPrivateRuntimeState(sourcePath: string): string {
   }
 }
 
-export function discoverExternalMcpRuntime(baseDir: string): {
+function discoverRunningRuntime(
+  baseDir: string,
+  options: { readonly requireLoopback: boolean },
+): {
   readonly state: PersistedServerRuntimeState;
   readonly sourcePath: string;
 } {
   const candidates = RUNTIME_STATE_RELATIVE_PATHS.flatMap((relativePath) => {
     const sourcePath = path.join(baseDir, relativePath);
     if (!fs.existsSync(sourcePath)) return [];
-    const state = parseRuntimeState(readPrivateRuntimeState(sourcePath), sourcePath);
+    const state = parseRuntimeState(readPrivateRuntimeState(sourcePath), sourcePath, options);
     return processIsAlive(state.pid) ? [{ state, sourcePath }] : [];
   });
   if (candidates.length === 0) {
@@ -308,6 +322,20 @@ export function discoverExternalMcpRuntime(baseDir: string): {
     );
   }
   return candidates[0]!;
+}
+
+export function discoverServerRuntime(baseDir: string): {
+  readonly state: PersistedServerRuntimeState;
+  readonly sourcePath: string;
+} {
+  return discoverRunningRuntime(baseDir, { requireLoopback: false });
+}
+
+export function discoverExternalMcpRuntime(baseDir: string): {
+  readonly state: PersistedServerRuntimeState;
+  readonly sourcePath: string;
+} {
+  return discoverRunningRuntime(baseDir, { requireLoopback: true });
 }
 
 function assertPrivateFile(filePath: string): void {
@@ -545,8 +573,8 @@ export async function readExternalMcpResponseText(
   }
 }
 
-export async function verifyExternalMcpRuntime(
-  runtime: ReturnType<typeof discoverExternalMcpRuntime>,
+async function verifyPersistedServerRuntime(
+  runtime: ReturnType<typeof discoverServerRuntime>,
   fetchImpl: ExternalMcpFetch,
 ): Promise<void> {
   const nonce = randomBytes(24).toString("base64url");
@@ -555,8 +583,10 @@ export async function verifyExternalMcpRuntime(
     new URL("/api/mcp/external/runtime-challenge", runtime.state.origin),
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ nonce }),
+      headers: {
+        [EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER]: nonce,
+        Accept: "application/json",
+      },
     },
     RUNTIME_CHALLENGE_TIMEOUT_MS,
   );
@@ -575,9 +605,23 @@ export async function verifyExternalMcpRuntime(
     !runtimeProofsMatch(expected, body.proof)
   ) {
     throw new ExternalMcpBridgeError(
-      "The loopback endpoint did not prove it is the Synara process named by the private runtime-state file.",
+      "The server endpoint did not prove it is the Synara process named by the private runtime-state file.",
     );
   }
+}
+
+export async function verifyServerRuntime(
+  runtime: ReturnType<typeof discoverServerRuntime>,
+  fetchImpl: ExternalMcpFetch,
+): Promise<void> {
+  await verifyPersistedServerRuntime(runtime, fetchImpl);
+}
+
+export async function verifyExternalMcpRuntime(
+  runtime: ReturnType<typeof discoverExternalMcpRuntime>,
+  fetchImpl: ExternalMcpFetch,
+): Promise<void> {
+  await verifyPersistedServerRuntime(runtime, fetchImpl);
 }
 
 export function requestTimeoutForBody(body: string): number {

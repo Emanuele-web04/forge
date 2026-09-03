@@ -66,9 +66,12 @@ export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "mess
 
 export function hasNativeAssistantMessagesBefore(
   thread: Pick<OrchestrationThread, "messages">,
-  currentMessageId: string,
+  currentMessageId?: string,
 ): boolean {
-  const currentIndex = thread.messages.findIndex((message) => message.id === currentMessageId);
+  const currentIndex =
+    currentMessageId === undefined
+      ? thread.messages.length
+      : thread.messages.findIndex((message) => message.id === currentMessageId);
   if (currentIndex <= 0) {
     return false;
   }
@@ -81,9 +84,12 @@ export function hasNativeAssistantMessagesBefore(
 
 export function listPriorTranscriptMessages(
   thread: Pick<OrchestrationThread, "messages">,
-  currentMessageId: string,
+  currentMessageId?: string,
 ): ReadonlyArray<OrchestrationMessage> {
-  const currentIndex = thread.messages.findIndex((message) => message.id === currentMessageId);
+  const currentIndex =
+    currentMessageId === undefined
+      ? thread.messages.length
+      : thread.messages.findIndex((message) => message.id === currentMessageId);
   if (currentIndex <= 0) {
     return [];
   }
@@ -192,7 +198,7 @@ export function buildHandoffBootstrapText(
 
 export function buildPriorTranscriptBootstrapText(
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
-  currentMessageId: string,
+  currentMessageId: string | undefined,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const priorMessages = listPriorTranscriptMessages(thread, currentMessageId);

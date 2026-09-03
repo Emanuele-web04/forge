@@ -109,7 +109,33 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
-function stringifyJsonLike(value: unknown): string {
+function isPlainJsonTree(value: unknown, seen: Set<object>): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isPlainJsonTree(entry, seen));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  return Object.values(value).every((entry) => isPlainJsonTree(entry, seen));
+}
+
+function stringifyJsonLikeFallback(value: unknown): string {
   const seen = new WeakSet<object>();
   return (
     JSON.stringify(value, (_key, entry) => {
@@ -128,6 +154,21 @@ function stringifyJsonLike(value: unknown): string {
       return entry;
     }) ?? "null"
   );
+}
+
+function serializeJsonLike(value: unknown): {
+  readonly text: string;
+  readonly plain: boolean;
+} {
+  const plain = isPlainJsonTree(value, new Set<object>());
+  return {
+    text: plain ? (JSON.stringify(value) ?? "null") : stringifyJsonLikeFallback(value),
+    plain,
+  };
+}
+
+function stringifyJsonLike(value: unknown): string {
+  return serializeJsonLike(value).text;
 }
 
 function truncateJsonString(value: string, limit: number): string {
@@ -250,9 +291,10 @@ function truncateJsonValue(
 }
 
 function boundActivityData(value: unknown): unknown {
-  const serialized = stringifyJsonLike(value);
+  const serialization = serializeJsonLike(value);
+  const serialized = serialization.text;
   if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
-    return JSON.parse(serialized);
+    return serialization.plain ? value : JSON.parse(serialized);
   }
 
   const withTruncationMetadata = (bounded: unknown): Record<string, unknown> => {
@@ -340,7 +382,11 @@ function buildContextWindowActivityPayload(
   const hasPercentUsage =
     typeof usage.usedPercent === "number" && Number.isFinite(usage.usedPercent);
   const hasKnownWindow = typeof usage.maxTokens === "number" && Number.isFinite(usage.maxTokens);
-  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
+  const hasProcessedTokens =
+    typeof usage.totalProcessedTokens === "number" &&
+    Number.isFinite(usage.totalProcessedTokens) &&
+    usage.totalProcessedTokens > 0;
+  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow && !hasProcessedTokens) {
     return undefined;
   }
   // Stamp the emitting provider so token stats can attribute usage to the
@@ -624,11 +670,9 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.warning",
           summary: isBackgroundMove
             ? "Moved to background"
-            : (event.provider === "opencode" || event.provider === "kilo") &&
+            : event.provider === "opencode" &&
                 (nativeType === "session.next.retried" || nativeType === "session.status")
-              ? event.provider === "opencode"
-                ? "OpenCode retrying"
-                : "Kilo retrying"
+              ? "OpenCode retrying"
               : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
@@ -1025,6 +1069,62 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "hook.started":
+    case "hook.progress":
+      // Hook lifecycle is operational evidence, not transcript content. The
+      // canonical runtime journal retains it for replay and diagnostics.
+      return [];
+
+    case "hook.completed": {
+      const status = event.payload.status;
+      // Successful hooks are routine, and cancelled hooks normally reflect an
+      // interrupted turn. Neither should add rows or transcript height churn.
+      if (
+        event.payload.outcome === "success" ||
+        (event.payload.outcome === "cancelled" && !status)
+      ) {
+        return [];
+      }
+      const hookLabel = event.payload.hookEvent ?? "Lifecycle";
+      const summary =
+        status === "blocked"
+          ? `${hookLabel} hook blocked an action`
+          : status === "stopped"
+            ? `${hookLabel} hook stopped execution`
+            : `${hookLabel} hook failed`;
+      const message = truncateDetail(
+        event.payload.statusMessage ??
+          event.payload.stderr ??
+          event.payload.output ??
+          event.payload.stdout ??
+          summary,
+        500,
+      );
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: status === "failed" || event.payload.outcome === "error" ? "error" : "info",
+          kind: "runtime.warning",
+          summary,
+          payload: toActivityPayload({
+            message,
+            detail: message,
+            hookId: event.payload.hookId,
+            ...(event.payload.hookName ? { hookName: event.payload.hookName } : {}),
+            ...(event.payload.hookEvent ? { hookEvent: event.payload.hookEvent } : {}),
+            outcome: event.payload.outcome,
+            ...(status ? { status } : {}),
+            ...(event.payload.durationMs !== undefined
+              ? { durationMs: event.payload.durationMs }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

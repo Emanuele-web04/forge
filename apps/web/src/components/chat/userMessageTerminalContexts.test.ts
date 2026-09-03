@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInlineTerminalContextText,
   formatInlineTerminalContextLabel,
+  resolveUserMessageMarkdownText,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 
@@ -32,5 +33,16 @@ describe("userMessageTerminalContexts", () => {
         { header: "Terminal 1 lines 12-13" },
       ]),
     ).toBe(false);
+  });
+
+  it("prefixes visible user text with terminal labels when they are not already inline", () => {
+    expect(
+      resolveUserMessageMarkdownText("Investigate this", [{ header: "Terminal 1 lines 12-13" }]),
+    ).toBe("@terminal-1:12-13 Investigate this");
+    expect(
+      resolveUserMessageMarkdownText("yo @terminal-1:12-13 whats up", [
+        { header: "Terminal 1 lines 12-13" },
+      ]),
+    ).toBe("yo @terminal-1:12-13 whats up");
   });
 });

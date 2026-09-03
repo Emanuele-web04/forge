@@ -47,6 +47,37 @@ describe("processTreeKiller", () => {
     );
   });
 
+  it("retries a transient capture failure and tracks descendants", () => {
+    let captureAttempts = 0;
+    const killer = createProcessTreeKiller({
+      captureChildrenMap: () => {
+        captureAttempts += 1;
+        return captureAttempts === 1
+          ? null
+          : new Map([[100, [{ pid: 101, command: "provider-child" }]]]);
+      },
+    });
+
+    expect(killer.capture(100)).toEqual({
+      descendants: [{ pid: 101, command: "provider-child" }],
+      captureComplete: true,
+    });
+    expect(captureAttempts).toBe(2);
+  });
+
+  it("fails closed when every capture attempt fails", () => {
+    let captureAttempts = 0;
+    const killer = createProcessTreeKiller({
+      captureChildrenMap: () => {
+        captureAttempts += 1;
+        return null;
+      },
+    });
+
+    expect(killer.capture(100)).toEqual({ descendants: [], captureComplete: false });
+    expect(captureAttempts).toBe(2);
+  });
+
   it("validates captured child commands before delayed SIGKILL", () => {
     const signaledPids: Array<{ pid: number; signal: TerminalKillSignal }> = [];
     const treeSignals: Array<{ rootPid: number; signal: TerminalKillSignal }> = [];

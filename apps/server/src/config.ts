@@ -80,6 +80,7 @@ export interface ServerDerivedPaths {
   readonly logsDir: string;
   readonly serverLogPath: string;
   readonly serverRuntimeStatePath: string;
+  readonly quitResumeStatePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
@@ -108,6 +109,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly desktopShutdownToken?: string | undefined;
+  readonly migrationDivergenceConsent?: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logProviderEvents: boolean;
   readonly logWebSocketEvents: boolean;
@@ -161,6 +163,7 @@ export const deriveServerPaths = Effect.fn(function* (
     logsDir,
     serverLogPath: join(logsDir, "server.log"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
+    quitResumeStatePath: join(stateDir, "quit-resume.json"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
@@ -265,6 +268,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           host: undefined,
           authToken: undefined,
           desktopShutdownToken: undefined,
+          migrationDivergenceConsent: undefined,
           staticDir: undefined,
           devUrl,
           publicUrl: undefined,

@@ -63,10 +63,10 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
+      devin: { ...provider, binaryPath: "devin" },
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
-      kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },
       opencode: {
         ...provider,
         binaryPath: "opencode",
@@ -269,11 +269,11 @@ describe("withProviderUpdateTimeout", () => {
     const pending = new Promise<never>(() => undefined);
     const assertion = expect(
       withProviderUpdateTimeout({
-        provider: "kilo",
+        provider: "opencode",
         request: pending,
         timeoutMs: 1_000,
       }),
-    ).rejects.toThrow("Kilo update timed out after 1 second");
+    ).rejects.toThrow("OpenCode update timed out after 1 second");
 
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -294,6 +294,44 @@ describe("withProviderUpdateTimeout", () => {
 });
 
 describe("shouldOfferProviderUpdateAction", () => {
+  it("does not offer updates without a confirmed CLI version", () => {
+    const uninstalledPi = providerStatus("pi", {
+      status: "warning",
+      available: true,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "pi update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+    const uninstalledDroid = providerStatus("droid", {
+      status: "error",
+      available: false,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "droid update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(shouldOfferProviderUpdateAction(uninstalledPi)).toBe(false);
+    expect(shouldOfferProviderUpdateAction(uninstalledDroid)).toBe(false);
+  });
+
+  it("offers updates for installed outdated CLIs", () => {
+    expect(shouldOfferProviderUpdateAction(providerStatus("codex"))).toBe(true);
+  });
+
   it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {
     expect(
       shouldOfferProviderUpdateAction(
@@ -356,12 +394,12 @@ describe("shouldPromptProviderUpdate", () => {
   });
 
   it("assumes a lookup source when an older server omits the flag", () => {
-    const legacy = providerStatus("kilo", {
+    const legacy = providerStatus("opencode", {
       versionAdvisory: {
         status: "unknown",
         currentVersion: "1.1.2",
         latestVersion: null,
-        updateCommand: "kilo update",
+        updateCommand: "opencode upgrade",
         canUpdate: true,
         checkedAt: "2026-07-15T14:00:00.000Z",
         message: null,

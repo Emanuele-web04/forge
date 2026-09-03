@@ -44,6 +44,51 @@ const StoredRowSchema = Schema.Struct({
   eventJson: Schema.String,
 });
 const decodeStoredRow = Schema.decodeUnknownEffect(StoredRowSchema);
+const SequenceRowSchema = Schema.Struct({ sequence: NonNegativeInt });
+const decodeSequenceRow = Schema.decodeUnknownEffect(SequenceRowSchema);
+
+/**
+ * Longest-prefix string truncation that never splits a UTF-8 code point.
+ * Returns the whole string when it already fits.
+ */
+export const truncateUtf8ToBytes = (value: string, maxBytes: number): string => {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.byteLength <= maxBytes) return value;
+  let prefixEnd = maxBytes;
+  while (prefixEnd > 0 && ((encoded[prefixEnd] ?? 0) & 0xc0) === 0x80) {
+    prefixEnd -= 1;
+  }
+  return encoded.subarray(0, prefixEnd).toString("utf8");
+};
+
+/**
+ * Budget assigned to every string leaf so a single oversized field (typically a
+ * provider tool result copied verbatim into `payload.detail` or `payload.data`)
+ * never exhausts the durable journal budget by itself.
+ */
+const JOURNAL_STRING_LEAF_BUDGET_BYTES = 64 * 1024;
+
+/**
+ * Shrink every string leaf inside a runtime event payload to the per-leaf
+ * budget, recursing through records and arrays. Non-string leaves are kept:
+ * they are either small structural fields or values with no safe truncation.
+ */
+export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return truncateUtf8ToBytes(value, JOURNAL_STRING_LEAF_BUDGET_BYTES);
+  }
+  if (Array.isArray(value)) {
+    return value.map(shrinkRuntimeEventStrings);
+  }
+  if (value !== null && typeof value === "object") {
+    const shrunk: Record<string, unknown> = {};
+    for (const [key, leaf] of Object.entries(value as Record<string, unknown>)) {
+      shrunk[key] = shrinkRuntimeEventStrings(leaf);
+    }
+    return shrunk;
+  }
+  return value;
+};
 
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
@@ -55,31 +100,40 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
       return { event, eventJson };
     }
 
-    if (event.raw !== undefined) {
-      const compactedEvent = {
-        ...event,
-        raw: {
-          source: event.raw.source,
-          ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
-          ...(event.raw.messageType !== undefined ? { messageType: event.raw.messageType } : {}),
-          payload: {
-            synaraTruncated: true,
-            reason: "provider runtime event exceeded the durable journal size limit",
-            originalBytes,
-          },
-        },
-      } satisfies ProviderRuntimeEvent;
-      const compactedJson = yield* encodeEvent(compactedEvent).pipe(
-        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
-      );
-      if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-        return { event: compactedEvent, eventJson: compactedJson };
-      }
+    // Shrink oversized string leaves so one huge tool output no longer strands
+    // the live item in quarantine. The raw payload is replaced by a forensics
+    // marker (its own copy of the tool output would otherwise re-blow the
+    // budget), while source/method/messageType survive for diagnostics.
+    const compactedEvent = {
+      ...event,
+      payload: shrinkRuntimeEventStrings(event.payload),
+      ...(event.raw !== undefined
+        ? {
+            raw: {
+              source: event.raw.source,
+              ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
+              ...(event.raw.messageType !== undefined
+                ? { messageType: event.raw.messageType }
+                : {}),
+              payload: {
+                synaraTruncated: true,
+                reason: "provider runtime event exceeded the durable journal size limit",
+                originalBytes,
+              },
+            },
+          }
+        : {}),
+    } as ProviderRuntimeEvent;
+    const compactedJson = yield* encodeEvent(compactedEvent).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
+    );
+    if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+      return { event: compactedEvent, eventJson: compactedJson };
     }
 
     return yield* new PersistenceDecodeError({
       operation: "ProviderRuntimeEvent.append",
-      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after raw payload compaction.`,
+      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after payload truncation and raw compaction.`,
     });
   });
 
@@ -91,16 +145,12 @@ const make = Effect.gen(function* () {
       const persistable = yield* encodePersistableEvent(event);
       const persistedEvent = persistable.event;
       const eventJson = persistable.eventJson;
-      const rows = yield* sql
+      const appendResult = yield* sql
         .withTransaction(
           Effect.gen(function* () {
-            const existing = yield* sql<Record<string, unknown>>`
-            SELECT sequence, event_json AS "eventJson"
-            FROM provider_runtime_events
-            WHERE event_id = ${event.eventId}
-          `;
-            if (existing.length > 0) return existing;
-            return yield* sql<Record<string, unknown>>`
+            // SQLite reserves the AUTOINCREMENT rowid before conflict handling, so duplicate event
+            // IDs consume sequence values. Sequence is a cursor, not a dense counter; gaps are valid.
+            const inserted = yield* sql<Record<string, unknown>>`
             INSERT INTO provider_runtime_events (
               event_id, thread_id, turn_id, lifecycle_generation, event_type,
               event_json, persisted_at
@@ -109,22 +159,38 @@ const make = Effect.gen(function* () {
               ${event.lifecycleGeneration ?? null},
               ${event.type}, ${eventJson}, ${new Date().toISOString()}
             )
-            RETURNING sequence, event_json AS "eventJson"
+            ON CONFLICT(event_id) DO NOTHING
+            RETURNING sequence
+            `;
+            if (inserted[0] !== undefined) {
+              return { inserted: true as const, row: inserted[0] };
+            }
+
+            const existing = yield* sql<Record<string, unknown>>`
+              SELECT sequence, event_json AS "eventJson"
+              FROM provider_runtime_events
+              WHERE event_id = ${event.eventId}
           `;
+            return { inserted: false as const, row: existing[0] };
           }),
         )
         .pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.append")));
-      const row = yield* decodeStoredRow(rows[0]).pipe(
-        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.row")),
-      );
-      if (row.eventJson !== eventJson) {
+      const persisted = appendResult.inserted
+        ? yield* decodeSequenceRow(appendResult.row).pipe(
+            Effect.map((row) => ({ sequence: row.sequence, eventJson })),
+            Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.row")),
+          )
+        : yield* decodeStoredRow(appendResult.row).pipe(
+            Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.conflictRow")),
+          );
+      if (persisted.eventJson !== eventJson) {
         return yield* new PersistenceDecodeError({
           operation: "ProviderRuntimeEvent.append",
           issue: `Provider event '${event.eventId}' was reused with different content.`,
         });
       }
       return {
-        sequence: row.sequence,
+        sequence: persisted.sequence,
         event: persistedEvent,
       } satisfies PersistedProviderRuntimeEvent;
     });
@@ -273,6 +339,15 @@ const make = Effect.gen(function* () {
       });
     };
 
+  // Open-turn rows keep their whole event range on the startup replay path
+  // (`rebuildAcceptedOpenTurnState`, which runs before the server listens), so
+  // rows that can never produce output again must not survive: settled turns,
+  // turns of purged or deleted threads, and turns of archived threads that the
+  // projection does not consider running (archiving neither interrupts a turn
+  // nor is permanent, so a still-running turn on an archived thread stays).
+  // Pruning is one-way: once a turn's row is gone, its journal rows become
+  // eligible for the retention sweep below, so every criterion here must
+  // describe a turn that can no longer emit output.
   const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] = sql`
       DELETE FROM provider_runtime_open_turns
       WHERE EXISTS (
@@ -281,6 +356,27 @@ const make = Effect.gen(function* () {
         WHERE turn.thread_id = provider_runtime_open_turns.thread_id
           AND turn.turn_id = provider_runtime_open_turns.turn_id
           AND turn.state IN ('interrupted', 'completed', 'error')
+      )
+      OR NOT EXISTS (
+        SELECT 1
+        FROM projection_threads AS thread
+        WHERE thread.thread_id = provider_runtime_open_turns.thread_id
+          AND thread.deleted_at IS NULL
+      )
+      OR (
+        EXISTS (
+          SELECT 1
+          FROM projection_threads AS thread
+          WHERE thread.thread_id = provider_runtime_open_turns.thread_id
+            AND thread.archived_at IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM projection_turns AS turn
+          WHERE turn.thread_id = provider_runtime_open_turns.thread_id
+            AND turn.turn_id = provider_runtime_open_turns.turn_id
+            AND turn.state NOT IN ('interrupted', 'completed', 'error')
+        )
       )
     `.pipe(
     Effect.asVoid,

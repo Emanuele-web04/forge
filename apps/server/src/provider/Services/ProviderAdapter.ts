@@ -110,6 +110,16 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
+   * Confirm that a successful start reused the provider-native session named
+   * by the supplied cursor. Adapters that can reject malformed cursors without
+   * failing startup should implement this instead of relying on cursor presence.
+   */
+  readonly didResumeSession?: (
+    input: ProviderSessionStartInput,
+    session: ProviderSession,
+  ) => boolean;
+
+  /**
    * Send a turn to an active provider session.
    */
   readonly sendTurn: (

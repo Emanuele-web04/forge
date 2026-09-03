@@ -138,6 +138,13 @@ export const EDITORS = [
     launchStyle: "terminal-working-directory",
   },
   {
+    id: "iterm",
+    label: "iTerm",
+    commands: ["iterm2"],
+    macApplications: ["iTerm"],
+    launchStyle: "terminal-working-directory",
+  },
+  {
     id: "warp",
     label: "Warp",
     commands: ["warp"],

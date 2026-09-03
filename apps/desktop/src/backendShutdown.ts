@@ -86,6 +86,7 @@ export function shouldDeferDesktopWindowClose(input: {
 
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
 const posixShutdownsByProcess = new WeakMap<object, Promise<void>>();
+const POSIX_SHUTDOWN_REQUEST_RETRY_DELAY_MS = 250;
 
 function isLoopbackShutdownUrl(url: URL): boolean {
   return (
@@ -191,8 +192,12 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 
 function runPosixBackendShutdown(input: {
   readonly child: BackendShutdownProcess;
+  readonly backendHttpUrl: string;
+  readonly shutdownToken: string;
+  readonly terminateDelayMs: number;
   readonly forceKillDelayMs: number;
   readonly timeoutMs: number;
+  readonly startRequest: StartDesktopBackendShutdownRequest;
 }): Promise<void> {
   if (hasExited(input.child)) {
     return Promise.resolve();
@@ -201,13 +206,24 @@ function runPosixBackendShutdown(input: {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let forced = false;
-    let forceTimer: ReturnType<typeof setTimeout> | null = null;
+    let terminationStarted = false;
+    let pendingRequest: PendingDesktopBackendShutdownRequest | null = null;
+    let requestRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let terminateTimer: ReturnType<typeof setTimeout> | null = null;
+    let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = (): void => {
       input.child.off("exit", onExit);
-      if (forceTimer) clearTimeout(forceTimer);
+      if (requestRetryTimer) clearTimeout(requestRetryTimer);
+      if (terminateTimer) clearTimeout(terminateTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (deadlineTimer) clearTimeout(deadlineTimer);
+      try {
+        pendingRequest?.cancel();
+      } catch {
+        // Request cleanup must not delay or invalidate process-exit proof.
+      }
     };
     const settle = (error?: Error): void => {
       if (settled) return;
@@ -222,42 +238,84 @@ function runPosixBackendShutdown(input: {
     const onExit = (): void => {
       settle();
     };
-    const forceIfRunning = (): void => {
+    const signalIfRunning = (signal: "SIGTERM" | "SIGKILL"): void => {
       if (settled || hasExited(input.child)) {
         if (hasExited(input.child)) onExit();
         return;
       }
-      forced = true;
+      if (signal === "SIGTERM") {
+        terminationStarted = true;
+        if (requestRetryTimer) {
+          clearTimeout(requestRetryTimer);
+          requestRetryTimer = null;
+        }
+      }
+      if (signal === "SIGKILL") {
+        forced = true;
+      }
       try {
-        input.child.kill("SIGKILL");
+        input.child.kill(signal);
       } catch {
-        // The absolute deadline below still fails closed if the process survives.
+        // Later escalation and the absolute deadline still bound shutdown.
       }
       if (hasExited(input.child)) {
         onExit();
       }
     };
+    const scheduleRequestRetry = (): void => {
+      if (settled || terminationStarted || hasExited(input.child) || requestRetryTimer) return;
+      requestRetryTimer = setTimeout(() => {
+        requestRetryTimer = null;
+        startRequestAttempt();
+      }, POSIX_SHUTDOWN_REQUEST_RETRY_DELAY_MS);
+      unrefTimer(requestRetryTimer);
+    };
+    const startRequestAttempt = (): void => {
+      if (settled || terminationStarted || hasExited(input.child)) return;
+      let request: PendingDesktopBackendShutdownRequest;
+      try {
+        request = input.startRequest({
+          backendHttpUrl: input.backendHttpUrl,
+          shutdownToken: input.shutdownToken,
+        });
+      } catch {
+        scheduleRequestRetry();
+        return;
+      }
+      if (settled) {
+        request.cancel();
+        return;
+      }
+      pendingRequest = request;
+      void request.outcome.then(
+        (outcome) => {
+          if (outcome.type === "error") {
+            scheduleRequestRetry();
+          }
+        },
+        () => scheduleRequestRetry(),
+      );
+    };
 
     input.child.once("exit", onExit);
-    try {
-      input.child.kill("SIGTERM");
-    } catch {
-      // A failed graceful signal still gets the bounded force-kill attempt.
-    }
+    startRequestAttempt();
 
     if (hasExited(input.child)) {
       onExit();
       return;
     }
 
-    if (input.forceKillDelayMs === 0) {
-      forceIfRunning();
+    if (input.terminateDelayMs === 0) {
+      signalIfRunning("SIGTERM");
     } else {
-      forceTimer = setTimeout(forceIfRunning, input.forceKillDelayMs);
-      unrefTimer(forceTimer);
+      terminateTimer = setTimeout(() => signalIfRunning("SIGTERM"), input.terminateDelayMs);
+      unrefTimer(terminateTimer);
     }
 
     if (settled) return;
+
+    forceKillTimer = setTimeout(() => signalIfRunning("SIGKILL"), input.forceKillDelayMs);
+    unrefTimer(forceKillTimer);
 
     deadlineTimer = setTimeout(() => {
       if (hasExited(input.child)) {
@@ -271,30 +329,47 @@ function runPosixBackendShutdown(input: {
 }
 
 /**
- * Stops a macOS/Linux backend and resolves only after the OS reports child exit.
- * A signal being sent is not proof of exit: updater handoff must fail closed or
- * a surviving old backend can retain the database lifecycle lock.
+ * Requests scoped macOS/Linux backend shutdown, then escalates to TERM and KILL.
+ * Resolves only after the OS reports child exit: a response or sent signal is not
+ * proof that provider descendants were finalized before updater handoff.
  */
 export function stopPosixBackendAndWait(input: {
   readonly child: BackendShutdownProcess;
+  readonly backendHttpUrl: string;
+  readonly shutdownToken: string;
+  readonly terminateDelayMs: number;
   readonly forceKillDelayMs: number;
   readonly timeoutMs: number;
+  readonly startRequest?: StartDesktopBackendShutdownRequest;
 }): Promise<void> {
+  if (!Number.isFinite(input.terminateDelayMs) || input.terminateDelayMs < 0) {
+    return Promise.reject(new RangeError("terminateDelayMs must be a non-negative number."));
+  }
   if (!Number.isFinite(input.forceKillDelayMs) || input.forceKillDelayMs < 0) {
     return Promise.reject(new RangeError("forceKillDelayMs must be a non-negative number."));
   }
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
     return Promise.reject(new RangeError("timeoutMs must be a positive number."));
   }
-  if (input.forceKillDelayMs >= input.timeoutMs) {
-    return Promise.reject(new RangeError("forceKillDelayMs must be less than timeoutMs."));
+  if (
+    input.terminateDelayMs >= input.forceKillDelayMs ||
+    input.forceKillDelayMs >= input.timeoutMs
+  ) {
+    return Promise.reject(
+      new RangeError(
+        "Shutdown delays must satisfy terminateDelayMs < forceKillDelayMs < timeoutMs.",
+      ),
+    );
   }
 
   const key = input.child as object;
   const existing = posixShutdownsByProcess.get(key);
   if (existing) return existing;
 
-  const shutdown = runPosixBackendShutdown(input).finally(() => {
+  const shutdown = runPosixBackendShutdown({
+    ...input,
+    startRequest: input.startRequest ?? startDesktopBackendShutdownRequest,
+  }).finally(() => {
     if (posixShutdownsByProcess.get(key) === shutdown) {
       posixShutdownsByProcess.delete(key);
     }

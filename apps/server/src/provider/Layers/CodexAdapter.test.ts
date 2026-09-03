@@ -462,6 +462,37 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps session/started to a canonical session.started runtime event", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-started"),
+        kind: "session",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "session/started",
+        threadId: asThreadId("thread-1"),
+        message: "Codex session ready for thread native-thread-1",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.started");
+      if (firstEvent.value.type !== "session.started") {
+        return;
+      }
+      assert.equal(
+        firstEvent.value.payload.message,
+        "Codex session ready for thread native-thread-1",
+      );
+    }),
+  );
+
   it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -614,10 +645,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       if (events[0]?.type === "content.delta") {
         assert.equal(events[0].payload.streamKind, "reasoning_text");
         assert.equal(events[0].payload.contentIndex, 2);
+        assert.deepEqual(events[0].raw?.payload, {});
       }
       if (events[1]?.type === "content.delta") {
         assert.equal(events[1].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[1].payload.summaryIndex, 1);
+        assert.deepEqual(events[1].raw?.payload, {});
       }
     }),
   );
@@ -1403,6 +1436,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[2].itemId, "rs_reasoning_1");
         assert.equal(events[2].payload.streamKind, "reasoning_summary_text");
         assert.equal(events[2].payload.summaryIndex, 0);
+        assert.deepEqual(events[2].raw?.payload, {});
       }
 
       assert.equal(events[3]?.type, "task.completed");
@@ -1555,6 +1589,101 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.itemType, "context_compaction");
       assert.equal(firstEvent.value.payload.detail, "Compacting context");
       assert.equal(firstEvent.value.payload.status, "inProgress");
+    }),
+  );
+
+  it.effect("maps Codex hook notifications to bounded canonical lifecycle events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const commonRun = {
+        id: "hook-run-1",
+        eventName: "preToolUse",
+        executionMode: "sync",
+        handlerType: "command",
+        scope: "turn",
+        source: "user",
+        sourcePath: "/Users/example/.codex/hooks.json",
+        displayOrder: 0,
+        startedAt: 100,
+      };
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-started"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/started",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "running",
+            statusMessage: null,
+            completedAt: null,
+            durationMs: null,
+            entries: [],
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-completed"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/completed",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "blocked",
+            statusMessage: "api_key=private-hook-secret blocked this action",
+            completedAt: 112,
+            durationMs: 12,
+            entries: [{ kind: "error", text: "Authorization: Bearer private-hook-token" }],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.length, 2);
+      const [started, completed] = events;
+      assert.equal(started?.type, "hook.started");
+      if (started?.type !== "hook.started") return;
+      assert.deepEqual(started.payload, {
+        hookId: "hook-run-1",
+        hookName: "/Users/example/.codex/hooks.json",
+        hookEvent: "preToolUse",
+        data: {
+          ...commonRun,
+          status: "running",
+          statusMessage: null,
+          completedAt: null,
+          durationMs: null,
+          entries: [],
+        },
+      });
+      assert.deepEqual(started.raw?.payload, { synaraSanitized: true });
+
+      assert.equal(completed?.type, "hook.completed");
+      if (completed?.type !== "hook.completed") return;
+      assert.equal(completed.payload.outcome, "cancelled");
+      assert.equal(completed.payload.status, "blocked");
+      assert.equal(completed.payload.durationMs, 12);
+      const serialized = JSON.stringify(completed);
+      assert.equal(serialized.includes("private-hook-secret"), false);
+      assert.equal(serialized.includes("private-hook-token"), false);
+      assert.equal(serialized.includes("[REDACTED]"), true);
+      assert.deepEqual(completed.raw?.payload, { synaraSanitized: true });
     }),
   );
 

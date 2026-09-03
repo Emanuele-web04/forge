@@ -44,6 +44,25 @@ export type WorkLogRequestKind = ApprovalRequestKind;
 // apps/server/src/orchestration/commandInvariants.ts, which the web app cannot
 // import.
 const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
+export const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
+const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
+
+export type ProviderContextLifecycleReason =
+  | "conversation-rebuilt"
+  | "fresh-session"
+  | "native-history-unavailable"
+  | "native-resume-failed";
+
+export interface ProviderContextLifecycleInfo {
+  provider: ProviderKind;
+  nativeHistory: "available" | "unavailable";
+  restartReason: ProviderContextLifecycleReason;
+  sessionRestarted: boolean;
+  recapInjected: boolean;
+  recapCharacters: number;
+  recapPreview: string | null;
+  recapPreviewTruncated: boolean;
+}
 
 export interface WorkLogEntry {
   id: string;
@@ -70,6 +89,7 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  providerContextLifecycle?: ProviderContextLifecycleInfo;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -158,6 +178,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   runtimeWarningRepeatCount?: number;
   runtimeWarningMessage?: string;
   suppressStandaloneCommandStart?: boolean;
+  taskListHasTasks?: boolean;
 }
 
 export function isFileChangeWorkLogEntry(
@@ -311,6 +332,7 @@ export function deriveWorkLogEntries(
         runtimeWarningMessage: _runtimeWarningMessage,
         runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
         suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+        taskListHasTasks: _taskListHasTasks,
         ...entry
       }) => entry,
     );
@@ -321,6 +343,12 @@ function shouldKeepActivityForWorkLog(
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
 ): boolean {
+  // Context lifecycle evidence must survive message visibility filters. It is
+  // the durable explanation for why a turn may behave differently after reload.
+  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+    return true;
+  }
+
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
     return true;
@@ -450,6 +478,98 @@ function extractWorkLogSynaraThreadCreation(
   return { operationId, requestedCount, createdCount, threads };
 }
 
+export interface TaskListTaskSnapshot {
+  task: string;
+  status: "pending" | "inProgress" | "completed";
+}
+
+// Shared parser for `turn.tasks.updated` payloads. Returns null when the
+// payload carries no readable task list (missing/non-array `tasks`, or a
+// non-empty list where every entry is malformed); an explicit empty snapshot
+// parses to an empty array. Consumed here for transcript rows and by
+// session-logic's composer task-list card state.
+export function parseTaskListTasks(payload: unknown): TaskListTaskSnapshot[] | null {
+  const record =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const rawTasks = record?.tasks;
+  if (!Array.isArray(rawTasks)) {
+    return null;
+  }
+  const tasks = rawTasks
+    .map((entry): TaskListTaskSnapshot | null => {
+      if (!entry || typeof entry !== "object") return null;
+      const taskRecord = entry as Record<string, unknown>;
+      if (typeof taskRecord.task !== "string") {
+        return null;
+      }
+      const status =
+        taskRecord.status === "completed" || taskRecord.status === "inProgress"
+          ? taskRecord.status
+          : "pending";
+      return { task: taskRecord.task, status };
+    })
+    .filter((task): task is TaskListTaskSnapshot => task !== null);
+  if (rawTasks.length > 0 && tasks.length === 0) {
+    return null;
+  }
+  return tasks;
+}
+
+function isProviderContextLifecycleReason(value: unknown): value is ProviderContextLifecycleReason {
+  return (
+    value === "conversation-rebuilt" ||
+    value === "fresh-session" ||
+    value === "native-history-unavailable" ||
+    value === "native-resume-failed"
+  );
+}
+
+function extractProviderContextLifecycleInfo(
+  payload: Record<string, unknown> | null,
+): ProviderContextLifecycleInfo | null {
+  const provider = PROVIDER_DESCRIPTORS.find(
+    (descriptor) => descriptor.kind === payload?.provider,
+  )?.kind;
+  const nativeHistory = payload?.nativeHistory;
+  const restartReason = payload?.restartReason;
+  const sessionRestarted = payload?.sessionRestarted;
+  const recapInjected = payload?.recapInjected;
+  const recapCharacters = payload?.recapCharacters;
+  const recapPreview = payload?.recapPreview;
+  const recapPreviewTruncated = payload?.recapPreviewTruncated;
+  if (
+    !provider ||
+    (nativeHistory !== "available" && nativeHistory !== "unavailable") ||
+    !isProviderContextLifecycleReason(restartReason) ||
+    typeof sessionRestarted !== "boolean" ||
+    typeof recapInjected !== "boolean" ||
+    typeof recapCharacters !== "number" ||
+    !Number.isInteger(recapCharacters) ||
+    recapCharacters < 0 ||
+    (recapPreview !== null && typeof recapPreview !== "string") ||
+    typeof recapPreviewTruncated !== "boolean"
+  ) {
+    return null;
+  }
+  const boundedPreview =
+    typeof recapPreview === "string" &&
+    recapPreview.length > SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS
+      ? `…${recapPreview.slice(-(SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS - 1)).trimStart()}`
+      : recapPreview;
+  return {
+    provider,
+    nativeHistory,
+    restartReason,
+    sessionRestarted,
+    recapInjected,
+    recapCharacters,
+    recapPreview: boundedPreview,
+    recapPreviewTruncated:
+      recapPreviewTruncated ||
+      (typeof recapPreview === "string" && recapPreview.length > (boundedPreview?.length ?? 0)),
+  };
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -508,6 +628,27 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
   }
+  if (activity.kind === "turn.tasks.updated") {
+    const tasks = parseTaskListTasks(payload);
+    if (tasks && tasks.length > 0) {
+      entry.taskListHasTasks = true;
+      const completedCount = tasks.filter((task) => task.status === "completed").length;
+      entry.label = `${completedCount} out of ${tasks.length} ${pluralize(tasks.length, "task")} completed`;
+      const inProgressTask = tasks.find((task) => task.status === "inProgress");
+      if (inProgressTask) {
+        entry.detail = inProgressTask.task;
+      } else {
+        delete entry.detail;
+      }
+    }
+    // Providers snapshot the whole checklist on every change, so one row per
+    // turn (keep-latest) is the entire task history. Without a turn id there is
+    // no safe boundary between separate turns, so keep those snapshots
+    // independent instead of collapsing the whole thread into one row.
+    if (activity.turnId !== null) {
+      entry.collapseKey = `taskList:${activity.turnId}`;
+    }
+  }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
   }
@@ -556,6 +697,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.synaraThreadCreation = synaraThreadCreation;
     }
   }
+  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+    const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);
+    if (providerContextLifecycle) {
+      entry.providerContextLifecycle = providerContextLifecycle;
+    }
+  }
   const readableTitle =
     extractCollabActionTitle(payload) ??
     deriveSynaraMcpToolTitle({
@@ -573,7 +720,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload,
       isRunning: activity.kind !== "tool.completed",
     });
-  if (readableTitle) {
+  // Task-list rows derive their own progress heading above. The generic
+  // activity summary ("Tasks updated") would otherwise become toolTitle and
+  // take precedence over that progress label in TimelineWorkEntryRow.
+  if (readableTitle && activity.kind !== "turn.tasks.updated") {
     entry.toolTitle = readableTitle;
   }
   const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
@@ -856,6 +1006,11 @@ function collapseDerivedWorkLogEntries(
   // converged. Preserve the first row for each semantic repair and hide only
   // exact repeats; different turns/actions remain independently visible.
   const seenRuntimeReconciliationKeys = new Set<string>();
+  // Task-list snapshots (collapseKey "taskList:<turnId>") fold into one row per
+  // turn: each update replaces the row's content while the row itself stays
+  // anchored at the first update's position, so the transcript shows a single
+  // progressing checklist row instead of one "Tasks updated" row per snapshot.
+  const taskListIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const runtimeReconciliationKey = entry.collapseKey?.startsWith("provider-runtime-reconcile:")
       ? entry.collapseKey
@@ -865,6 +1020,17 @@ function collapseDerivedWorkLogEntries(
         continue;
       }
       seenRuntimeReconciliationKeys.add(runtimeReconciliationKey);
+    }
+    const taskListKey = entry.collapseKey?.startsWith("taskList:") ? entry.collapseKey : undefined;
+    if (taskListKey !== undefined) {
+      const existingIndex = taskListIndexByKey.get(taskListKey);
+      if (existingIndex !== undefined) {
+        collapsed[existingIndex] = mergeTaskListEntries(collapsed[existingIndex]!, entry);
+        continue;
+      }
+      taskListIndexByKey.set(taskListKey, collapsed.length);
+      collapsed.push(entry);
+      continue;
     }
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
@@ -946,6 +1112,23 @@ function mergeRuntimeWarningEntries(
     detail: repeatPreview,
     preview: repeatPreview,
   };
+}
+
+// A later task-list snapshot supersedes the earlier one wholesale (providers
+// resend the full checklist), so keep the newest content while preserving the
+// first row's id and createdAt: the id keeps React rows stable across updates
+// and the createdAt keeps the row anchored where the checklist first appeared.
+// A snapshot without readable tasks (explicit clear, or an unreadable payload)
+// carries no progress copy, so it must not overwrite a progressed row with the
+// generic "Tasks updated" label — keep the previous row's content instead.
+function mergeTaskListEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): DerivedWorkLogEntry {
+  if (previous.taskListHasTasks && !next.taskListHasTasks) {
+    return previous;
+  }
+  return { ...next, id: previous.id, createdAt: previous.createdAt };
 }
 
 // Ingestion emits compaction progress ("Compacting conversation...") and its

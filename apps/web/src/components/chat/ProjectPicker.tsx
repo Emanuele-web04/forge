@@ -12,9 +12,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
+import { useAppSettings } from "../../appSettings";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
@@ -56,6 +58,8 @@ interface ProjectPickerProps {
   onResetToHome?: (() => void | Promise<void>) | undefined;
   /** Class override for the trigger button (e.g. tighter height in the composer tray). */
   triggerClassName?: string;
+  /** Visual variant override for the trigger button. */
+  triggerVariant?: ComponentProps<typeof PickerTriggerButton>["variant"];
   /**
    * Replaces the default PickerTriggerButton with a custom trigger element (e.g. the inline
    * project name in the new-chat heading). The element receives the combobox trigger props.
@@ -148,6 +152,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
+  triggerVariant,
   renderTrigger,
   emptyTriggerLabel: emptyTriggerLabelProp,
   addActionLabel,
@@ -165,7 +170,14 @@ export const ProjectPicker = memo(function ProjectPicker({
   const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
+  const { settings } = useAppSettings();
+  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
+  const sidebarThreads = useStore(
+    useMemo(
+      () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
+      [hideAutomationRunThreads],
+    ),
+  );
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -528,9 +540,6 @@ export const ProjectPicker = memo(function ProjectPicker({
         key={folder.cwd}
         index={index}
         value={folder.cwd}
-        onClick={() => {
-          handleSelectActiveFolder(folder);
-        }}
         className={cn(
           selected &&
             "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
@@ -553,6 +562,25 @@ export const ProjectPicker = memo(function ProjectPicker({
     );
   };
 
+  const handleValueChange = useCallback(
+    (selectedValue: string | null) => {
+      if (!selectedValue) return;
+      const activeFolder = activeFolderOptions.find((entry) => entry.cwd === selectedValue);
+      if (activeFolder) {
+        handleSelectActiveFolder(activeFolder);
+        return;
+      }
+      const localFolder = localFolderOptions.find((entry) => entry.absolutePath === selectedValue);
+      if (localFolder) {
+        if (onSelectWorkspaceRoot) {
+          onSelectWorkspaceRoot(localFolder.absolutePath);
+        }
+        setOpen(false);
+      }
+    },
+    [activeFolderOptions, handleSelectActiveFolder, localFolderOptions, onSelectWorkspaceRoot],
+  );
+
   return (
     <Combobox
       items={selectableDirectoryPaths}
@@ -560,6 +588,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       autoHighlight
       onOpenChange={handleOpenChange}
       open={open}
+      onValueChange={handleValueChange}
     >
       {renderTrigger ? (
         <ComboboxTrigger render={renderTrigger} />
@@ -582,6 +611,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                 }
                 label={triggerLabel}
                 hideChevron
+                {...(triggerVariant ? { variant: triggerVariant } : {})}
                 {...(triggerClassName ? { className: triggerClassName } : {})}
               />
             }
@@ -593,7 +623,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               aria-label={resetActionLabel}
               title={resetActionLabel}
               className={cn(
-                "group/reset-project pointer-events-none absolute top-1/2 left-0.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center",
+                "group/reset-project pointer-events-none absolute top-1/2 left-1.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center sm:left-2",
                 "opacity-0 transition-opacity duration-150 ease-out",
                 "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
                 "group-hover/project-picker-trigger:pointer-events-auto group-hover/project-picker-trigger:opacity-100",
@@ -702,10 +732,6 @@ export const ProjectPicker = memo(function ProjectPicker({
                     key={absolutePath}
                     index={filteredActiveFolderOptions.length + index}
                     value={absolutePath}
-                    onClick={() => {
-                      onSelectWorkspaceRoot?.(absolutePath);
-                      setOpen(false);
-                    }}
                     className={cn(
                       absolutePath === selectedWorkspaceRoot &&
                         "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",

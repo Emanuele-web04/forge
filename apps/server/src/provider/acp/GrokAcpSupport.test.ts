@@ -71,6 +71,30 @@ describe("buildGrokAcpSpawnInput", () => {
     expect(spawn.args).not.toContain("--always-approve");
   });
 
+  it("passes Grok 4.6 extra-high reasoning effort to the CLI", () => {
+    expect(
+      buildGrokAcpSpawnInput(
+        {
+          binaryPath: "/usr/local/bin/grok",
+          model: "grok-4.6",
+          reasoningEffort: "xhigh",
+        },
+        "/tmp/project",
+        "approval-required",
+      ).args,
+    ).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "--no-leader",
+      "-m",
+      "grok-4.6",
+      "--reasoning-effort",
+      "xhigh",
+      "stdio",
+    ]);
+  });
+
   it("uses Grok's process-scoped approval override only for Full Access", () => {
     expect(buildGrokAcpSpawnInput(undefined, "/tmp/project", "full-access").args).toEqual([
       "--permission-mode",

@@ -3,11 +3,12 @@
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
 // Usage is fetched read-only from each CLI's stored credentials by the server.
 
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import {
   PROVIDER_USAGE_PROVIDERS,
   providerUsageDisplayName,
   providerUsageNeedsAuthDetail,
+  selectVisibleProviderUsageSnapshots,
 } from "@synara/shared/providerUsage";
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -131,18 +132,6 @@ function ProviderUsageCard({
   );
 }
 
-function missingSnapshot(provider: ProviderKind): ServerProviderUsageSnapshot {
-  return {
-    provider,
-    updatedAt: new Date(0).toISOString(),
-    limits: [],
-    usageLines: [],
-    source: "unavailable",
-    status: "error",
-    detail: "Usage is currently unavailable.",
-  };
-}
-
 function mergeProviderUsageRefresh(
   previous: readonly ServerProviderUsageSnapshot[] | undefined,
   next: readonly ServerProviderUsageSnapshot[],
@@ -175,15 +164,9 @@ export function ProviderUsageSettingsPanel() {
     },
   });
 
-  // Always render a card per supported provider, ordered consistently, even if the batch
-  // omitted one (e.g. a transient server error) — fall back to an "unavailable" placeholder.
-  const byProvider = new Map<ProviderKind, ServerProviderUsageSnapshot>();
-  for (const snapshot of usageQuery.data ?? []) {
-    byProvider.set(snapshot.provider, snapshot);
-  }
-  const cards = PROVIDER_USAGE_PROVIDERS.map(
-    (provider) => byProvider.get(provider) ?? missingSnapshot(provider),
-  );
+  // Use the live payload only. Inventing error placeholders for omitted providers
+  // would count as "connected" and hide unsigned cards.
+  const cards = selectVisibleProviderUsageSnapshots(usageQuery.data ?? []);
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -224,8 +207,9 @@ export function ProviderUsageSettingsPanel() {
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
         Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. Short-lived tokens are refreshed through the provider&apos;s own CLI or
-        official token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
+        from the provider. The list follows whatever you are signed into; unsigned providers stay
+        visible until any account is connected, then drop away. Short-lived tokens are refreshed
+        through the provider&apos;s own CLI or official token endpoint.
       </p>
     </SettingsSectionShell>
   );

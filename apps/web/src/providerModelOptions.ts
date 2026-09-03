@@ -4,6 +4,7 @@ import {
   normalizeModelSlug,
 } from "@synara/shared/model";
 import {
+  MODEL_OPTIONS_BY_PROVIDER,
   PROVIDER_DISPLAY_NAMES,
   type AntigravityModelOptions,
   type AntigravityModelSelection,
@@ -15,9 +16,10 @@ import {
   type CursorModelSelection,
   type DroidModelOptions,
   type DroidModelSelection,
+  type DevinModelOptions,
+  type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
-  type KiloModelSelection,
   type ModelSelection,
   type OpenCodeModelOptions,
   type OpenCodeModelSelection,
@@ -80,7 +82,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "kilo" || input.provider === "opencode" || input.provider === "pi") {
+  if (input.provider === "opencode" || input.provider === "pi") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -104,11 +106,33 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   return normalizeModelSlug(slug, provider) ?? slug;
 }
 
+// Claude discovery order comes from the CLI's own catalog, which interleaves
+// families (Haiku ahead of Opus) and shifts with every CLI release. Rank Claude
+// models by our curated catalog instead so the picker stays strongest-first and
+// static-only models land next to their family rather than after the list.
+const CLAUDE_CATALOG_RANK_BY_SLUG: ReadonlyMap<string, number> = new Map(
+  MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((model, index) => [model.slug as string, index]),
+);
+
+// Models the CLI exposes but the catalog does not know yet (a release landing
+// before Synara updates) sort first so they stay visible at the top.
+function orderClaudeModelOptions<T extends ProviderModelOption>(
+  options: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  return options.toSorted(
+    (left, right) =>
+      (CLAUDE_CATALOG_RANK_BY_SLUG.get(left.slug) ?? -1) -
+      (CLAUDE_CATALOG_RANK_BY_SLUG.get(right.slug) ?? -1),
+  );
+}
+
 /**
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/kilo/opencode/cursor), and user-defined custom models always survive.
+ * (antigravity/opencode/cursor/grok), and user-defined custom models always survive.
+ * Claude is the exception: its discovered and static built-in models are merged
+ * into the curated catalog order.
  */
 export function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
@@ -181,23 +205,25 @@ export function mergeDynamicModelOptions(input: {
   );
   const missingStaticBuiltIns =
     (input.provider === "antigravity" ||
-      input.provider === "kilo" ||
       input.provider === "opencode" ||
       input.provider === "cursor" ||
-      input.provider === "droid") &&
+      input.provider === "droid" ||
+      input.provider === "grok" ||
+      input.provider === "devin") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
-  const orderedDynamicOptions =
-    input.provider === "claudeAgent"
-      ? normalizedDynamicOptions.toReversed()
-      : normalizedDynamicOptions;
+  if (input.provider === "claudeAgent") {
+    return [
+      ...orderClaudeModelOptions([...normalizedDynamicOptions, ...missingStaticBuiltIns]),
+      ...customOnlyModels,
+    ];
+  }
 
-  return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
+  return [...normalizedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
-/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
 export function providerModelCostMultiplierLabel(description?: string): string | null {
   const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
   return multiplier ? `${multiplier}×` : null;
@@ -320,6 +346,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as DroidModelOptions;
   }
+  if (provider === "devin") {
+    return {
+      ...(modelOptions as DevinModelOptions | undefined),
+      ...patch,
+    } as DevinModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -377,15 +409,15 @@ export function buildModelSelection(
   options?: OpenCodeModelOptions | null | undefined,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
-  provider: "kilo",
-  model: string,
-  options?: OpenCodeModelOptions | null | undefined,
-): KiloModelSelection;
-export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "devin",
+  model: string,
+  options?: DevinModelOptions | null | undefined,
+): DevinModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -430,6 +462,14 @@ export function buildModelSelection(
             options: options as CursorModelOptions,
           }
         : { provider, model };
+    case "devin":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DevinModelOptions,
+          }
+        : { provider, model };
     case "grok":
       return options
         ? {
@@ -444,14 +484,6 @@ export function buildModelSelection(
             provider,
             model,
             options: options as DroidModelOptions,
-          }
-        : { provider, model };
-    case "kilo":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
           }
         : { provider, model };
     case "opencode":

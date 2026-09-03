@@ -52,7 +52,10 @@ export function resolveDesktopAppDataBase(input?: {
 export function resolveDesktopUserDataPath(input: {
   readonly appDataBase: string;
   readonly userDataDirectoryName: string;
+  readonly testOverridePath?: string | undefined;
 }): string {
+  const testOverridePath = input.testOverridePath?.trim();
+  if (testOverridePath) return Path.resolve(testOverridePath);
   return Path.join(input.appDataBase, input.userDataDirectoryName);
 }
 

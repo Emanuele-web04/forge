@@ -17,6 +17,7 @@ import { ThreadGitMetadataReactorLive } from "./orchestration/Layers/ThreadGitMe
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
+import { SidechatExpiryReactorLive } from "./orchestration/Layers/SidechatExpiryReactor";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
 import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckpointCoordinator";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
@@ -109,6 +110,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
@@ -117,6 +119,9 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const sidechatExpiryReactorLayer = SidechatExpiryReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
@@ -128,12 +133,14 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(checkpointReactorLayer),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(threadGitMetadataReactorLayer),
+    Layer.provideMerge(sidechatExpiryReactorLayer),
   );
   const threadDeletionReactorLayer = provideThreadDeletionReactorDeviceService(
     ThreadDeletionReactorLive.pipe(
       Layer.provideMerge(profileStatsArchiveLayer),
       Layer.provideMerge(OrchestrationLayerLive),
       Layer.provideMerge(TerminalLayerLive),
+      Layer.provideMerge(GitCoreLive),
     ),
     DeviceServiceLive,
   );
@@ -193,7 +200,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
@@ -230,6 +237,7 @@ export function makeServerRuntimeServicesLayer(
     pullRequestServiceLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
+    sidechatExpiryReactorLayer,
     threadGitMetadataReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,
@@ -257,10 +265,17 @@ export function makeServerRuntimeServicesLayer(
  */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+  const runtimeServicesLayer = makeServerRuntimeServicesLayer({
+    agentGatewayCredentialsLayer,
+  });
+  // Provider start/discovery gates must observe the same settings instance as
+  // the RPC layer. Reusing this layer in the final graph lets Effect memoize a
+  // single ServerSettings service instead of capturing private defaults.
+  const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
+    Layer.provideMerge(ServerSettingsLive),
+  );
   return {
-    runtimeServicesLayer: makeServerRuntimeServicesLayer({
-      agentGatewayCredentialsLayer,
-    }),
-    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }),
+    runtimeServicesLayer,
+    providerLayer,
   } as const;
 }

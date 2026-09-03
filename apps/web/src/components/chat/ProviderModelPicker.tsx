@@ -8,6 +8,7 @@ import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
+import { appHistory } from "../../appNavigation";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
@@ -45,6 +46,7 @@ import {
   type FavoriteModelProvider,
 } from "../../lib/modelFavorites";
 import { Skeleton } from "../ui/skeleton";
+import { PlusIcon } from "~/lib/icons";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -86,7 +88,6 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
 }
 
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
-const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 
 // Removes user-hidden providers from a provider option list while always
 // preserving any providers the caller marks as protected (the active and
@@ -136,9 +137,12 @@ function resolveSelectedModelLabel(input: {
   model: string;
   options: ReadonlyArray<ProviderModelOption>;
 }): string {
-  const exact = input.options.find((option) => option.slug === input.model);
-  if (exact) {
-    return exact.name;
+  const resolvedSlug = resolveSelectableModel(input.provider, input.model, input.options);
+  if (resolvedSlug) {
+    const resolvedOption = input.options.find((option) => option.slug === resolvedSlug);
+    if (resolvedOption) {
+      return resolvedOption.name;
+    }
   }
   if (input.provider === "cursor") {
     const baseModel = stripParameterizedModelSuffix(input.model);
@@ -175,6 +179,7 @@ type ProviderModelMenuItemsProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   disabled?: boolean;
@@ -192,11 +197,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 ) {
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
-  const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.kilo,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     EMPTY_FAVORITE_MODEL_SLUGS,
@@ -224,24 +224,17 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
     AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
       compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+    ).filter((option) =>
+      props.providers?.some((provider) => provider.provider === option.value && provider.available),
     ),
     hiddenProviderSet,
     protectedProviderSet,
   );
-  const visibleUnavailableProviderOptions = filterProviderOptionsByVisibility(
-    UNAVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-    ),
-    hiddenProviderSet,
-    protectedProviderSet,
-  );
-  const kiloFavoriteModelSlugSet = new Set(kiloFavoriteModelSlugs);
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
-    kilo: kiloFavoriteModelSlugSet,
     opencode: openCodeFavoriteModelSlugSet,
     pi: piFavoriteModelSlugSet,
   };
@@ -261,11 +254,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     const setFavoriteModelSlugs =
       provider === "cursor"
         ? setCursorFavoriteModelSlugs
-        : provider === "kilo"
-          ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+        : provider === "pi"
+          ? setPiFavoriteModelSlugs
+          : setOpenCodeFavoriteModelSlugs;
     setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
   };
 
@@ -285,9 +276,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
-      (provider === "kilo" ||
-        provider === "opencode" ||
+      (provider === "opencode" ||
         provider === "cursor" ||
+        provider === "devin" ||
         provider === "pi") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
@@ -307,6 +298,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             favoriteSlugs: favoriteModelSlugSet,
           })
         : groupProviderModelOptions(filteredOptions);
+
+    const discoveryError = props.discoveryErrorsByProvider?.[provider];
+    const discoveryErrorElement = discoveryError ? (
+      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+    ) : null;
 
     const content =
       groupedOptions.length > 0 ? (
@@ -339,18 +335,26 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         shouldUseCollapsibleModelGroups(groupedOptions.length, false);
       if (needsScrollContainer) {
         return (
-          <div
-            className={cn(
-              "overflow-y-auto overscroll-contain py-0.5",
-              COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-              COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-            )}
-          >
-            {content}
-          </div>
+          <>
+            {discoveryErrorElement}
+            <div
+              className={cn(
+                "overflow-y-auto overscroll-contain py-0.5",
+                COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+                COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+              )}
+            >
+              {content}
+            </div>
+          </>
         );
       }
-      return content;
+      return (
+        <>
+          {discoveryErrorElement}
+          {content}
+        </>
+      );
     }
 
     return (
@@ -364,6 +368,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         bleedParentPadding
         listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
       >
+        {discoveryErrorElement}
         {content}
       </PickerPanelShell>
     );
@@ -417,25 +422,15 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           </MenuSub>
         );
       })}
-      {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
-      {visibleUnavailableProviderOptions.map((option) => {
-        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
-        return (
-          <MenuItem key={option.value} disabled>
-            <OptionIcon
-              aria-hidden="true"
-              className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
-            />
-            <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
-          </MenuItem>
-        );
-      })}
+      {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
+      <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
+        <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
+        <span>Add Providers</span>
+      </MenuItem>
     </>
   );
 };
 
-// Resolves the human-readable label for the currently selected model.
 export function resolveProviderModelLabel(input: {
   provider: ProviderKind;
   lockedProvider: ProviderKind | null;
@@ -464,6 +459,7 @@ type ProviderModelPickerProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
@@ -585,6 +581,9 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           modelOptionsByProvider={props.modelOptionsByProvider}
           {...(props.loadingModelProviders
             ? { loadingModelProviders: props.loadingModelProviders }
+            : {})}
+          {...(props.discoveryErrorsByProvider
+            ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}

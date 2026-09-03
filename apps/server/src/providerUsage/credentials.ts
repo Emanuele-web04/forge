@@ -6,7 +6,7 @@
 // rotation (a rotated refresh token that wasn't persisted invalidates the CLI's login).
 
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
@@ -56,11 +56,11 @@ export async function writeJsonFileAtomic(path: string, value: unknown): Promise
   const directory = nodePath.dirname(path);
   const tempPath = nodePath.join(
     directory,
-    `.${nodePath.basename(path)}.tmp-${process.pid}-${Date.now().toString(36)}`,
+    `.${nodePath.basename(path)}.tmp-${process.pid}-${randomUUID()}`,
   );
   const text = `${JSON.stringify(value, null, 2)}\n`;
   try {
-    await fs.writeFile(tempPath, text, { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(tempPath, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
     await fs.rename(tempPath, path);
   } catch (cause) {
     await fs.rm(tempPath, { force: true }).catch(() => {});
@@ -101,6 +101,8 @@ export async function refreshOAuthAccessToken(input: {
   allowedOrigins: ReadonlyArray<string>;
   refreshToken: string;
   clientId: string;
+  /** Google-style token endpoints require the confidential-client secret next to `client_id`. */
+  clientSecret?: string;
   scope?: string;
   /** OAuth token endpoints commonly require form encoding; JSON stays for the ones that don't. */
   bodyFormat?: "json" | "form";
@@ -111,6 +113,9 @@ export async function refreshOAuthAccessToken(input: {
     refresh_token: input.refreshToken,
     client_id: input.clientId,
   };
+  if (input.clientSecret) {
+    body.client_secret = input.clientSecret;
+  }
   if (input.scope) {
     body.scope = input.scope;
   }

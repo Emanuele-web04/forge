@@ -2,11 +2,13 @@
 // Purpose: Locks down server React Query polling profiles and cache options.
 // Layer: Web data-fetching unit tests
 
-import type { ServerConfig, ServerProviderStatus } from "@synara/contracts";
+import { ThreadId, type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import {
+  hasReconciledServerProviderStatuses,
+  invalidateProviderUsageQueries,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
@@ -15,6 +17,7 @@ import {
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
+  studioThreadOutputsQueryOptions,
 } from "./serverReactQuery";
 
 const READY_CODEX_STATUS = {
@@ -41,6 +44,17 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("distinguishes hydrated config from a live provider snapshot", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
+    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+  });
+
   it("applies a missed live snapshot after the config projection hydrates", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;
@@ -109,7 +123,11 @@ describe("server provider status reconciliation", () => {
     const refresh = refreshServerConfigAfterTransportOpen(queryClient, {
       loadConfig: () => configProjection,
     });
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
     await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+
     resolveConfig(makeServerConfig([unavailableStatus]));
     await refresh;
 
@@ -134,6 +152,7 @@ describe("server provider status reconciliation", () => {
       loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
     });
 
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
     ]);
@@ -199,6 +218,19 @@ describe("serverAllProviderUsageQueryOptions", () => {
 
     expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
   });
+
+  it("invalidates batch and provider-scoped caches after enablement changes", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.providerUsage("codex", null), null);
+
+    await invalidateProviderUsageQueries(queryClient);
+
+    expect(queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated).toBe(true);
+    expect(
+      queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))?.isInvalidated,
+    ).toBe(true);
+  });
 });
 
 describe("serverProviderUsageSnapshotQueryOptions", () => {
@@ -209,5 +241,26 @@ describe("serverProviderUsageSnapshotQueryOptions", () => {
     });
 
     expect(options.enabled).toBe(false);
+  });
+});
+
+describe("studio thread outputs query options", () => {
+  const capacityError = {
+    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+    retryable: true,
+    retryAfterMs: 375,
+  };
+
+  it("retries generic output failures without stacking capacity retries", () => {
+    const options = studioThreadOutputsQueryOptions({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(typeof options.retry).toBe("function");
+    if (typeof options.retry !== "function") {
+      throw new Error("Expected retry on studioThreadOutputsQueryOptions.");
+    }
+    expect(options.retry(0, capacityError as never)).toBe(false);
+    expect(options.retry(0, new Error("network"))).toBe(true);
+    expect(options.retry(3, new Error("network"))).toBe(false);
   });
 });

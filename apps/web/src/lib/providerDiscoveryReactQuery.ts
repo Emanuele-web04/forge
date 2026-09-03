@@ -224,11 +224,15 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
-    // fast so the picker settles to static options instead of spinning (#103).
+    // Cached catalogs paint immediately while stale entries revalidate in the
+    // background. Droid discovery starts a disposable ACP session, so retain its
+    // longer cache and never repeat that work merely because the window regained focus.
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
+    staleTime: input.provider === "droid" ? 5 * 60_000 : 30_000,
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
+    // providerModelPrefetch.ts (not imported: that module imports from here).
+    gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }

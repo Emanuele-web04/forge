@@ -36,6 +36,8 @@ describe("browser automation catalogue projection", () => {
       IDEMPOTENT_LOCAL,
       READ_ONLY_OPEN_WORLD,
       READ_ONLY_OPEN_WORLD,
+      DESTRUCTIVE_OPEN_WORLD,
+      READ_ONLY_OPEN_WORLD,
       READ_ONLY_OPEN_WORLD,
       DESTRUCTIVE_OPEN_WORLD,
       MUTATING_OPEN_WORLD,

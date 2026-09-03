@@ -144,40 +144,41 @@ export function ComposerSlashStatusDialog(props: {
                 />
               ) : null}
             </div>
-            {contextWindow ? (
-              <div className="grid gap-3 text-sm sm:grid-cols-2">
+            <div className="grid gap-3 text-sm sm:grid-cols-2">
+              {contextWindow ? (
+                <>
+                  <div>
+                    <p className="text-muted-foreground">Used</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.usedTokens)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Remaining</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.remainingTokens)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Window</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.maxTokens)}
+                    </p>
+                  </div>
+                </>
+              ) : (
                 <div>
-                  <p className="text-muted-foreground">Used</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.usedTokens)}
-                  </p>
+                  <p className="text-muted-foreground">Context usage</p>
+                  <p className="font-medium text-foreground">Not reported yet</p>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Remaining</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.remainingTokens)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Window</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.maxTokens)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cost</p>
-                  <p className="font-medium text-foreground">
-                    {cumulativeCostUsd !== null
-                      ? formatCostUsd(cumulativeCostUsd)
-                      : "Not available"}
-                  </p>
-                </div>
+              )}
+              <div>
+                <p className="text-muted-foreground">Cost</p>
+                <p className="font-medium text-foreground">
+                  {cumulativeCostUsd !== null ? formatCostUsd(cumulativeCostUsd) : "Not available"}
+                </p>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Context usage has not been reported yet for this thread.
-              </p>
-            )}
+            </div>
           </div>
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">

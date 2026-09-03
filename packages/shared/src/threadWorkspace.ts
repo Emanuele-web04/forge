@@ -40,12 +40,17 @@ export function normalizeWorkspaceRootForComparison(
   }
 
   const withForwardSlashes = trimmed.replace(/\\/g, "/");
+  const isWindowsDriveRoot = /^[a-z]:\/+$/i.test(withForwardSlashes);
   const hasUncPrefix = withForwardSlashes.startsWith("//");
   const prefix = hasUncPrefix ? "//" : withForwardSlashes.startsWith("/") ? "/" : "";
   const body = withForwardSlashes.slice(prefix.length).replace(/\/+/g, "/");
   const normalized =
     prefix.length > 0 ? `${prefix}${body.replace(/\/+$/g, "")}` : body.replace(/\/+$/g, "");
-  let finalValue = normalized.length > 0 ? normalized : prefix;
+  let finalValue = isWindowsDriveRoot
+    ? `${withForwardSlashes.slice(0, 2)}/`
+    : normalized.length > 0
+      ? normalized
+      : prefix;
 
   // macOS commonly surfaces the same temp/workspace location through both
   // `/var/...` and `/private/var/...` (likewise `/tmp/...` vs `/private/tmp/...`).
@@ -96,9 +101,9 @@ export function isWorkspaceRootWithin(
   return normalizedCandidate.startsWith(prefix);
 }
 
-// Per-thread scratch working directories (under the OS temp dir) used when a
-// provider session starts before any project workspace exists, e.g. a chat's
-// first turn racing its workspace provisioning.
+// Per-thread scratch working directories (under a per-user cache container)
+// used when a provider session starts before any project workspace exists,
+// e.g. a chat's first turn racing its workspace provisioning.
 export const SCRATCH_WORKSPACES_DIRNAME = "synara-codex-workspaces";
 
 // True when an absolute path points inside a per-thread scratch workspace.

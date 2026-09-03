@@ -43,8 +43,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      - name: Cache Electron runtime
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
+
+      - name: Install Electron test runtime
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node apps/desktop/node_modules/electron/install.js; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Verify Linux terminal PTY native dependency
         if: runner.os == 'Linux'
@@ -52,6 +75,9 @@ jobs:
 
       - name: Verify Synara identity
         run: bun run brand:check
+
+      - name: Verify Windows runtime boundary
+        run: bun run windows-runtime:check
 
       - name: Format
         run: bun run fmt:check
@@ -115,13 +141,32 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
 
-      - name: Test Windows process planning
-        run: bun run --cwd packages/shared test src/windowsProcess.test.ts
+      - name: Verify Windows runtime boundary
+        run: bun run windows-runtime:check
+
+      - name: Test Windows process runtime
+        run: >-
+          bun run --cwd packages/shared test
+          src/windowsProcess.test.ts
+          src/platformProcess.test.ts
+          src/processRuntime.test.ts
+          src/filesystemPlatform.test.ts
+          src/platformEnvironment.test.ts
+
+      - name: Test Windows lifecycle and process trees
+        run: >-
+          bun run --cwd apps/server test
+          src/platform/processTreeController.test.ts
+          src/provider/supervisedProcessTeardown.test.ts
+          src/provider/providerStartupLifecycle.test.ts
+          src/processRunner.test.ts
 
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts

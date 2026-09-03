@@ -77,6 +77,9 @@ interface TestFixture {
 let fixture: TestFixture;
 let shellStreamRequestId: string | null = null;
 let shellStreamClient: EffectRpcWebSocketClient | null = null;
+let serverLifecycleRequestId: string | null = null;
+let serverLifecycleClient: EffectRpcWebSocketClient | null = null;
+let suppressNextShellSnapshot = false;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
@@ -85,6 +88,7 @@ const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
+let getShellSnapshotRequestCount = 0;
 let getThreadDetailSnapshotRequestCount = 0;
 let delayNextThreadDetailSnapshotResponse = false;
 let pendingThreadDetailSnapshotResponse: {
@@ -196,6 +200,7 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -269,6 +274,10 @@ const worker = setupWorker(
         subscribeShellRequestCount += 1;
         shellStreamRequestId = request.id;
         shellStreamClient = client;
+        if (suppressNextShellSnapshot) {
+          suppressNextShellSnapshot = false;
+          return;
+        }
         sendEffectRpcChunk(client, request.id, {
           kind: "snapshot",
           snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
@@ -276,6 +285,8 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerLifecycle) {
+        serverLifecycleRequestId = request.id;
+        serverLifecycleClient = client;
         sendEffectRpcChunk(client, request.id, {
           type: "welcome",
           payload: fixture.welcome,
@@ -444,6 +455,16 @@ function sendShellEventPush(event: OrchestrationShellStreamItem) {
   sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, event);
 }
 
+function sendServerWelcomePush() {
+  if (!serverLifecycleRequestId || !serverLifecycleClient) {
+    throw new Error("Server lifecycle stream is not connected");
+  }
+  sendEffectRpcChunk(serverLifecycleClient, serverLifecycleRequestId, {
+    type: "welcome",
+    payload: fixture.welcome,
+  });
+}
+
 describe("EventRouter scoped orchestration sync", () => {
   beforeAll(async () => {
     fixture = buildFixture();
@@ -466,6 +487,9 @@ describe("EventRouter scoped orchestration sync", () => {
     document.body.innerHTML = "";
     shellStreamRequestId = null;
     shellStreamClient = null;
+    serverLifecycleRequestId = null;
+    serverLifecycleClient = null;
+    suppressNextShellSnapshot = false;
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
@@ -476,6 +500,7 @@ describe("EventRouter scoped orchestration sync", () => {
       projectDraftThreadIdByProjectId: {},
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
       projects: [],
       threadIds: [],
       threadShellById: {},
@@ -502,6 +527,7 @@ describe("EventRouter scoped orchestration sync", () => {
     subscribeThreadRequests = [];
     replayEvents = [];
     replayRequestCursors = [];
+    getShellSnapshotRequestCount = 0;
     getThreadDetailSnapshotRequestCount = 0;
     delayNextThreadDetailSnapshotResponse = false;
     pendingThreadDetailSnapshotResponse = null;
@@ -517,6 +543,47 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       expect(subscribeShellRequestCount).toBe(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not query a fallback after a streamed shell snapshot with no spaces", async () => {
+    const mounted = await mountApp();
+
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      expect(useStore.getState().spaces).toEqual([]);
+      expect(getShellSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("applies the shell fallback when a reconnect snapshot does not arrive", async () => {
+    const mounted = await mountApp();
+
+    try {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: fixture.snapshot.threads.map((thread) => ({
+          ...thread,
+          title: "Updated after reconnect",
+        })),
+      };
+      suppressNextShellSnapshot = true;
+      sendServerWelcomePush();
+
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      await vi.waitFor(() => expect(getShellSnapshotRequestCount).toBe(1), {
+        timeout: 3_000,
+      });
+      await vi.waitFor(() =>
+        expect(getThreadFromState(useStore.getState(), THREAD_ID)?.title).toBe(
+          "Updated after reconnect",
+        ),
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -963,7 +1030,169 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = buildFixture();
       await mounted.cleanup();
     }
-  }, 60_000);
+  }, 120_000);
+
+  it("keeps the terminal fence until a post-settle snapshot includes the assistant reply", async () => {
+    // Mirrors #548: session-set lands (and a premature detail snapshot is taken)
+    // before buffered assistant finals are projected. Clearing the fence on that
+    // first snapshot left the UI spinning until a full reload.
+    const turnId = TurnId.makeUnsafe("turn-fence-premature-snapshot");
+    const finalMessageId = MessageId.makeUnsafe("msg-fence-premature-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    const completedAt = "2026-03-04T12:00:09.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      // Premature authoritative projection: terminal at the session-set sequence,
+      // with an assistantMessageId that has not been projected into messages yet.
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [...currentThread.messages],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      delayNextThreadDetailSnapshotResponse = true;
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-fence-premature-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      sendPendingThreadDetailSnapshotResponse();
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      expect(
+        getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+          (message) => message.id === finalMessageId,
+        ),
+      ).toBe(false);
+
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          threads: [
+            {
+              ...fixture.snapshot.threads[0]!,
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered without a reload.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(1);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered without a reload.",
+          );
+        },
+        { timeout: 15_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 120_000);
 
   it("reconciles a missed completion from the authoritative thread projection", async () => {
     const turnId = TurnId.makeUnsafe("turn-missed-completion");

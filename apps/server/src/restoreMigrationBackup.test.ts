@@ -42,4 +42,31 @@ describe("migration backup recovery CLI", () => {
     expect(capture.warnings.join("\n")).toContain("Stop every Synara process");
     expect(capture.logs).toEqual([]);
   });
+
+  it("requires a complete absolute backup selection", async () => {
+    const incomplete = captureOutput();
+    const relative = captureOutput();
+
+    await expect(
+      runRestoreMigrationBackupCli(
+        ["/data/state.sqlite", "--backup-path", "/data/exact.sqlite"],
+        incomplete.output,
+      ),
+    ).resolves.toBe(2);
+    expect(incomplete.errors.join("\n")).toContain("--provenance-path");
+
+    await expect(
+      runRestoreMigrationBackupCli(
+        [
+          "/data/state.sqlite",
+          "--backup-path",
+          "relative.sqlite",
+          "--provenance-path",
+          "/data/state.sqlite.migration-backup.json",
+        ],
+        relative.output,
+      ),
+    ).resolves.toBe(2);
+    expect(relative.errors.join("\n")).toContain("must be absolute");
+  });
 });
