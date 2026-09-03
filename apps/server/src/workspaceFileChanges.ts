@@ -47,10 +47,25 @@ function outsideRootError(input: ProjectWatchFileInput): WorkspacePathOutsideRoo
 
 async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string[] | null> {
   const lexicalTargetPath = NodePath.resolve(input.cwd, input.relativePath);
-  const [entryParentPath, resolvedTargetPath] = await Promise.all([
-    resolveRealPathWithinRoot(input.cwd, NodePath.dirname(lexicalTargetPath)),
-    resolveRealPathForCreateWithinRoot(input.cwd, lexicalTargetPath),
-  ]);
+  const entryParentPath = await resolveRealPathWithinRoot(
+    input.cwd,
+    NodePath.dirname(lexicalTargetPath),
+  );
+  let resolvedTargetPath: string | null;
+  try {
+    resolvedTargetPath = await resolveRealPathForCreateWithinRoot(input.cwd, lexicalTargetPath);
+  } catch (cause) {
+    if (!isFileNotFoundError(cause)) throw cause;
+
+    // resolveRealPathForCreateWithinRoot deliberately rejects dangling links.
+    // Reading the final link itself lets this watcher retain its entry and the
+    // intended in-workspace target path until that target is created again.
+    const linkTarget = await NodeFileSystem.readlink(lexicalTargetPath);
+    const intendedTargetPath = NodePath.isAbsolute(linkTarget)
+      ? linkTarget
+      : NodePath.resolve(NodePath.dirname(lexicalTargetPath), linkTarget);
+    resolvedTargetPath = await resolveRealPathForCreateWithinRoot(input.cwd, intendedTargetPath);
+  }
   if (entryParentPath === null || resolvedTargetPath === null) {
     return null;
   }

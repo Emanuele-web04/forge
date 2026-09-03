@@ -178,4 +178,65 @@ describe("watchWorkspaceFile", () => {
       abortController.abort();
     }
   });
+
+  it("follows a symlink retargeted to a file that does not exist yet", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const initialTargetPath = NodePath.join(workspaceRoot, "targets/initial.ts");
+    const futureTargetPath = NodePath.join(workspaceRoot, "future/new.ts");
+    const aliasPath = NodePath.join(workspaceRoot, "alias.ts");
+    await NodeFileSystem.mkdir(NodePath.dirname(initialTargetPath), { recursive: true });
+    await NodeFileSystem.mkdir(NodePath.dirname(futureTargetPath), { recursive: true });
+    await NodeFileSystem.writeFile(initialTargetPath, "initial\n");
+    await NodeFileSystem.symlink("targets/initial.ts", aliasPath);
+
+    let resolveInitialEvent!: () => void;
+    const initialEvent = new Promise<void>((resolve) => {
+      resolveInitialEvent = resolve;
+    });
+    let resolveDeletedEvent!: () => void;
+    const deletedEvent = new Promise<void>((resolve) => {
+      resolveDeletedEvent = resolve;
+    });
+    const abortController = new AbortController();
+    const collectedEvents = Effect.runPromise(
+      watchWorkspaceFile({ cwd: workspaceRoot, relativePath: "alias.ts" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            resolveInitialEvent();
+            if (event.type === "deleted") resolveDeletedEvent();
+          }),
+        ),
+        Stream.take(3),
+        Stream.runCollect,
+      ),
+      { signal: abortController.signal },
+    );
+
+    try {
+      await initialEvent;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await NodeFileSystem.unlink(aliasPath);
+      await NodeFileSystem.symlink("future/new.ts", aliasPath);
+      await Promise.race([
+        deletedEvent,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("symlink retarget event timed out")), 5_000),
+        ),
+      ]);
+      await NodeFileSystem.writeFile(futureTargetPath, "created\n");
+
+      const events = Array.from(
+        await Promise.race([
+          collectedEvents,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("retargeted symlink watch timed out")), 5_000),
+          ),
+        ]),
+      );
+
+      expect(events.map((event) => event.type)).toEqual(["changed", "deleted", "changed"]);
+    } finally {
+      abortController.abort();
+    }
+  });
 });
