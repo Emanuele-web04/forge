@@ -143,11 +143,13 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     version: externalVersion,
   });
   const readFile = vi.fn().mockResolvedValueOnce(loadedFile()).mockResolvedValue(externalFile);
-  let emitFileChange: ((event: ProjectFileChangeEvent) => void) | null = null;
+  const fileChangeSubscription: {
+    listener?: (event: ProjectFileChangeEvent) => void;
+  } = {};
   const unsubscribe = vi.fn();
   const onFileChange = vi.fn(
     (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
-      emitFileChange = callback;
+      fileChangeSubscription.listener = callback;
       return unsubscribe;
     },
   );
@@ -167,7 +169,11 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     await editor.fill("manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
-    emitFileChange?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: Date.now() });
+    fileChangeSubscription.listener?.({
+      type: "changed",
+      relativePath: FILE_PATH,
+      mtimeMs: Date.now(),
+    });
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
     await expect.element(editor).toHaveValue("manual edit\n");
