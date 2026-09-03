@@ -108,9 +108,9 @@ function drainProviderModelDiscoveryQueue(): void {
 
 export function prioritizeProviderModelDiscovery(queryKey: readonly unknown[]): void {
   for (const task of providerModelDiscoveryQueue) {
-    if (queryKeysMatch(task.queryKey, queryKey)) {
-      task.priority = "foreground";
-    }
+    // Selection is exclusive: switching providers must demote the previous
+    // foreground task, otherwise FIFO order can still favor the stale choice.
+    task.priority = queryKeysMatch(task.queryKey, queryKey) ? "foreground" : "background";
   }
 }
 

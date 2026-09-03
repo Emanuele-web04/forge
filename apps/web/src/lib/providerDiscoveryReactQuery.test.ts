@@ -167,6 +167,7 @@ describe("providerModelsQueryOptions", () => {
     ];
 
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    prioritizeProviderModelDiscovery(backgroundOptions.queryKey);
     prioritizeProviderModelDiscovery(selectedOptions.queryKey);
     releaseCurrent?.();
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(2));
