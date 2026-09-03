@@ -294,16 +294,23 @@ describe("providerModelsQueryOptions", () => {
     expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
-  it("accepts an authoritative empty Pi catalog", async () => {
+  it.each([
+    ["codex", "codex-app-server"],
+    ["claudeAgent", "sdk"],
+    ["opencode", "opencode"],
+    ["opencode", "opencode-cli"],
+    ["pi", "pi.sdk"],
+    ["pi", "pi.sdk+extensions"],
+  ] as const)("accepts an authoritative empty %s catalog from %s", async (provider, source) => {
     const listModels = mockListModels(
-      vi.fn().mockResolvedValue({ models: [], source: "pi.sdk", cached: false }),
+      vi.fn().mockResolvedValue({ models: [], source, cached: false }),
     );
-    const options = { ...providerModelsQueryOptions({ provider: "pi" }), retry: 0 };
+    const options = { ...providerModelsQueryOptions({ provider }), retry: 0 };
     const queryClient = new QueryClient();
 
     await expect(queryClient.fetchQuery(options)).resolves.toEqual({
       models: [],
-      source: "pi.sdk",
+      source,
       cached: false,
     });
     expect(listModels).toHaveBeenCalledTimes(1);
