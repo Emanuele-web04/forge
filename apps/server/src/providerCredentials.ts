@@ -7,7 +7,7 @@ import { Effect, Layer, ServiceMap } from "effect";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { ServerSecretStore, type SecretStoreError } from "./auth/Services/ServerSecretStore";
 
-export type ExternalProviderServer = "kilo" | "opencode";
+export type ExternalProviderServer = "opencode";
 
 const secretName = (provider: ExternalProviderServer): string =>
   `provider-${provider}-server-password`;

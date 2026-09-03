@@ -20,10 +20,12 @@ export function nonEmptyTrimmed(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+const COMMAND_MISSING_MARKERS = ["enoent", "notfound", "command not found"] as const;
+
 export function isCommandMissingCause(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
-  return lower.includes("enoent") || lower.includes("notfound");
+  return COMMAND_MISSING_MARKERS.some((marker) => lower.includes(marker));
 }
 
 export function detailFromResult(

@@ -85,6 +85,7 @@ interface RightDockProps {
   onAddPane: (kind: RightDockPaneKind) => void;
   motionKey?: string;
   activePaneRuntimeMode?: DockPaneRuntimeMode;
+  browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
@@ -183,6 +184,7 @@ export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  const browserRuntimeMode = props.browserRuntimeMode ?? "live";
   // The dock is the right-most surface when open, so its header sits under the
   // fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
@@ -342,9 +344,14 @@ export function RightDock(props: RightDockProps) {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;
               // Keep-mounted panes that are not the active tab are already
-              // hydrated, so they render live (just hidden); the active pane uses
-              // the deferred-aware runtime mode from the activation hook.
-              const runtimeMode: DockPaneRuntimeMode = isActive ? activePaneRuntimeMode : "live";
+              // hydrated; browser panes may use an explicit runtime mode so a
+              // floating browser can own the live guest while the dock stays preview-only.
+              const runtimeMode: DockPaneRuntimeMode =
+                pane.kind === "browser"
+                  ? browserRuntimeMode
+                  : isActive
+                    ? activePaneRuntimeMode
+                    : "live";
               return (
                 <div
                   key={pane.id}

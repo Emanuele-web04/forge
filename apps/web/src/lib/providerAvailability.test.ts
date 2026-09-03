@@ -5,6 +5,7 @@ import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
+  resolveAvailableProviderPreference,
   resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
 
@@ -59,6 +60,28 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       status: "warning",
       message:
         "Claude uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
+    });
+  });
+
+  it("makes a disabled provider unavailable before its health status refreshes", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "opencode",
+        status: {
+          ...READY_STATUS,
+          provider: "opencode",
+          message: "OpenCode is ready.",
+        },
+        customBinaryPath: "/custom/bin/opencode",
+        disabled: true,
+      }),
+    ).toEqual({
+      provider: "opencode",
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: BASE_STATUS.checkedAt,
+      message: "Provider is disabled in Synara settings.",
     });
   });
 
@@ -181,6 +204,44 @@ describe("isProviderUsable", () => {
     expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
       true,
     );
+  });
+});
+
+describe("resolveAvailableProviderPreference", () => {
+  it("keeps an installed preferred provider", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [READY_STATUS],
+      }),
+    ).toBe("antigravity");
+  });
+
+  it("falls back to the first visible authenticated provider in picker order", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [
+          BASE_STATUS,
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            authStatus: "unauthenticated",
+          },
+          { ...READY_STATUS, provider: "cursor" },
+        ],
+        providerOrder: ["claudeAgent", "cursor"],
+      }),
+    ).toBe("cursor");
+  });
+
+  it("preserves the preference while provider status is loading", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "antigravity",
+        statuses: [],
+      }),
+    ).toBe("antigravity");
   });
 });
 

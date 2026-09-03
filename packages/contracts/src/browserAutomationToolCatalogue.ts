@@ -8,6 +8,8 @@ export const BROWSER_TOOL_NAMES = [
   "browser_reload",
   "browser_resize",
   "browser_snapshot",
+  "browser_webmcp_tools",
+  "browser_webmcp_call",
   "browser_screenshot",
   "browser_logs",
   "browser_click",

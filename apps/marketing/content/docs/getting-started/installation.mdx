@@ -1,0 +1,105 @@
+---
+title: Installation
+description: Install Synara on macOS, Windows, or Linux and connect your first coding-agent runtime.
+---
+
+Synara is a desktop workspace for coding agents. Installing Synara gives you the workspace; provider runtimes and model access still come from the coding-agent tools and accounts you already use.
+
+## Choose the right installer
+
+Download the latest stable build from the [Synara download page](/install). If the automatic download is unavailable, open [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) and select the asset for your system.
+
+| Platform               | Download             |
+| ---------------------- | -------------------- |
+| macOS on Apple Silicon | Arm64 `.dmg`         |
+| macOS on Intel         | x64 `.dmg`           |
+| Windows                | x64 `.exe` installer |
+| Linux                  | x86_64 `.AppImage`   |
+
+<Callout type="info" title="Synara does not include a model subscription">
+  Synara uses provider runtimes installed on your machine. Install and authenticate at least one
+  provider—such as Claude Code, Codex, OpenCode, Cursor, or another supported runtime—before
+  starting your first task.
+</Callout>
+
+## Install Synara
+
+<Steps>
+<Step>
+
+### Download the application
+
+Use the [download page](/install) or an official GitHub release. Avoid third-party download mirrors.
+
+</Step>
+<Step>
+
+### Complete the platform installation
+
+Open the downloaded installer and complete the normal installation flow for your operating system.
+
+On Linux, your desktop environment may require making the AppImage executable before opening it:
+
+```bash
+chmod +x Synara*.AppImage
+```
+
+</Step>
+<Step>
+
+### Install and authenticate a provider
+
+Follow the provider's official installation and sign-in process. Synara does not copy an account from another machine or replace the provider's own authentication.
+
+Open a fresh terminal and confirm that the provider can start successfully outside Synara. This separates provider installation problems from Synara configuration problems.
+
+</Step>
+<Step>
+
+### Launch Synara and check the provider
+
+Open Synara, go to provider settings, and confirm that the runtime is detected and available. Synara discovers the models and options exposed by the installed runtime, so the choices can vary by provider version, account, and subscription.
+
+</Step>
+<Step>
+
+### Add a project
+
+Choose a local project folder. A Git repository is strongly recommended because it enables branches, worktrees, diffs, commits, pushes, and pull-request workflows.
+
+</Step>
+</Steps>
+
+## When a provider is not detected
+
+Work through these checks in order:
+
+1. Open a new terminal window.
+2. Confirm that the provider executable runs there.
+3. Confirm that the provider is authenticated.
+4. Check whether Synara offers a custom binary-path setting for that provider.
+5. Restart Synara after changing your `PATH` or installing a new runtime.
+6. Continue with [Troubleshooting](/docs/troubleshooting) if it remains unavailable.
+
+Synara normalizes the environment available to the desktop process, but provider installations and shell configurations differ across operating systems.
+
+## Updating Synara
+
+Packaged builds use Synara's desktop updater. When an update cannot be applied automatically, download the newest installer and install it over the existing application.
+
+The application bundle and local workspace data are stored separately. Even so, keep important work committed to Git before updating an early release.
+
+## Run without the desktop shell
+
+Each GitHub release also includes `synara-server-<version>.tar.gz` for a headless web installation. It requires a supported Node.js runtime and a production dependency install; it is not a standalone executable or a replacement for provider authentication.
+
+Follow the [Headless server guide](/docs/workflows/headless-server) for extraction, startup, readiness checks, data-directory ownership, and remote-access policy. Start loopback-only and do not expose the raw server port without deliberate authentication and trusted transport.
+
+<Callout type="warn" title="Synara is under active development">
+  Synara changes quickly. Keep valuable work committed and review release notes before relying on a
+  new workflow for important repositories.
+</Callout>
+
+## Next
+
+Continue with the [Quickstart](/docs/getting-started/quickstart), or review the [provider overview](/docs/getting-started/providers) first.

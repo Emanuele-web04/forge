@@ -63,6 +63,26 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
+function normalizePersistedModelSelectionMap(
+  value: unknown,
+): Partial<Record<ProviderKind, ModelSelection>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+  for (const [legacyProvider, rawSelection] of Object.entries(value)) {
+    const selection = normalizeModelSelection(rawSelection, {
+      provider: legacyProvider,
+      model:
+        rawSelection !== null && typeof rawSelection === "object" && !Array.isArray(rawSelection)
+          ? (rawSelection as Record<string, unknown>).model
+          : undefined,
+    });
+    if (selection && !(legacyProvider === "kilo" && result.opencode !== undefined)) {
+      result[selection.provider] = selection;
+    }
+  }
+  return result;
+}
+
 function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnnotationDraft {
   return {
     ...annotation,
@@ -299,6 +319,7 @@ const PersistedDraftThreadState = Schema.Struct({
   workingDirectory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
+  goal: Schema.optionalKey(Schema.String),
   isTemporary: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(ThreadId),
 });
@@ -725,6 +746,10 @@ function normalizePersistedDraftThreads(
         }
       }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
+      const goal =
+        typeof candidateDraftThread.goal === "string" && candidateDraftThread.goal.trim().length > 0
+          ? candidateDraftThread.goal
+          : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
@@ -752,6 +777,7 @@ function normalizePersistedDraftThreads(
         workingDirectory: typeof workingDirectory === "string" ? workingDirectory : null,
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
+        ...(goal ? { goal } : {}),
         ...(isTemporary ? { isTemporary: true } : {}),
         ...(promotedTo ? { promotedTo } : {}),
       };
@@ -886,9 +912,9 @@ function normalizePersistedDraftsByThreadId(
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
       // v3 format
-      modelSelectionByProvider = draftCandidate.modelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+      modelSelectionByProvider = normalizePersistedModelSelectionMap(
+        draftCandidate.modelSelectionByProvider,
+      );
       activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
     } else {
       // v2 or legacy format: migrate
@@ -1272,10 +1298,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
   ) {
-    stickyModelSelectionByProvider =
-      normalizedPersistedState.stickyModelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+    stickyModelSelectionByProvider = normalizePersistedModelSelectionMap(
+      normalizedPersistedState.stickyModelSelectionByProvider,
+    );
     stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
   } else {
     // Legacy migration path

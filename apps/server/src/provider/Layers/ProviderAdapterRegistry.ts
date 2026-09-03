@@ -10,6 +10,7 @@
 import { Effect, Layer } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
+import { assertProviderAdapterConformance } from "../providerAdapterConformance.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
   ProviderAdapterRegistry,
@@ -18,9 +19,9 @@ import {
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { CursorAdapter } from "../Services/CursorAdapter.ts";
+import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
-import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
@@ -38,13 +39,18 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* CodexAdapter,
             yield* ClaudeAdapter,
             yield* CursorAdapter,
+            yield* DevinAdapter,
             yield* AntigravityAdapter,
             yield* GrokAdapter,
             yield* DroidAdapter,
-            yield* KiloAdapter,
             yield* OpenCodeAdapter,
             yield* PiAdapter,
           ];
+
+    for (const adapter of adapters) {
+      assertProviderAdapterConformance(adapter);
+    }
+
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {

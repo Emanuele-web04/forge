@@ -1,0 +1,69 @@
+---
+title: Thread goals
+description: Give a task a durable objective, control autonomous continuation, and understand when Synara pauses or completes the goal.
+---
+
+A thread goal is an explicit, persistent objective attached to one task. It stays visible above the composer, carries across turns and restarts, and gives supported agents a durable definition of what they are trying to finish.
+
+Use a goal when the work genuinely spans several turns and you want Synara to keep pursuing the same outcome. Do not use one for every ordinary prompt: a goal can start follow-up turns automatically, so it should reflect deliberate user intent.
+
+## Set a goal
+
+Enter the objective after `/goal`:
+
+```text
+/goal Finish the v0.7.2 documentation, verify the site build, and report the deployed pages.
+```
+
+You can also choose **Goal** from the composer command menu. On a draft task, the goal is staged with the task and its elapsed timer starts when work actually begins.
+
+Write the goal as an observable outcome. Include the important scope and completion boundary, but keep turn-specific instructions in normal messages.
+
+## Use the goal controls
+
+The goal panel above the composer shows the objective, elapsed pursuit time, and current state. Its controls let you edit, pause or resume, expand, and delete the goal.
+
+The same actions are available from the composer:
+
+| Command             | Result                                                  |
+| ------------------- | ------------------------------------------------------- |
+| `/goal`             | Show the current goal                                   |
+| `/goal <objective>` | Set or replace the goal                                 |
+| `/goal edit`        | Put the current goal back into the composer for editing |
+| `/goal pause`       | Pause continuation and freeze the elapsed timer         |
+| `/goal resume`      | Resume pursuit and timing                               |
+| `/goal clear`       | Remove the active goal without recording it as achieved |
+
+## How continuation works
+
+After a clean turn completes, Synara can start another turn to continue an eligible active goal. The continuation uses the same provider-independent orchestration path rather than provider-specific hidden prompts.
+
+Automatic continuation yields to higher-priority work and gates. It does not start while the task has queued user work, a pending approval or question, an incompatible Plan-mode decision, or another active turn. Interruptions, provider failures, timeouts, and explicit pauses stop continuation instead of immediately resurrecting the task.
+
+<Callout type="info" title="Your message wins">
+  A queued user instruction takes priority over an automatic goal continuation. Goals preserve the
+  objective; they do not take control away from the task owner.
+</Callout>
+
+## Achievement and blocked goals
+
+When the agent completes the objective through Synara's goal-aware tool path, the active goal is cleared and an achievement badge is attached to the completing turn with the recorded elapsed time.
+
+If the same external blocker prevents meaningful progress for three consecutive goal turns, a goal-aware agent can mark the goal blocked. Synara pauses it rather than generating an endless retry loop. Difficulty, incomplete work, or a useful clarifying question are not enough on their own to classify a goal as blocked.
+
+You can resume a blocked or manually paused goal after the external condition changes.
+
+## Goals, forks, and handoffs
+
+A goal belongs to its task. A [provider handoff](/docs/workflows/handoffs) continues the same task, while a [fork](/docs/workflows/forks) creates another task with its own future lifecycle. Check the destination after either operation and set or revise its goal explicitly when the new task should pursue a different outcome.
+
+## Goal checklist
+
+- [ ] The objective was explicitly requested
+- [ ] Completion is observable
+- [ ] The goal belongs to one task and environment
+- [ ] Turn-specific instructions remain in normal messages
+- [ ] Pending approvals and user questions are answered
+- [ ] Failed or interrupted work is inspected before resuming
+- [ ] A blocked goal is resumed only after its blocker changes
+- [ ] Achievement is verified from the actual result, not only the badge

@@ -51,7 +51,7 @@ import {
   useSidebar,
 } from "~/components/ui/sidebar";
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -170,7 +170,7 @@ function resolveBrowserNavigationShortcut(
   event: KeyboardEvent,
   platform: string,
 ): "back" | "forward" | null {
-  const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
+  const isMac = isMacPlatform(platform);
   const key = event.key.toLowerCase();
 
   if (
@@ -246,7 +246,7 @@ function ChatRouteGlobalShortcuts() {
   useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeThreadTerminalState = activeContextThreadId

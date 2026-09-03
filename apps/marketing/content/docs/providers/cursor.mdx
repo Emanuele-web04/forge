@@ -1,0 +1,144 @@
+---
+title: Cursor
+description: Install, authenticate, verify, and run Cursor Agent through Synara.
+---
+
+Synara connects to Cursor’s terminal agent runtime rather than embedding the Cursor editor. Cursor owns the account, model access, and agent service; Synara provides the surrounding task, working directory, transcript, approvals, Git review, and delivery workflow.
+
+## Install
+
+Install Cursor Agent with Cursor’s official installer:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+```
+
+Synara looks for the `cursor-agent` executable. Verify it after installation:
+
+```bash
+cursor-agent --version
+```
+
+The installer commonly places the executable under `~/.local/bin`. Add that directory to `PATH` when a fresh terminal cannot find the command.
+
+## Authenticate
+
+Browser-based authentication is the recommended interactive flow:
+
+```bash
+cursor-agent login
+```
+
+Check the current state with:
+
+```bash
+cursor-agent status
+```
+
+For automation, Cursor Agent can also use `CURSOR_API_KEY`. Keep API keys in environment variables or secure secret storage, not in project files, documentation, or Synara prompts.
+
+## Verify
+
+From a fresh terminal:
+
+```bash
+cursor-agent --version
+cursor-agent status
+```
+
+Then start Cursor Agent in a disposable repository:
+
+```bash
+cd /path/to/test-repository
+cursor-agent
+```
+
+Ask a harmless read-only question. This verifies the executable, account, model service, and repository access before Synara is involved.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Cursor
+
+Open provider settings and confirm that Synara detects Cursor Agent.
+
+</Step>
+<Step>
+
+### Confirm the executable
+
+Synara prefers `cursor-agent`. It can also resolve supported Cursor launcher paths and a configured custom executable. Avoid a generic `agent` command unless it is known to belong to Cursor.
+
+</Step>
+<Step>
+
+### Refresh provider status
+
+Confirm the account is authenticated and that the expected models are available.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a clean test repository and review the selected model, permissions, and environment before sending the first objective.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Cursor sessions can expose:
+
+- Cursor’s available model catalog
+- Tool calls, terminal commands, and file changes
+- Approval and permission events supported by the runtime
+- Session output through Synara’s shared conversation view
+- Custom binary selection
+- Cursor account and usage health where available
+- Task-level Git, terminal, browser, diff, and pull-request workflows
+
+Synara does not currently classify Cursor Agent as supporting native live-turn steering. Use the controls shown in the active task rather than assuming a follow-up can always be injected into an already-running Cursor turn.
+
+Cursor’s own rules, MCP configuration, permissions, and account settings remain provider-owned and can change session behavior.
+
+## Updating
+
+Cursor Agent attempts to update automatically. You can also update it explicitly:
+
+```bash
+cursor-agent update
+```
+
+Restart Synara after updating or replacing the executable.
+
+## Troubleshooting
+
+### Cursor is not detected
+
+1. Run `cursor-agent --version` from a fresh terminal.
+2. Confirm `~/.local/bin` or the installer directory is on `PATH`.
+3. Check that Synara is not pointing at an old custom path.
+4. Restart Synara after installation or shell-profile changes.
+
+### Cursor is detected but not authenticated
+
+Run `cursor-agent status`, then `cursor-agent login`. For API-key authentication, verify that `CURSOR_API_KEY` is available to the process that launches Synara.
+
+### The wrong executable is used
+
+Cursor installations may expose `cursor-agent`, the `cursor` editor launcher, or older launcher layouts. Point Synara at the intended Cursor-owned executable and avoid unrelated commands named `agent`.
+
+### Models differ from the Cursor editor
+
+Compare the account, executable version, model selection, and CLI configuration. Cursor’s terminal agent and editor can expose different state or release timing.
+
+## Official documentation
+
+- [Cursor CLI installation](https://cursor.com/docs/cli/installation)
+- [Cursor CLI authentication](https://cursor.com/docs/cli/reference/authentication)
+- [Cursor CLI parameters](https://cursor.com/docs/cli/reference/parameters)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

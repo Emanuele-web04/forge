@@ -59,7 +59,8 @@ export interface AutomationCreationDraft {
   readonly interactionMode: AutomationInteractionMode;
   readonly worktreeMode: AutomationWorktreeMode;
   readonly maxIterations: number | null;
-  readonly stopOnError: boolean;
+  /** Consecutive failed runs before auto-disable; null = never auto-disable. */
+  readonly stopAfterConsecutiveFailures: number | null;
   readonly warnings: readonly AutomationDraftWarning[];
 }
 
@@ -90,8 +91,8 @@ export function buildAutomationDraftWarnings(input: {
   if (input.schedule.type === "manual") {
     warnings.push({
       id: "missing-schedule",
-      title: "Schedule needs review",
-      detail: "Choose when this automation should run before creating it.",
+      title: "Manual runs only",
+      detail: "This automation only runs when you press Run now.",
       requiresAcknowledgement: false,
     });
   }
@@ -312,9 +313,7 @@ export function hasBlockingAutomationDraftWarnings(
   acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>,
 ): boolean {
   return warnings.some(
-    (warning) =>
-      warning.id === "missing-schedule" ||
-      (warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id)),
+    (warning) => warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id),
   );
 }
 

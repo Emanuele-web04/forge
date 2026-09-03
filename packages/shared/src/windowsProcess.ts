@@ -3,8 +3,15 @@
 // Layer: Shared Node runtime utility
 // Exports: command resolution plus safe spawn/spawnSync argument preparation.
 
-import { spawnSync } from "node:child_process";
 import * as Path from "node:path";
+
+import { resolveExecutable } from "./executable";
+import {
+  resolveWindowsComSpec,
+  resolveWindowsSystemRoot,
+  resolveWindowsWhereExecutable,
+  resolveWindowsWslExecutable,
+} from "./platformEnvironment";
 
 type SpawnSyncLike = (
   command: string,
@@ -35,31 +42,42 @@ export interface WindowsSafeProcessCommand {
   readonly windowsVerbatimArguments?: true;
 }
 
+export interface WindowsWslUncPath {
+  readonly distribution: string;
+  readonly linuxPath: string;
+}
+
 const WINDOWS_BATCH_EXTENSION_PATTERN = /\.(?:cmd|bat)$/i;
 const WINDOWS_SPAWN_SAFE_EXTENSION_PATTERN = /\.(?:exe|com|cmd|bat)$/i;
 const WINDOWS_PATH_SEPARATOR_PATTERN = /[\\/]/;
 const WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN = /[\r\n&|<>^%]/;
+const WINDOWS_WSL_UNC_PATTERN = /^\\\\(?:wsl\.localhost|wsl\$)\\([^\\]+)(?:\\(.*))?$/i;
 const WHERE_TIMEOUT_MS = 2_000;
 
-function trimNonEmpty(value: string | null | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
+export { resolveWindowsComSpec, resolveWindowsSystemRoot };
+export const resolveWindowsWslExe = resolveWindowsWslExecutable;
+const resolveWindowsWhereExe = resolveWindowsWhereExecutable;
 
-export function resolveWindowsSystemRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return trimNonEmpty(env.SystemRoot) ?? trimNonEmpty(env.SYSTEMROOT) ?? "C:\\Windows";
-}
+export function parseWindowsWslUncPath(value: string): WindowsWslUncPath | null {
+  const match = WINDOWS_WSL_UNC_PATTERN.exec(value.trim());
+  if (!match) {
+    return null;
+  }
 
-export function resolveWindowsComSpec(env: NodeJS.ProcessEnv = process.env): string {
-  return (
-    trimNonEmpty(env.ComSpec) ??
-    trimNonEmpty(env.COMSPEC) ??
-    Path.win32.join(resolveWindowsSystemRoot(env), "System32", "cmd.exe")
-  );
-}
+  const distribution = match[1]?.trim() ?? "";
+  if (!distribution) {
+    return null;
+  }
 
-function resolveWindowsWhereExe(env: NodeJS.ProcessEnv = process.env): string {
-  return Path.win32.join(resolveWindowsSystemRoot(env), "System32", "where.exe");
+  const suffix = match[2] ?? "";
+  const linuxPath = `/${suffix
+    .split("\\")
+    .filter((segment) => segment.length > 0)
+    .join("/")}`;
+  return {
+    distribution,
+    linuxPath: linuxPath === "/" ? "/" : linuxPath,
+  };
 }
 
 export function isWindowsBatchCommand(command: string): boolean {
@@ -122,10 +140,9 @@ function selectWindowsCommandCandidate(
   return allowedCandidates.find(isWindowsSpawnSafeResolvedCommand) ?? allowedCandidates[0];
 }
 
-// Resolve PATH/PATHEXT commands through where.exe so `.cmd` shims can be wrapped
-// explicitly. Prefer candidates that native spawn can execute or that we can
-// wrap, and skip current-directory hits for PATH commands to avoid restoring
-// shell-style CWD command hijacking.
+// Production resolution shares the same PATH/PATHEXT walk used by health,
+// startup, updates, editors, and version gates. The injected where.exe branch
+// remains only as a deterministic compatibility seam for historical tests.
 export function resolveWindowsCommandPath(
   command: string,
   input: WindowsSafeProcessInput = {},
@@ -137,7 +154,11 @@ export function resolveWindowsCommandPath(
 
   const env = input.env ?? process.env;
   const cwd = input.cwd ?? process.cwd();
-  const result = (input.spawnSync ?? spawnSync)(resolveWindowsWhereExe(env), [command], {
+  if (!input.spawnSync) {
+    return resolveExecutable(command, { platform: "win32", env }) ?? command;
+  }
+
+  const result = input.spawnSync(resolveWindowsWhereExe(env), [command], {
     cwd,
     env,
     encoding: "utf8",
@@ -169,6 +190,24 @@ export function prepareWindowsSafeProcess(
   }
 
   const env = input.env ?? process.env;
+  const wslWorkspace = input.cwd ? parseWindowsWslUncPath(input.cwd) : null;
+  if (wslWorkspace) {
+    return {
+      command: resolveWindowsWslExe(env),
+      args: [
+        "--distribution",
+        wslWorkspace.distribution,
+        "--cd",
+        wslWorkspace.linuxPath,
+        "--exec",
+        command,
+        ...args,
+      ],
+      shell: false,
+      windowsHide: true,
+    };
+  }
+
   const resolvedCommand = resolveWindowsCommandPath(command, input);
   if (!isWindowsBatchCommand(resolvedCommand)) {
     return {

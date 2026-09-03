@@ -196,6 +196,44 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("renders session-context lifecycle evidence as a compact expandable row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "context-restart-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "context-restart-entry",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Native session history was unavailable, so the model continued from a recap.",
+              tone: "error",
+              activityKind: "provider.context.changed",
+              providerContextLifecycle: {
+                provider: "opencode",
+                nativeHistory: "unavailable",
+                restartReason: "native-resume-failed",
+                sessionRestarted: true,
+                recapInjected: true,
+                recapCharacters: 4_200,
+                recapPreview: "Bounded recap preview",
+                recapPreviewTruncated: true,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
+    expect(markup).not.toContain("Bounded recap preview");
+  });
+
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1573,6 +1611,50 @@ describe("MessagesTimeline", () => {
       '<span data-work-entry-display-text="true">Searched 2 files found</span>',
     );
     expect(markup).not.toContain("data-work-entry-action-word");
+  });
+
+  it("renders the complete task-list progress heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-task-progress");
+    const timelineEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: activeTurnId,
+          payload: {
+            tasks: [
+              { task: "Implement inline editing", status: "completed" },
+              { task: "Run verification", status: "inProgress" },
+              { task: "Ship", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      activeTurnId,
+    ).map((entry) => ({
+      id: entry.id,
+      kind: "work" as const,
+      createdAt: entry.createdAt,
+      entry,
+    }));
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span data-work-entry-display-text="true">1 out of 3 tasks completed Run verification</span>',
+    );
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {
@@ -3318,7 +3400,11 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain("font-system-ui truncate font-normal");
+    expect(markup).toContain('data-edited-file-row="true"');
+    expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
+    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
+      markup.indexOf("Edited 1 file"),
+    );
   });
 });

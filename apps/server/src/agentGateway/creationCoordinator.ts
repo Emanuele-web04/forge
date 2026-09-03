@@ -54,10 +54,7 @@ import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 const CREATION_REPLAY_WAIT_MS = 60_000;
 
 function interactionModeForGatewayTarget(target: ModelSelection): ProviderInteractionMode {
-  if (
-    (target.provider === "opencode" || target.provider === "kilo") &&
-    target.options?.agent === "plan"
-  ) {
+  if (target.provider === "opencode" && target.options?.agent === "plan") {
     return "plan";
   }
   return "default";

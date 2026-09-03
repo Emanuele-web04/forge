@@ -18,6 +18,8 @@ interface ComposerStackedPanelProps extends HTMLAttributes<HTMLDivElement> {
   attachedToPrevious?: boolean;
   /** Lets clicks pass through the side margins to the transcript underneath. */
   passthroughSideMargins?: boolean;
+  /** Drops the hairline outline, keeping only the translucent surface (empty-landing tray). */
+  borderless?: boolean;
 }
 
 /** Single owner for composer-stacked panel frame, border, radius, and surface chrome. */
@@ -27,16 +29,18 @@ export function ComposerStackedPanel({
   ref,
   attachedToPrevious: attachedToPreviousProp,
   passthroughSideMargins: passthroughSideMarginsProp,
+  borderless: borderlessProp,
   ...rest
 }: ComposerStackedPanelProps) {
   const attachedToPrevious = attachedToPreviousProp ?? false;
   const passthroughSideMargins = passthroughSideMarginsProp ?? false;
+  const borderless = borderlessProp ?? false;
   return (
     <ComposerStackedHeaderFrame
       ref={ref}
       passthroughSideMargins={passthroughSideMargins}
       data-composer-stacked-attached={attachedToPrevious ? "true" : undefined}
-      className={cn(COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME, className)}
+      className={cn(COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME, borderless && "border-0", className)}
       {...rest}
     >
       {children}

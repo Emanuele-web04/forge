@@ -13,6 +13,20 @@ const electronMocks = vi.hoisted(() => ({
   fromPartition: vi.fn(),
   partitionSetUserAgent: vi.fn(),
   onBeforeSendHeaders: vi.fn(),
+  onHeadersReceived: vi.fn(),
+  responseHeaderListener: {
+    current: null as
+      | null
+      | ((
+          details: {
+            resourceType: string;
+            webContentsId: number;
+            url: string;
+            responseHeaders?: Record<string, string[]>;
+          },
+          callback: (result: object) => void,
+        ) => void),
+  },
   protocolHandle: vi.fn(),
   protocolUnhandle: vi.fn(),
   netFetch: vi.fn(),
@@ -45,12 +59,19 @@ describe("BrowserSessionPolicy", () => {
     vi.clearAllMocks();
     electronMocks.headerListener.current = null;
     electronMocks.willDownloadListener.current = null;
+    electronMocks.responseHeaderListener.current = null;
     electronMocks.onBeforeSendHeaders.mockImplementation((listener) => {
       electronMocks.headerListener.current = listener;
     });
+    electronMocks.onHeadersReceived.mockImplementation((listener) => {
+      electronMocks.responseHeaderListener.current = listener;
+    });
     electronMocks.fromPartition.mockReturnValue({
       setUserAgent: electronMocks.partitionSetUserAgent,
-      webRequest: { onBeforeSendHeaders: electronMocks.onBeforeSendHeaders },
+      webRequest: {
+        onBeforeSendHeaders: electronMocks.onBeforeSendHeaders,
+        onHeadersReceived: electronMocks.onHeadersReceived,
+      },
       protocol: {
         handle: electronMocks.protocolHandle,
         unhandle: electronMocks.protocolUnhandle,
@@ -73,6 +94,7 @@ describe("BrowserSessionPolicy", () => {
     expect(electronMocks.fromPartition).toHaveBeenCalledWith(BROWSER_SESSION_PARTITION);
     expect(electronMocks.partitionSetUserAgent).toHaveBeenCalledOnce();
     expect(electronMocks.onBeforeSendHeaders).toHaveBeenCalledOnce();
+    expect(electronMocks.onHeadersReceived).toHaveBeenCalledOnce();
     expect(electronMocks.protocolHandle).toHaveBeenCalledOnce();
   });
 
@@ -117,6 +139,39 @@ describe("BrowserSessionPolicy", () => {
     expect(electronMocks.fromPartition).toHaveBeenCalledTimes(2);
     expect(electronMocks.partitionSetUserAgent).toHaveBeenCalledOnce();
     expect(electronMocks.onBeforeSendHeaders).toHaveBeenCalledOnce();
+  });
+
+  it("enforces the top-level tools policy for the WebMCP compatibility bridge", () => {
+    const policy = new BrowserSessionPolicy();
+    policy.ensureConfigured();
+    const listener = electronMocks.responseHeaderListener.current;
+    expect(listener).not.toBeNull();
+    if (!listener) return;
+
+    const receive = (webContentsId: number, permissionsPolicy?: string) => {
+      const callback = vi.fn();
+      listener(
+        {
+          resourceType: "mainFrame",
+          webContentsId,
+          url: "https://shop.example/products",
+          ...(permissionsPolicy
+            ? { responseHeaders: { "Permissions-Policy": [permissionsPolicy] } }
+            : {}),
+        },
+        callback,
+      );
+      expect(callback).toHaveBeenCalledWith({});
+      return policy.isWebMcpCompatibilityAllowed(webContentsId);
+    };
+
+    expect(receive(40)).toBe(true);
+    expect(receive(41, "camera=(), tools=()")).toBe(false);
+    expect(receive(42, "tools=(self)")).toBe(true);
+    expect(receive(43, 'tools=("https://shop.example")')).toBe(true);
+    expect(receive(44, 'tools=("https://other.example")')).toBe(false);
+    expect(receive(45, "tools=broken")).toBe(false);
+    expect(policy.isWebMcpCompatibilityAllowed(999)).toBe(false);
   });
 
   it("does not duplicate download listeners when protocol setup is retried", () => {

@@ -1,9 +1,9 @@
 // FILE: ComposerInputBanners.tsx
-// Purpose: Picks which banner (if any) renders inside the composer surface — a plan
-// follow-up or automation setup prompt. Pending approvals and AskUserQuestion prompts
-// render as detached cards above the composer (see ComposerPendingApprovalPanel /
-// ComposerPendingUserInputPanel), not here. Centralizes the precedence and the shared
-// banner chrome so callers pass data, not layout.
+// Purpose: Picks the contextual banner that renders inside the composer surface.
+// Pending approvals and AskUserQuestion prompts render as detached cards above the composer
+// (see ComposerPendingApprovalPanel / ComposerPendingUserInputPanel), and the thread goal
+// renders as a stacked panel above the composer (see ComposerGoalHeader), not here.
+// Centralizes precedence and shared banner chrome so callers pass data, not layout.
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners
 
@@ -43,7 +43,11 @@ export function ComposerInputBanners({
 
   return (
     <div
-      className={cn(COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME, roundedTopReset && "!rounded-t-none")}
+      className={cn(
+        COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+        "divide-y divide-[color:var(--color-border-light)]",
+        roundedTopReset && "!rounded-t-none",
+      )}
     >
       {content}
     </div>

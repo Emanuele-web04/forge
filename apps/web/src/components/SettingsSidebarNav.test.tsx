@@ -35,6 +35,11 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:follow-up-behavior")).toBe(true);
   });
 
+  it("surfaces the automation run threads visibility row", () => {
+    const results = rankSettingsSearchEntries("automation runs", 12);
+    expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
+  });
+
   it("includes the activity toasts notification row", () => {
     const results = rankSettingsSearchEntries("toasts", 12);
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);

@@ -11,6 +11,7 @@ import {
   extractLocalServerPageTitle,
   isIgnoredLocalServerProcess,
   isLikelyDevServerProcess,
+  parseProcessInfo,
   parseLsofCwdOutput,
   parseLsofTcpListenOutput,
   type LocalServerProcessInfo,
@@ -346,6 +347,46 @@ describe("localServerMonitor", () => {
 
     expect(enriched[0]).toMatchObject({ displayName: "Expo", pageTitle: "Expo Web" });
     expect(fetchTitle).toHaveBeenCalledOnce();
+  });
+
+  it("classifies from raw lineage context while returning only redacted arguments", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 456, commandLine: "node generic-listener.js" }],
+      [
+        456,
+        {
+          ppid: 1,
+          commandLine: "sh -c APP_PASSWORD=[redacted]",
+          rawCommandLine: "sh -c APP_PASSWORD=secret npm run dev",
+        },
+      ],
+    ]);
+
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]?.args).toBe("node generic-listener.js");
+    expect(JSON.stringify(servers[0])).not.toContain("secret");
+  });
+
+  it("keeps full raw lineage context beyond the bounded display arguments", () => {
+    const secret = "s".repeat(1_100);
+    const processInfo = parseProcessInfo(
+      ["123 456 node generic-listener.js", `456 1 sh -c AUTH_TOKEN=${secret} npm run dev`].join(
+        "\n",
+      ),
+    );
+
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(JSON.stringify(servers[0])).not.toContain(secret);
   });
 
   it("does not classify browser servers from project directory names", async () => {

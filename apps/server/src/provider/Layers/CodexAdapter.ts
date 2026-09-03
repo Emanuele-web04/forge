@@ -78,7 +78,6 @@ import {
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES,
-  providerRuntimeEventBytes,
 } from "../providerRuntimeEventIngress.ts";
 import {
   makeUnmappedProviderEventGate,
@@ -110,9 +109,13 @@ interface CodexTurnWatchdogEntry {
 type CodexRuntimeIngressItem = {
   readonly nativeEvent: ProviderEvent;
   readonly runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>;
+  readonly bytes: number;
 };
 
-function compactCodexNativeEventForIngress(event: ProviderEvent): ProviderEvent {
+function compactCodexNativeEventForIngress(event: ProviderEvent): {
+  readonly event: ProviderEvent;
+  readonly bytes: number;
+} {
   let originalBytes: number;
   try {
     originalBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
@@ -120,9 +123,9 @@ function compactCodexNativeEventForIngress(event: ProviderEvent): ProviderEvent 
     originalBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES + 1;
   }
   if (originalBytes <= PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES) {
-    return event;
+    return { event, bytes: originalBytes };
   }
-  return {
+  const compactedEvent: ProviderEvent = {
     ...event,
     payload: {
       synaraTruncated: true,
@@ -130,19 +133,13 @@ function compactCodexNativeEventForIngress(event: ProviderEvent): ProviderEvent 
       originalBytes,
     },
   };
-}
-
-function codexRuntimeIngressItemBytes(item: CodexRuntimeIngressItem): number {
-  let nativeBytes: number;
+  let compactedBytes: number;
   try {
-    nativeBytes = Buffer.byteLength(JSON.stringify(item.nativeEvent), "utf8");
+    compactedBytes = Buffer.byteLength(JSON.stringify(compactedEvent), "utf8");
   } catch {
-    nativeBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES;
+    compactedBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES;
   }
-  return (
-    nativeBytes +
-    item.runtimeEvents.reduce((total, event) => total + providerRuntimeEventBytes(event), 0)
-  );
+  return { event: compactedEvent, bytes: compactedBytes };
 }
 
 export interface CodexAdapterLiveOptions {
@@ -817,6 +814,35 @@ function runtimeEventBase(
   };
 }
 
+function runtimeDeltaEventBase(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event);
+}
+
+function codexDeltaEventBase(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return withMinimalRawPayload(codexEventBase(event, canonicalThreadId), event);
+}
+
+function withMinimalRawPayload(
+  base: Omit<ProviderRuntimeEvent, "type" | "payload">,
+  event: ProviderEvent,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return {
+    ...base,
+    raw: {
+      source: base.raw?.source ?? eventRawSource(event),
+      ...(base.raw?.method !== undefined ? { method: base.raw.method } : {}),
+      ...(base.raw?.messageType !== undefined ? { messageType: base.raw.messageType } : {}),
+      payload: {},
+    },
+  };
+}
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -884,6 +910,106 @@ function mapItemLifecycle(
   };
 }
 
+type CodexHookRunStatus = "completed" | "failed" | "blocked" | "stopped";
+
+function toCodexHookRunStatus(value: unknown): CodexHookRunStatus | undefined {
+  return value === "completed" || value === "failed" || value === "blocked" || value === "stopped"
+    ? value
+    : undefined;
+}
+
+function toHookOutcome(status: CodexHookRunStatus | undefined): "success" | "error" | "cancelled" {
+  if (status === "completed") return "success";
+  if (status === "blocked" || status === "stopped") return "cancelled";
+  return "error";
+}
+
+function hookRunOutput(run: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(run.entries)) {
+    return undefined;
+  }
+  const output = run.entries
+    .flatMap((entry) => {
+      const record = asObject(entry);
+      const text = asTrimmedString(record?.text);
+      if (!text) return [];
+      const kind = asTrimmedString(record?.kind);
+      return [kind ? `${kind}: ${text}` : text];
+    })
+    .join("\n");
+  return output ? sanitizeUnmappedProviderDetail(output) : undefined;
+}
+
+function withSanitizedHookRaw(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    raw: {
+      source: eventRawSource(event),
+      method: event.method,
+      payload: { synaraSanitized: true },
+    },
+  };
+}
+
+function mapCodexHookEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): ProviderRuntimeEvent | undefined {
+  if (event.method !== "hook/started" && event.method !== "hook/completed") {
+    return undefined;
+  }
+  const run = asObject(asObject(event.payload)?.run);
+  const hookId = asTrimmedString(run?.id);
+  const hookEvent = asTrimmedString(run?.eventName);
+  if (!run || !hookId || !hookEvent) {
+    return undefined;
+  }
+  const hookName = asTrimmedString(run.sourcePath) ?? asTrimmedString(run.handlerType) ?? hookEvent;
+  const statusMessage = sanitizeUnmappedProviderDetail(asTrimmedString(run.statusMessage));
+  const data = sanitizeUnmappedProviderData(run);
+  const base = withSanitizedHookRaw(event, canonicalThreadId);
+
+  if (event.method === "hook/started") {
+    return {
+      ...base,
+      type: "hook.started",
+      payload: {
+        hookId,
+        hookName,
+        hookEvent,
+        ...(statusMessage ? { statusMessage } : {}),
+        data,
+      },
+    };
+  }
+
+  const status = toCodexHookRunStatus(run.status);
+  const durationCandidate = asNumber(run.durationMs);
+  const durationMs =
+    durationCandidate !== undefined && Number.isInteger(durationCandidate) && durationCandidate >= 0
+      ? durationCandidate
+      : undefined;
+  const output = hookRunOutput(run);
+  return {
+    ...base,
+    type: "hook.completed",
+    payload: {
+      hookId,
+      hookName,
+      hookEvent,
+      outcome: toHookOutcome(status),
+      ...(status ? { status } : {}),
+      ...(statusMessage ? { statusMessage } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(output ? { output } : {}),
+      data,
+    },
+  };
+}
+
 function mapUnmappedCodexEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -925,6 +1051,10 @@ function mapToRuntimeEvents(
   const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId);
   if (generatedImageEndEvent) {
     return [generatedImageEndEvent];
+  }
+  const hookEvent = mapCodexHookEvent(event, canonicalThreadId);
+  if (hookEvent) {
+    return [hookEvent];
   }
 
   if (event.kind === "error") {
@@ -1304,7 +1434,7 @@ function mapToRuntimeEvents(
     }
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...runtimeDeltaEventBase(event, canonicalThreadId),
         type: "turn.proposed.delta",
         payload: {
           delta,
@@ -1330,7 +1460,7 @@ function mapToRuntimeEvents(
     }
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...runtimeDeltaEventBase(event, canonicalThreadId),
         type: "content.delta",
         payload: {
           streamKind: contentStreamKindFromMethod(event.method),
@@ -1486,7 +1616,7 @@ function mapToRuntimeEvents(
     }
     return [
       {
-        ...codexEventBase(event, canonicalThreadId),
+        ...codexDeltaEventBase(event, canonicalThreadId),
         type: "content.delta",
         payload: {
           streamKind:
@@ -1614,7 +1744,7 @@ function mapToRuntimeEvents(
     return [
       {
         type: "thread.realtime.audio.delta",
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...runtimeDeltaEventBase(event, canonicalThreadId),
         payload: {
           audio: event.payload ?? {},
         },
@@ -2243,7 +2373,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
             terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
             isTerminal: (item) => item.runtimeEvents.some(isTerminalProviderRuntimeEvent),
-            sizeOf: codexRuntimeIngressItemBytes,
+            sizeOf: (item) => item.bytes,
           },
         );
         const listener = (event: ProviderEvent) => {
@@ -2253,18 +2383,22 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
           );
-          const runtimeEvents = mappedRuntimeEvents
+          const sizedRuntimeEvents = mappedRuntimeEvents
             .filter(
               (runtimeEvent) =>
                 runtimeEvent.type !== "event.unmapped" || shouldSurfaceUnmappedEvent(event),
             )
             .map(compactProviderRuntimeEventForIngress);
+          const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(event.threadId, runtimeEvents);
+          const nativeEvent = compactCodexNativeEventForIngress(
+            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(event) : event,
+          );
           const result = ingress.offer({
-            nativeEvent: compactCodexNativeEventForIngress(
-              hasUnmappedEvent ? sanitizeUnmappedProviderEvent(event) : event,
-            ),
+            nativeEvent: nativeEvent.event,
             runtimeEvents,
+            bytes:
+              nativeEvent.bytes + sizedRuntimeEvents.reduce((total, item) => total + item.bytes, 0),
           });
           if (result === "terminal-overflow") {
             // This means the reserved terminal budget itself was exhausted.

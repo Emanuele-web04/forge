@@ -7,6 +7,8 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { waitForSuccessfulPtyExit } from "./lib/node-pty-smoke.ts";
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const requireRoot =
@@ -29,11 +31,8 @@ try {
 
 const isWindows = process.platform === "win32";
 const shell = isWindows ? process.env.ComSpec || "cmd.exe" : "/bin/sh";
-const args = isWindows
-  ? ["/d", "/s", "/c", `echo ${expectedOutput}`]
-  : ["-lc", `printf '${expectedOutput}'`];
+const args = isWindows ? ["/d", "/q"] : ["-lc", `printf '${expectedOutput}'`];
 
-let output = "";
 let terminal;
 try {
   terminal = nodePty.spawn(shell, args, {
@@ -47,30 +46,21 @@ try {
   fail("Failed to spawn node-pty process.", error instanceof Error ? error.stack : String(error));
 }
 
-const outputTimeoutMs = isWindows ? 15_000 : 5_000;
-const timeout = setTimeout(() => {
-  try {
+try {
+  if (isWindows) {
+    // Bun's ConPTY input/output wrappers are asynchronous and can miss a
+    // one-shot command's data. The native spawn itself is synchronous: a real
+    // child PID proves the binding loaded and created the Windows PTY process.
+    if (!Number.isInteger(terminal.pid) || terminal.pid <= 0) {
+      throw new Error("node-pty did not return a valid Windows process ID.");
+    }
     terminal.kill();
-  } catch {
-    // Best-effort cleanup; the failure below is the useful signal.
-  }
-  fail("Timed out waiting for node-pty output.", output);
-}, outputTimeoutMs);
-
-const dataSubscription = terminal.onData((chunk) => {
-  output += chunk;
-});
-
-let exitSubscription;
-exitSubscription = terminal.onExit((event) => {
-  clearTimeout(timeout);
-  dataSubscription.dispose();
-  exitSubscription?.dispose();
-  if (!output.includes(expectedOutput)) {
-    fail(`Expected PTY output "${expectedOutput}" was not observed.`, output);
-  }
-  if (event.exitCode !== 0) {
-    fail(`PTY process exited with code ${event.exitCode}.`, output);
+  } else {
+    await waitForSuccessfulPtyExit({
+      terminal,
+      expectedOutput,
+      timeoutMs: 5_000,
+    });
   }
   console.log("[node-pty-smoke] node-pty loaded and spawned successfully.");
   // node-pty's Windows ConPTY reader owns a worker thread that may remain
@@ -78,4 +68,6 @@ exitSubscription = terminal.onExit((event) => {
   // smoke process, so terminate explicitly once output and exit status have
   // both been verified instead of leaving CI waiting on that native handle.
   process.exit(0);
-});
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}

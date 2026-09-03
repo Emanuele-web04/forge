@@ -1,0 +1,98 @@
+---
+title: iOS Simulator
+description: Run, watch, and control an iOS Simulator beside a Synara task on macOS.
+---
+
+The iOS Simulator pane gives the user and supported agents one shared, live device surface beside the conversation. You can watch an app, interact with it directly, capture evidence, and let the agent use device tools without switching to a separate simulator window.
+
+## Requirements
+
+The Synara server must run on macOS with:
+
+- Xcode installed and selected
+- The Xcode license accepted
+- At least one iOS Simulator runtime and device available
+- Enough local disk space for Xcode, runtimes, build products, screenshots, and recordings
+
+The pane is hidden when Synara is connected to a non-macOS server. Building the app remains the responsibility of the task and its terminal; the device integration installs and launches build products but does not replace `xcodebuild`, Tuist, or the project's build system.
+
+## Open and attach the pane
+
+Open the right-dock add menu and choose **iOS Simulator**, then select a device. Synara boots the selected simulator when needed and attaches its live stream to the current task.
+
+The first attachment compiles Synara's source-shipped device helper with the selected Xcode toolchain. The compiled helper is cached by source and toolchain identity, so later attachments normally reuse it. If setup is incomplete, the pane shows a checklist and updates it as Xcode, its license, and a simulator runtime become available.
+
+An agent launch through Synara's device tools can request that the pane open automatically for the owning task.
+
+## Control the simulator
+
+The device screen accepts direct input:
+
+- Click or tap the screen to inject a touch
+- Drag across the screen to swipe
+- Focus the screen and type with the keyboard
+- Use the drawn device buttons for supported lock and volume actions
+- Use **Home** or `Command+Shift+H`
+- Rotate the pane's view for landscape inspection
+
+The action rail can also:
+
+- Save a screenshot
+- Start and stop a video recording
+- Shut down the simulator
+- Detach it from the task without shutting it down
+
+**Rotate view** changes how Synara presents the captured screen; it does not force the guest app to change its simulator orientation.
+
+## Agent device tools
+
+Supported provider sessions can receive app-owned device tools for:
+
+- Listing and booting simulators
+- Installing and launching apps
+- Opening a URL
+- Tapping, swiping, typing, and pressing hardware buttons
+- Taking screenshots
+- Reading the accessibility tree
+- Scrolling to named interface elements
+
+Read-only inspection and input actions follow the active provider's tool policy. Input can require approval until allowed by the user, and opening a URL remains approval-gated because it can send information to another origin. Device access does not increase the task's runtime permissions.
+
+<Callout type="warn" title="The pane is evidence, not a build system">
+  Ask the task to build the correct scheme and configuration first. A successful install or launch
+  does not prove that the app was built from the intended branch, environment, or source state.
+</Callout>
+
+## Ownership and cleanup
+
+Synara distinguishes simulators it booted from devices that were already running. It can reclaim Synara-owned devices after task cleanup or a crash; it does not automatically shut down a user-owned simulator simply because the pane detaches.
+
+Shutting down ends the simulator session. Detaching only removes the task's live attachment. Choose detach when another tool or task should keep using the booted device.
+
+## Setup and recovery
+
+### No simulators are listed
+
+Open Xcode, install an iOS platform runtime, and create or boot a simulator. Return to the pane and let its setup state refresh.
+
+### The helper could not start
+
+Confirm the selected Xcode path and license, then retry the attachment. A beta or newly updated Xcode can temporarily leave one capability unavailable while video and input continue; the pane reports degraded capabilities separately from a total helper failure.
+
+### The screen is live but input misses
+
+Confirm the intended device is attached and booted. Detach and reattach before repeating destructive actions. If accessibility inspection is available, compare the reported element frames with the visible screen.
+
+### The stream stalls
+
+The frame path drops slow frames instead of blocking task RPC traffic. Wait for a fresh keyframe or reattach the device; do not assume a frozen picture means the app process stopped.
+
+## Verification checklist
+
+- [ ] Correct Xcode, runtime, simulator, branch, and build configuration
+- [ ] Intended app bundle installed and launched
+- [ ] Visible behavior exercised with direct input or device tools
+- [ ] Screenshots or recordings captured when they materially support the result
+- [ ] Accessibility evidence checked when element identity matters
+- [ ] Simulator detached or shut down according to ownership
+- [ ] Product checks run independently of the simulator interaction

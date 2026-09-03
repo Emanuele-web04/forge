@@ -136,7 +136,7 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
     ).toBe(true);
   });
 
-  it("still requires a branch match for a shared project root", () => {
+  it("never attributes live PR data from a shared project root", () => {
     expect(
       shouldUseLivePullRequestForSidebarThread({
         threadBranch: "feature/another-thread",
@@ -150,7 +150,7 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
         liveBranch: "feat/agent-created-branch",
         hasDedicatedWorktree: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not use live PR data for a detached worktree", () => {
@@ -193,6 +193,33 @@ describe("resolveSidebarThreadPullRequest", () => {
         persistedPullRequest: persisted,
       }),
     ).toBe(persisted);
+  });
+
+  it("keeps the thread-associated PR instead of the live PR from a shared checkout", () => {
+    const persisted = openPr(841, "fix/created-at-thread-order");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/environment-all-provider-usage",
+        liveBranch: "feat/environment-all-provider-usage",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: openPr(842, "feat/environment-all-provider-usage"),
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("does not claim an unrelated live PR for an unassociated shared-checkout thread", () => {
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/environment-all-provider-usage",
+        liveBranch: "feat/environment-all-provider-usage",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: openPr(842, "feat/environment-all-provider-usage"),
+        persistedPullRequest: null,
+      }),
+    ).toBeNull();
   });
 
   it("prefers live metadata for the worktree's current branch", () => {
@@ -2247,6 +2274,40 @@ describe("sortThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
+
+  it("keeps createdAt order stable across live and unread completion states", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newest-plain"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-middle-unread"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+          lastVisitedAt: "2026-03-09T10:01:00.000Z",
+        }),
+        {
+          ...makeThread({
+            id: ThreadId.makeUnsafe("thread-oldest-working"),
+            createdAt: "2026-03-09T09:00:00.000Z",
+            updatedAt: "2026-03-09T09:00:00.000Z",
+          }),
+          hasLiveTailWork: true,
+        },
+      ],
+      "created_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-middle-unread"),
+      ThreadId.makeUnsafe("thread-oldest-working"),
     ]);
   });
 

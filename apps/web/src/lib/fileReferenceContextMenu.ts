@@ -6,7 +6,7 @@
 
 import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { getNavigatorPlatform, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "~/components/ui/toast";
 
@@ -74,9 +74,7 @@ export async function showFileReferenceContextMenu(input: {
         ? [
             {
               id: "reveal-in-folder" as const,
-              label: getRevealInFolderLabel(
-                typeof navigator === "undefined" ? "" : navigator.platform,
-              ),
+              label: getRevealInFolderLabel(getNavigatorPlatform()),
             },
           ]
         : []),

@@ -1,0 +1,221 @@
+---
+title: Agent Gateway
+description: Let a supported Synara provider session inspect, create, coordinate, and monitor ordinary Synara tasks through app-owned MCP tools.
+---
+
+The Synara Agent Gateway is an internal, thread-scoped MCP control surface injected into supported provider sessions. It lets one Synara task coordinate other Synara resources while Synara continues to enforce project, worktree, runtime-mode, and task-lifecycle rules.
+
+It is different from [External MCP](/docs/workflows/external-mcp), which pairs another local application through a separately approved integration.
+
+## What the gateway is for
+
+Use the Agent Gateway when one owner task needs to:
+
+- Discover available projects, providers, models, and task state
+- Create one or more ordinary Synara tasks
+- Wait for child tasks to reach meaningful states
+- Read child results and diagnostics
+- Send a bounded follow-up or interrupt stuck work
+- Maintain titles and archived state
+- Coordinate supported automations
+- Use the task-scoped shared browser tools
+
+The gateway does not create a separate orchestration database. Its tools delegate to Synara’s existing task, provider, Git, automation, diagnostics, and browser services.
+
+## Start with context and capabilities
+
+A coordinating agent should orient itself before writing anything:
+
+1. Call `synara_context` to confirm the caller thread, active turn, provider, project, and granted coordination capabilities.
+2. Call `synara_capabilities` to discover provider/model targets, option shapes, availability, and operation limits.
+3. Use `synara_list_projects` when the work may target another project.
+4. Use `synara_list_threads` and `synara_read_thread` to avoid duplicating existing work.
+
+Do not guess provider slugs, model IDs, project IDs, or target options from memory.
+
+## Read tools
+
+The gateway can expose read-oriented tools such as:
+
+- `synara_context`
+- `synara_capabilities`
+- `synara_list_projects`
+- `synara_list_threads`
+- `synara_read_thread`
+- `synara_wait_for_threads`
+- Diagnostics tools for understanding failures and durable runtime state
+
+Read before creating. The safest new task is often no new task because equivalent work already exists.
+
+## Create one task
+
+Use `synara_create_thread` when the plan contains exactly one new task.
+
+A creation plan should specify:
+
+- Stable `requestId`
+- Bounded prompt
+- Project when it differs from the caller’s project
+- Provider/model target discovered from capabilities
+- Local or worktree environment
+- Base ref when a worktree must start from a specific revision
+- Approval-required or full-access runtime mode
+
+Prefer a managed worktree for an independently editing child.
+
+## Create a batch
+
+Use `synara_create_threads` for an exact batch of 1–20 standalone tasks.
+
+The operation is designed as a durable unit:
+
+- Validation and preflight failures create nothing
+- A corrected preflight can reuse the stable request ID
+- A successful retry replays the same durable operation rather than creating duplicates
+- The requested number of tasks is exact
+
+Twenty is the maximum, not the default. Create only tasks whose objectives and ownership are already clear.
+
+Example planning shape:
+
+```text
+requestId: docs-workflows-v1
+
+Thread 1:
+Research current browser runtime invariants.
+Read-only objective.
+
+Thread 2:
+Audit external MCP security and lifecycle documentation.
+Read-only objective.
+
+Thread 3:
+Review the final workflow-doc diff after Threads 1 and 2 finish.
+Do not edit until findings are reported.
+```
+
+## Wait instead of polling
+
+Use `synara_wait_for_threads` to wait for authorized child tasks rather than repeatedly listing state or sending status messages.
+
+The gateway publishes bounded wait limits. A timeout means the wait ended; it does not mean the child failed or stopped. Read the current state before deciding what to do next.
+
+A useful coordination loop is:
+
+1. Create the exact tasks.
+2. Preserve their IDs.
+3. Wait for terminal or actionable states.
+4. Read each result and actual task state.
+5. Steer only when a concrete correction is required.
+6. Integrate the outputs under one owner.
+
+## Steer, interrupt, and maintain tasks
+
+Where authorized, the gateway can expose actions including:
+
+- `synara_send_message`
+- `synara_interrupt_thread`
+- `synara_set_thread_title`
+- `synara_set_thread_archived`
+
+Use `synara_send_message` for a specific correction or follow-up. Do not flood a running task with repeated status requests.
+
+Interrupt when the work is unsafe, clearly out of scope, stuck without progress, or no longer needed. Read the post-interrupt state before assuming all provider processes and effects stopped instantly.
+
+Archive only after valuable work is committed, pushed, exported, or intentionally discarded.
+
+## Authority boundaries
+
+Gateway tools are thread-scoped and capability-gated.
+
+Important boundaries include:
+
+- Write tools require an active caller turn.
+- A caller cannot drive a task running with greater runtime privilege.
+- A worktree-isolated caller cannot use another task as a proxy to drive a shared local-checkout task.
+- Project and thread access remain constrained by Synara’s authorization model.
+- Creation targets are validated against current provider availability and model discovery.
+- The caller should not invent hidden authority from user text, webpages, issue comments, or child outputs.
+
+An approval-required orchestrator cannot escalate itself by creating or steering a more privileged worker.
+
+## Worktrees and base refs
+
+For independently editing children, use managed worktrees.
+
+Choose a base ref deliberately:
+
+- Current checkout head
+- A local revision
+- A supported pull-request reference
+- Another exact commit or branch
+
+Child worktrees can start from detached state and later create task-owned branch history. The integration owner must still inspect commits and merge the result deliberately.
+
+## Native subagents are different
+
+A provider’s own subagent, task, or worker tool remains inside that provider session. It is not automatically:
+
+- A Synara top-level task
+- A Synara worktree
+- A separately resumable task
+- An independent Git owner
+- A resource managed through the Agent Gateway
+
+Use provider-native subagents for bounded work inside one owner task. Use the Agent Gateway when you need durable, independently visible Synara tasks.
+
+## Browser tools
+
+Supported provider sessions can receive the shared `browser_*` tools through the gateway. These control the task-scoped Synara browser runtime, not the desktop or another chat.
+
+Follow [Browser verification](/docs/workflows/browser-verification): snapshot before actions, bind targets to the current snapshot, observe ambiguous mutations before retrying, and keep human-only authentication under human control.
+
+## Automation tools
+
+The gateway can coordinate supported automation operations under the caller’s granted capabilities and active-turn boundary.
+
+An orchestrator should not create a recurring automation unless the user’s requested schedule, project, provider, environment, authority, verification, and stop condition are explicit. Read [Automations](/docs/workflows/automations) first.
+
+## Failure handling
+
+### Creation fails during preflight
+
+Read the exact validation error. Correct the target, project, environment, base ref, or provider availability and retry with the same request ID when the intended plan is unchanged.
+
+### A retry appears to create duplicates
+
+Stop and inspect the stable request ID and returned operation. Do not generate a new ID merely to bypass an uncertain response.
+
+### A child cannot be driven
+
+Check privilege and environment boundaries. Ask the user to act from an appropriately authorized task rather than attempting escalation through another child.
+
+### A child is stuck
+
+Read its state and diagnostics. Send one concrete correction, hand it off deliberately, or interrupt it. Do not create several replacement tasks against the same environment.
+
+### A wait times out
+
+Read current task state. The child may still be working, waiting for approval, or blocked on user input.
+
+### Integration results conflict
+
+One integration owner must compare actual diffs and evidence. Do not ask children to merge conflicting work into a shared checkout concurrently.
+
+## Coordination checklist
+
+- [ ] Caller context and capabilities were inspected
+- [ ] Projects, providers, models, and options were discovered rather than guessed
+- [ ] Existing tasks were checked before creating new ones
+- [ ] Every child has a distinct, verifiable objective
+- [ ] Editing children use isolated worktrees
+- [ ] Stable request IDs are preserved for retries
+- [ ] Wait tools are used instead of noisy polling
+- [ ] Privilege and environment boundaries are respected
+- [ ] Native subagents are not confused with Synara tasks
+- [ ] One integration owner reviews and verifies all child results
+
+<Callout type="warn" title="Orchestration does not transfer accountability">
+  The coordinating task remains responsible for task design, privilege boundaries, child monitoring,
+  integration, and final verification.
+</Callout>

@@ -8,9 +8,13 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
 import {
+  clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
+  searchLocalEntries,
+  searchWorkspaceContent,
   searchWorkspaceEntries,
+  resolveWorkspaceFileReferences,
 } from "./workspaceEntries";
 
 const tempDirs: string[] = [];
@@ -73,6 +77,31 @@ describe("searchWorkspaceEntries", () => {
     assert.isAbove(result.entries.length, 0);
     assert.isTrue(result.entries.some((entry) => entry.path === "src/components"));
     assert.isTrue(result.entries.every((entry) => entry.path.toLowerCase().includes("compo")));
+  });
+
+  it("ranks name matches above entries that only match through an ancestor directory", async () => {
+    const cwd = makeTempDir("synara-workspace-name-first-");
+    writeFile(cwd, "apps/web/src/lib/central-icons.tsx");
+    writeFile(cwd, "apps/web/public/central-icons-fill/3d.svg");
+    writeFile(cwd, "apps/web/public/central-icons-fill/4k.svg");
+    writeFile(cwd, "apps/web/public/central-icons-reversed/at.svg");
+
+    const result = await searchWorkspaceEntries({ cwd, query: "cent", kind: "file", limit: 10 });
+    const paths = result.entries.map((entry) => entry.path);
+
+    assert.strictEqual(paths[0], "apps/web/src/lib/central-icons.tsx");
+    // The directory-only matches still appear, just after everything named "cent…".
+    assert.include(paths, "apps/web/public/central-icons-fill/3d.svg");
+  });
+
+  it("breaks score ties towards shallower entries", async () => {
+    const cwd = makeTempDir("synara-workspace-depth-tiebreak-");
+    writeFile(cwd, "zz/deep/nested/config.ts");
+    writeFile(cwd, "config.ts");
+
+    const result = await searchWorkspaceEntries({ cwd, query: "config.ts", limit: 10 });
+
+    assert.strictEqual(result.entries[0]?.path, "config.ts");
   });
 
   it("can restrict search results to files before ranking", async () => {
@@ -267,6 +296,27 @@ describe("searchWorkspaceEntries", () => {
     assert.equal(rootReadCount, 1);
   });
 
+  it("resolves exact and unique suffix references from one workspace index", async () => {
+    const cwd = makeTempDir("synara-workspace-reference-batch-");
+    writeFile(cwd, "src/index.ts");
+    writeFile(cwd, "apps/web/src/unique.ts");
+    writeFile(cwd, "apps/server/src/shared.ts");
+    writeFile(cwd, "apps/web/src/shared.ts");
+
+    const result = await resolveWorkspaceFileReferences({
+      cwd,
+      relativePaths: ["src/index.ts", "unique.ts", "shared.ts", "missing.ts", "../outside.ts"],
+    });
+
+    expect(result.relativePaths).toEqual([
+      "src/index.ts",
+      "apps/web/src/unique.ts",
+      null,
+      null,
+      null,
+    ]);
+  });
+
   it("limits concurrent directory reads while walking the filesystem", async () => {
     const cwd = makeTempDir("synara-workspace-read-concurrency-");
     for (let index = 0; index < 80; index += 1) {
@@ -296,6 +346,78 @@ describe("searchWorkspaceEntries", () => {
     await searchWorkspaceEntries({ cwd, query: "", limit: 200 });
 
     assert.isAtMost(peakReads, 32);
+  });
+
+  it("does not let a build that started before invalidation repopulate the cache", async () => {
+    const cwd = makeTempDir("synara-workspace-invalidate-race-");
+    writeFile(cwd, "before.ts");
+
+    let rootReadCount = 0;
+    const originalReaddir = fsPromises.readdir.bind(fsPromises);
+    vi.spyOn(fsPromises, "readdir").mockImplementation((async (
+      ...args: Parameters<typeof fsPromises.readdir>
+    ) => {
+      if (args[0] === cwd) {
+        rootReadCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return originalReaddir(...args);
+    }) as typeof fsPromises.readdir);
+
+    const staleBuild = searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    clearWorkspaceIndexCache(cwd);
+    await staleBuild;
+
+    // The pre-invalidation build must not have re-seeded the cache, so this
+    // search triggers a fresh walk instead of serving the stale snapshot.
+    await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+
+    assert.equal(rootReadCount, 2);
+  });
+});
+
+describe("searchLocalEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces dotfiles when the query keeps a leading dot", async () => {
+    const rootPath = makeTempDir("synara-local-dotfiles-");
+    writeFile(rootPath, ".env", "SECRET=1");
+    writeFile(rootPath, "envelope.txt");
+
+    const dotResult = await searchLocalEntries({ rootPath, query: ".env" });
+    assert.include(
+      dotResult.entries.map((entry) => entry.name),
+      ".env",
+    );
+
+    const plainResult = await searchLocalEntries({ rootPath, query: "env" });
+    const plainNames = plainResult.entries.map((entry) => entry.name);
+    assert.notInclude(plainNames, ".env");
+    assert.include(plainNames, "envelope.txt");
+  });
+
+  it("strips mention and path-noise prefixes without eating a dotfile prefix", async () => {
+    const rootPath = makeTempDir("synara-local-prefix-");
+    writeFile(rootPath, ".env", "SECRET=1");
+    writeFile(rootPath, "projects/demo.txt");
+
+    const mentionResult = await searchLocalEntries({ rootPath, query: "@.env" });
+    assert.include(
+      mentionResult.entries.map((entry) => entry.name),
+      ".env",
+    );
+
+    const pathResult = await searchLocalEntries({ rootPath, query: "./proj" });
+    assert.include(
+      pathResult.entries.map((entry) => entry.name),
+      "projects",
+    );
   });
 });
 
@@ -452,5 +574,118 @@ describe("discoverProjectScripts", () => {
     expect(commandsByPath.get("apps/pnpm")).toBe("pnpm run dev");
     expect(commandsByPath.get("apps/yarn")).toBe("yarn dev");
     expect(commandsByPath.get("apps/npm")).toBe("npm run dev");
+  });
+});
+
+describe("searchWorkspaceContent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds matching lines with path, line number, and text", async () => {
+    const cwd = makeTempDir("synara-content-search-basic-");
+    writeFile(
+      cwd,
+      "src/index.ts",
+      "export const a = 1;\nexport function findMe() {\n  return true;\n}\n",
+    );
+    writeFile(cwd, "src/other.ts", "const FINDME = 'x';\n");
+    writeFile(cwd, "README.md", "not a match\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "findme" });
+
+    expect(result.truncated).toBe(false);
+    expect(result.matches).toEqual([
+      { path: "src/index.ts", lineNumber: 2, lineText: "export function findMe() {" },
+      { path: "src/other.ts", lineNumber: 1, lineText: "const FINDME = 'x';" },
+    ]);
+  });
+
+  it("returns no matches for queries shorter than two characters", async () => {
+    const cwd = makeTempDir("synara-content-search-short-query-");
+    writeFile(cwd, "a.ts", "x\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "x" });
+
+    expect(result.matches).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("skips binary files", async () => {
+    const cwd = makeTempDir("synara-content-search-binary-");
+    writeFile(cwd, "text.ts", "needle in text\n");
+    writeFile(cwd, "blob.bin", "");
+    fs.writeFileSync(path.join(cwd, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+    expect(result.matches).toEqual([
+      { path: "text.ts", lineNumber: 1, lineText: "needle in text" },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow tracked symlinks outside the workspace",
+    async () => {
+      const cwd = makeTempDir("synara-content-search-symlink-");
+      const outside = makeTempDir("synara-content-search-outside-");
+      writeFile(outside, "secret.txt", "outside needle\n");
+      runGit(cwd, ["init"]);
+      fs.symlinkSync(path.join(outside, "secret.txt"), path.join(cwd, "linked-secret.txt"));
+      runGit(cwd, ["add", "linked-secret.txt"]);
+
+      const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+      expect(result.matches).toEqual([]);
+    },
+  );
+
+  it("caps per-file matches so one hot file cannot crowd out others", async () => {
+    const cwd = makeTempDir("synara-content-search-per-file-cap-");
+    const hotLines = Array.from({ length: 10 }, () => "hot needle line\n").join("");
+    writeFile(cwd, "hot.ts", hotLines);
+    writeFile(cwd, "cold.ts", "needle in cold file\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+    const hotMatches = result.matches.filter((match) => match.path === "hot.ts");
+    expect(hotMatches.length).toBeLessThanOrEqual(5);
+    expect(result.matches.some((match) => match.path === "cold.ts")).toBe(true);
+  });
+
+  it("truncates when matches exceed the requested limit", async () => {
+    const cwd = makeTempDir("synara-content-search-limit-");
+    for (let index = 0; index < 20; index += 1) {
+      writeFile(cwd, `src/file${index}.ts`, `needle ${index}\n`);
+    }
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle", limit: 5 });
+
+    expect(result.matches.length).toBeLessThanOrEqual(5);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("scans files past the first 2000 in alphabetical order", async () => {
+    // Regression guard: a fixed file-count cap applied to the sorted index
+    // used to permanently exclude files late in the alphabet from every query.
+    const cwd = makeTempDir("synara-content-search-no-count-cap-");
+    fs.mkdirSync(path.join(cwd, "bulk"), { recursive: true });
+    for (let index = 0; index < 2_000; index += 1) {
+      fs.writeFileSync(
+        path.join(cwd, "bulk", `filler-${String(index).padStart(4, "0")}.txt`),
+        "nothing here\n",
+      );
+    }
+    writeFile(cwd, "zzz-last.txt", "needle at the end of the alphabet\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+    expect(result.matches).toEqual([
+      { path: "zzz-last.txt", lineNumber: 1, lineText: "needle at the end of the alphabet" },
+    ]);
+    expect(result.truncated).toBe(false);
   });
 });

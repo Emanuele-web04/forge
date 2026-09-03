@@ -24,11 +24,13 @@ import {
   ProviderStartOptions,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
+  THREAD_GOAL_MAX_CHARS,
   THREAD_MARKER_LABEL_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
+  ThreadHandoff,
   ThreadTurnStartRequestedPayload,
   RuntimeMode,
 } from "./orchestration";
@@ -234,11 +236,6 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
 it.effect("drops legacy provider passwords from decoded provider options", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProviderStartOptions({
-      kilo: {
-        binaryPath: "/custom/bin/kilo",
-        serverUrl: "http://127.0.0.1:4095",
-        serverPassword: "legacy-kilo-secret",
-      },
       opencode: {
         binaryPath: "/custom/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
@@ -247,10 +244,6 @@ it.effect("drops legacy provider passwords from decoded provider options", () =>
     });
 
     assert.deepStrictEqual(parsed, {
-      kilo: {
-        binaryPath: "/custom/bin/kilo",
-        serverUrl: "http://127.0.0.1:4095",
-      },
       opencode: {
         binaryPath: "/custom/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
@@ -803,6 +796,22 @@ it.effect("rejects oversized thread notes payloads", () =>
   }),
 );
 
+it.effect("rejects oversized thread goal payloads", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      goal: "x".repeat(THREAD_GOAL_MAX_CHARS + 1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
+  }),
+);
+
 it.effect("accepts provider-scoped model options in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -1042,5 +1051,35 @@ it.effect("preserves user-input answer values through the RPC JSON codec", () =>
         skipped: null,
       },
     );
+  }),
+);
+
+const decodeThreadHandoff = Schema.decodeUnknownEffect(ThreadHandoff);
+
+it.effect("ThreadHandoff decodes legacy provider names instead of failing the row", () =>
+  Effect.gen(function* () {
+    const handoff = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "kilo",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(handoff.sourceProvider, "opencode");
+
+    const renamed = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "gemini",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(renamed.sourceProvider, "antigravity");
+
+    const current = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "codex",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(current.sourceProvider, "codex");
   }),
 );

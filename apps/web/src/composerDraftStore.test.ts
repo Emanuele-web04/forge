@@ -163,6 +163,26 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isTemporary).toBeUndefined();
   });
 
+  it("stages, trims, and clears a draft goal via context updates", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, {});
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.goal).toBeUndefined();
+
+    store.setDraftThreadContext(threadId, { goal: "  ship the snake game  " });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.goal).toBe(
+      "ship the snake game",
+    );
+
+    // Unrelated context updates keep the staged goal.
+    store.setDraftThreadContext(threadId, { branch: "feature/goal" });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.goal).toBe(
+      "ship the snake game",
+    );
+
+    store.setDraftThreadContext(threadId, { goal: "" });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.goal).toBeUndefined();
+  });
+
   it("registers a mapping-less temporary terminal draft for staged navigation", () => {
     const store = useComposerDraftStore.getState();
 

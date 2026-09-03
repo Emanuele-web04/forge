@@ -10,11 +10,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS } from "@synara/shared/migrationRecovery";
+import {
+  MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+  migrationBackupProvenancePath,
+} from "@synara/shared/migrationRecovery";
 
 import {
   FAILED_MIGRATION_BUNDLE_RETENTION,
   MIGRATION_BACKUP_RETENTION,
+  MigrationDivergenceConsentRequiredError,
   MigrationRecoveryRequiredError,
   TRACKER_REPAIR_SNAPSHOT_RETENTION,
   createMigrationBackup,
@@ -31,6 +35,14 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+  };
+});
 
 const tempDirectories: Array<string> = [];
 
@@ -448,6 +460,13 @@ describe("migration backups", () => {
     // Re-snapshotting here would both point recovery at the broken database and
     // copy the whole file on every restart.
     expect(await backupPaths(dbPath)).toEqual(backupsBefore);
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as { readonly backupPath: string; readonly resumeAttempts: number };
+    expect(provenance).toMatchObject({
+      backupPath: backupsBefore[0],
+      resumeAttempts: 1,
+    });
 
     const healed = new DatabaseSync(dbPath, { readOnly: true });
     try {
@@ -654,6 +673,18 @@ describe("migration backups", () => {
       code: "ENOENT",
     });
     expect(await backupPaths(dbPath)).toHaveLength(1);
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as {
+      readonly backupPath: string;
+      readonly databasePath: string;
+      readonly phase: string;
+    };
+    expect(provenance).toMatchObject({
+      databasePath: dbPath,
+      phase: "migration-completed",
+    });
+    await expect(fs.stat(provenance.backupPath)).resolves.toBeDefined();
 
     const database = new DatabaseSync(dbPath, { readOnly: true });
     try {
@@ -668,7 +699,7 @@ describe("migration backups", () => {
     }
   });
 
-  it("backs up an imported divergent lineage before reconciliation", async () => {
+  it("requires consent bound to the inspected database lineage before reconciliation", async () => {
     const dbPath = await makeDbPath();
     const latestId = Math.max(...migrationEntries.map(([id]) => id));
 
@@ -686,7 +717,35 @@ describe("migration backups", () => {
         }
         yield* sql`CREATE TABLE imported_probe(value TEXT NOT NULL)`;
         yield* sql`INSERT INTO imported_probe(value) VALUES ('imported-state')`;
-        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+
+        const blocked = yield* Effect.flip(runWithPreMigrationBackup(dbPath, runMigrations()));
+        expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+        if (!(blocked instanceof MigrationDivergenceConsentRequiredError)) return;
+        expect(blocked.challenge).toMatchObject({
+          databasePath: dbPath,
+          firstDivergedId: 17,
+          highWaterMark: latestId + 2,
+          recordedName: "ImportedMigration17",
+        });
+        expect(yield* Effect.promise(() => backupPaths(dbPath))).toEqual([]);
+
+        yield* sql`
+          UPDATE effect_sql_migrations
+          SET name = 'ChangedAfterInspection'
+          WHERE migration_id = ${latestId + 2}
+        `;
+        const staleConsent = yield* Effect.flip(
+          runWithPreMigrationBackup(dbPath, runMigrations(), {
+            divergenceConsent: blocked.challenge.consentToken,
+          }),
+        );
+        expect(staleConsent).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+        if (!(staleConsent instanceof MigrationDivergenceConsentRequiredError)) return;
+        expect(staleConsent.challenge.consentToken).not.toBe(blocked.challenge.consentToken);
+
+        yield* runWithPreMigrationBackup(dbPath, runMigrations(), {
+          divergenceConsent: staleConsent.challenge.consentToken,
+        });
       }),
     );
 
@@ -699,9 +758,212 @@ describe("migration backups", () => {
       expect(backup.prepare("SELECT value FROM imported_probe").get()).toMatchObject({
         value: "imported-state",
       });
+      expect(
+        backup
+          .prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = ?")
+          .get(latestId + 2),
+      ).toMatchObject({ name: "ChangedAfterInspection" });
     } finally {
       backup.close();
     }
+
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as {
+      readonly backupPath: string;
+      readonly lineageDivergence: Record<string, unknown>;
+      readonly restore: {
+        readonly executable: string;
+        readonly arguments: readonly string[];
+      };
+      readonly sourceVersion: string;
+      readonly targetVersion: number;
+    };
+    expect(provenance).toMatchObject({
+      backupPath,
+      restore: {
+        executable: "synara-restore-migration-backup",
+        arguments: [dbPath],
+      },
+      sourceVersion: `imported-v${latestId + 2}-from17`,
+      targetVersion: latestId,
+      lineageDivergence: {
+        firstDivergedId: 17,
+        recordedName: "ImportedMigration17",
+      },
+    });
+  });
+
+  it("requires consent for divergence after a legacy migration-32 tracker row", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 31 });
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES
+            (32, 'LegacyImportedSchemaLineage'),
+            (33, 'UnexpectedMigrationAfterLegacy32')
+        `;
+
+        const blocked = yield* Effect.flip(runWithPreMigrationBackup(dbPath, Effect.void));
+        expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+        if (!(blocked instanceof MigrationDivergenceConsentRequiredError)) return;
+        expect(blocked.challenge).toMatchObject({
+          firstDivergedId: 33,
+          recordedName: "UnexpectedMigrationAfterLegacy32",
+        });
+      }),
+    );
+
+    expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
+  it("keeps reviewed migration aliases on the automatic upgrade path", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 53 });
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES (54, 'ProjectPullRequestPins')
+        `;
+
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+
+        const repaired = yield* sql<{ readonly name: string }>`
+          SELECT name FROM effect_sql_migrations WHERE migration_id = 54
+        `;
+        expect(repaired[0]?.name).toBe("DurableProviderCommandDelivery");
+      }),
+    );
+
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as { readonly lineageDivergence: unknown };
+    expect(provenance.lineageDivergence).toBeNull();
+  });
+
+  it("restores the exact completed backup after the active marker is cleared", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* sql`CREATE TABLE completed_restore_probe(value TEXT NOT NULL)`;
+        yield* sql`INSERT INTO completed_restore_probe(value) VALUES ('before-upgrade')`;
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+        yield* sql`UPDATE completed_restore_probe SET value = 'after-upgrade'`;
+      }),
+    );
+
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await Effect.runPromise(restoreMarkedMigrationBackup(dbPath));
+
+    const restored = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(restored.prepare("SELECT value FROM completed_restore_probe").get()).toMatchObject({
+        value: "before-upgrade",
+      });
+      expect(
+        restored.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get(),
+      ).toMatchObject({ id: 52 });
+    } finally {
+      restored.close();
+    }
+
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as { readonly phase: string; readonly restoredAt?: string };
+    expect(provenance.phase).toBe("migration-restored");
+    expect(provenance.restoredAt).toBeTypeOf("string");
+  });
+
+  it("clears the restore marker when a completed-backup swap rolls back cleanly", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* sql`CREATE TABLE completed_restore_rollback_probe(value TEXT NOT NULL)`;
+        yield* sql`INSERT INTO completed_restore_rollback_probe(value) VALUES ('before-upgrade')`;
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+        yield* sql`UPDATE completed_restore_rollback_probe SET value = 'after-upgrade'`;
+      }),
+    );
+
+    const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+    const rename = vi.mocked(fs.rename);
+    rename.mockImplementation((source, destination) => {
+      if (String(source) === dbPath) {
+        return Promise.reject(new Error("injected live database swap failure"));
+      }
+      return realRename(source, destination);
+    });
+    try {
+      await expect(Effect.runPromise(restoreMarkedMigrationBackup(dbPath))).rejects.toThrow(
+        "injected live database swap failure",
+      );
+    } finally {
+      rename.mockImplementation(realRename);
+    }
+
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const live = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        live.prepare("SELECT value FROM completed_restore_rollback_probe").get(),
+      ).toMatchObject({ value: "after-upgrade" });
+    } finally {
+      live.close();
+    }
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as { readonly phase: string };
+    expect(provenance.phase).toBe("migration-completed");
+  });
+
+  it("keeps an active restore marker until restored provenance is durable", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const provenancePath = migrationBackupProvenancePath(dbPath);
+    await fs.mkdir(provenancePath);
+
+    await expect(Effect.runPromise(restoreMarkedMigrationBackup(dbPath))).rejects.toThrow();
+    const strandedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
+      readonly phase: string;
+      readonly resumeAttempts: number;
+    };
+    expect(strandedMarker).toMatchObject({
+      phase: "migration-restore-in-progress",
+      resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+    });
+    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).rejects.toThrow(
+      MigrationRecoveryRequiredError,
+    );
   });
 
   it("prunes versioned snapshots to the bounded retention count", async () => {

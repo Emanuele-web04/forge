@@ -22,7 +22,7 @@ import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import {
   arraysShallowEqual,
   capThreadActivities,
-  dedupeActivitiesById,
+  dedupeActivitiesByIdAfterAppend,
   deepEqualJson,
   mapProjects,
   mapSpaces,
@@ -104,11 +104,17 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
     ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
     ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
+    ...(thread.goal !== undefined ? { goal: thread.goal } : {}),
+    ...(thread.goalStartedAt !== undefined ? { goalStartedAt: thread.goalStartedAt } : {}),
+    ...(thread.goalPausedAt !== undefined ? { goalPausedAt: thread.goalPausedAt } : {}),
+    ...(thread.goalAchievements !== undefined ? { goalAchievements: thread.goalAchievements } : {}),
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
       : {}),
@@ -338,6 +344,7 @@ function sidebarThreadSummariesEqual(
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.creationSource ?? null) === (right.creationSource ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -348,6 +355,8 @@ function sidebarThreadSummariesEqual(
     left.hasLiveTailWork === right.hasLiveTailWork &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
+    (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
@@ -380,6 +389,7 @@ function buildSidebarThreadSummary(
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
+    creationSource: thread.creationSource ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -390,6 +400,8 @@ function buildSidebarThreadSummary(
     hasLiveTailWork: metadata.hasLiveTailWork,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
   };
@@ -737,9 +749,15 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
   }
 
   if (previousThread?.activities !== nextThread.activities) {
-    const activities = capThreadActivities(dedupeActivitiesById(nextThread.activities));
     const previousIds = nextState.activityIdsByThreadId?.[nextThread.id];
     const previousById = nextState.activityByThreadId?.[nextThread.id];
+    const activities = capThreadActivities(
+      dedupeActivitiesByIdAfterAppend(
+        nextThread.activities,
+        previousThread?.activities,
+        previousById,
+      ),
+    );
     const slice = buildNormalizedSlice(
       activities,
       activityId,
@@ -1120,18 +1138,20 @@ function commitThreadProjection(
     updateSidebarSummary?: boolean;
   },
 ): AppState {
+  const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
+  const previousSummary = state.sidebarThreadSummaryById[threadId];
+  // Skip deriving the thread entirely when the summary is pinned to its previous value —
+  // this runs on the streaming hot path where most flushes change no summary input.
+  if (!shouldUpdateSidebarSummary && previousSummary !== undefined) {
+    return state;
+  }
+
   const nextThread = getThreadFromState(state, threadId);
   if (!nextThread) {
     return state;
   }
 
-  const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
-
-  const previousSummary = state.sidebarThreadSummaryById[threadId];
-  const nextSummary =
-    shouldUpdateSidebarSummary || previousSummary === undefined
-      ? buildSidebarThreadSummary(nextThread, previousSummary)
-      : previousSummary;
+  const nextSummary = buildSidebarThreadSummary(nextThread, previousSummary);
 
   if (nextSummary === previousSummary) {
     return state;

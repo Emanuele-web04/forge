@@ -552,3 +552,24 @@ describe("hydratePendingBlobComposerAttachments", () => {
     expect(result).toEqual([expect.objectContaining({ id: "ok" })]);
   });
 });
+
+describe("resolvePromptEffortFromModelSelection", () => {
+  it("maps Devin reasoning effort and falls back to fast for pinned fast mode", async () => {
+    const { resolvePromptEffortFromModelSelection } = await import("./composerSend");
+    const { makeModelSelection } = await import("../composerDraftModels");
+
+    expect(
+      resolvePromptEffortFromModelSelection(
+        makeModelSelection("devin", "swe-1-7", { reasoningEffort: "high" }),
+      ),
+    ).toBe("high");
+    expect(
+      resolvePromptEffortFromModelSelection(
+        makeModelSelection("devin", "swe-1-7-lightning", { fastMode: true }),
+      ),
+    ).toBe("fast");
+    expect(
+      resolvePromptEffortFromModelSelection(makeModelSelection("devin", "adaptive")),
+    ).toBeNull();
+  });
+});

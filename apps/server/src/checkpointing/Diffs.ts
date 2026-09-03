@@ -18,8 +18,25 @@ const loadPierreDiffs: () => Promise<PierreDiffsModule> = lazyModule(() => impor
 
 export interface TurnDiffFileSummary {
   readonly path: string;
+  readonly kind: string;
   readonly additions: number;
   readonly deletions: number;
+}
+
+function checkpointKindFromParsedFile(
+  type: ParsedPatches[number]["files"][number]["type"],
+): string {
+  switch (type) {
+    case "deleted":
+      return "deleted";
+    case "new":
+      return "added";
+    case "rename-pure":
+    case "rename-changed":
+      return "renamed";
+    case "change":
+      return "modified";
+  }
 }
 
 function summarizeParsedPatches(parsedPatches: ParsedPatches): ReadonlyArray<TurnDiffFileSummary> {
@@ -31,6 +48,7 @@ function summarizeParsedPatches(parsedPatches: ParsedPatches): ReadonlyArray<Tur
       const existing = filesByPath.get(file.name);
       filesByPath.set(file.name, {
         path: file.name,
+        kind: checkpointKindFromParsedFile(file.type),
         additions: (existing?.additions ?? 0) + additions,
         deletions: (existing?.deletions ?? 0) + deletions,
       });
@@ -68,7 +86,7 @@ export function parseCheckpointFilesFromUnifiedDiff(
     files.map(
       (file): OrchestrationCheckpointFile => ({
         path: file.path,
-        kind: "modified",
+        kind: file.kind,
         additions: file.additions,
         deletions: file.deletions,
       }),

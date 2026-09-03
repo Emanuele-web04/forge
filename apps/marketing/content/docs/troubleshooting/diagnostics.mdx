@@ -1,0 +1,205 @@
+---
+title: Diagnostics
+description: Collect bounded thread evidence, understand source coverage, and share useful diagnostics without leaking sensitive data.
+---
+
+Diagnostics should answer a specific question: what state was projected, what durable event was recorded, what the provider emitted, or which delivery or operational incident blocked progress. Collect the smallest evidence set that can answer that question.
+
+## Diagnostic sources
+
+Authorized Agent Gateway sessions can expose four complementary tools:
+
+| Tool                                | Source                                           | Best for                                                 |
+| ----------------------------------- | ------------------------------------------------ | -------------------------------------------------------- |
+| `synara_diagnose_thread`            | Bounded forensic snapshot across several sources | First-pass triage of a stuck or inconsistent task        |
+| `synara_read_thread_activity`       | Projected task activity                          | What Synara presented as user-facing task activity       |
+| `synara_read_thread_events`         | Durable orchestration event journal              | Authoritative ordering of persisted orchestration events |
+| `synara_read_thread_runtime_events` | Retained provider-runtime events                 | What the provider adapter emitted before projection      |
+
+No single source answers every question.
+
+## Start with the forensic snapshot
+
+Use:
+
+```text
+synara_diagnose_thread({ threadId })
+```
+
+It combines a bounded view of:
+
+- Current task and turn state
+- Recent messages and projected activity
+- Durable orchestration events
+- Provider command-delivery blockers
+- Operational server or browser incidents
+- Provider-runtime coverage
+
+Use the result to choose the next narrow read. Do not paste the full snapshot publicly without reviewing it.
+
+## Read projected activity
+
+Use `synara_read_thread_activity` when the question is:
+
+- What appeared in the task transcript?
+- Which approval, tool, status, or user-input activity was projected?
+- Did the projection include the expected task event?
+
+The tool returns stable pagination and a coverage object. Detailed payloads are bounded and redacted, and requesting details lowers the maximum page size.
+
+A projected activity can be absent because projection failed even when a durable event exists.
+
+## Read durable thread events
+
+Use `synara_read_thread_events` when ordering and durable persistence matter.
+
+The event journal:
+
+- Uses a stable high-water sequence for pagination
+- Can filter by event type
+- Can return no payload, a summary, or bounded full payloads
+- Coalesces consecutive updates for the same message without crossing intervening events
+- Reports whether a coalescing scan was truncated
+
+When `durableSourceComplete` is true for the requested high-water mark, absence from that page range is stronger evidence than absence from a retained runtime source. Continue pagination when `pageHasOlder` is true.
+
+## Read provider-runtime events
+
+Use `synara_read_thread_runtime_events` when the question is:
+
+- Did the provider emit an item or completion event?
+- Which provider event IDs or request IDs appeared?
+- Did the adapter receive repeated, malformed, or out-of-order events?
+
+This source has a global accepted-event retention cap. Its coverage explicitly reports `sourceComplete: false`.
+
+<Callout type="warn" title="Absence is not proof">
+  A provider-runtime event missing from retained diagnostics does not prove the provider never
+  emitted it. Inspect `oldestRetainedSequence`, retained counts, the global cap, and durable
+  orchestration evidence before drawing a conclusion.
+</Callout>
+
+## Read source coverage first
+
+Before saying “there was no event,” record:
+
+- Source name
+- High-water sequence
+- Oldest retained sequence when applicable
+- Whether the source reports complete coverage
+- Whether older pages remain
+- Filters used
+- Whether a scan was truncated
+
+A filtered or incomplete source cannot prove global absence.
+
+## Use stable pagination
+
+Diagnostic cursors are opaque and bound to:
+
+- Source kind
+- Thread ID
+- Filter set
+- High-water sequence
+- Next page boundary
+
+Pass the returned cursor back unchanged. Changing filters while reusing a cursor should be treated as a new diagnostic query.
+
+## Include details only when necessary
+
+Start without detailed payloads. Enable details only when summaries cannot answer the question.
+
+Detailed output can include:
+
+- File or repository paths
+- Prompt fragments
+- Command arguments
+- Provider metadata
+- URLs
+- Error text
+- Account or project identifiers
+
+Keep the smallest useful page and filter to a relevant turn or event type.
+
+## Built-in redaction and bounds
+
+Synara’s diagnostic sanitizer:
+
+- Redacts fields whose keys resemble authorization, cookies, credentials, passwords, secrets, tokens, or API keys
+- Redacts common secret assignments, authorization headers, credential-bearing URLs, and sensitive query parameters
+- Truncates long strings
+- Limits array items, object keys, and nesting depth
+
+These protections reduce accidental exposure. Built-in redaction is not a substitute for manual review, and it does not guarantee that every private value, proprietary code fragment, internal URL, personal name, or novel secret format is removed.
+
+## Manual redaction checklist
+
+Before sharing diagnostics, remove or generalize:
+
+- API keys, tokens, cookies, credentials, and authorization headers
+- Private prompts and model responses
+- Proprietary source code and diffs
+- Repository names and remote URLs when confidential
+- Local usernames, home-directory paths, and machine names
+- Customer data and personal information
+- Internal hostnames, issue URLs, and annotation URLs
+- Account, organization, integration, task, and project identifiers when unnecessary
+
+Do not upload a complete data directory or database to a public issue.
+
+## Build a useful timeline
+
+A good diagnostic timeline includes:
+
+```text
+2026-08-04 02:14:03 IST — sent the task instruction
+2026-08-04 02:14:10 IST — provider process started
+2026-08-04 02:15:42 IST — last visible tool activity
+2026-08-04 02:16:12 IST — runtime warning appeared
+2026-08-04 02:17:00 IST — interrupted after preserving the diff
+```
+
+Use one timezone and include the offset. Exact times let maintainers align UI activity, durable events, runtime events, and operational incidents.
+
+## Compare sources without rewriting history
+
+When sources disagree, report the disagreement directly.
+
+Example:
+
+```text
+Projected activity shows the turn as completed.
+The durable event journal contains the completion event at sequence 1842.
+Retained provider-runtime diagnostics no longer include the matching raw event and report incomplete coverage.
+```
+
+Do not “reconcile” the evidence by inventing a missing event.
+
+## Minimal diagnostic bundle
+
+For most task-runtime problems, collect:
+
+1. Synara version and build type
+2. Operating system
+3. Provider executable path and version
+4. Provider/model/options
+5. Task status and environment type
+6. Exact error text and time range
+7. `git status --short --branch`
+8. A redacted `synara_diagnose_thread` result
+9. One narrow follow-up source page when needed
+10. Reproduction steps and expected behavior
+
+## Diagnostic completion checklist
+
+- [ ] A specific diagnostic question was defined
+- [ ] The smallest relevant source was selected
+- [ ] Coverage and pagination were recorded
+- [ ] Detailed payloads were requested only when necessary
+- [ ] Built-in redaction was not treated as complete privacy protection
+- [ ] The output was manually reviewed and redacted
+- [ ] Exact times and timezone were included
+- [ ] Source disagreement was reported honestly
+- [ ] The report distinguishes evidence from inference
+
+Continue with [Report a problem](/docs/troubleshooting/report-a-problem) when the evidence is ready.

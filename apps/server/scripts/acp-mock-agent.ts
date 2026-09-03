@@ -24,14 +24,35 @@ const emitAskQuestion = process.env.SYNARA_ACP_EMIT_ASK_QUESTION === "1";
 const failSessionNewOnce = process.env.SYNARA_ACP_FAIL_SESSION_NEW_ONCE === "1";
 const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const rejectConfigDuringLoadReplay =
+  process.env.SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY === "1";
 const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
+const advertiseAuthMethods = process.env.SYNARA_ACP_ADVERTISE_AUTH_METHODS === "1";
+const requireAuthForSession = process.env.SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION === "1";
+const emitOrphanUpdate = process.env.SYNARA_ACP_EMIT_ORPHAN_UPDATE === "1";
+const orphanUpdateDelayMs = Number(process.env.SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS || "0");
+const finalSessionDelayMs = Number(process.env.SYNARA_ACP_FINAL_SESSION_DELAY_MS || "0");
+const loadReplayDelaysMs = (process.env.SYNARA_ACP_LOAD_REPLAY_DELAYS_MS ?? "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0)
+  .map(Number)
+  .filter((value) => Number.isFinite(value) && value >= 0);
+const rejectPromptDuringLoadReplay =
+  process.env.SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY === "1";
+const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY === "1";
+const loadReplayModeId = process.env.SYNARA_ACP_LOAD_REPLAY_MODE_ID?.trim();
+const loadReplayAvailableCommands = process.env.SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
-const sessionId = "mock-session-1";
+const mainSessionId = "mock-session-1";
+const probeSessionId = "mock-session-probe";
+let sessionId = mainSessionId;
 
+let authenticated = false;
 let currentModeId = "ask";
 let currentModelId = "default";
 let parameterizedModelPicker = false;
@@ -39,6 +60,7 @@ let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
 let sessionNewAttempts = 0;
+let pendingLoadReplayUpdates = 0;
 const cancelledSessions = new Set<string>();
 
 function logExit(reason: string): void {
@@ -235,6 +257,52 @@ function makeClient(context: OfficialAcp.AgentContext) {
   };
 }
 
+function scheduleLoadReplayUpdates(
+  client: ReturnType<typeof makeClient>,
+  requestedSessionId: string,
+): void {
+  pendingLoadReplayUpdates += loadReplayDelaysMs.length;
+  loadReplayDelaysMs.forEach((delayMs, index) => {
+    setTimeout(() => {
+      const modeUpdate =
+        index === loadReplayDelaysMs.length - 1 && loadReplayModeId
+          ? client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "current_mode_update",
+                currentModeId: loadReplayModeId,
+              },
+            })
+          : Effect.void;
+      const commandsUpdate =
+        index === loadReplayDelaysMs.length - 1 && loadReplayAvailableCommands
+          ? client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: [
+                  { name: "compact", description: "Compact the current context" },
+                ],
+              },
+            })
+          : Effect.void;
+      void runEffect(
+        client
+          .sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `late replay ${index + 1}` },
+            },
+          })
+          .pipe(Effect.andThen(modeUpdate), Effect.andThen(commandsUpdate)),
+      ).finally(() => {
+        pendingLoadReplayUpdates -= 1;
+      });
+    }, delayMs);
+  });
+}
+
 function requestInput(): ReadableStream<Uint8Array> {
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   if (!requestLogPath) return input;
@@ -282,12 +350,25 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
             ...(supportsSessionFork ? { fork: {} } : {}),
           },
         },
+        authMethods: advertiseAuthMethods
+          ? [{ id: "test-key", name: "Test Key" }]
+          : [
+              { id: "device-pairing", name: "Device Pairing" },
+              { id: "factory-api-key", name: "Factory API Key" },
+            ],
       };
     }),
   ),
 );
 
-app.onRequest(OfficialAcp.methods.agent.authenticate, () => ({}));
+app.onRequest(OfficialAcp.methods.agent.authenticate, () =>
+  runEffect(
+    Effect.sync(() => {
+      authenticated = true;
+      return {};
+    }),
+  ),
+);
 
 app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   sessionNewAttempts += 1;
@@ -300,19 +381,49 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {
+      const isAuthenticated = !requireAuthForSession || authenticated;
+      sessionId = isAuthenticated ? mainSessionId : probeSessionId;
       if (emitAvailableCommands) {
         yield* client.sessionUpdate({
           sessionId,
           update: {
             sessionUpdate: "available_commands_update",
-            availableCommands: [{ name: "compact", description: "Compact the current context" }],
+            availableCommands: isAuthenticated
+              ? [{ name: "compact", description: "Compact the current context" }]
+              : [{ name: "orphan-command", description: "Should not leak to final session" }],
           },
         });
+      }
+      if (emitOrphanUpdate && !isAuthenticated) {
+        const orphan = {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "orphan" },
+          },
+        } as const;
+        if (orphanUpdateDelayMs > 0) {
+          setTimeout(() => {
+            runEffect(client.sessionUpdate(orphan)).catch(() => {});
+          }, orphanUpdateDelayMs);
+        } else {
+          yield* client.sessionUpdate(orphan);
+        }
+      }
+      const configOptionsForSession = isAuthenticated
+        ? configOptions()
+        : configOptions().map((option) =>
+            option.id === "model" && option.type === "select"
+              ? Object.assign({}, option, { options: [] as typeof option.options })
+              : option,
+          );
+      if (isAuthenticated && finalSessionDelayMs > 0) {
+        yield* Effect.sleep(finalSessionDelayMs);
       }
       return {
         sessionId,
         modes: modeState(),
-        configOptions: configOptions(),
+        configOptions: configOptionsForSession,
       };
     }),
   );
@@ -320,16 +431,18 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
 
 app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params: request }) => {
   const client = makeClient(context);
+  const requestedSessionId = String(request.sessionId ?? sessionId);
   return runEffect(
     client
       .sessionUpdate({
-        sessionId: String(request.sessionId ?? sessionId),
+        sessionId: requestedSessionId,
         update: {
           sessionUpdate: "user_message_chunk",
           content: { type: "text", text: "replay" },
         },
       })
       .pipe(
+        Effect.tap(() => Effect.sync(() => scheduleLoadReplayUpdates(client, requestedSessionId))),
         Effect.as({
           modes: modeState(),
           configOptions: configOptions(),
@@ -343,13 +456,24 @@ app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
   configOptions: configOptions(),
 }));
 
-app.onRequest(OfficialAcp.methods.agent.session.fork, () => ({
-  sessionId: "mock-session-fork-1",
-  modes: modeState(),
-  configOptions: configOptions(),
-}));
+app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
+  if (rejectForkDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw new OfficialAcp.RequestError(-32603, "Fork arrived before load replay settled.");
+  }
+  return {
+    sessionId: "mock-session-fork-1",
+    modes: modeState(),
+    configOptions: configOptions(),
+  };
+});
 
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
+  if (rejectConfigDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw OfficialAcp.RequestError.invalidParams(
+      { method: "session/set_config_option", params: request },
+      "Session configuration arrived before session/load replay settled",
+    );
+  }
   if (failSetConfigOption) {
     throw OfficialAcp.RequestError.invalidParams(
       {
@@ -393,6 +517,12 @@ app.onNotification(OfficialAcp.methods.agent.session.cancel, ({ params: { sessio
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.prompt, ({ client: context, params: request }) => {
+  if (rejectPromptDuringLoadReplay && pendingLoadReplayUpdates > 0) {
+    throw OfficialAcp.RequestError.invalidParams(
+      { method: "session/prompt", params: request },
+      "Prompt arrived before session/load replay settled",
+    );
+  }
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {

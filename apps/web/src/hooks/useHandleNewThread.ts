@@ -1,11 +1,19 @@
 import { type ProjectId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition } from "react";
 import { useAppSettings } from "../appSettings";
+import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import {
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import {
@@ -41,7 +49,12 @@ export interface NewThreadNavigationOptions {
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverCwd = serverConfigQuery.data?.cwd ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const navigate = useNavigate();
   const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -57,7 +70,42 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    if (!useStore.getState().threadsHydrated) {
+      return Promise.resolve(null);
+    }
+
     const entryPoint = options?.entryPoint ?? "chat";
+    if (entryPoint === "chat") {
+      const draftStore = useComposerDraftStore.getState();
+      const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
+      const draftComposer = draftThread
+        ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
+        : null;
+      const project = useStore.getState().projects.find((candidate) => candidate.id === projectId);
+
+      prefetchModelsForNewThread(queryClient, {
+        settings,
+        serverSettings: serverSettings ?? null,
+        hiddenProviders: settings.hiddenProviders,
+        providerOverride: options?.provider ?? null,
+        draftActiveProvider: draftComposer?.activeProvider ?? null,
+        stickyActiveProvider: draftStore.stickyActiveProvider,
+        projectDefaultProvider: project?.defaultModelSelection?.provider ?? null,
+        projectCwd: project?.cwd ?? null,
+        draftWorktreePath: draftThread?.worktreePath ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        hasExplicitWorktreePath: options?.worktreePath !== undefined,
+        fresh: options?.fresh === true,
+        envMode: options?.envMode ?? null,
+        serverCwd,
+        providerStatuses,
+        statusesReconciled: providerStatusesReconciled,
+        providerOrder: settings.providerOrder,
+        includeDroid: true,
+      });
+    }
     const wantsTemporaryThread = options?.temporary === true;
     const applyProviderOverride = (threadId: ThreadId) => {
       if (!options?.provider) {
@@ -71,6 +119,46 @@ export function useHandleNewThread() {
         provider: options.provider,
         model: defaultModel,
       });
+    };
+    // Fresh chat drafts carry only sticky-seeded composer state, so resolve the
+    // draft model selection against the full precedence (explicit provider >
+    // project default > global default > sticky) instead of overwriting the
+    // sticky provider with the global default alone.
+    const applyResolvedDefault = (threadId: ThreadId) => {
+      if (options?.provider) {
+        return;
+      }
+      const draftComposerState =
+        useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const modelSelection = resolvePreferredComposerModelSelection({
+        draft: draftComposerState,
+        threadModelSelection: null,
+        projectModelSelection: projectDefaultModelSelection,
+        defaultProvider: settings.defaultProvider,
+        fresh: true,
+      });
+      // A fresh chat draft was seeded with sticky composer state, so the
+      // resolved project/global default would otherwise get the sticky model's
+      // same-provider options merged back onto it by setModelSelection's option
+      // preservation. Drop the resolved provider's sticky-seeded entry first so
+      // only the resolved selection lands in the draft. When resolution fell
+      // back to the sticky draft selection, that selection already carries its
+      // own options.
+      useComposerDraftStore.setState((state) => {
+        const draft = state.draftsByThreadId[threadId];
+        if (!draft) {
+          return state;
+        }
+        const modelSelectionByProvider = { ...draft.modelSelectionByProvider };
+        delete modelSelectionByProvider[modelSelection.provider];
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...draft, modelSelectionByProvider },
+          },
+        };
+      });
+      setModelSelection(threadId, modelSelection);
     };
     const restoreComposerDraft = (
       threadId: ThreadId,
@@ -133,6 +221,11 @@ export function useHandleNewThread() {
       projectId,
       routeThreadId: focusedThreadId,
     });
+    // A fresh bootstrap (explicit options.fresh or a plan with no reusable draft)
+    // means the new draft's composer state is only sticky-seeded carry-over, so
+    // resolve its model selection against explicit thread/project/default
+    // providers instead of that stale sticky provider.
+    const freshBootstrap = options?.fresh === true || bootstrapPlan.kind === "fresh";
     // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
@@ -151,6 +244,7 @@ export function useHandleNewThread() {
         draftComposerState:
           useComposerDraftStore.getState().draftsByThreadId[targetThreadId] ?? null,
         draftThread,
+        fresh: freshBootstrap,
         options: creationOptions,
         projectDefaultModelSelection,
         projectId,
@@ -282,6 +376,7 @@ export function useHandleNewThread() {
           activateThreadEntryPoint(threadId);
           applyStickyState(threadId);
           applyProviderOverride(threadId);
+          applyResolvedDefault(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route
         // subtree renders interruptibly and the browser can paint the chat

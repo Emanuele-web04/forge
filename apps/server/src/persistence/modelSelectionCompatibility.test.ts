@@ -14,6 +14,31 @@ it("preserves canonical Pi model selections", () => {
   });
 });
 
+it("migrates legacy Kilo provider values and labels to OpenCode", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { kilo: { variant: "high" } },
+    }),
+    {
+      provider: "opencode",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "high" },
+    },
+  );
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Kilo Code local runtime",
+      model: "custom/provider-model",
+    }),
+    {
+      provider: "opencode",
+      model: "custom/provider-model",
+    },
+  );
+});
+
 it("migrates combined Antigravity model and effort labels", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({
@@ -95,6 +120,34 @@ it("infers Pi from persisted instance labels", () => {
   );
 });
 
+it("preserves canonical Devin model selections", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "devin",
+      model: "swe-1-7",
+      options: { reasoningEffort: "high" },
+    }),
+    {
+      provider: "devin",
+      model: "swe-1-7",
+      options: { reasoningEffort: "high" },
+    },
+  );
+});
+
+it("infers Devin from persisted instance labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Devin CLI",
+      model: "adaptive",
+    }),
+    {
+      provider: "devin",
+      model: "adaptive",
+    },
+  );
+});
+
 it("infers Droid only for Factory-exclusive provider-less model slugs", () => {
   assert.deepEqual(normalizePersistedModelSelection({ model: "minimax-m3" }), {
     provider: "droid",
@@ -106,5 +159,19 @@ it("does not steal ambiguous provider-less Claude slugs from Claude Agent", () =
   assert.deepEqual(normalizePersistedModelSelection({ model: "claude-opus-4-8" }), {
     provider: "claudeAgent",
     model: "claude-opus-4-8",
+  });
+});
+
+it("preserves canonical Devin model selections", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ provider: "devin", model: "devin-core" }), {
+    provider: "devin",
+    model: "devin-core",
+  });
+});
+
+it("infers Devin from provider-less model slugs containing devin", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ model: "devin-core" }), {
+    provider: "devin",
+    model: "devin-core",
   });
 });

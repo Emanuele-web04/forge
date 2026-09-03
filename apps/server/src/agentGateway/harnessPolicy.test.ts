@@ -16,6 +16,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
+    assert.include(policy, "synara_set_thread_pull_request");
+    assert.include(policy, "current thread's own deliverable");
+    assert.include(policy, "only reviews, references, or discusses");
     assert.include(policy, "Use the browser_* tools");
     assert.include(policy, "exact thread-scoped Electron page Synara surfaces to the user");
     assert.include(policy, "continue in the background");
@@ -37,6 +40,35 @@ describe("Synara harness policy", () => {
     assert.include(policy, "Never call this tool for a manual follow-up turn");
   });
 
+  it("asks agents to emit known absolute file URLs instead of invented relative links", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, "[config.ts](file:///absolute/path/config.ts)");
+      assert.include(
+        policy,
+        "Relative links are only for files inside the session working directory",
+      );
+      assert.include(policy, "If the absolute path is unknown, keep the name as plain text");
+      assert.include(policy, "Do not invent a path");
+    }
+  });
+
+  it("keeps final answers self-contained when intermediate progress is collapsed", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, 'under a "Worked for..." disclosure');
+      assert.include(policy, "Make every final response self-contained");
+      assert.include(policy, "restate the essential context concisely in the final response");
+      assert.include(policy, 'Never ask them to approve "this", "that", "the above"');
+      assert.include(policy, "structured user-input tool");
+      assert.include(policy, "contain all context the user needs to decide");
+    }
+  });
+
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");
@@ -53,15 +85,7 @@ describe("Synara harness policy", () => {
   });
 
   it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of [
-      "antigravity",
-      "cursor",
-      "grok",
-      "droid",
-      "opencode",
-      "kilo",
-      "pi",
-    ] as const) {
+    for (const provider of ["antigravity", "cursor", "grok", "droid", "opencode", "pi"] as const) {
       for (const lifecycle of ["fresh", "load", "fork"] as const) {
         const state: { harnessPolicyDelivered?: boolean } = {};
         const first =
@@ -82,8 +106,8 @@ describe("Synara harness policy", () => {
     }
   });
 
-  it("keeps OpenCode, Kilo, and Pi identity-only until scoped setup succeeds", () => {
-    for (const provider of ["opencode", "kilo", "pi"] as const) {
+  it("keeps OpenCode and Pi identity-only until scoped setup succeeds", () => {
+    for (const provider of ["opencode", "pi"] as const) {
       const text =
         takeSynaraHarnessPolicyForProviderSession(
           {},

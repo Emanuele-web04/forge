@@ -48,14 +48,30 @@ describe("desktopIdentity", () => {
     });
   });
 
-  it("selects Canary explicitly without changing normal dev and production defaults", () => {
+  it("selects explicit source flavors without changing packaged Stable", () => {
     expect(resolveSynaraDesktopFlavor({ isDevelopment: false })).toBe("production");
     expect(resolveSynaraDesktopFlavor({ isDevelopment: true })).toBe("development");
+    expect(
+      resolveSynaraDesktopFlavor({ isDevelopment: false, requestedFlavor: "development" }),
+    ).toBe("production");
+    expect(
+      resolveSynaraDesktopFlavor({
+        isDevelopment: false,
+        requestedFlavor: "development",
+        allowDevelopmentOverride: true,
+      }),
+    ).toBe("development");
     expect(resolveSynaraDesktopFlavor({ isDevelopment: false, requestedFlavor: " canary " })).toBe(
       "canary",
     );
     expect(resolveSynaraDesktopFlavor({ isDevelopment: true, requestedFlavor: "canary" })).toBe(
       "canary",
     );
+  });
+
+  it("isolates development and Canary homes from packaged Stable", () => {
+    expect(synaraDesktopIdentity("development").defaultHomeDirectoryName).toBe(".synara-dev");
+    expect(synaraDesktopIdentity("canary").defaultHomeDirectoryName).toBe(".synara-canary");
+    expect(synaraDesktopIdentity("production").defaultHomeDirectoryName).toBe(".synara");
   });
 });

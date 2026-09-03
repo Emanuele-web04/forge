@@ -375,9 +375,10 @@ describe("git expensive-read capacity retry", () => {
     expect(typeof options.retryDelay).toBe("function");
     if (typeof options.retry !== "function" || typeof options.retryDelay !== "function") return;
 
-    expect(options.retry(0, capacityError)).toBe(true);
-    expect(options.retry(12, capacityError)).toBe(false);
-    expect(options.retryDelay(0, capacityError)).toBe(375);
+    expect(options.retry(0, capacityError as never)).toBe(false);
+    expect(options.retry(0, new Error("network"))).toBe(true);
+    expect(options.retry(3, new Error("network"))).toBe(false);
+    expect(options.retryDelay(0, capacityError as never)).toBe(375);
   });
 });
 

@@ -1,87 +1,13 @@
 // FILE: useChatAutomationSetup.test.ts
-// Purpose: Characterizes automation draft restoration and edit-dialog initialization.
+// Purpose: Characterizes automation draft restoration and draft warning rebuilds.
 // Layer: Chat automation setup hook tests
 
-import { ThreadId, type AutomationDefinition } from "@synara/contracts";
+import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const reactHarness = vi.hoisted(() => {
-  interface HookSlot {
-    value?: unknown;
-    deps?: readonly unknown[];
-    cleanup?: (() => void) | undefined;
-  }
-
-  let slots: HookSlot[] = [];
-  let cursor = 0;
-
-  const nextSlot = () => {
-    const index = cursor;
-    cursor += 1;
-    slots[index] ??= {};
-    return slots[index]!;
-  };
-  const depsEqual = (left: readonly unknown[] | undefined, right: readonly unknown[]) =>
-    left !== undefined &&
-    left.length === right.length &&
-    left.every((value, index) => Object.is(value, right[index]));
-  const useEffect = (effect: () => void | (() => void), deps: readonly unknown[]) => {
-    const slot = nextSlot();
-    if (depsEqual(slot.deps, deps)) return;
-    slot.cleanup?.();
-    slot.deps = deps;
-    slot.cleanup = effect() ?? undefined;
-  };
-
-  return {
-    beginRender() {
-      cursor = 0;
-    },
-    reset() {
-      slots = [];
-      cursor = 0;
-    },
-    unmount() {
-      for (const slot of slots) slot.cleanup?.();
-      slots = [];
-      cursor = 0;
-    },
-    useCallback<T extends (...args: never[]) => unknown>(callback: T, deps: readonly unknown[]): T {
-      const slot = nextSlot();
-      if (!depsEqual(slot.deps, deps)) {
-        slot.deps = deps;
-        slot.value = callback;
-      }
-      return slot.value as T;
-    },
-    useEffect,
-    useLayoutEffect: useEffect,
-    useRef<T>(initialValue: T) {
-      const slot = nextSlot();
-      slot.value ??= { current: initialValue };
-      return slot.value as { current: T };
-    },
-    useState<T>(initialValue: T | (() => T)) {
-      const slot = nextSlot();
-      if (!("value" in slot)) {
-        slot.value =
-          typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
-      }
-      const setValue = (next: T | ((current: T) => T)) => {
-        slot.value =
-          typeof next === "function" ? (next as (current: T) => T)(slot.value as T) : next;
-      };
-      return [slot.value as T, setValue] as const;
-    },
-  };
-});
 
 const automationMocks = vi.hoisted(() => ({
   buildAutomationDraftWarnings: vi.fn(),
-  buildAutomationFormWarnings: vi.fn(),
-  formFromDefinition: vi.fn(),
   scheduleFromForm: vi.fn(),
-  warningIdsForAcknowledgedRisks: vi.fn(),
 }));
 
 const storeState = vi.hoisted(() => ({
@@ -89,17 +15,9 @@ const storeState = vi.hoisted(() => ({
   threads: [{ id: "thread-a" }],
 }));
 
-vi.mock("react", () => ({
-  useCallback: reactHarness.useCallback,
-  useEffect: reactHarness.useEffect,
-  useLayoutEffect: reactHarness.useLayoutEffect,
-  useRef: reactHarness.useRef,
-  useState: reactHarness.useState,
-}));
+vi.mock("react", async () => (await import("../../test/reactHookHarness")).reactHookHarnessMock);
 
 vi.mock("../../routes/-automations.shared", () => ({
-  buildAutomationFormWarnings: automationMocks.buildAutomationFormWarnings,
-  formFromDefinition: automationMocks.formFromDefinition,
   scheduleFromForm: automationMocks.scheduleFromForm,
   useAutomations: () => ({
     data: { definitions: [], runs: [] },
@@ -119,7 +37,6 @@ vi.mock("../../lib/automationDraft", () => ({
     else next.delete(id);
     return next;
   },
-  warningIdsForAcknowledgedRisks: automationMocks.warningIdsForAcknowledgedRisks,
 }));
 
 vi.mock("../../storeSelectors", () => ({
@@ -130,18 +47,18 @@ vi.mock("../../store", () => ({
   useStore: (selector: (state: typeof storeState) => unknown) => selector(storeState),
 }));
 
+import { reactHookHarness as reactHarness } from "../../test/reactHookHarness";
 import { useChatAutomationSetup } from "./useChatAutomationSetup";
 
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 const THREAD_B = ThreadId.makeUnsafe("thread-b");
-const EDIT_DEFINITION = {
-  id: "automation-a",
-  projectId: null,
-  acknowledgedRisks: ["full-access"],
-} as unknown as AutomationDefinition;
-const EDIT_FORM = { prompt: "saved prompt", mode: "standalone" } as never;
-const UPDATED_EDIT_FORM = { prompt: "updated prompt", mode: "standalone" } as never;
-const EDIT_WARNING = {
+const DRAFT_FORM = {
+  prompt: "draft prompt",
+  mode: "standalone",
+  runtimeMode: "standard",
+  worktreeMode: "isolated",
+} as never;
+const DRAFT_WARNING = {
   id: "full-access",
   title: "Full access",
   detail: "Review access",
@@ -157,7 +74,6 @@ describe("useChatAutomationSetup", () => {
     reactHarness.beginRender();
     return useChatAutomationSetup({
       threadId,
-      activeProjectId: "active-project",
       hasLiveTurn: false,
       promptRef,
       setComposerDraftPrompt,
@@ -170,12 +86,7 @@ describe("useChatAutomationSetup", () => {
     promptRef.current = "";
     setComposerDraftPrompt.mockReset();
     automationMocks.buildAutomationDraftWarnings.mockReset().mockReturnValue([]);
-    automationMocks.buildAutomationFormWarnings.mockReset().mockReturnValue([EDIT_WARNING]);
-    automationMocks.formFromDefinition.mockReset().mockReturnValue(EDIT_FORM);
     automationMocks.scheduleFromForm.mockReset().mockReturnValue({ type: "manual" });
-    automationMocks.warningIdsForAcknowledgedRisks
-      .mockReset()
-      .mockReturnValue(new Set(["full-access"]));
   });
 
   it("restores accumulated setup text plus the typed prompt when the thread changes", () => {
@@ -218,28 +129,23 @@ describe("useChatAutomationSetup", () => {
     );
   });
 
-  it("initializes edit state, acknowledgements, and edit-specific warnings", () => {
+  it("rebuilds draft warnings from the schedule whenever the draft form changes", () => {
     let result = render();
 
-    result.openAutomationEditDialog(EDIT_DEFINITION);
+    automationMocks.buildAutomationDraftWarnings.mockClear().mockReturnValue([DRAFT_WARNING]);
+    result.updateAutomationDraftForm(DRAFT_FORM);
     result = render();
 
-    expect(automationMocks.formFromDefinition).toHaveBeenCalledWith(
-      EDIT_DEFINITION,
-      "active-project",
+    expect(automationMocks.scheduleFromForm).toHaveBeenCalledWith(DRAFT_FORM);
+    expect(automationMocks.buildAutomationDraftWarnings).toHaveBeenCalledTimes(1);
+    expect(automationMocks.buildAutomationDraftWarnings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedule: { type: "manual" },
+        mode: "standalone",
+        prompt: "draft prompt",
+      }),
     );
-    expect(result.automationDraftOpen).toBe(true);
-    expect(result.automationEditingDefinition).toBe(EDIT_DEFINITION);
-    expect(result.automationDraftForm).toBe(EDIT_FORM);
-    expect(result.automationDraftWarnings).toEqual([EDIT_WARNING]);
-    expect(result.acknowledgedAutomationWarnings).toEqual(new Set(["full-access"]));
-
-    automationMocks.buildAutomationFormWarnings.mockClear().mockReturnValue([]);
-    result.updateAutomationDraftForm(UPDATED_EDIT_FORM);
-    result = render();
-
-    expect(automationMocks.buildAutomationFormWarnings).toHaveBeenCalledWith(UPDATED_EDIT_FORM);
-    expect(automationMocks.buildAutomationDraftWarnings).not.toHaveBeenCalled();
-    expect(result.automationDraftWarnings).toEqual([]);
+    expect(result.automationDraftForm).toBe(DRAFT_FORM);
+    expect(result.automationDraftWarnings).toEqual([DRAFT_WARNING]);
   });
 });

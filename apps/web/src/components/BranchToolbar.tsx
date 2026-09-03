@@ -151,6 +151,7 @@ export interface BranchToolbarProps {
   className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
+  threadDetailReady: boolean;
   onHandoffToWorktree?: () => void;
   onHandoffToLocal?: () => void;
   handoffBusy?: boolean;
@@ -288,6 +289,7 @@ export default function BranchToolbar({
   className,
   onEnvModeChange,
   envLocked,
+  threadDetailReady,
   onHandoffToWorktree,
   onHandoffToLocal,
   handoffBusy: handoffBusyProp,
@@ -594,31 +596,39 @@ export default function BranchToolbar({
                 ) : null}
               </MenuGroup>
 
-              <MenuSeparator />
+              {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
+              {hasServerThread ? (
+                <>
+                  <MenuSeparator />
 
-              <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
-                  <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                  <DisclosureChevron
-                    open={rateLimitsOpen}
-                    className="text-[var(--color-text-foreground-secondary)]"
-                  />
-                </MenuItem>
-                <CollapsiblePanel>
-                  <ProviderUsagePanelContent
-                    provider={activeProvider}
-                    rateLimits={usageSummary.rateLimits}
-                    usageLines={usageSummary.usageLines}
-                    notice={usageSummary.usageNotice}
-                    isLoading={usageSummary.isLoading}
-                    learnMoreHref={usageSummary.learnMoreHref}
-                    showTitle={false}
-                    showLearnMore={true}
-                    className="px-2 pb-1 pt-1"
-                  />
-                </CollapsiblePanel>
-              </Collapsible>
+                  <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
+                    <MenuItem
+                      closeOnClick={false}
+                      onClick={() => setRateLimitsOpen((open) => !open)}
+                    >
+                      <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                      <DisclosureChevron
+                        open={rateLimitsOpen}
+                        className="text-[var(--color-text-foreground-secondary)]"
+                      />
+                    </MenuItem>
+                    <CollapsiblePanel>
+                      <ProviderUsagePanelContent
+                        provider={activeProvider}
+                        rateLimits={usageSummary.rateLimits}
+                        usageLines={usageSummary.usageLines}
+                        notice={usageSummary.usageNotice}
+                        isLoading={usageSummary.isLoading}
+                        learnMoreHref={usageSummary.learnMoreHref}
+                        showTitle={false}
+                        showLearnMore={true}
+                        className="px-2 pb-1 pt-1"
+                      />
+                    </CollapsiblePanel>
+                  </Collapsible>
+                </>
+              ) : null}
             </ComposerPickerMenuPopup>
           </Menu>
         ) : isPanel ? (
@@ -636,7 +646,11 @@ export default function BranchToolbar({
         )}
 
         {showBranchSelector ? (
+          /* ChatView stays mounted while the route switches threads. Reset the selector's
+             optimistic checkout state at that boundary so a previous thread cannot paint its
+             branch while the new thread's workspace query is resolving. */
           <BranchToolbarBranchSelector
+            key={threadId}
             activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
@@ -644,6 +658,7 @@ export default function BranchToolbar({
             effectiveEnvMode={effectiveEnvMode}
             envLocked={envLocked}
             hasServerThread={hasServerThread}
+            isThreadSettled={serverThread?.settledAt != null || !threadDetailReady}
             onSetThreadWorkspace={setThreadWorkspace}
             variant={variant}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}

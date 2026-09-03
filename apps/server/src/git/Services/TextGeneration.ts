@@ -257,20 +257,20 @@ export class OpenCodeTextGeneration extends ServiceMap.Service<
 >()("synara/git/Services/TextGeneration/OpenCodeTextGeneration") {}
 
 /**
- * KiloTextGeneration - Provider-specific Kilo implementation for git text generation.
- */
-export class KiloTextGeneration extends ServiceMap.Service<
-  KiloTextGeneration,
-  TextGenerationShape
->()("synara/git/Services/TextGeneration/KiloTextGeneration") {}
-
-/**
  * CursorTextGeneration - Provider-specific Cursor implementation for git text generation.
  */
 export class CursorTextGeneration extends ServiceMap.Service<
   CursorTextGeneration,
   TextGenerationShape
 >()("synara/git/Services/TextGeneration/CursorTextGeneration") {}
+
+/**
+ * DroidTextGeneration - Provider-specific Droid implementation for git text generation.
+ */
+export class DroidTextGeneration extends ServiceMap.Service<
+  DroidTextGeneration,
+  TextGenerationShape
+>()("synara/git/Services/TextGeneration/DroidTextGeneration") {}
 
 /**
  * TextGeneration - Service tag for commit and PR text generation.

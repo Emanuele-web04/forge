@@ -3,6 +3,7 @@ import {
   AutomationSchedule,
   DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
   DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS,
+  DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ProjectId,
   ThreadId,
@@ -337,6 +338,12 @@ export function makeAgentGatewayAutomationTools(
               "Idle seconds required on the continued thread (excluding this automation's own runs) before a heartbeat or dedicated run may start. Defaults to min(60, schedule spacing).",
           },
           maxIterations: { type: "number", minimum: 1 },
+          stopAfterConsecutiveFailures: {
+            type: ["number", "null"],
+            minimum: 1,
+            default: DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
+            description: "Consecutive failed runs before the automation stops. Null never stops.",
+          },
           fastInterval: {
             type: "boolean",
             description:
@@ -396,6 +403,14 @@ export function makeAgentGatewayAutomationTools(
             : automationContinuesThread(mode)
               ? HEARTBEAT_DEFAULT_MAX_ITERATIONS
               : null);
+        const requestedFailureThreshold = readNullablePositiveInteger(
+          args,
+          "stopAfterConsecutiveFailures",
+        );
+        const stopAfterConsecutiveFailures =
+          requestedFailureThreshold === undefined
+            ? DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES
+            : requestedFailureThreshold;
         const completionPolicy = decodeCompletionPolicy(args) ?? { type: "none" as const };
         const notificationPolicy = readNotificationPolicy(args) ?? "all";
         const suggested = readBooleanArg(args, "suggested") ?? false;
@@ -491,7 +506,7 @@ export function makeAgentGatewayAutomationTools(
             notificationPolicy,
             heartbeatCooldownSeconds,
             maxIterations,
-            stopOnError: true,
+            stopAfterConsecutiveFailures,
             completionPolicy,
             worktreeMode,
             acknowledgedRisks,
@@ -518,6 +533,7 @@ export function makeAgentGatewayAutomationTools(
           targetThreadId: definition.targetThreadId,
           nextRunAt: definition.nextRunAt,
           maxIterations: definition.maxIterations,
+          stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
           proposalState: definition.proposalState ?? null,
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -551,6 +567,7 @@ export function makeAgentGatewayAutomationTools(
             mode: definition.mode,
             schedule: definition.schedule,
             enabled: definition.enabled,
+            disabledReason: definition.disabledReason,
             proposalState: definition.proposalState ?? null,
             targetThreadId: definition.targetThreadId,
             nextRunAt: definition.nextRunAt,
@@ -619,7 +636,7 @@ export function makeAgentGatewayAutomationTools(
     requiresActiveTurn: true,
     definition: {
       name: "synara_update_automation",
-      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected.`,
+      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, stopAfterConsecutiveFailures, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -629,6 +646,7 @@ export function makeAgentGatewayAutomationTools(
           schedule: SCHEDULE_INPUT_SCHEMA,
           enabled: { type: "boolean" },
           maxIterations: { type: ["number", "null"], minimum: 1 },
+          stopAfterConsecutiveFailures: { type: ["number", "null"], minimum: 1 },
           notificationPolicy: { type: "string", enum: ["all", "failed-runs-only"] },
           completionPolicy: {
             ...COMPLETION_POLICY_INPUT_SCHEMA,
@@ -644,6 +662,7 @@ export function makeAgentGatewayAutomationTools(
           "schedule",
           "enabled",
           "maxIterations",
+          "stopAfterConsecutiveFailures",
           "notificationPolicy",
           "completionPolicy",
         ],
@@ -687,6 +706,14 @@ export function makeAgentGatewayAutomationTools(
         if (maxIterations === undefined) {
           throw new ToolInputError('Missing required argument "maxIterations".');
         }
+        const stopAfterConsecutiveFailures = readNullablePositiveInteger(
+          args,
+          "stopAfterConsecutiveFailures",
+          { required: true },
+        );
+        if (stopAfterConsecutiveFailures === undefined) {
+          throw new ToolInputError('Missing required argument "stopAfterConsecutiveFailures".');
+        }
         const notificationPolicy = readNotificationPolicy(args, true);
         if (notificationPolicy === undefined) {
           throw new ToolInputError('Missing required argument "notificationPolicy".');
@@ -699,6 +726,7 @@ export function makeAgentGatewayAutomationTools(
             schedule,
             enabled,
             maxIterations,
+            stopAfterConsecutiveFailures,
             notificationPolicy,
             completionPolicy,
             acknowledgedRisks,

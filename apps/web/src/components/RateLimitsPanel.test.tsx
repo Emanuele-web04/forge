@@ -228,4 +228,33 @@ describe("RateLimitsPanel helpers", () => {
       },
     ]);
   });
+
+  it("humanizes the claude seven_day_overage_included window instead of leaking the raw key", () => {
+    const rateLimits = deriveAccountRateLimits([
+      {
+        activities: [
+          makeActivity("activity-1", "account.rate-limits.updated", {
+            provider: "claudeAgent",
+            rate_limit_info: {
+              status: "allowed_warning",
+              rateLimitType: "seven_day_overage_included",
+              utilization: 0.78,
+              resetsAt: 4_078_972_980,
+            },
+          }),
+        ],
+      },
+    ]);
+
+    const rows = deriveVisibleRateLimitRows(rateLimits);
+
+    expect(rows).toEqual([
+      {
+        id: "claudeAgent-Weekly (overage)",
+        label: "Weekly (overage)",
+        remainingPercent: 22,
+        resetsAt: "2099-04-04T08:03:00.000Z",
+      },
+    ]);
+  });
 });

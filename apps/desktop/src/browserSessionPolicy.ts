@@ -20,6 +20,7 @@ import {
 import { LOCAL_HTML_PREVIEW_SCHEME, LocalHtmlPreviewRegistry } from "./localHtmlPreviewProtocol";
 
 export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
+const MAX_WEB_MCP_POLICY_ENTRIES = 512;
 
 export interface BrowserSessionDownloadEvent {
   readonly event: Electron.Event;
@@ -28,6 +29,48 @@ export interface BrowserSessionDownloadEvent {
 }
 
 export type BrowserSessionDownloadListener = (event: BrowserSessionDownloadEvent) => void;
+
+type ResponseHeaders = Readonly<Record<string, string | readonly string[] | undefined>>;
+
+export function isWebMcpCompatibilityAllowedByHeaders(
+  url: string,
+  headers: ResponseHeaders | undefined,
+): boolean {
+  const values = Object.entries(headers ?? {})
+    .filter(([name]) => name.toLowerCase() === "permissions-policy")
+    .flatMap(([, value]) => (Array.isArray(value) ? value : value ? [value] : []));
+  if (values.length === 0) return true;
+
+  const policy = values.join(",");
+  const explicitToolsDirective = /(?:^|,)\s*tools\s*=/iu.test(policy);
+  const directives = [...policy.matchAll(/(?:^|,)\s*tools\s*=\s*(\*|\([^)]*\))/giu)];
+  if (!explicitToolsDirective) return true;
+  if (directives.length !== 1) return false;
+  const allowList = directives[0]?.[1];
+  if (allowList === "*") return true;
+  if (!allowList?.startsWith("(") || !allowList.endsWith(")")) return false;
+
+  const entries =
+    allowList
+      .slice(1, -1)
+      .match(/(?:^|\s)(self|'self'|"[^"]+")(?=\s|$)/giu)
+      ?.map((entry) => entry.trim()) ?? [];
+  if (entries.some((entry) => /^(?:self|'self')$/iu.test(entry))) return true;
+  let pageOrigin: string;
+  try {
+    pageOrigin = new URL(url).origin;
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => {
+    if (!entry.startsWith('"') || !entry.endsWith('"')) return false;
+    try {
+      return new URL(entry.slice(1, -1)).origin === pageOrigin;
+    } catch {
+      return false;
+    }
+  });
+}
 
 function replaceRequestHeadersCaseInsensitive(
   headers: Record<string, string>,
@@ -49,6 +92,7 @@ function replaceRequestHeadersCaseInsensitive(
 
 export class BrowserSessionPolicy {
   private readonly localHtmlPreviews = new LocalHtmlPreviewRegistry();
+  private readonly webMcpCompatibilityAllowedByWebContentsId = new Map<number, boolean>();
   private spoofedUserAgent: string | null = null;
   private configured = false;
   private configuredSession: Session | null = null;
@@ -84,6 +128,26 @@ export class BrowserSessionPolicy {
         });
         callback({ requestHeaders });
       });
+      partitionSession.webRequest.onHeadersReceived((details, callback) => {
+        const webContentsId = details.webContentsId;
+        if (
+          details.resourceType === "mainFrame" &&
+          typeof webContentsId === "number" &&
+          webContentsId >= 0
+        ) {
+          this.webMcpCompatibilityAllowedByWebContentsId.delete(webContentsId);
+          this.webMcpCompatibilityAllowedByWebContentsId.set(
+            webContentsId,
+            isWebMcpCompatibilityAllowedByHeaders(details.url, details.responseHeaders),
+          );
+          while (this.webMcpCompatibilityAllowedByWebContentsId.size > MAX_WEB_MCP_POLICY_ENTRIES) {
+            this.webMcpCompatibilityAllowedByWebContentsId.delete(
+              this.webMcpCompatibilityAllowedByWebContentsId.keys().next().value as number,
+            );
+          }
+        }
+        callback({});
+      });
       partitionSession.protocol.handle(LOCAL_HTML_PREVIEW_SCHEME, async (request) => {
         if (request.method !== "GET" && request.method !== "HEAD") {
           return new Response("Method not allowed", { status: 405 });
@@ -118,6 +182,7 @@ export class BrowserSessionPolicy {
     this.willDownloadListener = null;
     this.configured = false;
     this.localHtmlPreviews.clear();
+    this.webMcpCompatibilityAllowedByWebContentsId.clear();
     if (!partitionSession) {
       return;
     }
@@ -125,6 +190,7 @@ export class BrowserSessionPolicy {
       if (listener) {
         partitionSession.removeListener("will-download", listener);
       }
+      partitionSession.webRequest.onHeadersReceived(null);
       partitionSession.protocol.unhandle(LOCAL_HTML_PREVIEW_SCHEME);
     } catch {
       // Electron may already be tearing the session down during app quit.
@@ -134,6 +200,10 @@ export class BrowserSessionPolicy {
 
   applyUserAgent(webContents: Pick<WebContents, "setUserAgent">): void {
     webContents.setUserAgent(this.resolveUserAgent());
+  }
+
+  isWebMcpCompatibilityAllowed(webContentsId: number): boolean {
+    return this.webMcpCompatibilityAllowedByWebContentsId.get(webContentsId) === true;
   }
 
   resolveRuntimeUrl(url: string): string {

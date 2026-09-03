@@ -11,6 +11,8 @@ export const SYNARA_CANARY_BUNDLE_ID = `${SYNARA_PRODUCTION_BUNDLE_ID}.canary`;
 export const SYNARA_CANARY_DESKTOP_SCHEME = "synara-canary";
 export const SYNARA_CANARY_DESKTOP_ORIGIN = `${SYNARA_CANARY_DESKTOP_SCHEME}://app`;
 export const SYNARA_CANARY_DESKTOP_ENTRY_URL = `${SYNARA_CANARY_DESKTOP_ORIGIN}/index.html`;
+export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v2";
+export const SYNARA_DESKTOP_SMOKE_USER_DATA_ENV = "SYNARA_DESKTOP_SMOKE_USER_DATA";
 
 export type SynaraDesktopFlavor = "production" | "development" | "canary";
 
@@ -29,9 +31,17 @@ export interface SynaraDesktopIdentity {
 export function resolveSynaraDesktopFlavor(input: {
   readonly isDevelopment: boolean;
   readonly requestedFlavor?: string | undefined;
+  readonly allowDevelopmentOverride?: boolean | undefined;
 }): SynaraDesktopFlavor {
-  if (input.requestedFlavor?.trim().toLowerCase() === "canary") {
+  const requestedFlavor = input.requestedFlavor?.trim().toLowerCase();
+  if (requestedFlavor === "canary") {
     return "canary";
+  }
+  if (
+    requestedFlavor === "development" &&
+    (input.isDevelopment || input.allowDevelopmentOverride === true)
+  ) {
+    return "development";
   }
   return input.isDevelopment ? "development" : "production";
 }
@@ -59,7 +69,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
       origin: SYNARA_DESKTOP_ORIGIN,
       entryUrl: SYNARA_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-dev",
-      defaultHomeDirectoryName: ".synara",
+      defaultHomeDirectoryName: ".synara-dev",
       usesScriptedUpdates: false,
     };
   }

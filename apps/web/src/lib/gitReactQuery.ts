@@ -8,6 +8,7 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
+import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -19,41 +20,14 @@ const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
 export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
-const RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED = "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED";
-const GIT_CAPACITY_RETRY_LIMIT = 12;
-const DEFAULT_GIT_CAPACITY_RETRY_MS = 250;
 
 export function isGitExpensiveReadCapacityError(
   error: unknown,
 ): error is { readonly code: string; readonly retryAfterMs?: unknown } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED
-  );
+  return isRpcCapacityExceededError(error);
 }
 
-function shouldRetryGitExpensiveRead(failureCount: number, error: unknown): boolean {
-  return isGitExpensiveReadCapacityError(error)
-    ? failureCount < GIT_CAPACITY_RETRY_LIMIT
-    : failureCount < 3;
-}
-
-function gitExpensiveReadRetryDelay(attemptIndex: number, error: unknown): number {
-  if (isGitExpensiveReadCapacityError(error)) {
-    const retryAfterMs = "retryAfterMs" in error ? error.retryAfterMs : undefined;
-    return typeof retryAfterMs === "number" && retryAfterMs > 0
-      ? retryAfterMs
-      : DEFAULT_GIT_CAPACITY_RETRY_MS;
-  }
-  return Math.min(1_000 * 2 ** attemptIndex, 30_000);
-}
-
-const GIT_EXPENSIVE_READ_RETRY_OPTIONS = {
-  retry: shouldRetryGitExpensiveRead,
-  retryDelay: gitExpensiveReadRetryDelay,
-} as const;
+const GIT_EXPENSIVE_READ_RETRY_OPTIONS = EXPENSIVE_READ_RETRY_OPTIONS;
 
 export const gitQueryKeys = {
   all: ["git"] as const,

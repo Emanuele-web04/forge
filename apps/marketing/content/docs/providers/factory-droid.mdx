@@ -1,0 +1,133 @@
+---
+title: Factory Droid
+description: Install, authenticate, verify, and run Factory Droid through Synara.
+---
+
+Synara connects to Factory Droid through its `droid` executable and Agent Client Protocol mode. Factory owns the account, model routing, credentials, autonomy settings, and provider service; Synara supplies the task, repository environment, transcript, approvals, review surfaces, and Git workflow around the session.
+
+## Install
+
+Use Factory’s official installer:
+
+```bash
+curl -fsSL https://app.factory.ai/cli | sh
+```
+
+Verify that the executable is available:
+
+```bash
+droid --version
+```
+
+On Linux, Factory may require `xdg-utils` for browser-based authentication. Ensure the installer’s binary directory is on `PATH` in a fresh terminal.
+
+## Authenticate
+
+Start Droid interactively:
+
+```bash
+droid
+```
+
+When prompted, complete Factory’s browser device-pairing flow. For headless use, generate a Factory API key and make it available through:
+
+```bash
+export FACTORY_API_KEY="fk-..."
+```
+
+Synara’s ACP integration can use either a device-paired session advertised by Droid or the API-key method. Do not commit the key or paste it into a task transcript.
+
+## Verify
+
+From a disposable repository:
+
+```bash
+droid --version
+droid
+```
+
+Confirm that authentication completes and a harmless read-only request succeeds. For API-key verification, test the environment variable in the same shell context that launches Synara.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Factory Droid
+
+Open provider settings and confirm that Synara detects `droid`.
+
+</Step>
+<Step>
+
+### Confirm authentication
+
+Use the browser-paired account or provide `FACTORY_API_KEY` to the Synara process environment.
+
+</Step>
+<Step>
+
+### Refresh models and reasoning
+
+Droid advertises model and reasoning choices through ACP. Confirm that the expected options appear before starting the task.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a clean repository and conservative permissions. Review the selected autonomy or plan mode before allowing edits and commands.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Factory Droid sessions can expose:
+
+- Model and reasoning-effort options advertised through ACP
+- Normal execution and Droid’s spec-oriented plan mode
+- Tool calls, command output, file changes, and assistant text
+- Permission and autonomy controls supplied by the runtime
+- Browser device pairing or `FACTORY_API_KEY` authentication
+- Session configuration negotiated at startup
+- Synara’s terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
+
+Synara applies Droid’s model and reasoning choices through ACP session configuration because command-line model flags are not authoritative in every ACP release.
+
+Synara does not currently classify Factory Droid as supporting native live-turn steering.
+
+## Updating
+
+Use Factory’s supported update path or rerun the official installer, then restart Synara. Synara can recognize common Droid installations and may expose an update action when the runtime supports it.
+
+Create a new task after an update that changes ACP configuration, model discovery, authentication, or autonomy modes.
+
+## Troubleshooting
+
+### Droid is not detected
+
+1. Run `droid --version` from a fresh terminal.
+2. Confirm the installer directory is on `PATH`.
+3. Check Synara’s custom binary path.
+4. Restart Synara after installation or environment changes.
+
+### Device pairing does not complete
+
+Run `droid` directly and complete the browser flow. On Linux, verify that a browser opener such as `xdg-open` is available. In headless environments, use `FACTORY_API_KEY` instead.
+
+### The API key is ignored
+
+Confirm that `FACTORY_API_KEY` is exported in the environment that launches Synara. An environment variable set in one terminal does not automatically reach an already-running desktop application.
+
+### Model or reasoning options are missing
+
+Update Droid, authenticate directly, and start a new Synara session. The ACP runtime advertises the available configuration for each session.
+
+## Official documentation
+
+- [Factory Droid quickstart](https://docs.factory.ai/cli/getting-started/quickstart)
+- [Droid CLI reference](https://docs.factory.ai/reference/cli-reference)
+- [Droid Exec and API-key setup](https://docs.factory.ai/cli/droid-exec/overview)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
