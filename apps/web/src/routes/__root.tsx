@@ -99,6 +99,10 @@ import {
   setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
 import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+} from "../pendingInteractionDerivation";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import {
   doesSnapshotSatisfyTerminalFence,
@@ -985,6 +989,28 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   );
 }
 
+function isPendingInteractionDetailMissing(threadId: ThreadId): boolean {
+  const thread = getThreadFromState(useStore.getState(), threadId);
+  if (!thread) {
+    return false;
+  }
+  const options = {
+    latestTurnId: thread.latestTurn?.turnId,
+  };
+  return (
+    (thread.hasPendingApprovals === true &&
+      derivePendingApprovals(thread.activities, thread.pendingInteractions, {
+        ...options,
+        authoritativeHasPending: true,
+      }).length === 0) ||
+    (thread.hasPendingUserInput === true &&
+      derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
+        ...options,
+        authoritativeHasPending: true,
+      }).length === 0)
+  );
+}
+
 function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
@@ -993,6 +1019,7 @@ function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
     thread?.latestTurn?.state === "running" ||
     thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
       true ||
+    isPendingInteractionDetailMissing(threadId) ||
     hasPendingTurnDispatch(threadId)
   );
 }
@@ -1933,6 +1960,17 @@ function EventRouter() {
         // projection directly instead of restarting that stream on every shell
         // update; repeated ready/running/meta updates can otherwise keep
         // cancelling hydration before a snapshot reaches the renderer.
+        void reconcileThreadProjection(item.thread.id).catch(() => undefined);
+      }
+      if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
+        isPendingInteractionDetailMissing(item.thread.id)
+      ) {
+        // A shell summary can expose an approval before its detail event reaches
+        // the client (notably for orchestrator-created threads with no projected
+        // session or turn yet). Fetch the authoritative detail immediately so
+        // the composer does not remain an empty, unactionable conversation.
         void reconcileThreadProjection(item.thread.id).catch(() => undefined);
       }
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {

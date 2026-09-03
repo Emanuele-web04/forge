@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  ApprovalRequestId,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -794,6 +795,87 @@ describe("EventRouter scoped orchestration sync", () => {
       );
       expect(replayRequestCursors).toContain(1);
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hydrates a pending approval for an orchestrator thread with no session detail", async () => {
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        creationSource: "synara_mcp",
+        sourceThreadId: OTHER_THREAD_ID,
+        messages: [],
+        session: null,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const requestId = ApprovalRequestId.makeUnsafe("approval-orchestrator-thread");
+      const approvalActivity = {
+        id: EventId.makeUnsafe("event-orchestrator-approval"),
+        createdAt: "2026-03-04T12:00:05.000Z",
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId,
+          requestKind: "command",
+          requestType: "command_execution_approval",
+          detail: "Command: git status",
+        },
+        turnId: null,
+        sequence: 2,
+      } as const;
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 2,
+          threads: fixture.snapshot.threads.map((thread) => ({
+            ...thread,
+            updatedAt: "2026-03-04T12:00:05.000Z",
+            hasPendingApprovals: true,
+            activities: [approvalActivity],
+            pendingInteractions: [
+              {
+                interactionKind: "approval" as const,
+                requestId,
+                threadId: THREAD_ID,
+                turnId: null,
+                lifecycleGeneration: null,
+                status: "pending" as const,
+                decision: null,
+                responseCommandId: null,
+                responseRequestedAt: null,
+                createdAt: approvalActivity.createdAt,
+                resolvedAt: null,
+              },
+            ],
+          })),
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      };
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(document.body.textContent).toContain("Approve this command?");
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.pendingInteractions?.[0]?.requestId,
+          ).toBe(requestId);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
       await mounted.cleanup();
     }
   });
