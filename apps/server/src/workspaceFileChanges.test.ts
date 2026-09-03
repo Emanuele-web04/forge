@@ -10,7 +10,11 @@ import { Effect, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const trackedWatchers = vi.hoisted(() => new Set<object>());
-const realpathGate = vi.hoisted(() => ({
+const realpathGate = vi.hoisted<{
+  enabled: boolean;
+  onStart: () => void;
+  wait: Promise<void>;
+}>(() => ({
   enabled: false,
   onStart: () => undefined,
   wait: Promise.resolve(),
