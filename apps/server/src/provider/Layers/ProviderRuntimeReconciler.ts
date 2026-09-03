@@ -13,6 +13,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
+import { providerRuntimeReconciliationIdentityKey } from "@synara/shared/providerRuntimeReconciliation";
 import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -48,18 +49,7 @@ export interface ProviderRuntimeReconcilerLiveOptions {
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
-  // A stale turn can move through multiple settlement plans while the session
-  // and turn projections converge. Those are retries/refinements of one
-  // recovery, not separate user-visible recoveries. Runtime realignment stays
-  // distinct because each live runtime turn is independent evidence.
-  const operation = plan.action === "align-running-turn" ? plan.action : "settle-running-turn";
-  return `provider-runtime-reconcile:${JSON.stringify([
-    plan.provider,
-    operation,
-    plan.threadId,
-    plan.projectedTurnId,
-    plan.runtimeTurnId,
-  ])}`;
+  return providerRuntimeReconciliationIdentityKey(plan, [plan.threadId]);
 }
 
 const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>

@@ -300,6 +300,10 @@
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
     },
+    "./providerRuntimeReconciliation": {
+      "types": "./src/providerRuntimeReconciliation.ts",
+      "import": "./src/providerRuntimeReconciliation.ts"
+    },
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"
