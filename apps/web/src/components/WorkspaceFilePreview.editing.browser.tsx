@@ -233,6 +233,35 @@ it("subscribes before a missing workspace file is created", async () => {
   }
 });
 
+it("switches the watcher to a workspace path resolved by the file read", async () => {
+  const resolvedPath = "packages/app/src/app.ts";
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ relativePath: resolvedPath }));
+  const onFileChange = vi.fn(() => vi.fn());
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
+      .toHaveValue("export const value = 1;\n");
+    await vi.waitFor(() =>
+      expect(onFileChange).toHaveBeenLastCalledWith(
+        { cwd: WORKSPACE_ROOT, relativePath: resolvedPath },
+        expect.any(Function),
+      ),
+    );
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("preserves dirty edits when reloading the changed disk version fails", async () => {
   const externalFile = loadedFile({
     contents: "external edit\n",

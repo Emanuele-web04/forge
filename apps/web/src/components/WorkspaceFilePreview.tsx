@@ -439,18 +439,23 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         (fileNeedsLocalPreviewGrant ? localPreviewGrant !== null : props.workspaceRoot !== null),
     }),
   );
-  const watchedWorkspaceRelativePath =
-    workspaceRoot && requestedFilePath && isWorkspaceRelativePathSafe(requestedFilePath)
-      ? requestedFilePath
+  const resolvedWorkspaceRelativePath =
+    fileQuery.data && isWorkspaceRelativePathSafe(fileQuery.data.relativePath)
+      ? fileQuery.data.relativePath
       : null;
+  const watchedWorkspaceRelativePath =
+    resolvedWorkspaceRelativePath ??
+    (workspaceRoot && requestedFilePath && isWorkspaceRelativePathSafe(requestedFilePath)
+      ? requestedFilePath
+      : null);
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
-      const options = projectReadFileQueryOptions({
+      const requestedOptions = projectReadFileQueryOptions({
         cwd: workspaceRoot,
-        relativePath: watchedWorkspaceRelativePath,
+        relativePath: requestedFilePath,
       });
-      void queryClient.invalidateQueries({ queryKey: options.queryKey });
+      void queryClient.invalidateQueries({ queryKey: requestedOptions.queryKey });
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
       });
@@ -470,6 +475,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       fileIsPdf,
       queryClient,
       relocationRequestKey,
+      requestedFilePath,
       watchedWorkspaceRelativePath,
       workspaceRoot,
     ],
@@ -886,6 +892,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         filePath={filePath}
         cwd={props.workspaceRoot}
         previewGrant={localPreviewGrant}
+        cacheKey={binaryPreviewRevision}
         openInTarget={openInTarget}
         onPreviewReady={handleBinaryPreviewReady}
         onPreviewError={handleBinaryPreviewError}

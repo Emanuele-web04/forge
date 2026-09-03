@@ -32,6 +32,7 @@ export function PdfFilePreview(props: {
   filePath: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
   /** Pre-resolved target for the "Open in editor" control in the toolbar. */
   openInTarget: string | null;
   className?: string;
@@ -42,6 +43,7 @@ export function PdfFilePreview(props: {
     src: props.filePath,
     cwd: props.cwd ?? undefined,
     grant: props.previewGrant,
+    cacheKey: props.cacheKey,
   });
   const fileName = basenameOfPath(props.filePath);
   const doc = usePdfDocument(previewUrl);

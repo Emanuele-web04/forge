@@ -135,4 +135,47 @@ describe("watchWorkspaceFile", () => {
       abortController.abort();
     }
   });
+
+  it("keeps watching when a symlink target is temporarily missing", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const targetPath = NodePath.join(workspaceRoot, "targets/live.ts");
+    const aliasPath = NodePath.join(workspaceRoot, "alias.ts");
+    await NodeFileSystem.mkdir(NodePath.dirname(targetPath), { recursive: true });
+    await NodeFileSystem.writeFile(targetPath, "first\n");
+    await NodeFileSystem.symlink("targets/live.ts", aliasPath);
+
+    let resolveInitialEvent!: () => void;
+    const initialEvent = new Promise<void>((resolve) => {
+      resolveInitialEvent = resolve;
+    });
+    const abortController = new AbortController();
+    const collectedEvents = Effect.runPromise(
+      watchWorkspaceFile({ cwd: workspaceRoot, relativePath: "alias.ts" }).pipe(
+        Stream.tap(() => Effect.sync(resolveInitialEvent)),
+        Stream.take(3),
+        Stream.runCollect,
+      ),
+      { signal: abortController.signal },
+    );
+
+    try {
+      await initialEvent;
+      await NodeFileSystem.unlink(targetPath);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await NodeFileSystem.writeFile(targetPath, "restored\n");
+
+      const events = Array.from(
+        await Promise.race([
+          collectedEvents,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("dangling symlink watch timed out")), 5_000),
+          ),
+        ]),
+      );
+
+      expect(events.map((event) => event.type)).toEqual(["changed", "deleted", "changed"]);
+    } finally {
+      abortController.abort();
+    }
+  });
 });

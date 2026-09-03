@@ -124,14 +124,17 @@ function watchTargetDirectories(
             directory.watcher.off("close", directory.onClose);
             directory.watcher.close();
           };
-          const fail = (cause: WorkspaceFileWatchError | WorkspacePathOutsideRootError) => {
-            if (closed) return;
-            closed = true;
-            if (debounceTimer !== null) clearTimeout(debounceTimer);
+          const closeAllWatchedDirectories = () => {
             for (const directory of watchedDirectories.values()) {
               closeWatchedDirectory(directory);
             }
             watchedDirectories.clear();
+          };
+          const fail = (cause: WorkspaceFileWatchError | WorkspacePathOutsideRootError) => {
+            if (closed) return;
+            closed = true;
+            if (debounceTimer !== null) clearTimeout(debounceTimer);
+            closeAllWatchedDirectories();
             Queue.failCauseUnsafe(queue, Cause.fail(cause));
           };
 
@@ -193,7 +196,25 @@ function watchTargetDirectories(
             try {
               do {
                 refreshAgain = false;
-                const targetPaths = await resolveWatchTargets(input);
+                let targetPaths: string[] | null;
+                try {
+                  targetPaths = await resolveWatchTargets(input);
+                } catch (cause) {
+                  if (isFileNotFoundError(cause)) {
+                    // A previously valid symlink can become temporarily
+                    // dangling. Keep its lexical-entry and last target
+                    // directory watches alive so recreating the target is
+                    // observable, while reporting the current file deleted.
+                    if (!closed) {
+                      Queue.offerUnsafe(queue, {
+                        type: "deleted",
+                        relativePath: input.relativePath,
+                      });
+                    }
+                    continue;
+                  }
+                  throw cause;
+                }
                 if (targetPaths === null) {
                   fail(outsideRootError(input));
                   return;
@@ -223,19 +244,25 @@ function watchTargetDirectories(
             }, FILE_CHANGE_DEBOUNCE_MS);
           }
 
-          refreshTargets(initialTargetPaths);
-          // Establish every watcher before reading and emitting the initial
-          // state, closing the read-before-watch race.
-          Queue.offerUnsafe(queue, await readFileChangeState(input));
+          try {
+            refreshTargets(initialTargetPaths);
+            // Establish every watcher before reading and emitting the initial
+            // state, closing the read-before-watch race.
+            Queue.offerUnsafe(queue, await readFileChangeState(input));
+          } catch (cause) {
+            // acquireRelease cannot finalize a resource whose acquisition
+            // rejected, so close any watchers opened before the failure here.
+            closed = true;
+            if (debounceTimer !== null) clearTimeout(debounceTimer);
+            closeAllWatchedDirectories();
+            throw cause;
+          }
 
           return {
             close: () => {
               closed = true;
               if (debounceTimer !== null) clearTimeout(debounceTimer);
-              for (const directory of watchedDirectories.values()) {
-                closeWatchedDirectory(directory);
-              }
-              watchedDirectories.clear();
+              closeAllWatchedDirectories();
             },
           };
         },
