@@ -21,10 +21,6 @@ import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
-  isProviderRuntimeReconciliationAction,
-  providerRuntimeReconciliationIdentityKey,
-} from "@synara/shared/providerRuntimeReconciliation";
-import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
   isGenericToolTitle,
@@ -782,17 +778,26 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   if (
     !provider ||
     !projectedTurnId ||
-    !isProviderRuntimeReconciliationAction(action) ||
+    (action !== "settle-interrupted" &&
+      action !== "settle-terminal-projection" &&
+      action !== "settle-error" &&
+      action !== "align-running-turn") ||
     (action === "align-running-turn" && !runtimeTurnId)
   ) {
     return undefined;
   }
-  return providerRuntimeReconciliationIdentityKey({
+  // Session and turn projections converge independently. A single stale turn
+  // can therefore be observed first as interrupted, then as terminal or
+  // failed. Those settlement actions refine one recovery; a runtime
+  // realignment remains distinct because its live turn id identifies separate
+  // evidence.
+  const operation = action === "align-running-turn" ? action : "settle-running-turn";
+  return `provider-runtime-reconcile:${JSON.stringify([
     provider,
-    action,
+    operation,
     projectedTurnId,
-    runtimeTurnId: runtimeTurnId ?? null,
-  });
+    runtimeTurnId ?? null,
+  ])}`;
 }
 
 function deriveToolLifecycleStatus(
