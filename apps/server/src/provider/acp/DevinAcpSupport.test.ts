@@ -18,6 +18,7 @@ import {
   mapDevinAcpCommands,
   normalizeDevinGetOutputToolCall,
   parseDevinCredentialsToml,
+  resolveDevinBinaryPath,
   resolveDevinAcpAuthMethodId,
   resolveDevinCredentialsPath,
   runDevinAcpCompactionCommand,
@@ -25,6 +26,33 @@ import {
 } from "./DevinAcpSupport.ts";
 
 const textEncoder = new TextEncoder();
+
+describe("resolveDevinBinaryPath", () => {
+  it("discovers native Windows Devin installs outside PATH", () => {
+    const installedPath = "C:\\Users\\me\\AppData\\Local\\devin\\cli\\bin\\devin.exe";
+    expect(
+      resolveDevinBinaryPath(undefined, {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Windows" },
+        pathExists: (path) => path === installedPath,
+      }),
+    ).toBe(installedPath);
+  });
+
+  it("keeps explicit and PATH-resolved Devin commands ahead of the Windows fallback", () => {
+    const options = {
+      platform: "win32" as const,
+      env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Tools" },
+      pathExists: (path: string) =>
+        path.replaceAll("/", "\\") === "C:\\Tools\\devin.EXE" ||
+        path === "C:\\Users\\me\\AppData\\Local\\devin\\cli\\bin\\devin.exe",
+    };
+    expect(resolveDevinBinaryPath(undefined, options)).toBe("devin");
+    expect(resolveDevinBinaryPath("C:\\Custom\\devin.exe", options)).toBe(
+      "C:\\Custom\\devin.exe",
+    );
+  });
+});
 
 type GetOutputArguments = {
   readonly shell_id: string;
