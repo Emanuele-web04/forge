@@ -460,6 +460,14 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
   );
 });
 
+const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<string, unknown> => {
+  const found = tools.find((candidate) => isJsonRecord(candidate) && candidate.name === name);
+  if (!isJsonRecord(found)) {
+    throw new Error(`Expected tools/list to serve ${name}.`);
+  }
+  return found;
+};
+
 describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
   it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>
     Effect.gen(function* () {
@@ -499,12 +507,7 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
       if (!Array.isArray(response.body.result.tools)) {
         throw new Error("Expected tools/list to answer with a tools array.");
       }
-      const listed = response.body.result.tools.find(
-        (candidate: unknown) => isJsonRecord(candidate) && candidate.name === "synara_recursive",
-      );
-      if (!isJsonRecord(listed)) {
-        throw new Error("Expected tools/list to serve synara_recursive.");
-      }
+      const listed = findToolOrThrow(response.body.result.tools, "synara_recursive");
       assert.deepEqual(listed.inputSchema, {
         type: "object",
         properties: {

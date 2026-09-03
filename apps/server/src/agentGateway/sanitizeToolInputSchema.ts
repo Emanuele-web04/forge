@@ -23,7 +23,8 @@ const defNameOf = (ref: string): string | undefined => {
   return rest;
 };
 
-const cloneJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+const cloneJsonRecord = (value: Record<string, unknown>): Record<string, unknown> =>
+  JSON.parse(JSON.stringify(value));
 
 /** Every `#/$defs/<Name>` target reachable inside a subtree. */
 const collectRefTargets = (node: unknown, into: Set<string>): void => {
@@ -51,8 +52,7 @@ const findRecursiveDefNames = (defs: Record<string, unknown>): ReadonlySet<strin
   for (const name of edges.keys()) {
     const stack = [...(edges.get(name) ?? [])];
     const seen = new Set<string>();
-    while (stack.length > 0) {
-      const next = stack.pop() as string;
+    for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
       if (next === name) {
         recursive.add(name);
         break;
@@ -90,7 +90,7 @@ const sanitizeNode = (node: unknown, state: SanitizeState): unknown => {
       if (key !== "$ref") siblings[key] = sanitizeNode(value, state);
     }
     const merged: Record<string, unknown> = {
-      ...(cloneJson(body) as Record<string, unknown>),
+      ...cloneJsonRecord(body),
       ...siblings,
     };
     return sanitizeNode(merged, state);
