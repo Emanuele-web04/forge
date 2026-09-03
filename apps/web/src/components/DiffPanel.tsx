@@ -63,6 +63,7 @@ import {
   resolveDiffSelectAllWithinViewport,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
+  resolveWatchedDiffFilePath,
   type DiffPanelTurnScopeIntent,
   type DiffViewKind,
 } from "./DiffPanel.logic";
@@ -739,9 +740,7 @@ export default function DiffPanel({
     return sortFileDiffsByPath(renderablePatch.files);
   }, [renderablePatch]);
   const watchedRepoFilePath =
-    diffViewKind === "repo"
-      ? (selectedFilePath ?? (renderableFiles[0] ? resolveFileDiffPath(renderableFiles[0]) : null))
-      : null;
+    diffViewKind === "repo" ? resolveWatchedDiffFilePath(selectedFilePath, renderableFiles) : null;
   const handleWatchedRepoFileChange = useCallback(() => {
     if (!activeCwd) {
       return;

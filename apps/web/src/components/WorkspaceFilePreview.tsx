@@ -7,6 +7,7 @@
 
 import type {
   ProjectFileEncoding,
+  ProjectFileChangeEvent,
   ProjectFileLineEnding,
   ProjectReadFileResult,
 } from "@synara/contracts";
@@ -388,6 +389,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const relocatedFullPath =
     relocation?.requestedKey === relocationRequestKey ? relocation.fullPath : null;
   const [binaryPreviewErrorKey, setBinaryPreviewErrorKey] = useState<string | null>(null);
+  const [binaryPreviewRevision, setBinaryPreviewRevision] = useState(0);
+  const [binaryPreviewReloading, setBinaryPreviewReloading] = useState(false);
   const filePath = relocatedFullPath ?? requestedFilePath;
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
@@ -421,7 +424,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
-  const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}`;
+  const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}\0${binaryPreviewRevision}`;
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
@@ -436,16 +439,45 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         (fileNeedsLocalPreviewGrant ? localPreviewGrant !== null : props.workspaceRoot !== null),
     }),
   );
-  const handleWatchedFileChange = useCallback(() => {
-    if (!workspaceRoot || !filePath) return;
-    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-    void queryClient.invalidateQueries({ queryKey: options.queryKey });
-    void queryClient.invalidateQueries({ queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot) });
-  }, [filePath, queryClient, workspaceRoot]);
+  const watchedWorkspaceRelativePath =
+    workspaceRoot && requestedFilePath && isWorkspaceRelativePathSafe(requestedFilePath)
+      ? requestedFilePath
+      : null;
+  const handleWatchedFileChange = useCallback(
+    (event: ProjectFileChangeEvent) => {
+      if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
+      const options = projectReadFileQueryOptions({
+        cwd: workspaceRoot,
+        relativePath: watchedWorkspaceRelativePath,
+      });
+      void queryClient.invalidateQueries({ queryKey: options.queryKey });
+      void queryClient.invalidateQueries({
+        queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
+      });
+      if (fileIsImage || fileIsPdf) {
+        setBinaryPreviewReloading(true);
+        setBinaryPreviewRevision((current) => current + 1);
+      }
+      if (event.type === "changed") {
+        setRelocation((current) =>
+          current?.requestedKey === relocationRequestKey ? null : current,
+        );
+        setBinaryPreviewErrorKey((current) => (current === relocationRequestKey ? null : current));
+      }
+    },
+    [
+      fileIsImage,
+      fileIsPdf,
+      queryClient,
+      relocationRequestKey,
+      watchedWorkspaceRelativePath,
+      workspaceRoot,
+    ],
+  );
   useProjectFileChangeSubscription({
     cwd: workspaceRoot,
-    relativePath: fileQuery.data?.relativePath ?? null,
-    enabled: fileIsWorkspaceRelative && fileQuery.data !== undefined,
+    relativePath: watchedWorkspaceRelativePath,
+    enabled: watchedWorkspaceRelativePath !== null,
     onChange: handleWatchedFileChange,
   });
 
@@ -498,9 +530,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     resolvedOutOfRootFullPath,
   ]);
   const handleBinaryPreviewReady = useCallback(() => {
+    setBinaryPreviewReloading(false);
     setBinaryPreviewErrorKey((current) => (current === relocationRequestKey ? null : current));
   }, [relocationRequestKey]);
   const handleBinaryPreviewError = useCallback(() => {
+    setBinaryPreviewReloading(false);
     setBinaryPreviewErrorKey(relocationRequestKey);
   }, [relocationRequestKey]);
 
@@ -626,17 +660,24 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
 
   const handleFileReload = useCallback(() => {
     if (!filePath) return;
+    if (fileIsImage || fileIsPdf) {
+      setBinaryPreviewReloading(true);
+      setBinaryPreviewRevision((current) => current + 1);
+      return;
+    }
     const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
     void queryClient.invalidateQueries({ queryKey: options.queryKey });
-  }, [filePath, queryClient, workspaceRoot]);
+  }, [fileIsImage, fileIsPdf, filePath, queryClient, workspaceRoot]);
 
   const handleEditBufferReload = () => {
     if (!editableDocument || !filePath) return;
     const documentKey = editableDocument.key;
-    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-    void queryClient
-      .invalidateQueries({ queryKey: options.queryKey })
-      .then(() => {
+    void fileQuery
+      .refetch({ throwOnError: true })
+      .then((result) => {
+        if (result.data === undefined) {
+          throw new Error("Could not reload this file from disk.");
+        }
         setEditBuffer((current) => (current?.key === documentKey ? null : current));
       })
       .catch((error: unknown) => {
@@ -874,7 +915,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         truncated={fileQuery.data?.truncated ?? false}
         dirty={editBufferDirty}
         readOnlyReason={readOnlyReason}
-        reloading={fileQuery.isFetching}
+        reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
       />
       {activeEditBuffer?.error ? (
@@ -937,6 +978,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             src={filePath}
             cwd={props.workspaceRoot}
             previewGrant={localPreviewGrant}
+            cacheKey={binaryPreviewRevision}
             alt={basenameOfPath(filePath)}
             className="min-h-full"
             imageClassName="max-h-[calc(100vh-13rem)]"

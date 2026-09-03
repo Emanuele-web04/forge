@@ -190,6 +190,102 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
   }
 });
 
+it("subscribes before a missing workspace file is created", async () => {
+  const readFile = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("File not found"))
+    .mockResolvedValueOnce(loadedFile());
+  const fileChangeSubscription: {
+    listener?: (event: ProjectFileChangeEvent) => void;
+  } = {};
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
+      fileChangeSubscription.listener = callback;
+      return vi.fn();
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    await expect.element(page.getByText("File not found")).toBeVisible();
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+
+    fileChangeSubscription.listener?.({
+      type: "changed",
+      relativePath: FILE_PATH,
+      mtimeMs: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
+    await expect
+      .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
+      .toHaveValue("export const value = 1;\n");
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("preserves dirty edits when reloading the changed disk version fails", async () => {
+  const externalFile = loadedFile({
+    contents: "external edit\n",
+    version: `sha256:${"5".repeat(64)}`,
+  });
+  const readFile = vi
+    .fn()
+    .mockResolvedValueOnce(loadedFile())
+    .mockResolvedValueOnce(externalFile)
+    .mockRejectedValueOnce(new Error("Transient read failure"));
+  const fileChangeSubscription: {
+    listener?: (event: ProjectFileChangeEvent) => void;
+  } = {};
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
+      fileChangeSubscription.listener = callback;
+      return vi.fn();
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await editor.fill("manual edit\n");
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+    fileChangeSubscription.listener?.({
+      type: "changed",
+      relativePath: FILE_PATH,
+      mtimeMs: Date.now(),
+    });
+
+    const reloadButton = page.getByRole("button", { name: "Reload from disk" });
+    await expect.element(reloadButton).toBeVisible();
+    await reloadButton.click();
+
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
+    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(page.getByText("Transient read failure")).toBeVisible();
+    await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("keeps markdown task previews and guarded versions in sync after an editor save", async () => {
   const markdownPath = "README.md";
   const taskVersion = `sha256:${"3".repeat(64)}`;
