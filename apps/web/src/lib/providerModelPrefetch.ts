@@ -18,6 +18,7 @@ import {
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerDiscoveryQueryKeys,
+  providerModelDiscoveryRetry,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 
@@ -229,7 +230,10 @@ export function prefetchProviderModelsForNewThread(
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
-      retry: provider === "codex" || provider === "claudeAgent" ? 0 : modelsOptions.retry,
+      retry:
+        provider === "codex" || provider === "claudeAgent"
+          ? 0
+          : providerModelDiscoveryRetry(provider),
       staleTime:
         provider === "devin"
           ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)

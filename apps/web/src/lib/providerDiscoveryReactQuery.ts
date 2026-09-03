@@ -252,6 +252,10 @@ export const providerDiscoveryQueryKeys = {
     [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
 };
 
+export function providerModelDiscoveryRetry(provider: ProviderKind): number {
+  return provider === "cursor" ? 0 : provider === "droid" ? 2 : 3;
+}
+
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
@@ -407,7 +411,7 @@ export function providerModelsQueryOptions(input: {
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
-    retry: input.provider === "cursor" ? 0 : input.provider === "droid" ? 2 : 3,
+    retry: providerModelDiscoveryRetry(input.provider),
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 30_000)
