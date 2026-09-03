@@ -209,6 +209,27 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
 }
 
 /**
+ * Revalidates active working-tree diff variants from scratch after a watched
+ * file changes. Reads stay on the shared Git queue so stats and patch variants
+ * cannot consume expensive-read capacity in parallel.
+ */
+export async function refreshGitWorkingTreeDiffsForCwd(
+  queryClient: QueryClient,
+  cwd: string,
+): Promise<void> {
+  await queryClient.invalidateQueries({
+    queryKey: gitQueryKeys.workingTreeDiffs(cwd),
+    refetchType: "none",
+  });
+  const queries = activeGitDetailQueries(queryClient, cwd).filter(
+    (query) => query.queryKey[1] === "working-tree-diff",
+  );
+  for (const query of queries) {
+    await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
+  }
+}
+
+/**
  * Coalesces refreshes by repository and serializes their expensive reads across the client.
  * Availability is refreshed first; active diff/PR details follow one at a time so Git UI work
  * cannot consume both expensive-read leases or fan out across every visible worktree.

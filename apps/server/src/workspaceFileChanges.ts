@@ -45,12 +45,36 @@ function outsideRootError(input: ProjectWatchFileInput): WorkspacePathOutsideRoo
   });
 }
 
+async function resolveNearestWatchableTargetPath(targetPath: string): Promise<string> {
+  let watchTargetPath = targetPath;
+  while (true) {
+    const parentPath = NodePath.dirname(watchTargetPath);
+    try {
+      if ((await NodeFileSystem.stat(parentPath)).isDirectory()) {
+        return watchTargetPath;
+      }
+    } catch (cause) {
+      if (!isFileNotFoundError(cause)) throw cause;
+    }
+    if (parentPath === watchTargetPath) {
+      throw new Error(`No watchable parent directory exists for ${targetPath}`);
+    }
+    // Watch the first missing (or non-directory) ancestor from its existing
+    // parent. When it appears, the refresh advances toward the intended file.
+    watchTargetPath = parentPath;
+  }
+}
+
 async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string[] | null> {
   const lexicalTargetPath = NodePath.resolve(input.cwd, input.relativePath);
   const entryParentPath = await resolveRealPathWithinRoot(
     input.cwd,
     NodePath.dirname(lexicalTargetPath),
   );
+  if (entryParentPath === null) {
+    return null;
+  }
+
   let resolvedTargetPath: string | null;
   try {
     resolvedTargetPath = await resolveRealPathForCreateWithinRoot(input.cwd, lexicalTargetPath);
@@ -63,10 +87,14 @@ async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string
     const linkTarget = await NodeFileSystem.readlink(lexicalTargetPath);
     const intendedTargetPath = NodePath.isAbsolute(linkTarget)
       ? linkTarget
-      : NodePath.resolve(NodePath.dirname(lexicalTargetPath), linkTarget);
-    resolvedTargetPath = await resolveRealPathForCreateWithinRoot(input.cwd, intendedTargetPath);
+      : NodePath.resolve(entryParentPath, linkTarget);
+    const realWorkspaceRoot = await NodeFileSystem.realpath(input.cwd);
+    resolvedTargetPath = await resolveRealPathForCreateWithinRoot(
+      realWorkspaceRoot,
+      intendedTargetPath,
+    );
   }
-  if (entryParentPath === null || resolvedTargetPath === null) {
+  if (resolvedTargetPath === null) {
     return null;
   }
 
@@ -75,7 +103,8 @@ async function resolveWatchTargets(input: ProjectWatchFileInput): Promise<string
   // retarget operations. Canonicalizing the parent avoids duplicate watchers
   // when the workspace root itself is reached through a symlink.
   const entryPath = NodePath.join(entryParentPath, NodePath.basename(lexicalTargetPath));
-  return [...new Set([entryPath, resolvedTargetPath])];
+  const watchableTargetPath = await resolveNearestWatchableTargetPath(resolvedTargetPath);
+  return [...new Set([entryPath, watchableTargetPath])];
 }
 
 async function readFileChangeState(input: ProjectWatchFileInput): Promise<ProjectFileChangeEvent> {

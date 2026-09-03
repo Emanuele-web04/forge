@@ -44,6 +44,24 @@ export const projectQueryKeys = {
     ["projects", "search-content", cwd, query, limit] as const,
 };
 
+/**
+ * Revalidates one active file read from scratch. A watcher can emit while the
+ * initial read is still in flight; invalidation alone would join that older
+ * fetch and let pre-change contents become the new cache value.
+ */
+export async function refetchFreshProjectFileQuery(
+  queryClient: QueryClient,
+  input: { readonly cwd: string | null; readonly relativePath: string | null },
+): Promise<void> {
+  const queryKey = projectQueryKeys.readFile(input.cwd, input.relativePath);
+  await queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+  await queryClient.cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" });
+  await queryClient.refetchQueries(
+    { queryKey, exact: true, type: "active" },
+    { cancelRefetch: true },
+  );
+}
+
 // Scope live file-change invalidations to one workspace so unrelated
 // project/worktree caches stay warm (mirrors invalidateGitQueriesForCwds).
 export function invalidateProjectFileQueriesForCwds(

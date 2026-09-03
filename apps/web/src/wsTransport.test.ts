@@ -23,6 +23,7 @@ import {
   shouldKeepServerLifecycleStream,
   getUnexpectedStreamCompletionRetryDelayMs,
   getReconnectRetryDelayMs,
+  getProjectFileWatchRetryDelayMs,
   getStreamCapacityRetryDelayMs,
   getStreamDuplicateRetryDelayMs,
   getStreamFailureCode,
@@ -35,6 +36,7 @@ import {
   getSnapshotFaultRetryDelayMs,
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
+  MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS,
   SNAPSHOT_FAULT_RETRY_MS,
   isRuntimeInterruptFailure,
   makeRequestAbortScope,
@@ -148,6 +150,7 @@ interface WsTransportInternals {
   readonly streamDuplicateRetries: Map<string, number>;
   readonly streamThreadBootstrapRetries: Map<string, number>;
   readonly streamResnapshotRetries: Map<string, number>;
+  readonly projectFileWatchRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
   readonly streamCompletionRetries: Map<string, number>;
   readonly streamCompletionRetryTimers: Map<string, number>;
@@ -195,6 +198,7 @@ function makeBareTransport(): {
     streamDuplicateRetries: new Map(),
     streamThreadBootstrapRetries: new Map(),
     streamResnapshotRetries: new Map(),
+    projectFileWatchRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
     streamCompletionRetries: new Map(),
     streamCompletionRetryTimers: new Map(),
@@ -431,6 +435,48 @@ describe("WsTransport", () => {
         retryable: false,
       }),
     ).toBe(true);
+  });
+
+  it("bounds project file watcher retries with exponential backoff", () => {
+    const failure = Cause.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false });
+
+    expect(getProjectFileWatchRetryDelayMs(failure, 0)).toBe(500);
+    expect(getProjectFileWatchRetryDelayMs(failure, 4)).toBe(8_000);
+    expect(
+      getProjectFileWatchRetryDelayMs(failure, MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS),
+    ).toBeNull();
+    expect(getProjectFileWatchRetryDelayMs(Cause.fail(new Error("transient")), 0)).toBeNull();
+  });
+
+  it("retries a failed project file watcher in place without reconnecting the socket", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "projects.file-change:/repo\0src/app.ts";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(499);
+
+      expect(restart).not.toHaveBeenCalled();
+      expect(reconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(internals.projectFileWatchRetries.get(key)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not reconnect the socket for snapshot-fence failures", () => {
@@ -1126,6 +1172,7 @@ describe("WsTransport", () => {
       const retry = vi.fn();
       const timeoutId = window.setTimeout(retry, 1_000);
       internals.streamCapacityRetries.set(key, 2);
+      internals.projectFileWatchRetries.set(key, 2);
       internals.streamCapacityRetryTimers.set(key, timeoutId);
 
       await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, {
@@ -1136,6 +1183,7 @@ describe("WsTransport", () => {
       expect(retry).not.toHaveBeenCalled();
       expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
       expect(internals.streamCapacityRetries.has(key)).toBe(false);
+      expect(internals.projectFileWatchRetries.has(key)).toBe(false);
     } finally {
       vi.useRealTimers();
     }

@@ -1,5 +1,5 @@
 import type { NativeApi } from "@synara/contracts";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as nativeApi from "../nativeApi";
@@ -10,6 +10,7 @@ import {
   projectLocalPreviewGrantQueryOptions,
   projectQueryKeys,
   projectReadFileQueryOptions,
+  refetchFreshProjectFileQuery,
   projectSearchEntriesQueryOptions,
 } from "./projectReactQuery";
 
@@ -120,6 +121,51 @@ describe("project read file capacity retry", () => {
     expect(seenSignal?.aborted).toBe(true);
     await expect(fetchPromise).rejects.toBeDefined();
     queryClient.clear();
+  });
+
+  it("cancels a cold in-flight read before revalidating an active file query", async () => {
+    let firstSignal: AbortSignal | undefined;
+    const readFile = vi.fn((_input: unknown, options?: { signal?: AbortSignal }) => {
+      if (readFile.mock.calls.length === 1) {
+        firstSignal = options?.signal;
+        return new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(firstSignal?.reason), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve({
+        relativePath: "src/app.ts",
+        contents: "fresh\n",
+        truncated: false,
+        version: null,
+        encoding: "utf8" as const,
+        lineEnding: "lf" as const,
+      });
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      projects: { readFile },
+    } as unknown as NativeApi);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const options = projectReadFileQueryOptions({ cwd: "/repo", relativePath: "src/app.ts" });
+    const observer = new QueryObserver(queryClient, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(1));
+      await refetchFreshProjectFileQuery(queryClient, {
+        cwd: "/repo",
+        relativePath: "src/app.ts",
+      });
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(readFile).toHaveBeenCalledTimes(2);
+      expect(queryClient.getQueryData(options.queryKey)).toMatchObject({ contents: "fresh\n" });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
   });
 });
 

@@ -469,6 +469,34 @@ const MAX_STREAM_CAPACITY_RETRY_MS = 10_000;
 const INITIAL_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 100;
 const MAX_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 5_000;
 const STABLE_STREAM_LIFETIME_MS = 10_000;
+const PROJECT_FILE_WATCH_FAILED_ERROR_CODE = "PROJECT_FILE_WATCH_FAILED";
+const INITIAL_PROJECT_FILE_WATCH_RETRY_MS = 500;
+const MAX_PROJECT_FILE_WATCH_RETRY_MS = 8_000;
+export const MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS = 5;
+
+/**
+ * A file watcher failure belongs to one optional visible panel, not the whole
+ * socket. Retry that subscription with bounded exponential backoff so a
+ * transient filesystem failure heals without reconnecting unrelated streams.
+ */
+export function getProjectFileWatchRetryDelayMs(
+  cause: Cause.Cause<unknown>,
+  previousAttempts: number,
+): number | null {
+  if (previousAttempts >= MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS) return null;
+  for (const reason of cause.reasons) {
+    if (!Cause.isFailReason(reason)) continue;
+    const error = reason.error;
+    if (!error || typeof error !== "object") continue;
+    const code = "code" in error ? error.code : undefined;
+    if (code !== PROJECT_FILE_WATCH_FAILED_ERROR_CODE) continue;
+    return Math.min(
+      INITIAL_PROJECT_FILE_WATCH_RETRY_MS * 2 ** previousAttempts,
+      MAX_PROJECT_FILE_WATCH_RETRY_MS,
+    );
+  }
+  return null;
+}
 
 /**
  * Infinite subscription streams should not complete successfully. A short,
@@ -744,6 +772,7 @@ export class WsTransport {
   private readonly streamDuplicateRetries = new Map<string, number>();
   private readonly streamThreadBootstrapRetries = new Map<string, number>();
   private readonly streamResnapshotRetries = new Map<string, number>();
+  private readonly projectFileWatchRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
   private readonly streamCompletionRetries = new Map<string, number>();
   private readonly streamCompletionRetryTimers = new Map<string, number>();
@@ -1280,6 +1309,7 @@ export class WsTransport {
     this.streamDuplicateRetries.delete(key);
     this.streamThreadBootstrapRetries.delete(key);
     this.streamResnapshotRetries.delete(key);
+    this.projectFileWatchRetries.delete(key);
   }
 
   private resetAllStreamCapacityRetries(): void {
@@ -1291,6 +1321,7 @@ export class WsTransport {
     this.streamDuplicateRetries.clear();
     this.streamThreadBootstrapRetries.clear();
     this.streamResnapshotRetries.clear();
+    this.projectFileWatchRetries.clear();
   }
 
   private clearStreamCompletionRetryTimer(key: string): void {
@@ -1839,6 +1870,28 @@ export class WsTransport {
               this.streamCapacityRetryTimers.set(key, timeoutId);
               return;
             }
+
+            const previousFileWatchAttempts =
+              performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
+                ? 0
+                : (this.projectFileWatchRetries.get(key) ?? 0);
+            const fileWatchRetryDelayMs = getProjectFileWatchRetryDelayMs(
+              exit.cause,
+              previousFileWatchAttempts,
+            );
+            if (fileWatchRetryDelayMs !== null) {
+              this.projectFileWatchRetries.set(key, previousFileWatchAttempts + 1);
+              this.clearStreamCapacityRetryTimer(key);
+              const timeoutId = window.setTimeout(() => {
+                if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                this.streamCapacityRetryTimers.delete(key);
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  restart();
+                }
+              }, fileWatchRetryDelayMs);
+              this.streamCapacityRetryTimers.set(key, timeoutId);
+              return;
+            }
           }
           if (restart && Exit.isFailure(exit) && shouldReconnectAfterStreamFailure(exit.cause)) {
             window.setTimeout(
@@ -1904,6 +1957,7 @@ export class WsTransport {
       this.streamDuplicateRetries.delete(key);
       this.streamThreadBootstrapRetries.delete(key);
       this.streamResnapshotRetries.delete(key);
+      this.projectFileWatchRetries.delete(key);
     }
     this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);

@@ -49,6 +49,7 @@ import {
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
   projectReadFileQueryOptions,
+  refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
 import { gitQueryKeys } from "~/lib/gitReactQuery";
@@ -451,11 +452,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
-      const requestedOptions = projectReadFileQueryOptions({
+      void refetchFreshProjectFileQuery(queryClient, {
         cwd: workspaceRoot,
         relativePath: requestedFilePath,
       });
-      void queryClient.invalidateQueries({ queryKey: requestedOptions.queryKey });
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
       });
@@ -671,8 +671,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       setBinaryPreviewRevision((current) => current + 1);
       return;
     }
-    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-    void queryClient.invalidateQueries({ queryKey: options.queryKey });
+    void refetchFreshProjectFileQuery(queryClient, {
+      cwd: workspaceRoot,
+      relativePath: filePath,
+    });
   }, [fileIsImage, fileIsPdf, filePath, queryClient, workspaceRoot]);
 
   const handleEditBufferReload = () => {
