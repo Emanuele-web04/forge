@@ -167,6 +167,60 @@ describe("project read file capacity retry", () => {
       queryClient.clear();
     }
   });
+
+  it("coalesces a watcher event into a manual refresh and waits for the newest read", async () => {
+    const seenSignals: AbortSignal[] = [];
+    const readFile = vi.fn((_input: unknown, options?: { signal?: AbortSignal }) => {
+      const call = readFile.mock.calls.length;
+      const signal = options?.signal;
+      if (signal) seenSignals.push(signal);
+      if (call < 3) {
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve({
+        relativePath: "src/app.ts",
+        contents: "newest\n",
+        truncated: false,
+        version: null,
+        encoding: "utf8" as const,
+        lineEnding: "lf" as const,
+      });
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      projects: { readFile },
+    } as unknown as NativeApi);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const options = projectReadFileQueryOptions({ cwd: "/repo", relativePath: "src/app.ts" });
+    const observer = new QueryObserver(queryClient, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(1));
+      const manualRefresh = refetchFreshProjectFileQuery(queryClient, {
+        cwd: "/repo",
+        relativePath: "src/app.ts",
+      });
+      await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
+      const watcherRefresh = refetchFreshProjectFileQuery(queryClient, {
+        cwd: "/repo",
+        relativePath: "src/app.ts",
+      });
+
+      expect(watcherRefresh).toBe(manualRefresh);
+      await Promise.all([manualRefresh, watcherRefresh]);
+      expect(readFile).toHaveBeenCalledTimes(3);
+      expect(seenSignals.slice(0, 2).every((signal) => signal.aborted)).toBe(true);
+      expect(queryClient.getQueryData(options.queryKey)).toMatchObject({ contents: "newest\n" });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
 });
 
 describe("project search capacity retry", () => {

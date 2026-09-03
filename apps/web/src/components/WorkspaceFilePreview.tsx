@@ -48,6 +48,7 @@ import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import {
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
+  projectQueryKeys,
   projectReadFileQueryOptions,
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
@@ -680,10 +681,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const handleEditBufferReload = () => {
     if (!editableDocument || !filePath) return;
     const documentKey = editableDocument.key;
-    void fileQuery
-      .refetch({ throwOnError: true })
-      .then((result) => {
-        if (result.data === undefined) {
+    const queryKey = projectQueryKeys.readFile(workspaceRoot, filePath);
+    void refetchFreshProjectFileQuery(queryClient, {
+      cwd: workspaceRoot,
+      relativePath: filePath,
+    })
+      .then(() => {
+        const queryState = queryClient.getQueryState(queryKey);
+        if (queryState?.error) throw queryState.error;
+        if (queryClient.getQueryData(queryKey) === undefined) {
           throw new Error("Could not reload this file from disk.");
         }
         setEditBuffer((current) => (current?.key === documentKey ? null : current));
