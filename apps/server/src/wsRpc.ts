@@ -24,6 +24,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
+  type ProjectFileChangeEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
@@ -117,6 +118,7 @@ import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
+import { watchWorkspaceFile } from "./workspaceFileChanges";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import {
   WorkspaceFileConflictError,
@@ -1169,6 +1171,26 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsSubscribeFileChange]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: `projects.file-change:${input.cwd}\0${input.relativePath}` },
+            watchWorkspaceFile(input).pipe(
+              Stream.map((event): ProjectFileChangeEvent => event),
+              Stream.mapError(
+                (cause) =>
+                  new WsRpcError({
+                    message:
+                      cause instanceof Error && cause.message.length > 0
+                        ? cause.message
+                        : "Failed to watch workspace file",
+                    code: "PROJECT_FILE_WATCH_FAILED",
+                    retryable: false,
+                    cause,
+                  }),
+              ),
+            ),
+          ),
         [WS_METHODS.projectsResolveWorkspaceFileReferences]: (input) =>
           rpcEffect(
             workspaceEntries.resolveFileReferences(input),

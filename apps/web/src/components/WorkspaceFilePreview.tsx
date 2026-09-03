@@ -36,6 +36,7 @@ import {
 
 import { basenameOfPath } from "~/file-icons";
 import { useTheme } from "~/hooks/useTheme";
+import { useProjectFileChangeSubscription } from "~/hooks/useProjectFileChangeSubscription";
 import { getSelectionWithin, type ChatFileReference } from "~/lib/chatReferences";
 import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
@@ -49,6 +50,7 @@ import {
   projectReadFileQueryOptions,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
+import { gitQueryKeys } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -434,6 +436,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         (fileNeedsLocalPreviewGrant ? localPreviewGrant !== null : props.workspaceRoot !== null),
     }),
   );
+  const handleWatchedFileChange = useCallback(() => {
+    if (!workspaceRoot || !filePath) return;
+    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
+    void queryClient.invalidateQueries({ queryKey: options.queryKey });
+    void queryClient.invalidateQueries({ queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot) });
+  }, [filePath, queryClient, workspaceRoot]);
+  useProjectFileChangeSubscription({
+    cwd: workspaceRoot,
+    relativePath: fileQuery.data?.relativePath ?? null,
+    enabled: fileIsWorkspaceRelative && fileQuery.data !== undefined,
+    onChange: handleWatchedFileChange,
+  });
 
   // Out-of-root relocation kicks in only after the workspace-relative text
   // read or binary preview has actually failed. A reference the read RPC or
@@ -517,6 +531,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     : null;
   const editBufferDirty =
     activeEditBuffer !== null && activeEditBuffer.contents !== activeEditBuffer.savedContents;
+  const editBufferExternallyChanged =
+    editBufferDirty &&
+    activeEditBuffer !== null &&
+    editableDocument !== null &&
+    (activeEditBuffer.version !== editableDocument.version ||
+      activeEditBuffer.savedContents !== editableDocument.contents);
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
@@ -603,6 +623,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       );
     }
   };
+
+  const handleFileReload = useCallback(() => {
+    if (!filePath) return;
+    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
+    void queryClient.invalidateQueries({ queryKey: options.queryKey });
+  }, [filePath, queryClient, workspaceRoot]);
 
   const handleEditBufferReload = () => {
     if (!editableDocument || !filePath) return;
@@ -848,6 +874,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         truncated={fileQuery.data?.truncated ?? false}
         dirty={editBufferDirty}
         readOnlyReason={readOnlyReason}
+        reloading={fileQuery.isFetching}
+        onReload={workspaceRoot && filePath ? handleFileReload : undefined}
       />
       {activeEditBuffer?.error ? (
         <div
@@ -855,6 +883,22 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
         >
           <span className="min-w-0 flex-1">{activeEditBuffer.error}</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground/80 hover:bg-foreground/8"
+            onClick={handleEditBufferReload}
+          >
+            Reload from disk
+          </button>
+        </div>
+      ) : editBufferExternallyChanged ? (
+        <div
+          role="alert"
+          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] text-foreground/80"
+        >
+          <span className="min-w-0 flex-1">
+            This file changed on disk. Your unsaved edits are preserved.
+          </span>
           <button
             type="button"
             className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground/80 hover:bg-foreground/8"

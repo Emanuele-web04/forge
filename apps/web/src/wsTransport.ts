@@ -17,6 +17,7 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_PROJECT_FILE_WATCH_CAPABILITY,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   WsBootstrapNegotiateResult,
@@ -36,6 +37,8 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type ProjectFileChangeEvent,
+  type ProjectWatchFileInput,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -80,6 +83,15 @@ type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void
 type RpcClientEffect = typeof makeRpcClient;
 type RpcClientInstance =
   RpcClientEffect extends Effect.Effect<infer Client, any, any> ? Client : never;
+
+type ProjectFileChangeSubscription = {
+  readonly input: ProjectWatchFileInput;
+  readonly listeners: Set<(event: ProjectFileChangeEvent) => void>;
+};
+
+export function projectFileChangeStreamKey(input: ProjectWatchFileInput): string {
+  return `projects.file-change:${input.cwd.length}:${input.cwd}${input.relativePath}`;
+}
 
 class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
   readonly message: string;
@@ -351,6 +363,9 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "WS_NEGOTIATION_REQUIRED",
   "WS_PROTOCOL_INCOMPATIBLE",
   "WS_CAPABILITIES_INCOMPATIBLE",
+  // A local filesystem watcher failure is scoped to its optional panel
+  // subscription. Reconnecting every RPC stream cannot repair that path.
+  "PROJECT_FILE_WATCH_FAILED",
   // Snapshot-fence failures are a property of one stream's read model, not of
   // the socket. Tearing the whole transport down for them interrupts every
   // unrelated in-flight request while fixing nothing — the same fence is
@@ -741,6 +756,10 @@ export class WsTransport {
   // is absorbed (bootstrap coalescing).
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
+  private readonly projectFileSubscriptions = new Map<
+    string,
+    ProjectFileChangeSubscription
+  >();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
   // Tracks the last server generation this transport observed so cross-restart
@@ -911,6 +930,42 @@ export class WsTransport {
     };
   }
 
+  subscribeProjectFileChange(
+    input: ProjectWatchFileInput,
+    listener: (event: ProjectFileChangeEvent) => void,
+  ): () => void {
+    const key = projectFileChangeStreamKey(input);
+    let subscription = this.projectFileSubscriptions.get(key);
+    const isNewSubscription = subscription === undefined;
+    if (!subscription) {
+      subscription = { input, listeners: new Set() };
+      this.projectFileSubscriptions.set(key, subscription);
+    }
+    subscription.listeners.add(listener);
+    const desiredSubscription = subscription;
+    if (isNewSubscription) {
+      void this.getClient()
+        .then((client) => this.startProjectFileChangeStream(client, key, desiredSubscription))
+        .catch((error) => {
+          if (!this.disposed && this.projectFileSubscriptions.get(key) === desiredSubscription) {
+            console.warn("WebSocket RPC project file stream failed to start", error);
+          }
+        });
+    }
+
+    return () => {
+      desiredSubscription.listeners.delete(listener);
+      if (
+        desiredSubscription.listeners.size > 0 ||
+        this.projectFileSubscriptions.get(key) !== desiredSubscription
+      ) {
+        return;
+      }
+      this.projectFileSubscriptions.delete(key);
+      void this.stopStream(key);
+    };
+  }
+
   getLatestPush<C extends WsPushChannel>(channel: C): WsPushMessage<C> | null {
     const latest = this.latestPushByChannel.get(channel);
     return latest ? (latest as WsPushMessage<C>) : null;
@@ -990,6 +1045,7 @@ export class WsTransport {
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
+    this.projectFileSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1356,6 +1412,9 @@ export class WsTransport {
           if (input === undefined) continue;
           await this.startThreadStream(client, threadId, input);
         }
+        for (const [key, subscription] of this.projectFileSubscriptions) {
+          this.startProjectFileChangeStream(client, key, subscription);
+        }
         this.reconnectFailures = 0;
         return client;
       } catch (error) {
@@ -1635,6 +1694,43 @@ export class WsTransport {
       (event: OrchestrationThreadStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.threadEvent, event),
       restartThread,
+    );
+  }
+
+  private startProjectFileChangeStream(
+    client: RpcClientInstance,
+    key: string,
+    subscription: ProjectFileChangeSubscription,
+  ): void {
+    if (
+      this.disposed ||
+      this.projectFileSubscriptions.get(key) !== subscription ||
+      !this.compatibility?.capabilities.includes(WS_PROJECT_FILE_WATCH_CAPABILITY)
+    ) {
+      return;
+    }
+    const restart = () => {
+      if (this.projectFileSubscriptions.get(key) !== subscription) return;
+      void this.getClient()
+        .then((nextClient) => this.startProjectFileChangeStream(nextClient, key, subscription))
+        .catch((error) =>
+          console.warn("WebSocket RPC project file stream failed to restart", error),
+        );
+    };
+    this.startStream<ProjectFileChangeEvent>(
+      client,
+      key,
+      client[WS_METHODS.projectsSubscribeFileChange](subscription.input),
+      (event) => {
+        for (const subscribedListener of subscription.listeners) {
+          try {
+            subscribedListener(event);
+          } catch {
+            // One panel listener must not prevent another from revalidating.
+          }
+        }
+      },
+      restart,
     );
   }
 

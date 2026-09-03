@@ -46,6 +46,7 @@ import {
   resolveStreamAdmissionRetry,
   shouldReconnectAfterStreamFailure,
   threadStreamInputsEqual,
+  projectFileChangeStreamKey,
   WsTransport,
   type WsThreadStreamFailure,
 } from "./wsTransport";
@@ -152,6 +153,10 @@ interface WsTransportInternals {
   readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
+  readonly projectFileSubscriptions: Map<
+    string,
+    { readonly input: { cwd: string; relativePath: string }; readonly listeners: Set<unknown> }
+  >;
   shellSubscribed: boolean;
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
@@ -172,6 +177,7 @@ interface WsTransportInternals {
     input: unknown,
     forceRestart?: boolean,
   ): Promise<void>;
+  startProjectFileChangeStream(client: unknown, key: string, subscription: unknown): void;
   stopStream(key: string, options?: { readonly resetCapacityRetry?: boolean }): Promise<void>;
   emitThreadStreamFailure(failure: WsThreadStreamFailure): void;
 }
@@ -194,6 +200,7 @@ function makeBareTransport(): {
     streamCompletionRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
+    projectFileSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
     disposed: false,
     sessionVersion: 1,
@@ -275,6 +282,29 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it("shares one stream per watched file and stops it after the last listener leaves", async () => {
+    const { transport, internals } = makeBareTransport();
+    const input = { cwd: "/repo", relativePath: "src/app.ts" };
+    const key = projectFileChangeStreamKey(input);
+    const client = {};
+    internals.getClient = vi.fn(async () => client);
+    internals.startProjectFileChangeStream = vi.fn();
+    internals.stopStream = vi.fn(async () => undefined);
+
+    const unsubscribeFirst = transport.subscribeProjectFileChange(input, vi.fn());
+    const unsubscribeSecond = transport.subscribeProjectFileChange(input, vi.fn());
+
+    await vi.waitFor(() => expect(internals.startProjectFileChangeStream).toHaveBeenCalledOnce());
+    expect(internals.projectFileSubscriptions.size).toBe(1);
+
+    unsubscribeFirst();
+    expect(internals.stopStream).not.toHaveBeenCalled();
+    unsubscribeSecond();
+
+    expect(internals.projectFileSubscriptions.size).toBe(0);
+    expect(internals.stopStream).toHaveBeenCalledWith(key);
+  });
+
   it("returns the completed GitHub provisioning result and emits each progress event", async () => {
     const phase = {
       operationId: "operation-1",
@@ -382,6 +412,11 @@ describe("WsTransport", () => {
     expect(
       shouldReconnectAfterStreamFailure(
         Cause.fail({ code: "THREAD_SNAPSHOT_NOT_FOUND", retryable: false }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
       ),
     ).toBe(false);
     expect(shouldReconnectAfterStreamFailure(Cause.fail(new Error("transient")))).toBe(true);
@@ -1287,6 +1322,7 @@ describe("WsTransport", () => {
         listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
         shellSubscribed: true,
         threadSubscriptions: new Map([[threadId, input]]),
+        projectFileSubscriptions: new Map(),
         runtime: null,
         clientScope: null,
         createSession,

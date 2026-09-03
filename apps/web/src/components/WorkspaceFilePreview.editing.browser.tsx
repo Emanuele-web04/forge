@@ -4,7 +4,12 @@
 
 import "../index.css";
 
-import type { NativeApi, ProjectReadFileResult } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProjectFileChangeEvent,
+  ProjectReadFileResult,
+  ProjectWatchFileInput,
+} from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
@@ -126,6 +131,54 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
     await expect.element(editor).toHaveValue("manual edit\n");
     expect(writeFile).toHaveBeenCalledTimes(1);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("revalidates on file events without overwriting a dirty edit buffer", async () => {
+  const externalVersion = `sha256:${"4".repeat(64)}`;
+  const externalFile = loadedFile({
+    contents: "external edit\n",
+    version: externalVersion,
+  });
+  const readFile = vi.fn().mockResolvedValueOnce(loadedFile()).mockResolvedValue(externalFile);
+  let emitFileChange: ((event: ProjectFileChangeEvent) => void) | null = null;
+  const unsubscribe = vi.fn();
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
+      emitFileChange = callback;
+      return unsubscribe;
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await editor.fill("manual edit\n");
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+
+    emitFileChange?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: Date.now() });
+
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
+    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect
+      .element(page.getByText("This file changed on disk. Your unsaved edits are preserved."))
+      .toBeVisible();
+
+    const reloadButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
+    expect(reloadButton).not.toBeNull();
+    reloadButton?.click();
+    await expect.element(editor).toHaveValue("external edit\n");
   } finally {
     restoreNativeApi();
   }
