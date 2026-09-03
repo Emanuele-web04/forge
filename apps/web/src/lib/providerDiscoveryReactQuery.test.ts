@@ -3,7 +3,7 @@
 //          stale-catalog preservation, and initial-vs-background pending (#103).
 // Layer: Web data fetching tests
 
-import type { NativeApi } from "@synara/contracts";
+import type { NativeApi, ProviderListModelsResult } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -76,8 +76,9 @@ describe("providerModelsQueryOptions", () => {
 
   it("fails fast only for Cursor and retries transient Droid discovery", () => {
     expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
-    expect(providerModelsQueryOptions({ provider: "devin" }).retry).toBe(3);
-    expect(providerModelsQueryOptions({ provider: "devin" }).staleTime).toBe(30_000);
+    const devinOptions = providerModelsQueryOptions({ provider: "devin" });
+    expect(devinOptions.retry).toBe(3);
+    expect(typeof devinOptions.staleTime).toBe("function");
     expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(2);
     expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(5 * 60_000);
     expect(providerModelsQueryOptions({ provider: "cursor" }).retry).toBe(0);
@@ -139,42 +140,101 @@ describe("providerModelsQueryOptions", () => {
     expect(maxActiveDiscoveries).toBe(1);
   });
 
-  it("retries degraded static fallbacks instead of caching them as discoveries", async () => {
+  it("skips a queued catalog when its inactive prefetch is cancelled", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const listModels = mockListModels(
+      vi.fn().mockImplementation(
+        ({ provider }: { provider: string }) =>
+          new Promise((resolve) => {
+            if (provider !== "opencode") {
+              throw new Error(`Unexpected stale discovery for ${provider}`);
+            }
+            releaseFirst = () =>
+              resolve({
+                models: [{ slug: "opencode-dynamic", name: "OpenCode Dynamic" }],
+                source: "opencode",
+                cached: false,
+              });
+          }),
+      ),
+    );
+    const queryClient = new QueryClient();
+    const firstOptions = providerModelsQueryOptions({ provider: "opencode", cwd: "/first" });
+    const staleOptions = providerModelsQueryOptions({ provider: "pi", cwd: "/stale" });
+    const firstRequest = queryClient.fetchQuery(firstOptions);
+
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    const staleRequest = queryClient.fetchQuery(staleOptions).then(
+      () => "resolved",
+      () => "cancelled",
+    );
+    await vi.waitFor(() =>
+      expect(queryClient.getQueryState(staleOptions.queryKey)?.fetchStatus).toBe("fetching"),
+    );
+    await queryClient.cancelQueries({ queryKey: staleOptions.queryKey, exact: true });
+    releaseFirst?.();
+
+    await expect(firstRequest).resolves.toMatchObject({ source: "opencode" });
+    await expect(staleRequest).resolves.toBe("cancelled");
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an initial Devin fallback usable but immediately stale for recovery", async () => {
     const degraded = {
       models: [{ slug: "sonnet", name: "Sonnet" }],
       source: "devin.static",
       cached: false,
       error: "Devin CLI temporarily failed",
     };
-    const dynamic = {
+    const listModels = mockListModels(vi.fn().mockResolvedValue(degraded));
+    const options = providerModelsQueryOptions({ provider: "devin" });
+    const queryClient = new QueryClient();
+
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual(degraded);
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(options.queryKey)).toEqual(degraded);
+
+    const staleTime = options.staleTime as (query: {
+      state: { data: ProviderListModelsResult };
+    }) => number;
+    const refetchInterval = options.refetchInterval as (query: {
+      state: { data: ProviderListModelsResult };
+    }) => number | false;
+    expect(staleTime({ state: { data: degraded } })).toBe(0);
+    expect(refetchInterval({ state: { data: degraded } })).toBe(30_000);
+    const healthy = {
       models: [{ slug: "custom-devin-model", name: "Custom Devin Model" }],
       source: "devin-cli",
       cached: false,
     };
-    const listModels = mockListModels(
-      vi.fn().mockResolvedValueOnce(degraded).mockResolvedValueOnce(dynamic),
-    );
-    const options = {
-      ...providerModelsQueryOptions({ provider: "devin" }),
-      retry: 1,
-      retryDelay: 0,
-    };
-    const queryClient = new QueryClient();
-
-    await expect(queryClient.fetchQuery(options)).resolves.toEqual(dynamic);
-    expect(listModels).toHaveBeenCalledTimes(2);
-    expect(queryClient.getQueryData(options.queryKey)).toEqual(dynamic);
+    expect(staleTime({ state: { data: healthy } })).toBe(30_000);
+    expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
-  it("rejects an unexplained empty catalog instead of caching it", async () => {
+  it("accepts an authoritative empty Pi catalog", async () => {
     const listModels = mockListModels(
       vi.fn().mockResolvedValue({ models: [], source: "pi.sdk", cached: false }),
     );
     const options = { ...providerModelsQueryOptions({ provider: "pi" }), retry: 0 };
     const queryClient = new QueryClient();
 
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual({
+      models: [],
+      source: "pi.sdk",
+      cached: false,
+    });
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an unexplained empty runtime catalog instead of caching it", async () => {
+    const listModels = mockListModels(
+      vi.fn().mockResolvedValue({ models: [], source: "antigravity.cli", cached: false }),
+    );
+    const options = { ...providerModelsQueryOptions({ provider: "antigravity" }), retry: 0 };
+    const queryClient = new QueryClient();
+
     await expect(queryClient.fetchQuery(options)).rejects.toThrow(
-      "pi model discovery returned no models",
+      "antigravity model discovery returned no models",
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();

@@ -49,8 +49,18 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
 // the provider picker cannot reject most catalogs before their CLIs even run.
 let providerModelDiscoveryTail: Promise<void> = Promise.resolve();
 
-function serializeProviderModelDiscovery<T>(discover: () => Promise<T>): Promise<T> {
-  const result = providerModelDiscoveryTail.then(discover);
+function serializeProviderModelDiscovery<T>(
+  signal: AbortSignal,
+  discover: () => Promise<T>,
+): Promise<T> {
+  const result = providerModelDiscoveryTail.then(() => {
+    // React Query aborts inactive hover prefetches when a newer project wins.
+    // Check only when this queued request reaches the front so stale work never
+    // consumes native admission; an already-running discovery remains bounded
+    // by its provider timeout.
+    signal.throwIfAborted();
+    return discover();
+  });
   providerModelDiscoveryTail = result.then(
     () => undefined,
     () => undefined,
@@ -61,15 +71,19 @@ function serializeProviderModelDiscovery<T>(discover: () => Promise<T>): Promise
 function requireDiscoveredModels(
   provider: ProviderKind,
   result: ProviderListModelsResult,
+  previous: ProviderListModelsResult | undefined,
 ): ProviderListModelsResult {
-  // A catalog accompanied by an error is a degraded static fallback. Let React
-  // Query retry it and retain any previously good dynamic catalog instead of
-  // caching the incomplete fallback as a successful discovery.
-  if (result.error) {
+  // Initial degraded discovery can still expose an adapter's usable static
+  // fallback. During a background refresh, however, keep a previously good
+  // dynamic catalog and let React Query retry the transient failure.
+  if (result.error && previous && !previous.error && previous.models.length > 0) {
     throw new Error(result.error);
   }
+  const isAuthoritativeEmptyPiCatalog =
+    provider === "pi" && result.source?.startsWith("pi.sdk") === true;
   if (
     result.models.length === 0 &&
+    !isAuthoritativeEmptyPiCatalog &&
     result.source !== "disabled" &&
     result.source !== "unsupported"
   ) {
@@ -80,6 +94,7 @@ function requireDiscoveredModels(
 
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
+  modelsAll: ["provider-discovery", "models"] as const,
   composerCapabilities: (provider: ProviderKind) =>
     ["provider-discovery", "composer-capabilities", provider] as const,
   commands: (
@@ -247,8 +262,8 @@ export function providerModelsQueryOptions(input: {
       input.agentDir ?? null,
       input.cwd ?? null,
     ),
-    queryFn: (): Promise<ProviderListModelsResult> =>
-      serializeProviderModelDiscovery(async () => {
+    queryFn: ({ client, signal }): Promise<ProviderListModelsResult> =>
+      serializeProviderModelDiscovery(signal, async () => {
         const api = ensureNativeApi();
         const result = await api.provider.listModels({
           provider: input.provider,
@@ -257,14 +272,34 @@ export function providerModelsQueryOptions(input: {
           ...(input.agentDir ? { agentDir: input.agentDir } : {}),
           ...(input.cwd ? { cwd: input.cwd } : {}),
         });
-        return requireDiscoveredModels(input.provider, result);
+        const previous = client.getQueryData<ProviderListModelsResult>(
+          providerDiscoveryQueryKeys.models(
+            input.provider,
+            input.binaryPath ?? null,
+            input.apiEndpoint ?? null,
+            input.agentDir ?? null,
+            input.cwd ?? null,
+          ),
+        );
+        return requireDiscoveredModels(input.provider, result, previous);
       }),
     enabled: input.enabled ?? true,
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
     retry: input.provider === "cursor" ? 0 : input.provider === "droid" ? 2 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 30_000,
+    staleTime:
+      input.provider === "devin"
+        ? (query) => (query.state.data?.error ? 0 : 30_000)
+        : input.provider === "droid"
+          ? 5 * 60_000
+          : 30_000,
+    // Devin deliberately returns a usable static catalog when CLI discovery
+    // fails. Keep it visible, but retry while observed instead of treating the
+    // degraded result as a successful 30-minute cache entry.
+    ...(input.provider === "devin"
+      ? { refetchInterval: (query) => (query.state.data?.error ? 30_000 : false) }
+      : {}),
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).

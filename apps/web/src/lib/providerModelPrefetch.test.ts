@@ -221,6 +221,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
 describe("prefetchModelsForNewThread", () => {
   it("warms every provider except Droid, selected provider first", async () => {
     const queryClient = new QueryClient();
+    const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
     prefetchModelsForNewThread(queryClient, {
@@ -243,6 +244,14 @@ describe("prefetchModelsForNewThread", () => {
     );
     expect(modelKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("claudeAgent", null, null, null, null),
+    );
+    expect(cancelQueries).toHaveBeenCalledWith({
+      queryKey: providerDiscoveryQueryKeys.modelsAll,
+      type: "inactive",
+      fetchStatus: "fetching",
+    });
+    expect(cancelQueries.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      prefetchQuery.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
     );
   });
 
@@ -451,6 +460,43 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     for (const options of modelCalls.filter((options) => options.queryKey[2] !== "cursor")) {
       expect(options.retry).toBe(3);
     }
+    const devinModelOptions = modelCalls.find((options) => options.queryKey[2] === "devin");
+    const devinStaleTime = devinModelOptions?.staleTime as (query: unknown) => number;
+    const devinRefetchInterval = devinModelOptions?.refetchInterval as (
+      query: unknown,
+    ) => number | false;
+    expect(
+      devinStaleTime({
+        state: {
+          data: {
+            models: [{ slug: "adaptive", name: "Adaptive" }],
+            source: "devin.static",
+            error: "temporary failure",
+          },
+        },
+      }),
+    ).toBe(0);
+    expect(
+      devinStaleTime({
+        state: {
+          data: {
+            models: [{ slug: "adaptive", name: "Adaptive" }],
+            source: "devin-cli",
+          },
+        },
+      }),
+    ).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
+    expect(
+      devinRefetchInterval({
+        state: {
+          data: {
+            models: [{ slug: "adaptive", name: "Adaptive" }],
+            source: "devin.static",
+            error: "temporary failure",
+          },
+        },
+      }),
+    ).toBe(30_000);
     for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
       expect(options.retry).toBe(0);
     }

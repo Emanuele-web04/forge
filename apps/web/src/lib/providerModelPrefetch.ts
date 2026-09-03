@@ -16,6 +16,7 @@ import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
+  providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 
@@ -216,7 +217,10 @@ export function prefetchProviderModelsForNewThread(
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
-      staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+      staleTime:
+        provider === "devin"
+          ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)
+          : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     });
 
@@ -372,6 +376,15 @@ export function prefetchModelsForNewThread(
     selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
       ? providers
       : [selectedProvider, ...providers.filter((provider) => provider !== selectedProvider)];
+
+  // Hovering another project supersedes only inactive model prefetches. Active
+  // composer queries keep running, while their queued hover counterparts see
+  // the aborted signal and never consume the native expensive-read budget.
+  void queryClient.cancelQueries({
+    queryKey: providerDiscoveryQueryKeys.modelsAll,
+    type: "inactive",
+    fetchStatus: "fetching",
+  });
 
   prefetchProviderModelsForNewThread(queryClient, {
     settings: input.settings,
