@@ -1,8 +1,3 @@
-// FILE: _chat.settings.tsx
-// Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
-// Layer: Route screen
-// Exports: Settings route component for `/settings`
-
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
@@ -27,6 +22,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { AccountsSettingsPanel } from "~/components/settings/AccountsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
@@ -1311,6 +1307,12 @@ function SettingsRouteView() {
                   updateSettings={updateSettings}
                   updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
+                />
+                <AccountsSettingsPanel
+                  active={activeSection === "accounts"}
+                  connectProvider={
+                    typeof routeSearch.connect === "string" ? routeSearch.connect : null
+                  }
                 />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel

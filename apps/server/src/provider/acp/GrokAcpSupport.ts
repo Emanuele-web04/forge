@@ -3,12 +3,17 @@
  *
  * @module GrokAcpSupport
  */
-import { type GrokModelOptions, type RuntimeMode } from "@synara/contracts";
+import {
+  type GrokModelOptions,
+  type ProviderAccountLaunchContext,
+  type RuntimeMode,
+} from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   AcpSessionRuntime,
@@ -30,6 +35,7 @@ export interface GrokAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly grokSettings: GrokAcpRuntimeSettings | null | undefined;
   readonly runtimeMode: RuntimeMode;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface GrokAcpModelSelectionErrorContext {
@@ -101,6 +107,7 @@ export function buildGrokAcpSpawnInput(
   grokSettings: GrokAcpRuntimeSettings | null | undefined,
   cwd: string,
   runtimeMode: RuntimeMode,
+  accountLaunch?: ProviderAccountLaunchContext,
 ): AcpSpawnInput {
   // Keep Grok's request-based mode as the explicit baseline. Full Access also
   // needs the process-scoped override because some Grok builds deny before
@@ -121,11 +128,18 @@ export function buildGrokAcpSpawnInput(
   }
   args.push("stdio");
 
+  const env = buildProviderChildEnvironment({ provider: "grok" });
+  if (accountLaunch !== undefined) {
+    // Applied last so managed-account auth (GROK_HOME, XAI_API_KEY) always
+    // beats inherited env.
+    applyAccountEnvironmentOverrides(env, accountLaunch.environment);
+  }
+
   return {
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "grok" }),
+    env,
   };
 }
 
@@ -143,10 +157,11 @@ function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
 
 export const resolveGrokAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
+  env: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = hasGrokApiKeyEnv();
+    const hasApiKey = hasGrokApiKeyEnv(env);
     if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
       return GROK_API_KEY_AUTH_METHOD_ID;
     }
@@ -194,11 +209,20 @@ export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const spawn = buildGrokAcpSpawnInput(
+      input.grokSettings,
+      input.cwd,
+      input.runtimeMode,
+      input.accountLaunch,
+    );
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodId,
+        spawn,
+        // Authentication selection must examine the exact environment supplied
+        // to the child process, not process-global credentials.
+        resolveAuthMethodId: (initializeResult) =>
+          resolveGrokAcpAuthMethodId(initializeResult, spawn.env),
         authenticateMeta: { headless: true },
         freshSessionRetry: {
           shouldRetry: isGrokSessionStoragePathNotFoundError,

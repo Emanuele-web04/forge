@@ -23,6 +23,7 @@ import {
   type ProviderUserInputAnswers,
   ThreadId,
   TurnId,
+  type ProviderAccountLaunchContext,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -58,6 +59,7 @@ import {
 } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
@@ -275,6 +277,8 @@ export interface CodexAppServerStartSessionInput {
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  /** Server-private managed account launch context; never sent to clients. */
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -1011,13 +1015,29 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async buildSessionProcessEnv(
     homePath: string | undefined,
     gatewayBearerToken: string | undefined,
+    accountLaunch?: ProviderAccountLaunchContext,
   ) {
+    // Managed accounts pin CODEX_HOME to the account agent home and skip the
+    // shared overlay config, so nothing from the native home can leak in.
+    // This intentionally also omits the gateway MCP config: the account
+    // environment overrides (applied last, below) repoint CODEX_HOME at the
+    // account home, so config appended to the overlay would never be read.
+    // Synara-side MCP features are therefore unavailable in managed launches
+    // until the account home gains its own managed config section.
     const env = await buildCodexProcessEnv({
-      ...(homePath ? { homePath } : {}),
-      ...(this.agentGatewayMcp
+      ...(accountLaunch?.profilePath
+        ? { homePath: accountLaunch.profilePath }
+        : homePath
+          ? { homePath }
+          : {}),
+      ...(this.agentGatewayMcp && accountLaunch === undefined
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
     });
+    if (accountLaunch !== undefined) {
+      // Applied last so managed-account auth always beats inherited env.
+      applyAccountEnvironmentOverrides(env, accountLaunch.environment);
+    }
     if (gatewayBearerToken) {
       env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
     }
@@ -1086,6 +1106,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         env: await this.buildSessionProcessEnv(
           codexHomePath,
           gatewaySessionLease?.connection.bearerToken,
+          input.accountLaunch,
         ),
       });
 

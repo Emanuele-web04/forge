@@ -198,6 +198,48 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
+  it("applies managed-account environment overrides over inherited env", () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "key_native";
+    try {
+      const spawn = buildCursorAcpSpawnInput(undefined, "/tmp/project", undefined, {
+        ordinal: 2,
+        generation: 1,
+        environment: {
+          CURSOR_API_KEY: "key_managed",
+          CURSOR_CONFIG_DIR: "/accounts/cursor/2/agent/home",
+        },
+      });
+      expect(spawn.env?.CURSOR_API_KEY).toBe("key_managed");
+      expect(spawn.env?.CURSOR_CONFIG_DIR).toBe("/accounts/cursor/2/agent/home");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.CURSOR_API_KEY;
+      } else {
+        process.env.CURSOR_API_KEY = previousApiKey;
+      }
+    }
+  });
+
+  it("strips conflicting Cursor auth overrides marked for removal", () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "key_native";
+    try {
+      const spawn = buildCursorAcpSpawnInput(undefined, "/tmp/project", undefined, {
+        ordinal: 2,
+        generation: 1,
+        environment: { CURSOR_API_KEY: "" },
+      });
+      expect(spawn.env).not.toHaveProperty("CURSOR_API_KEY");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.CURSOR_API_KEY;
+      } else {
+        process.env.CURSOR_API_KEY = previousApiKey;
+      }
+    }
+  });
+
   it("passes api endpoint overrides through the Cursor launcher fallback", () => {
     expect(
       buildCursorAcpSpawnInput(

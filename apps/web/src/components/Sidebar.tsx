@@ -1,7 +1,3 @@
-// FILE: Sidebar.tsx
-// Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
-// Exports: Sidebar
-
 import {
   AddPlusIcon,
   ArchiveIcon,
@@ -30,12 +26,14 @@ import {
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
+  UsersIcon,
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { ProviderAccountMenu } from "~/components/ProviderAccountMenu";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
@@ -6433,6 +6431,21 @@ export default function Sidebar() {
                   <DebugFeatureFlagsMenu />
                 </Suspense>
               ) : null}
+              {!isOnSettings && (
+                <ProviderAccountMenu
+                  triggerClassName={cn(
+                    SIDEBAR_HEADER_ROW_CLASS_NAME,
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    "flex w-full items-center gap-2",
+                  )}
+                >
+                  <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
+                    <SidebarGlyph icon={UsersIcon} variant="leading" />
+                  </SidebarLeadingIcon>
+                  <span>Accounts</span>
+                </ProviderAccountMenu>
+              )}
               <div className="flex items-center gap-2">
                 {!isOnSettings && (
                   <SidebarMenuButton

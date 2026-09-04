@@ -12,6 +12,7 @@ import {
 } from "../../../scripts/lib/brand-assets.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import rootPackageJson from "../../../package.json" with { type: "json" };
+import launcherPackageJson from "../../account-launcher/package.json" with { type: "json" };
 import serverPackageJson from "../package.json" with { type: "json" };
 
 class CliError extends Data.TaggedError("CliError")<{
@@ -115,6 +116,52 @@ const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")
   yield* Effect.log("[cli] Applied development icon overrides to dist/client");
 });
 
+// Bundles the standalone account launcher and stages it inside dist/ so
+// packaged CLI/desktop artifacts (which only ship apps/server/dist) can start
+// installed shims without the monorepo source tree. The staged layout keeps
+// the launcher package.json one directory above the entry file, matching how
+// the server resolves the launcher version at runtime.
+const stageAccountLauncher = Effect.fn("stageAccountLauncher")(function* (
+  repoRoot: string,
+  serverDir: string,
+  verbose: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const launcherDir = path.join(repoRoot, "apps/account-launcher");
+
+  yield* Effect.log("[cli] Bundling account launcher...");
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: launcherDir,
+      stdout: verbose ? "inherit" : "ignore",
+      stderr: "inherit",
+      // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+      shell: process.platform === "win32",
+    })`bun tsdown`,
+  );
+
+  const bundledLauncher = path.join(launcherDir, "dist/launcher.mjs");
+  if (!(yield* fs.exists(bundledLauncher))) {
+    return yield* new CliError({
+      message: `Launcher bundle missing at ${bundledLauncher}. tsdown did not produce it.`,
+    });
+  }
+
+  const stagedLauncherDir = path.join(serverDir, "dist/account-launcher");
+  yield* fs.makeDirectory(path.join(stagedLauncherDir, "bin"), { recursive: true });
+  yield* fs.copyFile(bundledLauncher, path.join(stagedLauncherDir, "bin/launcher.mjs"));
+  yield* fs.writeFileString(
+    path.join(stagedLauncherDir, "package.json"),
+    `${JSON.stringify(
+      { name: launcherPackageJson.name, version: launcherPackageJson.version },
+      null,
+      2,
+    )}\n`,
+  );
+  yield* Effect.log("[cli] Staged account launcher into dist/account-launcher");
+});
+
 // ---------------------------------------------------------------------------
 // build subcommand
 // ---------------------------------------------------------------------------
@@ -151,6 +198,7 @@ const buildCmd = Command.make(
       yield* fs.copy(deviceHelperSource, deviceHelperTarget);
       yield* fs.chmod(path.join(deviceHelperTarget, "build.sh"), 0o755);
       yield* Effect.log("[cli] Bundled iOS Simulator helper sources into dist/device-helper");
+      yield* stageAccountLauncher(repoRoot, serverDir, config.verbose);
 
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
@@ -181,6 +229,8 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
   for (const relPath of [
     "dist/index.mjs",
     "dist/restoreMigrationBackup.mjs",
+    "dist/account-launcher/bin/launcher.mjs",
+    "dist/account-launcher/package.json",
     "dist/client/index.html",
   ]) {
     const abs = path.join(serverDir, relPath);

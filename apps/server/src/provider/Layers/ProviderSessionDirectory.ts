@@ -44,8 +44,20 @@ function mergeRuntimePayload(
   if (next === undefined) {
     return existing ?? null;
   }
+  // The persisted account binding survives every runtime payload rewrite:
+  // losing it would silently rebind the thread on its next launch.
+  const accountBinding = isRecord(existing) ? existing["accountBinding"] : undefined;
   if (isRecord(existing) && isRecord(next)) {
-    return { ...existing, ...next };
+    return {
+      ...existing,
+      ...next,
+      ...(accountBinding !== undefined && next["accountBinding"] === undefined
+        ? { accountBinding }
+        : {}),
+    };
+  }
+  if (isRecord(next) && accountBinding !== undefined && next["accountBinding"] === undefined) {
+    return { accountBinding, ...next };
   }
   return next;
 }

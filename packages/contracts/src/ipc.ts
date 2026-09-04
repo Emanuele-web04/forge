@@ -252,6 +252,23 @@ import type {
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
+import type {
+  ProviderAccountsBeginConnectInput,
+  ProviderAccountsBeginConnectResult,
+  ProviderAccountsConnectStatus,
+  ProviderAccountsDisconnectBindingInput,
+  ProviderAccountsDoctorReport,
+  ProviderAccountsGetThreadBindingInput,
+  ProviderAccountsHideInput,
+  ProviderAccountsIntegrationStatus,
+  ProviderAccountsLaunchInput,
+  ProviderAccountsLaunchResult,
+  ProviderAccountsOperationInput,
+  ProviderAccountsSetActiveInput,
+  ProviderAccountsSnapshot,
+  ProviderAccountsThreadBinding,
+  ProviderAccountsUpdateCliIntegrationInput,
+} from "./providerAccounts";
 import type { ProviderCompactThreadInput } from "./provider";
 import type {
   StatsGetProfileStatsInput,
@@ -855,6 +872,28 @@ export interface NativeApi {
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
+  };
+  providerAccounts: {
+    getSnapshot: () => Promise<ProviderAccountsSnapshot>;
+    beginConnect: (
+      input: ProviderAccountsBeginConnectInput,
+    ) => Promise<ProviderAccountsBeginConnectResult>;
+    getConnectStatus: (
+      input: ProviderAccountsOperationInput,
+    ) => Promise<ProviderAccountsConnectStatus>;
+    cancelConnect: (input: ProviderAccountsOperationInput) => Promise<void>;
+    setActive: (input: ProviderAccountsSetActiveInput) => Promise<void>;
+    disconnectBinding: (input: ProviderAccountsDisconnectBindingInput) => Promise<void>;
+    hide: (input: ProviderAccountsHideInput) => Promise<void>;
+    launch: (input: ProviderAccountsLaunchInput) => Promise<ProviderAccountsLaunchResult>;
+    getIntegrationStatus: () => Promise<ProviderAccountsIntegrationStatus>;
+    updateCliIntegration: (
+      input: ProviderAccountsUpdateCliIntegrationInput,
+    ) => Promise<ProviderAccountsIntegrationStatus>;
+    getDoctorReport: () => Promise<ProviderAccountsDoctorReport>;
+    getThreadBinding: (
+      input: ProviderAccountsGetThreadBindingInput,
+    ) => Promise<ProviderAccountsThreadBinding>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

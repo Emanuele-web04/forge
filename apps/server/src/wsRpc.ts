@@ -5,6 +5,7 @@ import {
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  PROVIDER_ACCOUNTS_WS_METHODS,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
@@ -104,6 +105,7 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { ProviderAccounts } from "./providerAccounts/Services/ProviderAccounts";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
@@ -362,6 +364,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
       const providerService = yield* ProviderService;
+      const providerAccounts = yield* ProviderAccounts;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
@@ -1975,6 +1978,36 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.getSnapshot]: () =>
+          rpcEffect(providerAccounts.getSnapshot, "Failed to load provider accounts"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.beginConnect]: (input) =>
+          rpcEffect(providerAccounts.beginConnect(input), "Failed to begin account connect"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.getConnectStatus]: (input) =>
+          rpcEffect(providerAccounts.getConnectStatus(input), "Failed to get connect status"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.cancelConnect]: (input) =>
+          rpcEffect(
+            providerAccounts.cancelConnect(input).pipe(Effect.asVoid),
+            "Failed to cancel account connect",
+          ),
+        [PROVIDER_ACCOUNTS_WS_METHODS.setActive]: (input) =>
+          rpcEffect(providerAccounts.setActive(input), "Failed to set the active account"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.disconnectBinding]: (input) =>
+          rpcEffect(providerAccounts.disconnectBinding(input), "Failed to disconnect account"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.hide]: (input) =>
+          rpcEffect(providerAccounts.hide(input), "Failed to hide account"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.launch]: (input) =>
+          rpcEffect(providerAccounts.launch(input), "Failed to launch account"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.getIntegrationStatus]: () =>
+          rpcEffect(providerAccounts.getIntegrationStatus, "Failed to get integration status"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.updateCliIntegration]: (input) =>
+          rpcEffect(
+            providerAccounts.updateCliIntegration(input),
+            "Failed to update CLI integration",
+          ),
+        [PROVIDER_ACCOUNTS_WS_METHODS.getDoctorReport]: () =>
+          rpcEffect(providerAccounts.getDoctorReport, "Failed to build the doctor report"),
+        [PROVIDER_ACCOUNTS_WS_METHODS.getThreadBinding]: (input) =>
+          rpcEffect(providerAccounts.getThreadBinding(input), "Failed to get thread binding"),
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>

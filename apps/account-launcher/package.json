@@ -1,0 +1,24 @@
+{
+  "name": "@synara/account-launcher",
+  "version": "0.0.0-alpha.1",
+  "private": true,
+  "bin": {
+    "synara-account-launcher": "src/launcher.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@synara/contracts": "workspace:*",
+    "@synara/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

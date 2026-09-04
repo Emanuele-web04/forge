@@ -1,8 +1,3 @@
-// FILE: wsNativeApi.ts
-// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
-// Layer: Web transport adapter
-// Exports: createWsNativeApi and event subscription helpers for server push channels.
-
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,
@@ -37,6 +32,7 @@ import {
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
+  PROVIDER_ACCOUNTS_WS_METHODS,
   type ContextMenuItem,
   type NativeApi,
   ServerConfigUpdatedPayload,
@@ -748,6 +744,26 @@ export function createWsNativeApi(): NativeApi {
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
+    },
+    providerAccounts: {
+      getSnapshot: () => transport.request(PROVIDER_ACCOUNTS_WS_METHODS.getSnapshot, {}),
+      beginConnect: (input) => transport.request(PROVIDER_ACCOUNTS_WS_METHODS.beginConnect, input),
+      getConnectStatus: (input) =>
+        transport.request(PROVIDER_ACCOUNTS_WS_METHODS.getConnectStatus, input),
+      cancelConnect: (input) =>
+        transport.request<void>(PROVIDER_ACCOUNTS_WS_METHODS.cancelConnect, input),
+      setActive: (input) => transport.request<void>(PROVIDER_ACCOUNTS_WS_METHODS.setActive, input),
+      disconnectBinding: (input) =>
+        transport.request<void>(PROVIDER_ACCOUNTS_WS_METHODS.disconnectBinding, input),
+      hide: (input) => transport.request<void>(PROVIDER_ACCOUNTS_WS_METHODS.hide, input),
+      launch: (input) => transport.request(PROVIDER_ACCOUNTS_WS_METHODS.launch, input),
+      getIntegrationStatus: () =>
+        transport.request(PROVIDER_ACCOUNTS_WS_METHODS.getIntegrationStatus, {}),
+      updateCliIntegration: (input) =>
+        transport.request(PROVIDER_ACCOUNTS_WS_METHODS.updateCliIntegration, input),
+      getDoctorReport: () => transport.request(PROVIDER_ACCOUNTS_WS_METHODS.getDoctorReport, {}),
+      getThreadBinding: (input) =>
+        transport.request(PROVIDER_ACCOUNTS_WS_METHODS.getThreadBinding, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),

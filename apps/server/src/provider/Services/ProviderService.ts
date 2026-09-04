@@ -16,6 +16,7 @@ import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
+  ProviderAppLaunchPlan,
   ProviderKind,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -214,6 +215,15 @@ export interface ProviderServiceShape {
   readonly getCapabilities: (
     provider: ProviderKind,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
+
+  /**
+   * Build a provider desktop app launch plan when the routed adapter supports
+   * it. The plan environment can carry credentials and is server-private.
+   */
+  readonly launchApp?: (input: {
+    readonly provider: ProviderKind;
+    readonly ordinal?: number;
+  }) => Effect.Effect<ProviderAppLaunchPlan, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

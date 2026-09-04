@@ -834,6 +834,48 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("applies the managed-account launch environment to the Claude SDK env", () => {
+    const harness = makeHarness();
+    const previousAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.ANTHROPIC_AUTH_TOKEN = "inherited-token";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        accountLaunch: {
+          ordinal: 1,
+          generation: 1,
+          profilePath: "/accounts/claudeAgent/1/agent",
+          environment: {
+            CLAUDE_CONFIG_DIR: "/accounts/claudeAgent/1/agent",
+            ANTHROPIC_API_KEY: "sk-ant-managed",
+            ANTHROPIC_AUTH_TOKEN: "",
+          },
+        },
+      });
+
+      const env = harness.getLastCreateQueryInput()?.options.env;
+      assert.isDefined(env);
+      assert.equal(env?.CLAUDE_CONFIG_DIR, "/accounts/claudeAgent/1/agent");
+      assert.equal(env?.ANTHROPIC_API_KEY, "sk-ant-managed");
+      assert.isFalse(env !== undefined && "ANTHROPIC_AUTH_TOKEN" in env);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (previousAuthToken === undefined) {
+            delete process.env.ANTHROPIC_AUTH_TOKEN;
+          } else {
+            process.env.ANTHROPIC_AUTH_TOKEN = previousAuthToken;
+          }
+        }),
+      ),
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("loads Claude filesystem settings sources for SDK sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

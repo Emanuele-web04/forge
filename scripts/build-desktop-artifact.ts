@@ -1,9 +1,4 @@
 #!/usr/bin/env node
-// FILE: build-desktop-artifact.ts
-// Purpose: Stages and builds packaged desktop artifacts plus updater metadata for GitHub releases.
-// Layer: Release/build script
-// Depends on: apps/desktop package metadata, electron-builder, and GitHub release config.
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

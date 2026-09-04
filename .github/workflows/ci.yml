@@ -102,9 +102,28 @@ jobs:
           cd apps/web
           ./node_modules/.bin/playwright install --with-deps chromium
 
+      # Rolldown's native dependency optimizer can deadlock nondeterministically
+      # on hosted runners right after "[optimizer] bundling dependencies..."
+      # (see rolldown/rolldown#10102; also hit on main). A healthy run finishes
+      # in ~4 minutes, so bound each attempt and retry once in a fresh process
+      # with a cold optimizer cache. Real test failures exit non-124 and fail
+      # immediately without a retry.
       - name: Browser test (stable)
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:stable
+        run: |
+          for attempt in 1 2; do
+            status=0
+            timeout --kill-after=30s 8m bun run --cwd apps/web test:browser:stable || status=$?
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$status" -ne 124 ]; then
+              exit "$status"
+            fi
+            echo "::warning::Browser test attempt ${attempt} hung (optimizer deadlock); retrying with a fresh optimizer cache"
+            rm -rf apps/web/node_modules/.vite
+          done
+          exit 1
 
       # Pixel/font/layout comparisons are tracked explicitly in
       # apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.

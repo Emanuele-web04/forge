@@ -12,6 +12,23 @@
         "vitest": "catalog:",
       },
     },
+    "apps/account-launcher": {
+      "name": "@synara/account-launcher",
+      "version": "0.0.0-alpha.1",
+      "bin": {
+        "synara-account-launcher": "src/launcher.ts",
+      },
+      "dependencies": {
+        "@synara/contracts": "workspace:*",
+        "@synara/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "tsdown": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "apps/desktop": {
       "name": "@synara/desktop",
       "version": "0.8.1",
@@ -1247,6 +1264,7 @@
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
     "@swc/helpers": ["@swc/helpers@0.5.15", "", { "dependencies": { "tslib": "^2.8.0" } }, "sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g=="],
+    "@synara/account-launcher": ["@synara/account-launcher@workspace:apps/account-launcher"],
 
     "@synara/cli": ["@synara/cli@workspace:apps/server"],
 

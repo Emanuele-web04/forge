@@ -138,6 +138,24 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  PROVIDER_ACCOUNTS_WS_METHODS,
+  ProviderAccountsBeginConnectInput,
+  ProviderAccountsBeginConnectResult,
+  ProviderAccountsConnectStatus,
+  ProviderAccountsDisconnectBindingInput,
+  ProviderAccountsDoctorReport,
+  ProviderAccountsGetThreadBindingInput,
+  ProviderAccountsHideInput,
+  ProviderAccountsIntegrationStatus,
+  ProviderAccountsLaunchInput,
+  ProviderAccountsLaunchResult,
+  ProviderAccountsOperationInput,
+  ProviderAccountsSetActiveInput,
+  ProviderAccountsSnapshot,
+  ProviderAccountsThreadBinding,
+  ProviderAccountsUpdateCliIntegrationInput,
+} from "./providerAccounts";
+import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -1160,6 +1178,102 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
+export const WsProviderAccountsGetSnapshotRpc = Rpc.make(PROVIDER_ACCOUNTS_WS_METHODS.getSnapshot, {
+  payload: Schema.Struct({}),
+  success: ProviderAccountsSnapshot,
+  error: WsRpcError,
+});
+
+export const WsProviderAccountsBeginConnectRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.beginConnect,
+  {
+    payload: ProviderAccountsBeginConnectInput,
+    success: ProviderAccountsBeginConnectResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsGetConnectStatusRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.getConnectStatus,
+  {
+    payload: ProviderAccountsOperationInput,
+    success: ProviderAccountsConnectStatus,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsCancelConnectRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.cancelConnect,
+  {
+    payload: ProviderAccountsOperationInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsSetActiveRpc = Rpc.make(PROVIDER_ACCOUNTS_WS_METHODS.setActive, {
+  payload: ProviderAccountsSetActiveInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsProviderAccountsDisconnectBindingRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.disconnectBinding,
+  {
+    payload: ProviderAccountsDisconnectBindingInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsHideRpc = Rpc.make(PROVIDER_ACCOUNTS_WS_METHODS.hide, {
+  payload: ProviderAccountsHideInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsProviderAccountsLaunchRpc = Rpc.make(PROVIDER_ACCOUNTS_WS_METHODS.launch, {
+  payload: ProviderAccountsLaunchInput,
+  success: ProviderAccountsLaunchResult,
+  error: WsRpcError,
+});
+
+export const WsProviderAccountsGetIntegrationStatusRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.getIntegrationStatus,
+  {
+    payload: Schema.Struct({}),
+    success: ProviderAccountsIntegrationStatus,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsUpdateCliIntegrationRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.updateCliIntegration,
+  {
+    payload: ProviderAccountsUpdateCliIntegrationInput,
+    success: ProviderAccountsIntegrationStatus,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsGetDoctorReportRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.getDoctorReport,
+  {
+    payload: Schema.Struct({}),
+    success: ProviderAccountsDoctorReport,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderAccountsGetThreadBindingRpc = Rpc.make(
+  PROVIDER_ACCOUNTS_WS_METHODS.getThreadBinding,
+  {
+    payload: ProviderAccountsGetThreadBindingInput,
+    success: ProviderAccountsThreadBinding,
+    error: WsRpcError,
+  },
+);
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1341,6 +1455,18 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsProviderAccountsGetSnapshotRpc,
+  WsProviderAccountsBeginConnectRpc,
+  WsProviderAccountsGetConnectStatusRpc,
+  WsProviderAccountsCancelConnectRpc,
+  WsProviderAccountsSetActiveRpc,
+  WsProviderAccountsDisconnectBindingRpc,
+  WsProviderAccountsHideRpc,
+  WsProviderAccountsLaunchRpc,
+  WsProviderAccountsGetIntegrationStatusRpc,
+  WsProviderAccountsUpdateCliIntegrationRpc,
+  WsProviderAccountsGetDoctorReportRpc,
+  WsProviderAccountsGetThreadBindingRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

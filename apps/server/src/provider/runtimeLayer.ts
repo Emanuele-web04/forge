@@ -22,6 +22,8 @@ import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
+import { ProviderAccountsLive } from "../providerAccounts/Layers/ProviderAccounts";
+import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
 import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/ProviderRuntimeEvents";
@@ -98,6 +100,10 @@ export function makeServerProviderLayer(
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
+    const providerAccountsLayer = ProviderAccountsLive.pipe(
+      Layer.provide(ServerSecretStoreLive),
+      Layer.provide(providerSessionDirectoryLayer),
+    );
     const providerServiceLayer = makeDurableProviderServiceLive({
       ...(canonicalEventLogger ? { canonicalEventLogger } : {}),
       providerIsEnabled: (provider) =>
@@ -116,6 +122,7 @@ export function makeServerProviderLayer(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(ProviderRuntimeEventRepositoryLive),
+      Layer.provide(providerAccountsLayer),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
@@ -125,6 +132,7 @@ export function makeServerProviderLayer(
       providerDiscoveryLayer,
       adapterRegistryLayer,
       providerSessionDirectoryLayer,
+      providerAccountsLayer,
     );
   }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 }

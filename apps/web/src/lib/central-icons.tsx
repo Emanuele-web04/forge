@@ -1,9 +1,3 @@
-// FILE: central-icons.tsx
-// Purpose: Resolve and render Central icon SVGs shipped as static web assets.
-// Layer: web UI utility
-// Exports: CentralIcon, getCentralIconUrl, createCentralIconElement, createCentralIconComponent
-// Depends on: Vite public asset serving and app className merging utilities.
-
 import { forwardRef, type CSSProperties, type HTMLAttributes, type ReactElement } from "react";
 import { cn } from "./utils";
 
@@ -107,9 +101,9 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      data-slot={CENTRAL_ICON_SLOT}
       className={cn(CENTRAL_ICON_BASE_CLASS, className)}
       style={maskStyle}
+      data-slot={CENTRAL_ICON_SLOT}
     />
   );
 });

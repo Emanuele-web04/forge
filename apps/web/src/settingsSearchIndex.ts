@@ -1,9 +1,3 @@
-// FILE: settingsSearchIndex.ts
-// Purpose: Declarative, searchable index of settings rows/sections so the sidebar can
-//          surface matches by title/description the same way the editor file search does.
-// Layer: Route/UI support
-// Exports: entry type, the index, section label lookup, and the ranking helper
-
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import {
   settingRowAnchorId,
@@ -337,6 +331,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "archived",
     title: "Archived threads",
     keywords: "View and restore archived threads. unarchive history",
+    target: null,
+  },
+
+  // ── Accounts ──────────────────────────────────────────────────────────────────
+  {
+    id: "accounts:accounts",
+    section: "accounts",
+    title: "Accounts",
+    keywords:
+      "Connected provider accounts, active numbered slot, switch account, sign in, connect, disconnect. codex claude cursor grok oauth api key",
     target: null,
   },
 
