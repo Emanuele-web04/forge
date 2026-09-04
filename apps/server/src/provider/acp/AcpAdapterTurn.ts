@@ -12,9 +12,11 @@
 
 import type * as Acp from "@agentclientprotocol/sdk";
 import {
+  type EventId,
   type ProviderInteractionMode,
   type ProviderKind,
   type ProviderRuntimeEvent,
+  type ProviderSession,
   type RuntimeMode,
   type ThreadId,
   type TurnId,
@@ -40,16 +42,7 @@ export interface AcpTurnContext {
   readonly acp: AcpSessionRuntimeShape;
   readonly gatewaySessionLease: AgentGatewaySessionLease | undefined;
   readonly scope: Scope.Closeable;
-  session: {
-    readonly provider: ProviderKind;
-    status: "connecting" | "ready" | "running" | "error" | "closed";
-    runtimeMode: RuntimeMode;
-    readonly threadId: ThreadId;
-    model: string | undefined;
-    activeTurnId: TurnId | undefined;
-    updatedAt: string;
-    lastError: string | undefined;
-  };
+  session: ProviderSession;
   activeTurnId: TurnId | undefined;
   activeTurnHadAssistantContent: boolean;
   readonly activeAssistantItemsWithContent: {
@@ -74,7 +67,7 @@ export type AcpTurnOfferEvent = (
 
 /** Returns a fresh `{ eventId, createdAt }` stamp for a runtime event. */
 export type AcpTurnEventStamp = () => Effect.Effect<{
-  readonly eventId: string;
+  readonly eventId: EventId;
   readonly createdAt: string;
 }>;
 
@@ -156,7 +149,7 @@ export const runAcpTurn = (
       provider: ctx.provider,
       threadId: ctx.threadId,
       turnId,
-      payload: { ...(model ? { model } : {}) },
+      payload: { ...(model ? { model } : undefined) },
     };
     yield* offerRuntimeEvent(ctx.lifecycleGeneration, startedEvent);
 
@@ -168,7 +161,7 @@ export const runAcpTurn = (
 
     return yield* handleAcpPromptResult({ ...options, result });
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.gen(function* () {
         if (error instanceof ProviderAdapterSessionNotFoundError) {
           return yield* Effect.fail(error);
@@ -207,7 +200,7 @@ export const handleAcpPromptResult = (
       ...sessionWithoutLastError,
       status: "ready",
       updatedAt: yield* nowIso,
-      ...(model ? { model } : {}),
+      ...(model ? { model } : undefined),
     };
     if (!hadAssistantContent && result.stopReason !== "cancelled") {
       if (options.onTurnCompletedWithoutContent !== undefined) {
@@ -264,7 +257,7 @@ export const handleAcpPromptFailure = (
       ...sessionWithoutLastError,
       status: "error",
       updatedAt: yield* nowIso,
-      ...(model ? { model } : {}),
+      ...(model ? { model } : undefined),
       lastError: detail,
     };
     const failedEvent: ProviderRuntimeEvent = {
@@ -306,7 +299,7 @@ export const handleAcpTurnInterrupt = (
       ...sessionWithoutLastError,
       status: "ready",
       updatedAt: yield* nowIso,
-      ...(model ? { model } : {}),
+      ...(model ? { model } : undefined),
     };
     const cancelledEvent: ProviderRuntimeEvent = {
       type: "turn.completed",
