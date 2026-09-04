@@ -34,7 +34,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.6 Luna",
       description: "0.4x Factory token rate",
     },
-    { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna" },
+    { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna", isCustom: true },
   ],
   opencode: [
     {
@@ -72,7 +72,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "Gemini 3.5 Flash",
     },
   ],
-} as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
+} as const satisfies Record<
+  ProviderKind,
+  ReadonlyArray<ProviderModelOption & { slug: ModelSlug; isCustom?: boolean }>
+>;
 
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
   slug: `${index % 2 === 0 ? "openai" : "anthropic"}/model-${index + 1}` as ModelSlug,
@@ -175,7 +178,7 @@ async function mountPicker(props: {
   onSelectionCommitted?: () => void;
   modelOptionsByProvider?: Record<
     ProviderKind,
-    ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
+    ReadonlyArray<ProviderModelOption & { slug: ModelSlug; isCustom?: boolean }>
   >;
   queryClient?: QueryClient;
 }) {
@@ -794,6 +797,18 @@ describe("ProviderModelPicker", () => {
       provider: "droid",
       model: "gpt-5.6-luna",
       lockedProvider: "droid",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        droid: [
+          {
+            slug: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            description: "0.4x Factory token rate",
+          },
+          { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna", isCustom: true },
+          { slug: "gpt-5.6-flash", name: "GPT-5.6 Flash" },
+        ],
+      },
       modelDiscoveryByProvider: {
         droid: {
           status: "failed",
@@ -807,10 +822,15 @@ describe("ProviderModelPicker", () => {
       await page.getByRole("button").click();
 
       await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Luna" }))
+        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Luna", exact: true }))
+        .toBeInTheDocument();
+      // The user's own custom model stays selectable offline; the static
+      // built-in that discovery owns stays hidden.
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Custom GPT-5.6 Luna", exact: true }))
         .toBeInTheDocument();
       await expect
-        .element(page.getByRole("menuitemradio", { name: "Custom GPT-5.6 Luna" }))
+        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Flash", exact: true }))
         .not.toBeInTheDocument();
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";

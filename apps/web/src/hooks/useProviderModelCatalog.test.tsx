@@ -264,6 +264,14 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("droid")).toBe(true);
   });
 
+  it("keeps Droid discovery cold for non-prefetch surfaces", () => {
+    // Droid discovery costs a disposable ACP session per model, so only an
+    // explicit prefetch (the git-writing settings panel) may warm it.
+    readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(readModelQueryEnabled("droid")).toBe(false);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {

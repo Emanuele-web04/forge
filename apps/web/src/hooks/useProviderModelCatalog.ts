@@ -208,13 +208,14 @@ export function useProviderModelCatalog(input: {
     }
     return prefetchProviderSet?.has(provider) ?? !hiddenProviderSet.has(provider);
   };
-
+  // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
+  const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
   const claudeModelDiscoveryEnabled = shouldDiscoverProvider("claudeAgent");
   const codexModelDiscoveryEnabled = shouldDiscoverProvider("codex");
   const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
   const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
   const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
-  const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid");
+  const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");

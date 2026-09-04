@@ -374,10 +374,14 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         discovery?.status === "empty")
     ) {
       // Discovery owns this catalog, so a failed or empty live list must not
-      // fall back to the static catalog: show only the selected model and
-      // selection hints, plus the retry row.
+      // fall back to the static catalog: show only rows that stay meaningful
+      // offline — the selected model, the user's own custom models, and
+      // selection hints — plus the retry row.
       const selectedOptions = providerOptions.filter(
-        (option) => option.isSelectionHint === true || option.slug === props.model,
+        (option) =>
+          option.isSelectionHint === true ||
+          ("isCustom" in option && option.isCustom === true) ||
+          option.slug === props.model,
       );
       if (selectedOptions.length === 0) return discoveryStatusRow;
       return (
