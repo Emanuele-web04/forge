@@ -1450,11 +1450,14 @@ export default function GitActionsControl({
     if (!promotedPull) return null;
     // Pull-only chrome: Environment already owns commit/push/PR dialogs, so this
     // instance must not mount a second copy of them beside the panel control.
+    // Plain tone + icon-only square footprint match the flat EnvironmentToggle /
+    // right-dock toggle beside it, so the button doesn't widen the cluster under
+    // the transparent desktop window controls when it mounts.
     return (
       <ChatHeaderButton
         type="button"
-        tone="outline"
-        className={hideQuickActionLabel ? "gap-1" : "gap-1.5"}
+        tone="plain"
+        className={hideQuickActionLabel ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME : "gap-1.5"}
         aria-label={promotedPull.label}
         title={promotedPull.label}
         disabled={isGitActionRunning}

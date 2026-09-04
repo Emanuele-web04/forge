@@ -4,7 +4,7 @@
 // Exports: absolute-path predicates plus safe workspace relative path helpers
 
 export function isWindowsDrivePath(value: string): boolean {
-  return /^[a-zA-Z]:([/\\]|$)/.test(value);
+  return /^[a-zA-Z]:[/\\]/.test(value);
 }
 
 export function isUncPath(value: string): boolean {

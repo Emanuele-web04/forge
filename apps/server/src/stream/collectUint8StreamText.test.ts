@@ -34,6 +34,38 @@ describe("collectUint8StreamText", () => {
     });
   });
 
+  it("does not mark an exact-limit stream truncated for a trailing empty chunk", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([encoder.encode("hello"), new Uint8Array()]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "hello",
+      truncated: false,
+    });
+  });
+
+  it("still marks a later non-empty chunk truncated after an empty chunk", async () => {
+    const result = await Effect.runPromise(
+      collectUint8StreamText({
+        stream: Stream.fromIterable([
+          encoder.encode("hello"),
+          new Uint8Array(),
+          encoder.encode("!"),
+        ]),
+        maxBytes: 5,
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "hello",
+      truncated: true,
+    });
+  });
+
   it("does not emit a replacement character when truncation splits a UTF-8 sequence", async () => {
     const result = await Effect.runPromise(
       collectUint8StreamText({

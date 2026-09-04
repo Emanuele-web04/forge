@@ -4,7 +4,9 @@
 
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  GIT_TEXT_GENERATION_PROVIDERS,
   PROVIDER_DISPLAY_NAMES,
+  type GitTextGenerationProvider,
   type ProviderKind,
 } from "@synara/contracts";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
@@ -45,8 +47,6 @@ import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPan
 type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
-
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "kilo", "opencode"] as const;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -98,13 +98,7 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const {
-    customCodexModels,
-    customKiloModels,
-    customOpenCodeModels,
-    textGenerationModel,
-    textGenerationProvider,
-  } = settings;
+  const { textGenerationModel, textGenerationProvider } = settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -121,35 +115,18 @@ export function ModelsSettingsPanel({
     discoveryEnabled: active,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: gitWritingModelHintByProvider,
-    prefetchProviders: GIT_WRITING_DISCOVERY_PROVIDERS,
+    prefetchProviders: GIT_TEXT_GENERATION_PROVIDERS,
   });
-  const gitTextGenerationModelOptions = useMemo(
-    () =>
-      getGitTextGenerationModelOptions(
-        {
-          customCodexModels,
-          customKiloModels,
-          customOpenCodeModels,
-          textGenerationModel,
-          textGenerationProvider,
-        },
-        {
-          codex: gitWritingCatalogOptionsByProvider.codex,
-          kilo: gitWritingCatalogOptionsByProvider.kilo,
-          opencode: gitWritingCatalogOptionsByProvider.opencode,
-        },
-      ),
-    [
-      customCodexModels,
-      customKiloModels,
-      customOpenCodeModels,
-      gitWritingCatalogOptionsByProvider.codex,
-      gitWritingCatalogOptionsByProvider.kilo,
-      gitWritingCatalogOptionsByProvider.opencode,
-      textGenerationModel,
-      textGenerationProvider,
-    ],
-  );
+  const gitTextGenerationModelOptions = useMemo(() => {
+    const discoveredOptionsByProvider = {} as Record<
+      GitTextGenerationProvider,
+      (typeof gitWritingCatalogOptionsByProvider)[GitTextGenerationProvider]
+    >;
+    for (const provider of GIT_TEXT_GENERATION_PROVIDERS) {
+      discoveredOptionsByProvider[provider] = gitWritingCatalogOptionsByProvider[provider];
+    }
+    return getGitTextGenerationModelOptions(settings, discoveredOptionsByProvider);
+  }, [gitWritingCatalogOptionsByProvider, settings]);
   const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
   const selectedGitTextGenerationModelLabel =

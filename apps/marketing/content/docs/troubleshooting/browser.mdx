@@ -1,0 +1,203 @@
+---
+title: Browser troubleshooting
+description: Recover from unavailable runtimes, stale snapshots, ambiguous actions, OAuth popups, and browser-tool failures safely.
+---
+
+The Synara browser is a shared Chromium surface scoped to the owning task. Browser failures are safest to handle with an observe–act–observe loop: inspect the current page, perform one bounded action, then inspect the resulting state.
+
+## Browser is unavailable
+
+Start with `browser_status` when the provider has browser tools.
+
+Check:
+
+- The task owns or can acquire a browser tab
+- The desktop browser host is running
+- The task is still authorized to use the browser
+- The tab was not closed or crashed
+- The operation targets the current task’s browser scope
+
+Opening another chat does not necessarily destroy the task’s browser runtime. Do not create repeated tabs simply because the browser surface is hidden.
+
+## No tab is assigned
+
+Use `browser_tabs` to inspect tabs in the task scope, then `browser_open` to create or reuse one.
+
+- Omit `tabId` to use the provider session’s assigned tab
+- Use only tab IDs returned in the same thread scope
+- Use `reuse:false` only when a genuinely new tab is required
+- Use `show:false` when background work is appropriate and the page does not require human interaction
+
+Do not guess a tab ID from another task.
+
+## Snapshot reference is stale
+
+Element references are bound to the snapshot that produced them.
+
+Correct target shape:
+
+```json
+{
+  "target": {
+    "ref": "e3",
+    "snapshotId": "current-snapshot-id"
+  }
+}
+```
+
+A bare `e3` can never safely identify an element after navigation, resize, scrolling, or page mutation.
+
+When a stale-reference error occurs:
+
+1. Take a new `browser_snapshot`.
+2. Find the element again.
+3. Use the new `ref` and `snapshotId` together.
+4. Retry only the intended action.
+
+## Action timed out
+
+A timeout does not prove that the action failed.
+
+For clicks, typing, navigation, form submission, uploads, or evaluation:
+
+1. Do not immediately repeat the mutation.
+2. Take a fresh snapshot.
+3. Check the URL, visible text, form value, and page state.
+4. Use `browser_logs` when console or network evidence matters.
+5. Retry only when the observed state proves the effect did not commit.
+
+Repeated blind retries can submit forms twice, create duplicate records, or overwrite text.
+
+## Typing produced no visible text
+
+Check:
+
+- The target is editable and enabled
+- The snapshot is current
+- The field was replaced when you expected append behavior, or appended when you expected replacement
+- A re-render did not replace the input during the action
+- The page did not reject the value after an `input` or `change` event
+
+Re-snapshot and inspect the field value. For long text, use bounded chunks and verify after each committed step rather than assuming one large action succeeded.
+
+## Click opened an OAuth or permission popup
+
+Stop browser automation when the result reports that human action is required.
+
+1. Reveal the owning task’s browser surface.
+2. Let the user complete sign-in or consent in the visible popup.
+3. Do not inspect, type, or copy credentials through browser evaluation.
+4. Resume only after the user confirms completion.
+5. Take a new snapshot because the original page state may have changed.
+
+## Navigation succeeded but the page is not ready
+
+Wait for a bounded condition rather than a fixed long sleep when possible.
+
+Example:
+
+```json
+{
+  "conditions": [
+    {
+      "kind": "text",
+      "text": "Dashboard",
+      "state": "present"
+    }
+  ],
+  "timeoutMs": 15000
+}
+```
+
+After the wait completes, take another snapshot. A load event can finish before client-side content is usable.
+
+## Browser logs are empty
+
+`browser_logs` returns bounded console, exception, and network metadata for the exact tab. It does not return every header, request body, or response body.
+
+Empty results can mean:
+
+- No matching event was captured
+- The relevant event occurred before capture
+- The failure is outside the page
+- The evidence was truncated or not retained
+- The wrong tab was inspected
+
+Do not treat an empty log result as proof that no browser or network failure occurred.
+
+## Upload was rejected
+
+Browser uploads accept regular files inside the task workspace.
+
+Check:
+
+- The path is workspace-relative
+- The target is an enabled `input[type=file]`
+- The path does not traverse outside the canonical workspace
+- The file is not a directory
+- A symlink does not escape the workspace
+- The upload matches explicit user intent
+
+Never upload credentials, private keys, environment files, or proprietary artifacts without explicit authorization.
+
+## Keyboard command was rejected
+
+The browser accepts page-scoped key chords and blocks privileged OS, application, browser, and clipboard shortcuts.
+
+Use normalized keys such as:
+
+```json
+{ "keys": ["Control+A", "Backspace"] }
+```
+
+Use visible browser controls instead of attempting to bypass policy with privileged shortcuts.
+
+## Screenshot differs from semantic snapshot
+
+A screenshot answers pixel-level questions. A semantic snapshot answers structure, visible text, roles, state, and actionable references.
+
+Use:
+
+- `browser_snapshot` for interaction and accessibility structure
+- `browser_screenshot` for layout, clipping, colors, canvas, or image evidence
+- Both when visual appearance and interactive semantics disagree
+
+Do not interact from screenshot coordinates when a current semantic target is available.
+
+## Evaluation failed or changed the page
+
+`browser_evaluate` runs a bounded main-world expression and can mutate the page.
+
+Before retrying:
+
+1. Inspect the current page.
+2. Determine whether the expression partially committed.
+3. Prefer normal browser actions for the recovery.
+4. Avoid using evaluation to bypass navigation, network, upload, or native-surface policy.
+
+## Browser crashed or disconnected
+
+Record:
+
+- Task and tab ID
+- URL or annotation ID
+- Last successful tool call
+- Exact error code
+- Whether the action may have committed
+- Whether the tab appears in `browser_tabs`
+- Whether a new tab reproduces the failure
+
+Close a crashed tab only after preserving evidence. `browser_close` is permanent for that tab and invalidates every reference.
+
+## Browser recovery checklist
+
+- [ ] The correct task and tab scope were confirmed
+- [ ] A current snapshot was taken
+- [ ] Every element action used its matching `snapshotId`
+- [ ] Ambiguous mutations were observed before retrying
+- [ ] OAuth and credential steps were left to the user
+- [ ] Logs and screenshots were used only when relevant
+- [ ] Upload paths stayed inside the task workspace
+- [ ] The final user-visible result was verified
+
+Continue with [Browser verification](/docs/workflows/browser-verification) for the normal workflow or [Diagnostics](/docs/troubleshooting/diagnostics) when the browser host and task state disagree.

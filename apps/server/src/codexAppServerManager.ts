@@ -1,4 +1,4 @@
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -37,7 +37,7 @@ import {
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { spawnProcess } from "@synara/shared/processRuntime";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -65,6 +65,7 @@ import {
   teardownProviderProcessTree,
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
+import { registerProviderProcess } from "./providerProcessRegistry.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
@@ -735,17 +736,11 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-  return spawn(prepared.command, prepared.args, {
+  return spawnProcess(input.binaryPath, ["app-server"], {
+    requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
     stdio: ["pipe", "pipe", "pipe"],
-    shell: prepared.shell,
-    windowsHide: prepared.windowsHide,
-    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -1002,7 +997,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
-  private readonly resolveDefaultHomePath: () => Promise<string | undefined>;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1014,7 +1008,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
-      readonly resolveDefaultHomePath?: () => Promise<string | undefined>;
     },
   ) {
     super();
@@ -1027,7 +1020,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       0,
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
-    this.resolveDefaultHomePath = options?.resolveDefaultHomePath ?? (async () => undefined);
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -2419,11 +2411,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "One or more Codex app-server process trees did not exit.",
       );
     }
-    this.skillsCache.clear();
-    this.pluginsCache.clear();
-    this.pluginDetailCache.clear();
-    this.modelCache.clear();
-    this.voiceAuthCache = undefined;
   }
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
@@ -2788,16 +2775,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const now = new Date().toISOString();
-    const defaultHomePath = await this.resolveDefaultHomePath();
     await this.assertSupportedCodexCliVersion({
       binaryPath: "codex",
       cwd: normalizedCwd,
-      ...(defaultHomePath ? { homePath: defaultHomePath } : {}),
     });
     const child = spawnCodexAppServer({
       binaryPath: "codex",
       cwd: normalizedCwd,
-      env: await buildCodexProcessEnv(defaultHomePath ? { homePath: defaultHomePath } : {}),
+      env: await buildCodexProcessEnv(),
     });
     const context: CodexSessionContext = {
       session: {
@@ -2936,6 +2921,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
+    // Register the app-server pid for the resource manager: single-owner
+    // provider runtimes join their thread's worktree instead of orphan.
+    // Stale entries are pruned lazily by liveness + command-identity checks.
+    const pid = context.child.pid;
+    if (pid !== undefined) {
+      registerProviderProcess({ pid, provider: "codex", threadIds: [context.session.threadId] });
+    }
     const onStdoutData = (chunk: Buffer) => {
       if (context.stopping) return;
       try {
@@ -4159,21 +4151,14 @@ function runCodexVersionCommand(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<CodexVersionCommandResult> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-
   return new Promise<CodexVersionCommandResult>((resolve) => {
     let child: ChildProcess;
     try {
-      child = spawn(prepared.command, prepared.args, {
+      child = spawnProcess(input.binaryPath, ["--version"], {
+        requireExecutable: true,
         cwd: input.cwd,
         env: input.env,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: prepared.shell,
-        windowsHide: prepared.windowsHide,
-        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       });
     } catch (error) {
       resolve({

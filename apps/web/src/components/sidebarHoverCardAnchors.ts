@@ -31,9 +31,40 @@ export function createProjectHoverCardAnchor(projectId: string) {
   return createSidebarEdgeRowAnchor(`[data-project-hover-anchor="${projectId}"]`);
 }
 
-export function abbreviateHomePath(cwd: string, homeDir: string | null): string {
-  if (homeDir && (cwd === homeDir || cwd.startsWith(`${homeDir}/`))) {
-    return `~${cwd.slice(homeDir.length)}`;
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\");
+}
+
+function trimHomePathTrailingSeparators(value: string): string {
+  if (value === "/" || /^[A-Za-z]:[\\/]$/u.test(value)) {
+    return value;
   }
-  return cwd;
+  return value.replace(/[\\/]+$/u, "");
+}
+
+export function abbreviateHomePath(cwd: string, homeDir: string | null): string {
+  if (!homeDir) {
+    return cwd;
+  }
+
+  const normalizedHomeDir = trimHomePathTrailingSeparators(homeDir);
+  const windowsStyle = isWindowsPath(normalizedHomeDir) || isWindowsPath(cwd);
+  const comparisonCwd = cwd.replaceAll("\\", "/");
+  const comparisonHomeDir = normalizedHomeDir.replaceAll("\\", "/");
+  const comparableCwd = windowsStyle ? comparisonCwd.toLowerCase() : comparisonCwd;
+  const comparableHomeDir = windowsStyle ? comparisonHomeDir.toLowerCase() : comparisonHomeDir;
+  const childPrefix = comparableHomeDir.endsWith("/") ? comparableHomeDir : `${comparableHomeDir}/`;
+
+  if (comparableCwd === comparableHomeDir) {
+    return "~";
+  }
+  if (!comparableCwd.startsWith(childPrefix)) {
+    return cwd;
+  }
+
+  let suffix = cwd.slice(normalizedHomeDir.length);
+  if (comparisonHomeDir.endsWith("/") && suffix.length > 0 && !/^[\\/]/u.test(suffix)) {
+    suffix = `/${suffix}`;
+  }
+  return `~${suffix}`;
 }

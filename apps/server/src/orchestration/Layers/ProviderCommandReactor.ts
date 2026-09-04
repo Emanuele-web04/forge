@@ -98,6 +98,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
@@ -141,6 +142,7 @@ import {
 import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
+import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
 type ProviderQueueDrainEvent = Extract<
   ProviderRuntimeEvent,
@@ -546,7 +548,7 @@ function isStaleClaudeResumeError(error: unknown): boolean {
 function isOpenCodeCompatibleResumeError(error: unknown): boolean {
   if (
     !Schema.is(ProviderAdapterRequestError)(error) ||
-    (error.provider !== "opencode" && error.provider !== "kilo") ||
+    error.provider !== "opencode" ||
     error.method !== "session.update"
   ) {
     return false;
@@ -615,6 +617,7 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const checkpointStore = yield* CheckpointStore;
   const studioOutputReactor = yield* StudioOutputReactor;
@@ -1109,6 +1112,15 @@ const make = Effect.gen(function* () {
     }
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
+    // Skip the configured fallback when its provider is currently unavailable.
+    const settings = yield* serverSettings.getSettings;
+    const statuses = yield* providerHealth.getStatuses;
+    const fallbackStatus = statuses.find(
+      (status) => status.provider === settings.textGenerationModelSelection.provider,
+    );
+    if (fallbackStatus && !fallbackStatus.available) {
+      return null;
+    }
     return yield* resolveConfiguredTextGenerationInput();
   });
 
@@ -1542,18 +1554,44 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
-    if (
+    const resolveActiveSession = (threadId: ThreadId) =>
+      providerService
+        .listSessions()
+        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+    // The runtime-session lookup costs a provider round-trip. It can only change
+    // the binding decision when a session row exists but no turn has run yet
+    // (an optimistic placeholder) AND the turn contests the row's provider.
+    // Every other case resolves identically without it, so skip the lookup.
+    const activeSession =
+      currentProvider !== undefined &&
+      thread.latestTurn === null &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== threadProvider
+      requestedModelSelection.provider !== currentProvider
+        ? yield* resolveActiveSession(threadId)
+        : undefined;
+    // A session row alone can be an optimistic placeholder written before the
+    // first turn; only treat the provider as an immutable binding when a real
+    // runtime session exists or the thread has actually run a turn.
+    const establishedProvider =
+      currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
+        ? currentProvider
+        : undefined;
+    if (
+      establishedProvider !== undefined &&
+      requestedModelSelection !== undefined &&
+      requestedModelSelection.provider !== establishedProvider
     ) {
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: establishedProvider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
+    const preferredProvider: ProviderKind =
+      establishedProvider ??
+      requestedModelSelection?.provider ??
+      currentProvider ??
+      thread.modelSelection.provider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settings = yield* serverSettings.getSettings;
     if (!settings.providers[preferredProvider].enabled) {
@@ -1577,7 +1615,7 @@ const make = Effect.gen(function* () {
     });
     if (workspaceState === "worktree-pending") {
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: preferredProvider,
         operation: "thread.turn.start",
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
@@ -1590,11 +1628,6 @@ const make = Effect.gen(function* () {
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
     };
-
-    const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({
       ...providerSessionOptions,
@@ -1675,7 +1708,9 @@ const make = Effect.gen(function* () {
               previousModelSelection ?? thread.modelSelection,
               requestedModelSelection,
             )
-          : (currentProvider === "droid" || currentProvider === "grok") &&
+          : (currentProvider === "droid" ||
+              currentProvider === "grok" ||
+              currentProvider === "devin") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
 
       if (
@@ -1833,7 +1868,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        (preferredProvider === "opencode" || preferredProvider === "kilo") &&
+        preferredProvider === "opencode" &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -1992,7 +2027,7 @@ const make = Effect.gen(function* () {
       thread.session?.providerName ??
       thread.modelSelection.provider;
     const registerPriorTranscriptBootstrapOnFreshStart =
-      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      selectedProvider === "opencode" &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
     const {
       activeSessionBeforeEnsure,
@@ -2064,9 +2099,7 @@ const make = Effect.gen(function* () {
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
       !hasPendingRollbackTranscriptBootstrap &&
-      (!hasPendingFreshSessionTranscriptBootstrap ||
-        selectedProvider === "opencode" ||
-        selectedProvider === "kilo");
+      (!hasPendingFreshSessionTranscriptBootstrap || selectedProvider === "opencode");
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
@@ -2092,7 +2125,7 @@ const make = Effect.gen(function* () {
       });
     }
     const shouldBootstrapPriorTranscriptContext =
-      (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      ((selectedProvider === "opencode" &&
         activeSessionBeforeEnsure === undefined &&
         !nativeResumeSucceeded) ||
         hasPendingPriorTranscriptBootstrap) &&
@@ -2338,7 +2371,7 @@ const make = Effect.gen(function* () {
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
       const tracksOpenCodeCompatibleContextAcceptance =
-        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        selectedProvider === "opencode" &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
@@ -2549,7 +2582,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        selectedProvider === "opencode" &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -2869,7 +2902,7 @@ const make = Effect.gen(function* () {
       }
 
       const thread = yield* resolveThread(event.payload.threadId);
-      if (!thread) {
+      if (!thread || isExpiredSidechat(thread)) {
         return;
       }
 
@@ -2928,12 +2961,18 @@ const make = Effect.gen(function* () {
       // session's runtimeMode: ensureSessionForThread detects mode changes by
       // comparing against it, and adopting the requested mode here would mask
       // the restart.
+      // The pre-turn session row can be an optimistic placeholder carrying a
+      // stale provider; only defer to it for a real established binding, and
+      // otherwise honor the turn's explicit requested selection.
+      const sessionProviderEstablished =
+        thread.session != null && (thread.session.status === "ready" || thread.latestTurn !== null);
       const turnStartSession = deriveTurnStartSession({
         threadId: event.payload.threadId,
         currentSession: thread.session,
-        providerName,
+        providerName: event.payload.modelSelection?.provider ?? providerName,
         requestedRuntimeMode: event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         requestedAt: event.payload.createdAt,
+        sessionProviderEstablished,
       });
       if (turnStartSession !== null) {
         yield* setThreadSession({
@@ -3234,6 +3273,7 @@ const make = Effect.gen(function* () {
       !thread ||
       thread.deletedAt != null ||
       thread.archivedAt != null ||
+      isExpiredSidechat(thread) ||
       thread.parentThreadId != null ||
       thread.interactionMode === "plan" ||
       !activeThreadGoal(thread)?.trim() ||
@@ -3358,6 +3398,7 @@ const make = Effect.gen(function* () {
           !thread ||
           thread.deletedAt != null ||
           thread.archivedAt != null ||
+          isExpiredSidechat(thread) ||
           thread.parentThreadId != null ||
           thread.interactionMode === "plan" ||
           !activeThreadGoal(thread)?.trim() ||
@@ -4176,10 +4217,7 @@ const make = Effect.gen(function* () {
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
       : thread.modelSelection.provider;
-    if (
-      (stoppedProvider === "opencode" || stoppedProvider === "kilo") &&
-      providerService.completePriorTranscriptBootstrap
-    ) {
+    if (stoppedProvider === "opencode" && providerService.completePriorTranscriptBootstrap) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -4424,7 +4462,12 @@ const make = Effect.gen(function* () {
           const thread = yield* resolveThread(event.payload.threadId);
           const startsOrResumesGoal =
             event.payload.goalPausedAt == null && event.payload.goalStartedAt != null;
-          if (event.payload.goalStartBehavior !== "defer" && startsOrResumesGoal) {
+          if (
+            thread &&
+            !isExpiredSidechat(thread) &&
+            event.payload.goalStartBehavior !== "defer" &&
+            startsOrResumesGoal
+          ) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",
               commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
@@ -4492,6 +4535,7 @@ const make = Effect.gen(function* () {
           const thread = yield* resolveThread(event.payload.threadId);
           if (
             thread &&
+            !isExpiredSidechat(thread) &&
             thread.parentThreadId == null &&
             activeThreadGoal(thread)?.trim() &&
             thread.goalPausedAt == null
@@ -5215,6 +5259,7 @@ const make = Effect.gen(function* () {
         (thread) =>
           thread.deletedAt == null &&
           thread.archivedAt == null &&
+          !isExpiredSidechat(thread) &&
           thread.parentThreadId == null &&
           Boolean(activeThreadGoal(thread)?.trim()) &&
           thread.goalPausedAt == null,

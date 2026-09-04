@@ -34,6 +34,7 @@ function createWorkspacePathsStorage(): StateStorage {
     },
     removeItem: (name) => {
       localStorage.removeItem(name);
+      localStorage.removeItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY);
     },
   };
 }

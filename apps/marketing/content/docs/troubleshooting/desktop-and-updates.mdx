@@ -1,0 +1,123 @@
+---
+title: Desktop and updates
+description: Resolve Synara launch, window, architecture, packaged update, and reinstall problems without deleting useful state.
+---
+
+Treat the desktop application, its local server, and the installed provider runtimes as separate layers. A window problem does not automatically mean your repositories, provider credentials, or Synara workspace data are damaged.
+
+## Synara will not launch
+
+Work through these checks in order:
+
+1. Confirm the installer matches your operating system and CPU architecture.
+2. Fully quit any existing Synara process.
+3. Start Synara again from the normal application launcher.
+4. Restart the operating system if a previous process cannot be terminated cleanly.
+5. Re-download the current installer from the [official download page](/install).
+6. Reinstall over the current application without deleting workspace data.
+
+On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, ensure the AppImage is executable:
+
+```bash
+chmod +x Synara*.AppImage
+```
+
+<Callout type="warn" title="Do not delete data as a first step">
+  Replacing the application bundle and deleting Synara’s local data are different operations. As a
+  rule, reinstall the application first. Preserve repositories, uncommitted changes, task evidence,
+  and any data directory before considering destructive cleanup.
+</Callout>
+
+## Closing while chats are still running
+
+When a desktop quit would interrupt running or connecting chats, Synara lists those chats before closing.
+
+- Choose **Cancel** to keep the app and current work open.
+- Choose **Quit** to stop the listed work and close.
+- Leave **Resume chats automatically** enabled when eligible chats should receive a continuation turn on the next launch.
+
+Automatic resume is guarded rather than unconditional. Synara skips a remembered chat when it completed, was archived or deleted, already started newer work, or no longer belongs to a live project. If the local server cannot record the resume intent within the bounded quit wait, Synara falls back to interruption and still allows the desktop app to close; do not assume that fallback work will resume automatically.
+
+The checkbox choice persists for later quits. Review it when a task must not continue without fresh supervision.
+
+## The window is blank or unresponsive
+
+A blank window can come from the renderer, the local server, graphics state, or a process left over from an earlier launch.
+
+1. Wait briefly for initial startup and provider-health probes.
+2. Fully quit Synara rather than only closing the window.
+3. Start it again with no other Synara instance running.
+4. Disconnect unusual display, proxy, or security software only when you can do so safely and reversibly.
+5. Record whether the window is blank immediately or only after opening a specific project or surface.
+6. Capture the operating system, Synara version, and exact time before restarting again.
+
+When only one project or task triggers the problem, report that boundary. It is more useful than “the app is blank.”
+
+## Windows or Linux title bar looks wrong
+
+Open **Settings → Appearance → Use custom title bar** to switch between Synara’s frameless title bar and the operating system’s title bar. A restart is required because Electron chooses the window frame before the renderer starts; use the offered relaunch action after saving the preference.
+
+The custom title bar is supported only on Windows and Linux. Some Linux window managers integrate better with the system title bar. On Windows, the custom frame keeps Synara’s own minimize, maximize, restore, and close controls.
+
+## The local server does not become ready
+
+Synara’s desktop UI depends on its local application server. Repeated connection or startup errors can result from:
+
+- Another Synara process using the local runtime state
+- A partially terminated previous launch
+- A blocked local process
+- A damaged or incompatible application installation
+- Security software preventing the packaged server from running
+
+Fully quit every Synara process, then relaunch. Do not expose or forward Synara’s local server ports as a troubleshooting shortcut.
+
+## The packaged update failed
+
+1. Preserve important Git work.
+2. Close active provider turns and terminal processes when practical.
+3. Fully quit Synara.
+4. Start it again and retry the update once.
+5. If the updater still fails, download the newest installer from [trysynara.com/install](/install) or [GitHub Releases](https://github.com/Emanuele-web04/synara/releases).
+6. Install the new application over the existing application.
+7. Launch Synara and verify the displayed version before resuming important work.
+
+An update failure does not prove that local task data was deleted. Avoid combining an update recovery with manual data-directory cleanup.
+
+## Synara opens but providers changed after an update
+
+The application update and provider CLI updates are independent. After updating Synara:
+
+- Restart the app so provider discovery runs against the current environment.
+- Check each enabled provider’s detected executable and authentication state.
+- Remove stale custom binary paths.
+- Update the provider runtime through its own supported method when Synara reports that it is outdated.
+- Start a new provider session when protocol or capability negotiation changed.
+
+Continue with [Provider troubleshooting](/docs/troubleshooting/providers).
+
+## Source build and packaged build behave differently
+
+A development checkout and a packaged release may use different executable paths, environment variables, data locations, update behavior, and build-time configuration.
+
+When reporting a problem, state whether you are using:
+
+- A packaged release
+- A locally built desktop application
+- A website development server only
+- A specific branch or commit
+
+Do not use a successful website build as evidence that the packaged desktop runtime works.
+
+## Safe reinstall checklist
+
+- [ ] Important repository changes are committed, stashed, copied, or pushed
+- [ ] The correct installer and architecture were selected
+- [ ] Every Synara process was fully closed
+- [ ] The application was replaced before any data was deleted
+- [ ] The version was checked after launch
+- [ ] Provider detection and authentication were rechecked
+- [ ] A small test task was completed before resuming important work
+
+## Still failing
+
+Continue with [Diagnostics](/docs/troubleshooting/diagnostics), then prepare a focused report using [Report a problem](/docs/troubleshooting/report-a-problem).

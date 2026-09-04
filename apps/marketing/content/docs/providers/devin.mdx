@@ -1,0 +1,165 @@
+---
+title: Devin CLI
+description: Install, authenticate, verify, and run Devin CLI through Synara's ACP integration.
+---
+
+Synara connects to the local Devin CLI through the `devin` executable and its Agent Client Protocol server, `devin acp`. Devin owns the account, credentials, model access, commands, and provider service; Synara supplies the durable task, repository environment, transcript, approvals, context controls, review surfaces, and Git workflow around the session.
+
+## Install
+
+On macOS, Linux, or WSL, use Devin's official installer:
+
+```bash
+curl -fsSL https://cli.devin.ai/install.sh | bash
+```
+
+On macOS, Homebrew is also supported:
+
+```bash
+brew install --cask devin-cli
+```
+
+On Windows, run the official installer from PowerShell:
+
+```powershell
+irm https://static.devin.ai/cli/setup.ps1 | iex
+```
+
+Restart the terminal, then verify the installed executable:
+
+```bash
+devin --version
+```
+
+## Authenticate
+
+Use Devin's normal account login:
+
+```bash
+devin auth login
+devin auth status
+```
+
+The ACP server uses `WINDSURF_API_KEY` when it is present and otherwise uses credentials stored by `devin auth login`. Prefer the interactive login for normal desktop use. If you provide an environment variable, keep it out of repositories, shell history, screenshots, and task transcripts.
+
+## Verify
+
+From a disposable repository, verify the same runtime Synara will launch:
+
+```bash
+devin --version
+devin auth status
+devin models list --format json
+```
+
+Then start Devin interactively and make one harmless read-only request:
+
+```bash
+devin
+```
+
+The `devin acp` subcommand is a JSON-RPC stdio server intended for ACP-aware hosts. Do not use it as an interactive terminal session.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Devin
+
+Open provider settings and confirm that Synara detects `devin`.
+
+</Step>
+<Step>
+
+### Confirm authentication
+
+Use credentials saved by `devin auth login`, or make `WINDSURF_API_KEY` available to the Synara process when account policy requires key-based authentication.
+
+</Step>
+<Step>
+
+### Refresh models and commands
+
+Synara discovers the models and slash commands advertised by the installed Devin ACP server. Confirm that the expected model choices and commands appear before starting important work.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a clean test repository and conservative permissions. Verify Plan mode, a normal response, and one safe tool call before granting broader access.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Devin sessions can expose:
+
+- Fresh and resumed ACP sessions tied to the owning Synara task
+- Models and slash commands advertised by the installed Devin CLI
+- Normal execution and Devin's plan-oriented mode
+- Context compaction through Devin's advertised `/compact` command
+- File and image attachments supported by the ACP session
+- Compatible MCP server configuration passed at session startup
+- Tool calls, command output, file changes, and assistant text
+- Account usage when Synara can verify it from the authenticated Devin account
+- Synara's terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
+
+Synara does not currently classify Devin as supporting native live-turn steering. Queue a follow-up or wait for the current turn to settle instead of assuming another provider's active-turn controls are available.
+
+## Configuration
+
+Keep Devin configuration in locations supported by the installed CLI. A custom Synara binary path must point to the `devin` executable, not its configuration directory.
+
+When behavior differs between Devin and Synara, compare the exact executable, version, working directory, account, model, environment, and configuration file selected by the CLI.
+
+## Updating
+
+Use Devin's supported update command:
+
+```bash
+devin update
+```
+
+If installed through Homebrew, you can also update the cask:
+
+```bash
+brew upgrade --cask devin-cli
+```
+
+Restart Synara after updating, especially when the ACP command set, authentication, models, or session configuration changed.
+
+## Troubleshooting
+
+### Devin is not detected
+
+1. Run `devin --version` from a fresh terminal.
+2. Confirm the installer directory is on `PATH`.
+3. Check Synara's custom binary path.
+4. Restart Synara after installation or environment changes.
+
+### Authentication works in a terminal but not Synara
+
+Run `devin auth status` in the same user account, then fully restart Synara. If you use `WINDSURF_API_KEY`, confirm it is exported to the process that launches Synara rather than only one unrelated shell.
+
+### Models or commands are missing
+
+Run `devin models list --format json`, update Devin, and start a new Synara task. ACP capabilities are advertised by the installed runtime and can differ by version and account.
+
+### Compaction is unavailable
+
+Synara uses Devin's advertised `/compact` command. Update the CLI if the ACP server does not advertise that command, then start a new session.
+
+### A follow-up cannot steer the running turn
+
+This is expected: Synara does not advertise native live-turn steering for Devin. Queue the message for the next turn or interrupt deliberately after reviewing any work already performed.
+
+## Official documentation
+
+- [Devin CLI quickstart](https://docs.devin.ai/cli)
+- [Devin CLI commands and flags](https://docs.devin.ai/cli/reference/commands)
+- [Devin CLI configuration file](https://docs.devin.ai/cli/reference/configuration/config-file)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

@@ -17,7 +17,7 @@ const PROJECT_ID = ProjectId.makeUnsafe("project-bootstrap");
 const THREAD_ID = ThreadId.makeUnsafe("thread-bootstrap");
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -371,5 +371,26 @@ describe("threadBootstrap", () => {
       worktreePath: null,
       branch: "feature/terminal-bootstrap",
     });
+  });
+
+  it("prefers the persisted default provider over a stale sticky draft on a fresh bootstrap", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProvider: "devin",
+        draftComposerState: makeComposerDraftState({
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        }),
+        draftThread: makeDraftThread(),
+        options: undefined,
+        fresh: true,
+        projectDefaultModelSelection: null,
+        projectId: PROJECT_ID,
+      }).modelSelection,
+    ).toEqual(modelSelection("devin", "adaptive"));
   });
 });

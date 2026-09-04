@@ -16,7 +16,7 @@ export interface RateLimitWindow {
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: readonly RateLimitWindow[];
+  limits?: ReadonlyArray<RateLimitWindow>;
   usedPercent?: number;
   utilization?: number;
   resetsAt?: string;
@@ -41,11 +41,13 @@ export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
 
 const WINDOW_ORDER = new Map([
   ["5h", 0],
-  ["Weekly", 1],
-  ["Weekly (overage)", 2],
-  ["Sonnet", 3],
-  ["Opus", 4],
-  ["Current", 5],
+  ["Daily", 1],
+  ["Weekly", 2],
+  ["Weekly (overage)", 3],
+  ["Fable", 4],
+  ["Sonnet", 5],
+  ["Opus", 6],
+  ["Current", 7],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -110,6 +112,9 @@ export function normalizeRateLimitLabel(
   }
   if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
     return "Weekly";
+  }
+  if (normalized === "seven_day_fable" || normalized === "weekly_fable" || normalized === "fable") {
+    return "Fable";
   }
   if (
     normalized === "seven_day_sonnet" ||

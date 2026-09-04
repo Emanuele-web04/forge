@@ -3,6 +3,7 @@ import {
   CLAUDE_API_EFFORT_OPTIONS,
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
@@ -36,6 +37,7 @@ import {
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
   resolveApiModelId,
+  resolveDevinModelVariant,
   resolveSelectableModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
@@ -66,6 +68,67 @@ describe("parseCursorCliReasoningEffort", () => {
     ["gpt-5.5-fast", undefined],
   ] as const)("parses %s as %s", (model, expected) => {
     expect(parseCursorCliReasoningEffort(model)).toBe(expected);
+  });
+});
+
+describe("resolveDevinModelVariant", () => {
+  it("resolves static SWE fast variants", () => {
+    expect(resolveDevinModelVariant({ model: "swe-1-6", fastMode: true })).toBe("swe-1-6-fast");
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: true })).toBe(
+      "swe-1-7-lightning",
+    );
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: false })).toBe("swe-1-7");
+  });
+
+  it("recomputes runtime variants from current traits instead of a stored variant", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "gpt-5.6-sol",
+        modelVariant: "gpt-5-6-sol-high",
+        reasoningEffort: "low",
+        runtimeModel: {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          defaultReasoningEffort: "medium",
+          modelVariants: [
+            { model: "gpt-5-6-sol-low", reasoningEffort: "low", fastMode: false },
+            { model: "gpt-5-6-sol-high", reasoningEffort: "high", fastMode: false },
+          ],
+        },
+      }),
+    ).toBe("gpt-5-6-sol-low");
+  });
+
+  it("preserves an explicit variant when no supplied trait maps to a variant dimension", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "custom-family",
+        modelVariant: "custom-concrete-model",
+        thinking: false,
+        runtimeModel: {
+          slug: "custom-family",
+          name: "Custom Family",
+          modelVariants: [{ model: "custom-concrete-model" }],
+        },
+      }),
+    ).toBe("custom-concrete-model");
+  });
+
+  it("returns undefined when no variant matches an all-fast matrix", () => {
+    expect(
+      resolveDevinModelVariant({
+        runtimeModel: {
+          slug: "devin",
+          name: "Devin",
+          supportsFastMode: true,
+          modelVariants: [
+            { model: "devin-fast-1", reasoningEffort: "medium", fastMode: true },
+            { model: "devin-fast-2", reasoningEffort: "high", fastMode: true },
+          ],
+        },
+        fastMode: false,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -108,6 +171,15 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
     expect(normalizeModelSlug("4.5", "grok")).toBe("grok-4.5");
     expect(normalizeModelSlug("grok-4.6", "grok")).toBe("grok-4.6");
+    expect(normalizeModelSlug("Vendor/ModelCase-MEDIUM", "devin")).toBe("Vendor/ModelCase-MEDIUM");
+    expect(normalizeModelSlug("swe-1-7-medium", "devin")).toBe("swe-1-7");
+  });
+
+  it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
+    expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
+    expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
   });
 });
 
@@ -133,6 +205,12 @@ describe("resolveModelSlug", () => {
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
     expect(resolveModelSlugForProvider("claudeAgent", "sonnet")).toBe("claude-sonnet-5");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5.1")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5")).toBe("claude-fable-5");
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
@@ -242,6 +320,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     const droidSlugs = MODEL_OPTIONS_BY_PROVIDER.droid.map((model) => model.slug);
 
     expect(droidSlugs).toContain("gpt-5.5-fast");
+    expect(droidSlugs).toContain(DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL);
     expect(droidSlugs).not.toContain("gpt-5.6-fast");
     expect(getModelCapabilities("droid", "gpt-5.6-sol").supportsFastMode).toBe(false);
   });
@@ -519,6 +598,40 @@ describe("provider option descriptor helpers", () => {
     expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
   });
 
+  it("surfaces Devin runtime reasoningEffortLevels and keeps effort/fast controls", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "devin",
+      caps: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        supportsFastMode: true,
+        supportsThinkingToggle: true,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+      selections: { reasoningEffort: "high" },
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "reasoningEffort")).toMatchObject({
+      label: "Reasoning",
+      type: "select",
+      currentValue: "high",
+    });
+    const reasoning = descriptors.find((descriptor) => descriptor.id === "reasoningEffort");
+    if (reasoning?.type === "select") {
+      expect(reasoning.options.map((option) => option.id)).toEqual(["low", "medium", "high"]);
+    }
+    expect(descriptors.some((descriptor) => descriptor.id === "variant")).toBe(false);
+    expect(descriptors.find((descriptor) => descriptor.id === "fastMode")).toMatchObject({
+      type: "boolean",
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "thinking")).toMatchObject({
+      type: "boolean",
+      currentValue: true,
+    });
+  });
   it("honors explicit descriptors and serializes their current values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
@@ -1053,6 +1166,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-fable-5-1")).toBe(false);
     expect(has("claude-fable-5")).toBe(false);
     expect(has("claude-opus-5")).toBe(false);
     expect(has("claude-opus-4-8")).toBe(true);

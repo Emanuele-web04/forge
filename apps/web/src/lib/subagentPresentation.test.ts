@@ -81,59 +81,13 @@ describe("resolveSubagentPresentation", () => {
     expect(presentation.primaryLabel).toBe("agent-1");
   });
 
-  it("never exposes an opaque provider id before the parent spawn activity arrives", () => {
+  it("keeps readable provider ids intact until richer metadata arrives", () => {
     const presentation = resolveSubagentPresentation({
       title: "Subagent 019d8cae-0628-7bf1-bf86-5cbc31cd582c",
       fallbackId: "subagent:thread-1:019d8cae-0628-7bf1-bf86-5cbc31cd582c",
     });
 
-    expect(presentation.primaryLabel).toBe("Subagent");
-  });
-
-  it("uses the parent spawn order instead of loaded sibling ids for opaque subagent titles", () => {
-    const thread = {
-      id: "subagent:thread-parent:01a05765-ad32-7d30-83d7-6534933391f3",
-      parentThreadId: "thread-parent",
-      title: "Subagent 01a05765-ad32-7d30-83d7-6534933391f3",
-    };
-    const parent = {
-      id: "thread-parent",
-      activities: [
-        {
-          payload: {
-            data: {
-              item: {
-                receiverThreadIds: ["older-child", "01a05765-ad32-7d30-83d7-6534933391f3"],
-              },
-            },
-          },
-        },
-      ],
-    };
-    const presentation = resolveSubagentPresentationForThread({
-      thread,
-      threads: [parent],
-    });
-    const presentationAfterSiblingHydration = resolveSubagentPresentationForThread({
-      thread,
-      threads: [{ id: "unrelated-child" }, parent, { id: "older-child" }],
-    });
-
-    expect(presentation.primaryLabel).toBe("Subagent 2");
-    expect(presentationAfterSiblingHydration.primaryLabel).toBe("Subagent 2");
-  });
-
-  it("keeps explicit nickname, semantic title, and role ahead of the spawn ordinal", () => {
-    expect(
-      resolveSubagentPresentation({ nickname: "Scout", title: "Audit layout", role: "reviewer" })
-        .primaryLabel,
-    ).toBe("Scout");
-    expect(resolveSubagentPresentation({ title: "Audit layout", role: "reviewer" }).primaryLabel).toBe(
-      "Audit layout",
-    );
-    expect(resolveSubagentPresentation({ title: "Subagent", role: "reviewer" }).primaryLabel).toBe(
-      "Reviewer",
-    );
+    expect(presentation.primaryLabel).toBe("019d8cae-0628-7bf1-bf86-5cbc31cd582c");
   });
 });
 

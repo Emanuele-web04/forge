@@ -8,16 +8,16 @@ import {
   ProviderCredentialsLive,
 } from "../providerCredentials";
 import { ServerSettingsService } from "../serverSettings";
-import { ProviderAccountService } from "../providerAccounts";
 import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
+import { makeDevinAdapterLive } from "./Layers/DevinAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
-import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
+import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
@@ -34,7 +34,6 @@ export function makeServerProviderLayer(
   return Effect.gen(function* () {
     const credentials = yield* ProviderCredentials;
     const serverSettings = yield* ServerSettingsService;
-    const providerAccounts = yield* ProviderAccountService;
     const resolveProviderServerPassword = makeProviderServerPasswordResolver(credentials);
     const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
     const nativeEventLogger = logProviderEvents
@@ -51,29 +50,17 @@ export function makeServerProviderLayer(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
     // Gives gateway-capable sessions their thread-scoped synara_* credentials.
-    // OpenCode/Kilo isolate managed servers before installing MCP; Pi projects
+    // OpenCode isolates managed servers before installing MCP; Pi projects
     // the same MCP catalog/dispatcher through its native custom-tool API.
     const agentGatewayCredentialsLayer =
       options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
-    const codexAdapterLayer = makeCodexAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveHomePath: async () =>
-        (await Effect.runPromise(providerAccounts.resolveEnvironment("codex"))).homePath,
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const claudeAdapterLayer = makeClaudeAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveProcessEnvironment: async () => {
-        const resolved = await Effect.runPromise(
-          providerAccounts.resolveEnvironment("claudeAgent"),
-        );
-        return { accountId: resolved.accountId, env: resolved.env };
-      },
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const codexAdapterLayer = makeCodexAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const claudeAdapterLayer = makeClaudeAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
-      ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveServerPassword: resolveProviderServerPassword,
-    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const kiloAdapterLayer = makeKiloAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
     }).pipe(Layer.provide(agentGatewayCredentialsLayer));
@@ -92,6 +79,10 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const devinAdapterLayer = makeDevinAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const piAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
@@ -99,10 +90,10 @@ export function makeServerProviderLayer(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
       Layer.provide(cursorAdapterLayer),
+      Layer.provide(devinAdapterLayer),
       Layer.provide(antigravityAdapterLayer),
       Layer.provide(grokAdapterLayer),
       Layer.provide(droidAdapterLayer),
-      Layer.provide(kiloAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),

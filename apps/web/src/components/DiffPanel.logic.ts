@@ -3,12 +3,7 @@
 // Exports: resolveDiffPanelThread, diff view source helpers
 // Depends on: ChatView.logic draft-thread normalization.
 
-import {
-  DEFAULT_MODEL_BY_PROVIDER,
-  type ModelSelection,
-  type ThreadId,
-  type TurnId,
-} from "@synara/contracts";
+import { type ModelSelection, type ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 import type { DraftThreadState } from "../composerDraftStore";
@@ -47,7 +42,7 @@ export function resolveDiffPanelThread(input: {
   threadId: ThreadId | null | undefined;
   serverThread: Thread | undefined;
   draftThread: DraftThreadState | null | undefined;
-  fallbackModelSelection: ModelSelection | null | undefined;
+  fallbackModelSelection: ModelSelection;
 }): Thread | undefined {
   if (input.serverThread) {
     return input.serverThread;
@@ -59,10 +54,7 @@ export function resolveDiffPanelThread(input: {
   return buildLocalDraftThread(
     input.threadId,
     input.draftThread,
-    input.fallbackModelSelection ?? {
-      provider: "codex",
-      model: DEFAULT_MODEL_BY_PROVIDER.codex,
-    },
+    input.fallbackModelSelection,
     null,
   );
 }

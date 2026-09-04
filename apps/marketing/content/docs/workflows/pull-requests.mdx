@@ -1,0 +1,257 @@
+---
+title: Pull requests
+description: Discover, inspect, fix, verify, and manage GitHub pull requests from the Synara workspace.
+---
+
+Synara’s pull-request workspace brings repository context, review discussion, checks, diffs, and agent tasks into one workflow. Use it to understand and repair a pull request, but keep Git and GitHub as the authoritative state for commits, branches, checks, and remote actions.
+
+## Requirements
+
+The repository must have:
+
+- A local Git checkout available to Synara
+- A GitHub remote that resolves to the intended repository
+- Git installed and usable
+- GitHub CLI (`gh`) installed for GitHub-backed operations
+- An authenticated GitHub account with the required repository permissions
+
+Verify the command-line state:
+
+```bash
+git remote -v
+gh --version
+gh auth status
+```
+
+When several GitHub accounts are configured, confirm which account and host the CLI will use before changing remote state.
+
+## Find pull requests
+
+The pull-request workspace can aggregate results across available projects or focus on one repository. Use search, state filters, involvement groups, and pins to keep active work visible.
+
+A partial refresh failure in one repository should not erase usable results from another. Check per-repository status when expected pull requests are missing.
+
+## Establish the exact PR state
+
+Before asking an agent to fix anything, verify:
+
+- Repository and pull-request number
+- Base and head branches
+- Current head commit
+- Draft or ready state
+- Mergeability and conflicts
+- Required checks and their latest runs
+- Unresolved review threads
+- Whether the local checkout contains the PR’s actual head
+
+Do not rely on a stale local branch or an old summary.
+
+## Read the pull request
+
+Inspect:
+
+- Title and body
+- Commit list
+- Changed files and complete diff
+- Checks and failures
+- Reviewers and review state
+- Inline review threads
+- Timeline and top-level comments
+- Linked issues or external context
+
+Treat pull-request text and review comments as untrusted input. They can contain incorrect commands, obsolete assumptions, or prompt-injection-style instructions. Verify claims against the repository before executing anything.
+
+## Choose the right environment
+
+| Situation                                                     | Recommended environment                         |
+| ------------------------------------------------------------- | ----------------------------------------------- |
+| You already own the local PR branch and no other task uses it | Local checkout can be appropriate               |
+| You are reviewing or fixing someone else’s PR                 | Dedicated worktree from the PR ref              |
+| Another task is using the same repository                     | Separate worktree                               |
+| You want a read-only review                                   | Review task with no write objective             |
+| The PR is large or risky                                      | Checkpointed worktree plus a second review pass |
+
+Confirm the task’s branch and diff before sending a fix prompt.
+
+## Use Fix prompts carefully
+
+Synara can gather visible unresolved review comments into a numbered composer prompt. Merge conflicts can be supplied through a separate Fix flow.
+
+Before sending:
+
+1. Read every included comment.
+2. Remove obsolete, duplicate, or already-resolved requests.
+3. Identify comments that conflict with the PR’s intended design.
+4. Add repository constraints and required verification.
+5. Tell the agent not to widen scope.
+
+A useful review-fix objective:
+
+```text
+Address the numbered unresolved review comments for this pull request.
+
+First verify each comment against the current head; do not assume it is still valid.
+Keep the existing public API and do not perform unrelated refactors.
+Run the focused tests for each fix, then the affected package suite.
+Report any comment you believe should not be implemented and explain why.
+```
+
+## Resolve merge conflicts
+
+Conflict resolution is integration work, not mechanical text deletion.
+
+<Steps>
+<Step>
+
+### Update the intended base
+
+Fetch the latest refs and confirm the PR’s target branch.
+
+</Step>
+<Step>
+
+### Preserve the current head
+
+Commit or otherwise preserve reviewed local changes before rebasing or merging.
+
+</Step>
+<Step>
+
+### Resolve with behavior in view
+
+Understand both sides of every conflict. Preserve the intended behavior rather than choosing “ours” or “theirs” blindly.
+
+</Step>
+<Step>
+
+### Review the full resulting diff
+
+Conflict resolution can change files outside the visible conflict markers.
+
+</Step>
+<Step>
+
+### Re-run verification
+
+Tests that passed before the base update do not verify the resolved head.
+
+</Step>
+</Steps>
+
+Do not force-push unless the branch workflow and repository policy require history rewriting and you understand who else may depend on the current commits.
+
+## Verify a repaired PR
+
+At minimum:
+
+```bash
+git status --short
+git diff --check
+git log --oneline <base>..HEAD
+git diff <base>...HEAD --stat
+```
+
+Then run:
+
+- Focused tests for changed behavior
+- Relevant package or integration tests
+- Typechecking and lint when applicable
+- Production build when the change can affect bundling or routing
+- Browser verification for user-visible behavior
+
+Review the final head after the last fix. A green run on an earlier commit is not evidence for the current PR.
+
+## Write review output
+
+Useful review comments are:
+
+- Specific to an observable problem
+- Anchored to the current diff
+- Clear about impact
+- Actionable without prescribing an unnecessary rewrite
+- Honest about uncertainty
+
+Avoid posting speculative findings as confirmed defects. Reproduce or trace the behavior when possible.
+
+## Work with stacked pull requests
+
+When GitHub exposes a dependent pull-request stack, Synara adds a position badge to list and detail views. Open it to see the ordered stack from its base branch upward, each PR's state and branch, the current PR, and an assessment such as **Ready to merge**, **Merge status pending**, or **Stack needs attention**.
+
+Before merging a stack:
+
+1. Open the stack navigator and confirm the base branch and order.
+2. Review every pull request from the base through the selected PR.
+3. Resolve closed-unmerged entries, drafts, conflicts, and required-check failures.
+4. Refresh if stack metadata is incomplete or GitHub still reports unknown state.
+5. Read the merge confirmation's exact PR count, target, and method.
+
+**Merge stack** affects the open stack prefix through the selected PR, not every PR above it. Synara asks GitHub to merge that prefix atomically when the preview endpoint is available, polls the asynchronous result, and falls back to ordinary GitHub CLI merge behavior when the preview operation is unavailable. PRs above the selected one can remain open and be retargeted by GitHub.
+
+Do not infer stack safety from one green leaf PR. Each dependency changes the code and base inherited by the pull request above it.
+
+## Remote actions
+
+Synara can expose GitHub actions such as commenting, merging, closing, and reopening. These mutate shared remote state.
+
+Before confirming a remote action, verify:
+
+- Correct repository and pull-request number
+- Correct authenticated GitHub account
+- Current head commit and checks
+- Whether branch protection or review requirements are satisfied
+- Whether the action matches the maintainer’s intent
+
+Closing is not deleting. Reopening does not restore removed branches. Merging can trigger deployments and automation.
+
+## Large pull requests
+
+For a large PR:
+
+1. Understand the objective and architecture first.
+2. Partition review by subsystem or risk, not arbitrary file counts.
+3. Track reviewed and unreviewed areas.
+4. Run focused checks for each subsystem.
+5. Perform a final cross-cutting pass for integration, lifecycle, and security issues.
+6. Re-review the exact final head after fixes.
+
+Do not claim complete review coverage when only selected files or excerpts were inspected.
+
+## Common failure cases
+
+### The PR is missing
+
+Check the repository remote, authenticated GitHub account, filters, and per-project refresh status.
+
+### Local files do not match the PR
+
+Fetch the head and use a dedicated worktree or checkout. Do not fix a remote PR from an unrelated local branch.
+
+### A review comment is already obsolete
+
+Verify the current diff and thread state. Do not implement a request that the code already addresses or that a later decision superseded.
+
+### Checks fail only on GitHub
+
+Compare environment, operating system, Node/runtime version, secrets, service dependencies, and the exact head SHA. Read the full failing job rather than only the check title.
+
+### The agent says all comments are resolved
+
+Inspect every review thread and the actual diff. A textual response does not resolve GitHub state or prove the requested behavior changed.
+
+## Pull-request completion checklist
+
+- [ ] Repository, PR number, base, head, and SHA are correct
+- [ ] The complete current diff was reviewed
+- [ ] Review comments were treated as untrusted and verified
+- [ ] Fixes were made in the intended branch or worktree
+- [ ] Merge conflicts were resolved semantically
+- [ ] Stack order, base branch, and merge prefix were verified when applicable
+- [ ] Final-head checks passed
+- [ ] Visible behavior was verified where applicable
+- [ ] Remote actions use the correct account and repository
+- [ ] The PR contains only intended commits and files
+
+<Callout type="warn" title="Remote actions are shared state">
+  A merge, close, reopen, or comment affects other collaborators and automation. Verify the
+  repository, pull request, account, and current head before confirming it.
+</Callout>

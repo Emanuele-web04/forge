@@ -1,3 +1,5 @@
+import { totalmem } from "node:os";
+
 import { Effect, Layer, FileSystem, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -12,6 +14,7 @@ import {
 } from "../MigrationBackup.ts";
 import { createMigrationSchemaTooNewStartupBlockError } from "../MigrationSchemaTooNewStartupBlock.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
+import { resolveSqliteMemoryBudget } from "../sqliteMemoryBudget.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   acquireDatabaseLifecycleLock,
@@ -108,14 +111,16 @@ const makeSetup = ({
       yield* sql`PRAGMA foreign_keys = ON;`;
       // The event log alone can exceed a gigabyte, so the 2MB default page
       // cache thrashes during projector replay and large projection reads.
-      // 256MB of page cache (negative value = KiB) keeps the hot b-tree
-      // interior pages resident. It is an on-demand ceiling for the single
+      // The page cache (negative value = KiB) keeps the hot b-tree interior
+      // pages resident and is sized to the host's physical memory (see
+      // sqliteMemoryBudget.ts). It is an on-demand ceiling for the single
       // serialized connection, not an upfront allocation. temp_store stays at
       // its default deliberately: the snapshot window queries can build
       // temp b-trees proportional to live-thread history, and MEMORY would
       // turn those into unbounded native RSS; the disk default already keeps
       // small temp structures in memory and only spills when they grow.
-      yield* sql`PRAGMA cache_size = -262144;`;
+      const memoryBudget = resolveSqliteMemoryBudget(totalmem());
+      yield* sql`PRAGMA cache_size = ${sql.literal(String(memoryBudget.cacheSizePragma))};`;
       if (dbPath) {
         // mmap serves large sequential reads (event replay, VACUUM INTO
         // backups) through the OS page cache without double-buffering into
@@ -125,7 +130,7 @@ const makeSetup = ({
         // of a recoverable SQLite error. locking_mode=EXCLUSIVE plus the
         // lifecycle lock make external mutation effectively impossible, and
         // no internal path truncates the live database.
-        yield* sql`PRAGMA mmap_size = 1073741824;`;
+        yield* sql`PRAGMA mmap_size = ${sql.literal(String(memoryBudget.mmapSizeBytes))};`;
         // Setting locking_mode changes connection policy; this transaction
         // actually acquires and retains the database lock before startup
         // continues, closing the window where another client could attach.

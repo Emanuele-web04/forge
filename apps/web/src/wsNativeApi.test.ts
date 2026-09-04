@@ -300,6 +300,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        keepAwakeMode: "off",
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
@@ -307,16 +308,10 @@ describe("wsNativeApi", () => {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
+          devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
-          kilo: {
-            enabled: true,
-            binaryPath: "kilo",
-            serverUrl: "",
-            serverPasswordConfigured: false,
-            customModels: [],
-          },
           opencode: {
             enabled: true,
             binaryPath: "opencode",
@@ -337,6 +332,27 @@ describe("wsNativeApi", () => {
 
     const lateListener = vi.fn();
     onServerSettingsUpdated(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(payload);
+  });
+
+  it("delivers and caches keep-awake updates", async () => {
+    const { createWsNativeApi, onServerKeepAwakeUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerKeepAwakeUpdated(listener);
+
+    const payload = {
+      keepAwake: { available: true, mode: "agent", active: true, error: null },
+    } as const;
+    emitPush(WS_CHANNELS.serverKeepAwakeUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+
+    const lateListener = vi.fn();
+    onServerKeepAwakeUpdated(lateListener);
     expect(lateListener).toHaveBeenCalledTimes(1);
     expect(lateListener).toHaveBeenCalledWith(payload);
   });

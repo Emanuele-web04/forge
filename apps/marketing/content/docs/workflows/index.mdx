@@ -1,0 +1,141 @@
+---
+title: Workflow guides
+description: Run, isolate, coordinate, verify, and deliver agent work safely in Synara.
+---
+
+Synara workflows are built around one rule: **every body of work needs a clear owner and a verifiable result**. The tools—tasks, worktrees, handoffs, browser automation, scheduled runs, and agent-to-agent coordination—are useful only when they preserve that boundary.
+
+## Start with the smallest workflow
+
+| Need                                                       | Start here                     |
+| ---------------------------------------------------------- | ------------------------------ |
+| One focused change                                         | One task in a known checkout   |
+| Independent work in the same repository                    | Separate worktree-backed tasks |
+| Another path from the same conversation                    | Thread fork                    |
+| A second provider continuing the same objective            | Provider handoff               |
+| A defect whose cause is still unknown                      | Debug mode                     |
+| Visual or web behavior verification                        | Browser verification           |
+| Synara without the desktop shell                           | Headless server                |
+| Review and delivery through GitHub                         | Pull requests                  |
+| Recurring work                                             | Automations                    |
+| Long-running, output-oriented work                         | Studio                         |
+| One Synara agent coordinating other Synara tasks           | Agent Gateway                  |
+| Another local application creating restricted Synara tasks | External MCP                   |
+
+Do not begin with maximum parallelism. First learn the complete loop: objective, execution, supervision, verification, review, and delivery.
+
+## Core workflow
+
+<Steps>
+<Step>
+
+### Begin from a known state
+
+Confirm the repository, branch, existing changes, provider, model, and task environment before sending work.
+
+</Step>
+<Step>
+
+### Give one owner a bounded objective
+
+State the outcome, scope, constraints, and verification. Split work when those cannot be expressed clearly.
+
+</Step>
+<Step>
+
+### Supervise the work
+
+Watch plans, tool activity, approvals, questions, and the growing diff. Correct wrong assumptions early.
+
+</Step>
+<Step>
+
+### Verify independently
+
+Inspect every changed file and run the relevant checks. Use the browser when visible behavior matters.
+
+</Step>
+<Step>
+
+### Preserve and deliver intentionally
+
+Commit only reviewed changes. Push, open a pull request, or archive the work only after its ownership and state are understood.
+
+</Step>
+</Steps>
+
+## Guides
+
+<Cards>
+  <Card
+    title="Best practices"
+    description="The operating principles that keep agent work fast, reviewable, and recoverable."
+    href="/docs/workflows/best-practices"
+  />
+  <Card
+    title="Parallel agents"
+    description="Choose between separate tasks, worktrees, subagents, and orchestrated task batches."
+    href="/docs/workflows/parallel-agents"
+  />
+  <Card
+    title="Worktrees"
+    description="Isolate branches and working directories without duplicating repository history."
+    href="/docs/workflows/worktrees"
+  />
+  <Card
+    title="Thread forks"
+    description="Continue the complete conversation or one exact turn in a separate task and environment."
+    href="/docs/workflows/forks"
+  />
+  <Card
+    title="Provider handoffs"
+    description="Continue the same objective and environment with another provider."
+    href="/docs/workflows/handoffs"
+  />
+  <Card
+    title="Debug mode"
+    description="Move from an observed defect to a reproduced, investigated, fixed, and verified result."
+    href="/docs/workflows/debugging"
+  />
+  <Card
+    title="Browser verification"
+    description="Use snapshots, actions, screenshots, logs, and manual review to verify visible behavior."
+    href="/docs/workflows/browser-verification"
+  />
+  <Card
+    title="Headless server"
+    description="Install the release tarball, run Synara without Electron, and verify readiness from the CLI."
+    href="/docs/workflows/headless-server"
+  />
+  <Card
+    title="Pull requests"
+    description="Discover, inspect, fix, validate, and manage GitHub pull requests."
+    href="/docs/workflows/pull-requests"
+  />
+  <Card
+    title="Automations"
+    description="Schedule recurring agent work with reviewable runs and explicit stop conditions."
+    href="/docs/workflows/automations"
+  />
+  <Card
+    title="Studio"
+    description="Organize long-running, output-oriented work separately from daily task conversations."
+    href="/docs/workflows/studio"
+  />
+  <Card
+    title="Agent Gateway"
+    description="Let a Synara provider session coordinate ordinary Synara tasks through app-owned MCP tools."
+    href="/docs/workflows/agent-gateway"
+  />
+  <Card
+    title="External MCP"
+    description="Pair another local application with a restricted, user-approved Synara task surface."
+    href="/docs/workflows/external-mcp"
+  />
+</Cards>
+
+<Callout type="warn" title="More agents do not reduce review responsibility">
+  Parallel tasks, handoffs, automations, and orchestrators can increase throughput. They also
+  increase the number of assumptions, diffs, and failure states you must verify. Keep one clearly
+  identified integration owner responsible for the final result.
+</Callout>

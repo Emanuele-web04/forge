@@ -40,6 +40,26 @@ const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => (
   },
 });
 
+const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+      VALUES (${threadId}, 'project-runtime-journal', 'Runtime journal', ${createdAt}, ${createdAt})
+    `;
+  });
+
+const readOpenTurnReplayCount = (threadId: string) =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const rows = yield* repository.readAcceptedOpenTurnEvents({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      sequenceExclusive: 0,
+      limit: 50,
+    });
+    return rows.filter((row) => row.event.threadId === threadId).length;
+  });
+
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
     Effect.gen(function* () {
@@ -183,6 +203,7 @@ layer("ProviderRuntimeEventRepository", (it) => {
           updatedAt: "2026-07-14T00:01:00.000Z",
         }),
       );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
       yield* sql`
         INSERT INTO projection_turns (
           thread_id, turn_id, state, requested_at, checkpoint_files_json
@@ -217,6 +238,76 @@ layer("ProviderRuntimeEventRepository", (it) => {
         }),
         0,
       );
+    }),
+  );
+
+  it.effect("prunes replay rows whose thread is purged, deleted, or archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const orphanThreadId = ThreadId.makeUnsafe("thread-runtime-orphaned");
+      const orphanTurnId = TurnId.makeUnsafe("turn-runtime-orphaned");
+      const event: ProviderRuntimeEvent = {
+        ...runtimeEvent("runtime-event-orphaned-turn", "orphaned replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      };
+      const persisted = yield* repository.append(event);
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // No projection thread row at all (hard-purged): the open turn is dead.
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
+
+      // Re-open the turn under a live thread: the replay row must survive.
+      const reopened = yield* repository.append({
+        ...runtimeEvent("runtime-event-orphaned-turn-2", "live replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: reopened.sequence,
+          updatedAt: "2026-07-14T00:01:01.000Z",
+        }),
+      );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // Archiving does not interrupt a turn the projection still considers
+      // running, so that replay row must survive the archive.
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${orphanThreadId}, ${orphanTurnId}, 'running', ${event.createdAt}, '[]'
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = ${"2026-07-14T00:02:00.000Z"}
+        WHERE thread_id = ${event.threadId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // An archived thread whose turn the projection never tracked (or has
+      // settled) has nothing left to replay.
+      yield* sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${orphanThreadId} AND turn_id = ${orphanTurnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
     }),
   );
 

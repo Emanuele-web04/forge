@@ -10,7 +10,7 @@ import {
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
-import { ServerSettingsPatch, ServerSettingsView } from "./settings";
+import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
@@ -205,6 +205,13 @@ export const ServerLocalServerProcess = Schema.Struct({
 });
 export type ServerLocalServerProcess = typeof ServerLocalServerProcess.Type;
 
+export const ServerListLocalServersInput = Schema.Struct({
+  // When true, report every listening process (Orca-style "Puertos"), not just
+  // recognized dev servers. App-internals exclusions still apply.
+  includeAll: Schema.optional(Schema.Boolean),
+});
+export type ServerListLocalServersInput = typeof ServerListLocalServersInput.Type;
+
 export const ServerListLocalServersResult = Schema.Struct({
   generatedAt: IsoDateTime,
   servers: Schema.Array(ServerLocalServerProcess),
@@ -259,6 +266,134 @@ export const ServerDiagnosticsResult = Schema.Struct({
   }),
 });
 export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
+
+// ── Resource manager (Orca parity) ─────────────────────────────────────
+// NOTE: `cpuPct` is delta-based (0–100 × cpuCount) and imprecise on short
+// windows; `rssBytes` sums resident pages, so shared pages are double-counted
+// across processes (same caveat Orca documents for Σ RSS). History rings are
+// bounded server-side (RESOURCE_HISTORY_POINTS) for sparklines.
+export const ResourceProcessSnapshot = Schema.Struct({
+  pid: NonNegativeInt,
+  ppid: NonNegativeInt,
+  command: Schema.String.check(Schema.isMaxLength(256)),
+  args: Schema.String.check(Schema.isMaxLength(1_000)),
+  cpuPct: Schema.Number,
+  rssBytes: NonNegativeInt,
+  terminalId: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
+  /** Provider runtime that owns this process (e.g. "codex"), when known. */
+  provider: Schema.optional(TrimmedNonEmptyString),
+  worktreePath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  projectId: Schema.optional(ProjectId),
+});
+export type ResourceProcessSnapshot = typeof ResourceProcessSnapshot.Type;
+
+export const ResourceWorktreeNode = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  cpuPct: Schema.Number,
+  rssBytes: NonNegativeInt,
+  sessionCount: NonNegativeInt,
+  history: Schema.Array(Schema.Number),
+  processes: Schema.Array(ResourceProcessSnapshot),
+});
+export type ResourceWorktreeNode = typeof ResourceWorktreeNode.Type;
+
+export const ResourceProjectNode = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  cpuPct: Schema.Number,
+  rssBytes: NonNegativeInt,
+  sessionCount: NonNegativeInt,
+  history: Schema.Array(Schema.Number),
+  worktrees: Schema.Array(ResourceWorktreeNode),
+});
+export type ResourceProjectNode = typeof ResourceProjectNode.Type;
+
+export const ResourceSnapshot = Schema.Struct({
+  generatedAt: IsoDateTime,
+  totalCpuPct: Schema.Number,
+  totalRssBytes: NonNegativeInt,
+  sessionCount: NonNegativeInt,
+  orphanCount: NonNegativeInt,
+  projects: Schema.Array(ResourceProjectNode),
+  unattributed: Schema.Array(ResourceProcessSnapshot),
+});
+export type ResourceSnapshot = typeof ResourceSnapshot.Type;
+
+export const ResourceGetSnapshotResult = ResourceSnapshot;
+export type ResourceGetSnapshotResult = typeof ResourceGetSnapshotResult.Type;
+
+export const ResourceKillSessionInput = Schema.Struct({
+  terminalId: Schema.optional(TrimmedNonEmptyString),
+  pid: Schema.optional(PositiveInt),
+});
+export type ResourceKillSessionInput = typeof ResourceKillSessionInput.Type;
+
+export const ResourceKillSessionResult = Schema.Struct({
+  pid: PositiveInt,
+  killed: Schema.Boolean,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ResourceKillSessionResult = typeof ResourceKillSessionResult.Type;
+
+export const ResourceKillAllSessionsResult = Schema.Struct({
+  killedCount: NonNegativeInt,
+  pids: Schema.Array(PositiveInt),
+});
+export type ResourceKillAllSessionsResult = typeof ResourceKillAllSessionsResult.Type;
+
+export const ResourceWorkspaceCandidate = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  bytes: NonNegativeInt,
+  protected: Schema.Boolean,
+});
+export type ResourceWorkspaceCandidate = typeof ResourceWorkspaceCandidate.Type;
+
+export const ResourceCleanWorkspacesInput = Schema.Struct({
+  dryRun: Schema.Boolean,
+  paths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type ResourceCleanWorkspacesInput = typeof ResourceCleanWorkspacesInput.Type;
+
+export const ResourceCleanWorkspacesResult = Schema.Struct({
+  dryRun: Schema.Boolean,
+  candidates: Schema.Array(ResourceWorkspaceCandidate),
+  reclaimedBytes: NonNegativeInt,
+  removedPaths: Schema.Array(TrimmedNonEmptyString),
+});
+export type ResourceCleanWorkspacesResult = typeof ResourceCleanWorkspacesResult.Type;
+
+export const ResourceDiskEntry = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  bytes: NonNegativeInt,
+});
+export type ResourceDiskEntry = typeof ResourceDiskEntry.Type;
+
+export const ResourceScanDiskInput = Schema.Struct({
+  paths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type ResourceScanDiskInput = typeof ResourceScanDiskInput.Type;
+
+export const ResourceDiskUsageReport = Schema.Struct({
+  generatedAt: IsoDateTime,
+  totalBytes: NonNegativeInt,
+  reclaimableBytes: NonNegativeInt,
+  entries: Schema.Array(ResourceDiskEntry),
+});
+export type ResourceDiskUsageReport = typeof ResourceDiskUsageReport.Type;
+
+export const ResourceCancelDiskScanResult = Schema.Struct({
+  cancelled: Schema.Boolean,
+});
+export type ResourceCancelDiskScanResult = typeof ResourceCancelDiskScanResult.Type;
+
+export const ResourceRestartDaemonResult = Schema.Struct({
+  restarted: Schema.Boolean,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ResourceRestartDaemonResult = typeof ResourceRestartDaemonResult.Type;
 
 export const ServerVoicePrewarmInput = Schema.Struct({
   provider: ProviderKind,
@@ -380,6 +515,19 @@ export const ServerSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettingsView,
 });
 export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
+
+export const ServerKeepAwakeState = Schema.Struct({
+  available: Schema.Boolean,
+  mode: KeepAwakeMode,
+  active: Schema.Boolean,
+  error: Schema.NullOr(Schema.String),
+});
+export type ServerKeepAwakeState = typeof ServerKeepAwakeState.Type;
+
+export const ServerKeepAwakeUpdatedPayload = Schema.Struct({
+  keepAwake: ServerKeepAwakeState,
+});
+export type ServerKeepAwakeUpdatedPayload = typeof ServerKeepAwakeUpdatedPayload.Type;
 
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,

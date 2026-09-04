@@ -1643,6 +1643,7 @@ describe("SDK OAuth lifecycle", () => {
   });
 
   it("reports incompatible before authorization when discovery advertises no DCR and no public client exists", async () => {
+    const { publicClientId: _publicClientId, ...presetWithoutPublicClient } = PARATY_MCP_PRESET;
     const credentials = makeMemoryCredentials();
     let authorizeCalled = false;
     const oauth = makeSdkMcpConnectionOAuthLifecycle({
@@ -1666,7 +1667,7 @@ describe("SDK OAuth lifecycle", () => {
     );
 
     await expect(
-      Effect.runPromise(oauth.begin({ preset: { ...PARATY_MCP_PRESET, publicClientId: undefined }, attempt, credentials })),
+      Effect.runPromise(oauth.begin({ preset: presetWithoutPublicClient, attempt, credentials })),
     ).rejects.toMatchObject({ category: "incompatible-client" });
     expect(authorizeCalled).toBe(false);
   });

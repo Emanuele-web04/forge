@@ -43,6 +43,7 @@ export function resolveFirstSendTarget(input: {
   activeProject: Project;
   chatWorkspaceRoot: string | null;
   createdAt: Date;
+  defaultModelSelection?: ModelSelection;
   isFirstMessage: boolean;
   isHomeChatContainer: boolean;
   isStudioContainer: boolean;
@@ -51,6 +52,12 @@ export function resolveFirstSendTarget(input: {
   title: string;
   titleSeed: string;
 }): FirstSendTargetResolution {
+  const createDefaultModelSelection =
+    input.defaultModelSelection ??
+    ({
+      provider: "codex",
+      model: DEFAULT_MODEL_BY_PROVIDER.codex,
+    } satisfies ModelSelection);
   const {
     activeProject,
     chatWorkspaceRoot,
@@ -102,10 +109,7 @@ export function resolveFirstSendTarget(input: {
         title,
         kind: "chat",
         createWorkspaceRootIfMissing: true,
-        defaultModelSelection: {
-          provider: "codex",
-          model: DEFAULT_MODEL_BY_PROVIDER.codex,
-        },
+        defaultModelSelection: createDefaultModelSelection,
       },
     };
   }
@@ -128,10 +132,7 @@ export function resolveFirstSendTarget(input: {
       title: buildProjectTitleFromWorkspaceRoot(selectedWorkspaceRoot),
       kind: "project",
       createWorkspaceRootIfMissing: false,
-      defaultModelSelection: {
-        provider: "codex",
-        model: DEFAULT_MODEL_BY_PROVIDER.codex,
-      },
+      defaultModelSelection: createDefaultModelSelection,
     },
   };
 }

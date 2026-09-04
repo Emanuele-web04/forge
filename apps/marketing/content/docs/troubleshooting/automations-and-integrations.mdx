@@ -1,0 +1,208 @@
+---
+title: Automations and integrations
+description: Diagnose scheduled work, duplicate effects, Agent Gateway authority, and External MCP pairing or lifecycle problems.
+---
+
+Automations, Agent Gateway, and External MCP can all create or coordinate tasks, but they have different authority and lifecycle rules. Identify which surface initiated the work before changing schedules, credentials, or task state.
+
+## Automation did not run
+
+Check:
+
+1. The automation is current rather than paused.
+2. Its schedule is valid and the next run is still in the future.
+3. The selected project, provider, model, and environment remain available.
+4. Provider authentication still succeeds.
+5. The previous run is not still active or blocked on approval.
+6. A stop condition did not disable the automation.
+7. Synara was running when the automation depended on the local desktop runtime.
+
+Read the run history before editing the schedule. A missing visible response can still have a recorded dispatch or failure.
+
+## Automation ran but produced no useful result
+
+Open the run’s task and inspect:
+
+- The dispatched prompt
+- Provider and model
+- Environment and branch
+- Approval or user-input gates
+- Final response
+- Diff and untracked files
+- Verification commands
+- Recorded error
+
+Do not broaden the schedule until one manual run of the same objective works reliably.
+
+## Automation created duplicate effects
+
+Stop or pause the automation first.
+
+Then determine whether the duplication came from:
+
+- Two automation definitions
+- A manual run overlapping a scheduled run
+- A retry after an ambiguous timeout
+- A provider repeating a remote mutation
+- A task running in a shared checkout
+- The same request being sent without stable idempotency
+
+A timeout is not proof that the first effect failed. Inspect the repository, remote service, or browser state before replaying the action.
+
+## Stop condition did not disable the automation
+
+A heartbeat stop condition is evaluated after a successful run. Check:
+
+- The run actually completed successfully
+- The condition is observable from the run result
+- The condition is specific enough to evaluate
+- The provider reported evidence rather than an unsupported conclusion
+- The automation history records an auto-disable reason
+
+Prefer measurable conditions such as “the focused test passes five consecutive runs” over “the bug seems fixed.”
+
+## Automation is blocked on approval
+
+Scheduled work still respects runtime permissions.
+
+Options:
+
+- Review and approve the pending action manually
+- Narrow the prompt so approval is unnecessary
+- Use a managed worktree and approval-required mode as the safe default
+- Pause the automation when it cannot complete unattended
+
+Do not grant full access merely to silence recurring approval requests.
+
+## Agent Gateway tool is unavailable
+
+The internal Agent Gateway is thread-scoped and capability-scoped.
+
+Check:
+
+- The caller is a provider session running inside Synara
+- The caller turn is still active for write operations
+- The provider received the gateway capability
+- The requested tool is allowed for that thread
+- The target project and task are visible to the caller
+- The target does not have higher runtime privileges
+- A worktree-isolated caller is not trying to drive a local-checkout task
+
+Read-only tools can remain available when a write tool is blocked. Use `synara_context` and `synara_capabilities` before assuming the gateway is broken.
+
+## Agent Gateway creation was rejected
+
+For `synara_create_thread` or `synara_create_threads`, verify:
+
+- The `requestId` is stable for the same exact plan
+- A changed plan uses a new `requestId`
+- The provider and model come from `synara_capabilities`
+- The project ID exists
+- The batch contains 1–20 tasks
+- The environment and runtime mode are valid
+- The active caller turn has not already spent its creation authority on another plan
+
+Validation and preflight failures should create nothing. Correct the plan before retrying.
+
+## Agent Gateway wait appears stuck
+
+Use `synara_wait_for_threads` rather than tight polling.
+
+If a wait returns without completion:
+
+- Inspect the returned task statuses
+- Check approval and user-input gates
+- Read the target task directly
+- Use diagnostics when visible state and provider events disagree
+- Continue with a bounded later wait
+
+A wait timeout means the wait ended; it does not mean the target task failed.
+
+## External MCP is waiting for pairing
+
+Open **Settings → Integrations** and inspect the integration.
+
+- Use **Resume pairing** when the short-lived pairing code expired
+- Use **Continue setup** for an integration that is already paired
+- Complete the generated setup prompt in the intended MCP client
+- Confirm the client reaches `synara_overview`
+- Verify the setup targets the currently running Synara installation and data directory
+
+A new pairing code does not replace an already paired credential.
+
+## External MCP is paired but not connected
+
+“Paired” means the local credential exchange completed. “Connected” means the client made its first request.
+
+Check:
+
+- The MCP client configuration launches the generated local bridge command
+- The configured runtime and server paths still exist
+- The explicit Synara data directory is correct
+- The intended integration ID is selected when more than one credential exists
+- Synara is running and loopback-only
+- The credential is not expired or revoked
+
+Do not copy the raw integration credential into the client configuration. The generated launcher reads the private local credential file.
+
+## External MCP reports no allowed projects
+
+Review the integration’s project scope in Synara.
+
+The external tool surface lists only projects explicitly allowed by the integration. System-managed containers such as Chats and Studio are not ordinary projects.
+
+Grant only the projects the client needs. Avoid “all current and future projects” when a narrow list is sufficient.
+
+## External MCP cannot create a task
+
+Creation requires:
+
+- An allowed project
+- Provider and model values from the integration’s capabilities response
+- A prompt
+- A stable `requestId`
+- Capacity under the per-integration active-agent-task limit
+- The required capability scope
+
+The safe defaults are a managed worktree and approval-required runtime. Local checkout and full-access execution require separate explicit scopes.
+
+## External MCP reports a rate or active-task limit
+
+Wait for the current rate window or active task to clear. Do not create another integration to bypass a safety limit.
+
+An active task slot remains occupied while its current turn is pending or running. An idempotent retry of the same creation request does not consume a second slot.
+
+## Integration targets the wrong Synara instance
+
+Stop the client before sending more requests.
+
+Generated setup includes the exact executable and data directory of the running installation. A manually written bridge configuration must do the same.
+
+When several Synara installations or credentials exist:
+
+- Use the intended integration ID explicitly
+- Verify the `--home-dir` path
+- Remove obsolete client configuration
+- Revoke credentials that should no longer work
+- Pair a new integration rather than copying another installation’s credential
+
+## Revoked or expired integration
+
+Revocation takes effect immediately. Create and pair a new integration when access is needed again.
+
+Do not restore a revoked credential file from backup as a recovery method. The server checks lifecycle state independently of the local file.
+
+## Integration troubleshooting checklist
+
+- [ ] The initiating surface was identified
+- [ ] Automation current/paused state and run history were checked
+- [ ] Ambiguous effects were inspected before replay
+- [ ] Agent Gateway context and capabilities were read
+- [ ] Stable request IDs were preserved for exact retries
+- [ ] External MCP pairing and connected state were distinguished
+- [ ] The explicit Synara installation and data directory were verified
+- [ ] Project, capability, rate, and active-task limits were respected
+- [ ] No raw integration credential was shared
+- [ ] Revoked credentials were replaced rather than restored
+
+Continue with [Automations](/docs/workflows/automations), [Agent Gateway](/docs/workflows/agent-gateway), or [External MCP](/docs/workflows/external-mcp) for normal operation.

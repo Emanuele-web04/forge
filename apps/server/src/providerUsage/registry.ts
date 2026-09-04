@@ -9,8 +9,9 @@ import { claudeUsageFetcher } from "./providers/claude";
 import { codexUsageFetcher } from "./providers/codex";
 import { cursorUsageFetcher } from "./providers/cursor";
 import { grokUsageFetcher } from "./providers/grok";
-import { droidUsageFetcher, kiloUsageFetcher, piUsageFetcher } from "./providers/localCredential";
+import { droidUsageFetcher, piUsageFetcher } from "./providers/localCredential";
 import { opencodeUsageFetcher } from "./providers/opencode";
+import { devinUsageFetcher } from "./providers/devin";
 import type { ProviderUsageFetcher } from "./types";
 
 export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsageFetcher>> = {
@@ -20,7 +21,7 @@ export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsage
   antigravity: antigravityUsageFetcher,
   grok: grokUsageFetcher,
   droid: droidUsageFetcher,
-  kilo: kiloUsageFetcher,
   opencode: opencodeUsageFetcher,
   pi: piUsageFetcher,
+  devin: devinUsageFetcher,
 };

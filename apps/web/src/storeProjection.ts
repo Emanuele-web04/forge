@@ -69,7 +69,6 @@ import type {
   ThreadShell,
   ThreadTurnState,
 } from "./types";
-import { resolveSubagentSpawnOrdinal } from "./lib/subagentPresentation";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
 export type ProjectMatchPolicy = "id-only" | "id-or-cwd";
@@ -105,6 +104,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
@@ -344,11 +345,9 @@ function sidebarThreadSummariesEqual(
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
-    (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
-    (left.subagentOrdinal ?? null) === (right.subagentOrdinal ?? null) &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
@@ -356,6 +355,8 @@ function sidebarThreadSummariesEqual(
     left.hasLiveTailWork === right.hasLiveTailWork &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
+    (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
@@ -364,7 +365,6 @@ function sidebarThreadSummariesEqual(
 function buildSidebarThreadSummary(
   thread: Thread,
   previous?: SidebarThreadSummary,
-  relatedThreads?: readonly Thread[],
 ): SidebarThreadSummary {
   const metadata = resolveThreadSidebarMetadata(thread);
   const nextSummary: SidebarThreadSummary = {
@@ -390,16 +390,9 @@ function buildSidebarThreadSummary(
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
     creationSource: thread.creationSource ?? null,
-    sourceThreadId: thread.sourceThreadId ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
-    subagentOrdinal:
-      relatedThreads && thread.parentThreadId
-        ? (resolveSubagentSpawnOrdinal({ thread, threads: relatedThreads }) ??
-          previous?.subagentOrdinal ??
-          null)
-        : (previous?.subagentOrdinal ?? null),
     latestUserMessageAt: metadata.latestUserMessageAt,
     hasPendingApprovals: metadata.hasPendingApprovals,
     hasPendingUserInput: metadata.hasPendingUserInput,
@@ -407,6 +400,8 @@ function buildSidebarThreadSummary(
     hasLiveTailWork: metadata.hasLiveTailWork,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
+    sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
   };
@@ -1296,7 +1291,7 @@ export function syncServerShellSnapshot(
   const nextSidebarThreadSummaryById = Object.fromEntries(
     threads.map((thread) => [
       thread.id,
-      buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id], threads),
+      buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id]),
     ]),
   ) as Record<string, SidebarThreadSummary>;
   const sidebarThreadSummaryById = recordsShallowEqual(
@@ -1480,7 +1475,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   const nextSidebarThreadSummaryById = Object.fromEntries(
     threads.map((thread) => [
       thread.id,
-      buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id], threads),
+      buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id]),
     ]),
   ) as Record<string, SidebarThreadSummary>;
   const sidebarThreadSummaryById = recordsShallowEqual(

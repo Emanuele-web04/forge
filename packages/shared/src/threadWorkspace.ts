@@ -40,12 +40,17 @@ export function normalizeWorkspaceRootForComparison(
   }
 
   const withForwardSlashes = trimmed.replace(/\\/g, "/");
+  const isWindowsDriveRoot = /^[a-z]:\/+$/i.test(withForwardSlashes);
   const hasUncPrefix = withForwardSlashes.startsWith("//");
   const prefix = hasUncPrefix ? "//" : withForwardSlashes.startsWith("/") ? "/" : "";
   const body = withForwardSlashes.slice(prefix.length).replace(/\/+/g, "/");
   const normalized =
     prefix.length > 0 ? `${prefix}${body.replace(/\/+$/g, "")}` : body.replace(/\/+$/g, "");
-  let finalValue = normalized.length > 0 ? normalized : prefix;
+  let finalValue = isWindowsDriveRoot
+    ? `${withForwardSlashes.slice(0, 2)}/`
+    : normalized.length > 0
+      ? normalized
+      : prefix;
 
   // macOS commonly surfaces the same temp/workspace location through both
   // `/var/...` and `/private/var/...` (likewise `/tmp/...` vs `/private/tmp/...`).

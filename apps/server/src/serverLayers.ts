@@ -17,6 +17,7 @@ import { ThreadGitMetadataReactorLive } from "./orchestration/Layers/ThreadGitMe
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
+import { SidechatExpiryReactorLive } from "./orchestration/Layers/SidechatExpiryReactor";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
 import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckpointCoordinator";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
@@ -38,6 +39,7 @@ import { ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
+import { KeepAwakeLive } from "./keepAwake";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
@@ -57,7 +59,6 @@ import { GitHubPullRequestProviderLive } from "./pullRequests/providers/GitHubPu
 import { ParatyBitbucketPullRequestProviderLive } from "./pullRequests/providers/ParatyBitbucketPullRequestProvider";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
-import { ProviderAccountServiceLive } from "./providerAccounts";
 import {
   makeMcpConnectionService,
   makeSdkMcpConnectionOAuthLifecycle,
@@ -82,13 +83,6 @@ import {
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
-// Both the RPC/background graph and the provider-adapter graph must resolve the
-// same account selection and authentication jobs. Keeping this as one layer
-// value lets Effect memoize one ProviderAccountService across both graphs.
-const ProviderAccountServiceWithSettingsLive = ProviderAccountServiceLive.pipe(
-  Layer.provideMerge(ServerSettingsLive),
-);
-
 export function provideThreadDeletionReactorDeviceService<
   ReactorServices,
   ReactorError,
@@ -110,11 +104,6 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
-  const providerAccountLayer = ProviderAccountServiceWithSettingsLive;
-  const textGenerationLayer = TextGenerationLayerLive.pipe(
-    Layer.provideMerge(providerAccountLayer),
-  );
-  const gitLayer = GitLayerLive.pipe(Layer.provideMerge(providerAccountLayer));
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
@@ -140,18 +129,22 @@ export function makeServerRuntimeServicesLayer(
   );
   const threadGitMetadataReactorLayer = ThreadGitMetadataReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(gitLayer),
+    Layer.provideMerge(GitLayerLive),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(textGenerationLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const sidechatExpiryReactorLayer = SidechatExpiryReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
@@ -163,6 +156,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(checkpointReactorLayer),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(threadGitMetadataReactorLayer),
+    Layer.provideMerge(sidechatExpiryReactorLayer),
   );
   const threadDeletionReactorLayer = provideThreadDeletionReactorDeviceService(
     ThreadDeletionReactorLive.pipe(
@@ -200,7 +194,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(AutomationRepositoryLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(textGenerationLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
@@ -281,17 +275,21 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(DeviceServiceLive),
   );
   const githubPullRequestProviderLayer = GitHubPullRequestProviderLive.pipe(
-    Layer.provideMerge(gitLayer),
+    Layer.provideMerge(GitLayerLive),
   );
   const bitbucketPullRequestProviderLayer = ParatyBitbucketPullRequestProviderLive.pipe(
     Layer.provideMerge(outboundMcpLayer),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
-    Layer.provideMerge(gitLayer),
+    Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(githubPullRequestProviderLayer),
     Layer.provideMerge(bitbucketPullRequestProviderLayer),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
+  );
+  const keepAwakeLayer = KeepAwakeLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
   );
 
   return Layer.mergeAll(
@@ -309,20 +307,21 @@ export function makeServerRuntimeServicesLayer(
     externalMcpGatewayLayer,
     outboundMcpLayer,
     providerHealthLayer,
-    providerAccountLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
+    sidechatExpiryReactorLayer,
     threadGitMetadataReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,
     DeviceServiceLive,
-    gitLayer,
-    textGenerationLayer,
+    GitLayerLive,
+    TextGenerationLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,
+    keepAwakeLayer,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     authServicesLayer,
@@ -348,7 +347,6 @@ export function makeServerApplicationLayers() {
   // single ServerSettings service instead of capturing private defaults.
   const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
     Layer.provideMerge(ServerSettingsLive),
-    Layer.provideMerge(ProviderAccountServiceWithSettingsLive),
   );
   return {
     runtimeServicesLayer,

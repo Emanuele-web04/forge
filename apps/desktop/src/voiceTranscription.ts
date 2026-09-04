@@ -3,7 +3,7 @@
 // Layer: Desktop IPC + ChatGPT upload bridge
 // Depends on: Codex auth discovery, Electron net uploads, and the shared server voice contract.
 
-import * as ChildProcess from "node:child_process";
+import { spawnProcess } from "@synara/shared/processRuntime";
 
 import { app, ipcMain } from "electron";
 import type {
@@ -20,7 +20,6 @@ import {
   decodeOutboundText,
   type OutboundHttpResponse,
 } from "@synara/shared/outboundHttp";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
 
 const MAX_VOICE_DURATION_MS = 120_000;
@@ -88,17 +87,11 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const prepared = prepareWindowsSafeProcess("codex", ["app-server"], {
-      cwd,
-      env: process.env,
-    });
-    const child = ChildProcess.spawn(prepared.command, prepared.args, {
+    const child = spawnProcess("codex", ["app-server"], {
       cwd,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: prepared.shell,
-      windowsHide: prepared.windowsHide,
-      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      requireExecutable: true,
     });
 
     let settled = false;
@@ -120,11 +113,22 @@ async function resolveDesktopVoiceAuth(
       resolve(value);
     };
     const send = (payload: Record<string, unknown>) => {
-      child.stdin.write(`${JSON.stringify(payload)}\n`);
+      if (!settled && child.stdin.writable) {
+        child.stdin.write(`${JSON.stringify(payload)}\n`);
+      }
     };
 
     child.once("error", (error) => {
       rejectOnce(new Error(`Could not start Codex auth discovery: ${error.message}`));
+    });
+    child.once("close", (code, signal) => {
+      if (!settled) {
+        rejectOnce(
+          new Error(
+            `Codex auth discovery exited before the handshake completed (code=${code ?? "null"}, signal=${signal ?? "null"}).`,
+          ),
+        );
+      }
     });
     child.stderr.on("data", () => {
       // Ignore stderr noise from the discovery process; the JSON-RPC result is authoritative.

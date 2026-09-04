@@ -37,6 +37,7 @@ describe("resolveEnvironmentProviderUsageSummary", () => {
       providerName: "Codex",
       rows,
       snapshot: providerSnapshot,
+      hasUsageLines: false,
     });
 
     expect(summary.rows.map((row) => [row.label, row.remainingLabel])).toEqual([
@@ -58,9 +59,38 @@ describe("resolveEnvironmentProviderUsageSummary", () => {
       providerName: "Codex",
       rows: [],
       snapshot: providerSnapshot,
+      hasUsageLines: false,
     });
 
     expect(summary.statusLabel).toBe(label);
     expect(summary.ariaLabel).toBe(`Codex usage: ${label}`);
+  });
+
+  it("falls back to No data when the batch has no snapshot for the provider", () => {
+    const summary = resolveEnvironmentProviderUsageSummary({
+      providerName: "Claude",
+      rows: [],
+      snapshot: undefined,
+      hasUsageLines: false,
+    });
+
+    expect(summary.statusLabel).toBe("No data");
+    expect(summary.ariaLabel).toBe("Claude usage: No data");
+  });
+
+  it("reports connected when an ok provider only exposes usage text", () => {
+    const providerSnapshot = snapshot({
+      usageLines: [{ label: "Limits", value: "Remaining limits stay in the provider CLI." }],
+    });
+
+    const summary = resolveEnvironmentProviderUsageSummary({
+      providerName: "Droid",
+      rows: [],
+      snapshot: providerSnapshot,
+      hasUsageLines: true,
+    });
+
+    expect(summary.statusLabel).toBe("Connected");
+    expect(summary.ariaLabel).toBe("Droid usage: Connected");
   });
 });

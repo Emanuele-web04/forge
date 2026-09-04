@@ -25,10 +25,10 @@ export type ProviderModelPrefetchSettings = Pick<
   | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
-  | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
@@ -46,9 +46,9 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "cursor",
   "antigravity",
   "grok",
-  "kilo",
   "opencode",
   "pi",
+  "devin",
 ];
 
 /** Warm results stay fresh for 30 minutes instead of the interactive 60s. */
@@ -132,6 +132,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
       });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
+        cwd,
+      });
     case "antigravity":
       return providerModelsQueryOptions({
         provider: "antigravity",
@@ -147,12 +153,6 @@ export function providerModelsPrefetchQueryOptions(input: {
       return providerModelsQueryOptions({
         provider: "droid",
         binaryPath: settings.droidBinaryPath || null,
-        cwd,
-      });
-    case "kilo":
-      return providerModelsQueryOptions({
-        provider: "kilo",
-        binaryPath: settings.kiloBinaryPath || null,
         cwd,
       });
     case "opencode":
@@ -184,12 +184,6 @@ function providerAgentsPrefetchQueryOptions(input: {
       return providerAgentsQueryOptions({ provider: "claudeAgent" });
     case "codex":
       return providerAgentsQueryOptions({ provider: "codex" });
-    case "kilo":
-      return providerAgentsQueryOptions({
-        provider: "kilo",
-        binaryPath: settings.kiloBinaryPath || null,
-        cwd,
-      });
     case "opencode":
       return providerAgentsQueryOptions({
         provider: "opencode",

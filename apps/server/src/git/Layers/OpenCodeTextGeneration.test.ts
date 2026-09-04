@@ -67,6 +67,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 
       return {
         url,
+        pid: null,
         exitCode: Effect.never,
       };
     }),

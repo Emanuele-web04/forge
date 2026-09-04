@@ -177,6 +177,16 @@ import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -187,6 +197,7 @@ import type {
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
   ServerGetSettingsResult,
+  ServerListLocalServersInput,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateInput,
@@ -203,13 +214,6 @@ import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "./server";
-import type {
-  ServerCreateProviderAccountInput,
-  ServerListProviderAccountsResult,
-  ServerProviderAccountInput,
-  ServerProviderAccountMutationResult,
-  ServerSetActiveProviderAccountInput,
-} from "./providerAccounts";
 import type {
   TerminalAckOutputInput,
   TerminalClearInput,
@@ -803,19 +807,6 @@ export interface NativeApi {
     getEnvironment: () => Promise<ServerGetEnvironmentResult>;
     getSettings: () => Promise<ServerGetSettingsResult>;
     updateSettings: (input: ServerUpdateSettingsInput) => Promise<ServerUpdateSettingsResult>;
-    listProviderAccounts: () => Promise<ServerListProviderAccountsResult>;
-    createProviderAccount: (
-      input: ServerCreateProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    setActiveProviderAccount: (
-      input: ServerSetActiveProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    reauthenticateProviderAccount: (
-      input: ServerProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
-    deleteProviderAccount: (
-      input: ServerProviderAccountInput,
-    ) => Promise<ServerProviderAccountMutationResult>;
     getAuthSession: () => Promise<AuthSessionState>;
     bootstrapAuth: (input: AuthBootstrapInput) => Promise<AuthBootstrapResult>;
     bootstrapBearerAuth: (input: AuthBootstrapInput) => Promise<AuthBearerBootstrapResult>;
@@ -847,7 +838,7 @@ export interface NativeApi {
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
-    listLocalServers: () => Promise<ServerListLocalServersResult>;
+    listLocalServers: (input: ServerListLocalServersInput) => Promise<ServerListLocalServersResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
@@ -856,6 +847,15 @@ export interface NativeApi {
       input: ServerListProviderUsageInput,
     ) => Promise<ServerListProviderUsageResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    getResourceSnapshot: () => Promise<ResourceGetSnapshotResult>;
+    killResourceSession: (input: ResourceKillSessionInput) => Promise<ResourceKillSessionResult>;
+    killAllResourceSessions: () => Promise<ResourceKillAllSessionsResult>;
+    cleanResourceWorkspaces: (
+      input: ResourceCleanWorkspacesInput,
+    ) => Promise<ResourceCleanWorkspacesResult>;
+    scanResourceDisk: (input: ResourceScanDiskInput) => Promise<ResourceDiskUsageReport>;
+    cancelResourceDiskScan: () => Promise<ResourceCancelDiskScanResult>;
+    restartResourceDaemon: () => Promise<ResourceRestartDaemonResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;

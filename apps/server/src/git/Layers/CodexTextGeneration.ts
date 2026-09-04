@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -10,13 +11,11 @@ import {
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
-import { ProviderAccountService } from "../../providerAccounts.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   CodexTextGeneration,
@@ -125,9 +124,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig);
-  const providerAccounts = Option.getOrUndefined(
-    yield* Effect.serviceOption(ProviderAccountService),
-  );
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -300,12 +296,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
-      // Managed account selection is server-authoritative. In layers that do not
-      // install the account service (focused unit tests), retain the historical
-      // explicit-home behavior.
-      const resolvedCodexHomePath = providerAccounts
-        ? (yield* providerAccounts.resolveEnvironment("codex")).homePath
-        : resolveCodexHomePath(codexHomePath, providerOptions);
+      const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
       const schemaPath = yield* writeTempFile(
         operation,
         "codex-schema",
@@ -351,12 +342,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
           "-",
         ];
-        const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
-        const command = ChildProcess.make(prepared.command, prepared.args, {
+        const command = makeEffectProcessCommand(codexBinaryPath, args, {
           cwd,
           env,
-          shell: prepared.shell,
-          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           stdin: {
             stream: Stream.make(new TextEncoder().encode(prompt)),
           },

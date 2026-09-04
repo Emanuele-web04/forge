@@ -1,0 +1,81 @@
+---
+title: Keyboard shortcuts
+description: The full default keymap, verified against the Synara source, plus JSON customization.
+---
+
+`mod` means Command on macOS and Control on Windows or Linux.
+
+## Navigate
+
+| Shortcut                      | Action                                             |
+| ----------------------------- | -------------------------------------------------- |
+| `mod+k`                       | Search the sidebar                                 |
+| `mod+b`                       | Toggle the sidebar                                 |
+| `mod+1` … `mod+9`             | Jump to the Nth thread                             |
+| `mod+shift+]` / `mod+shift+[` | Next / previous visible chat                       |
+| `ctrl+tab` / `ctrl+shift+tab` | Cycle recent views                                 |
+| `mod+shift+o`                 | Add a project                                      |
+| `mod+i`                       | Import a thread                                    |
+| `mod+o`                       | Open the favorite file in the editor               |
+| `mod+p`                       | Search files by name in the active project         |
+| `mod+shift+f`                 | Search matching source lines in the active project |
+| `mod+f`                       | Find text in the current conversation              |
+
+## Create
+
+| Shortcut                                | Action                             |
+| --------------------------------------- | ---------------------------------- |
+| `mod+n`                                 | New task in the active project     |
+| `mod+shift+n`                           | New task in the latest project     |
+| `mod+alt+n`                             | New chat without a project         |
+| `mod+shift+t`                           | New terminal-first task            |
+| `mod+alt+c` / `mod+alt+x` / `mod+alt+r` | New Claude / Codex / Cursor thread |
+| `mod+\`                                 | Split the current chat             |
+
+## Composer and models
+
+| Shortcut          | Action                             |
+| ----------------- | ---------------------------------- |
+| `cmd+l`           | Focus or blur the composer         |
+| `mod+shift+m`     | Toggle the model picker            |
+| `alt+]` / `alt+[` | Cycle the active provider's models |
+| `mod+shift+e`     | Toggle the reasoning/effort picker |
+| `mod+shift+u`     | Open usage settings                |
+
+## Panels and terminals
+
+| Shortcut           | Action                                                               | Context              |
+| ------------------ | -------------------------------------------------------------------- | -------------------- |
+| `mod+j`            | Toggle the terminal drawer                                           | Anywhere             |
+| `mod+shift+j`      | Full-width terminal workspace (`mod+1`/`mod+2` switch terminal/chat) | Anywhere             |
+| `mod+d`            | Toggle the diff panel                                                | Outside the terminal |
+| `mod+d`            | Split the terminal                                                   | Terminal focused     |
+| `mod+shift+arrows` | Directional terminal splits                                          | Terminal focused     |
+| `mod+t` / `mod+w`  | New / close terminal tab                                             | Terminal focused     |
+| `mod+shift+b`      | Toggle the browser preview                                           | Outside the terminal |
+
+Opening a file or source match sends it to the current task's file pane. Content search requires at least two characters and shows the matching path, line number, and source excerpt. The iOS Simulator exposes a customizable `device.toggle` command but has no default shortcut; open it from the right-dock add menu or assign a key in Settings.
+
+<Callout type="info" title="Spaces (preview on main)">
+  Synara `main` adds project spaces with `mod+alt+←` / `mod+alt+→` to switch spaces and
+  `mod+alt+1`…`9` to jump. See [Features on main](/docs/reference/main-preview).
+</Callout>
+
+## Custom keybindings
+
+A settings panel lets you explore and remap shortcuts. For full control, Synara reads user overrides from:
+
+```text
+~/.synara/userdata/keybindings.json
+```
+
+The file contains an ordered JSON array. The last matching rule whose `when` expression is true wins.
+
+```json
+[
+  { "key": "mod+g", "command": "terminal.toggle" },
+  { "key": "mod+shift+g", "command": "terminal.new", "when": "terminalFocus" }
+]
+```
+
+Supported context keys currently include `terminalFocus` and `terminalOpen`. Expressions support `!`, `&&`, `||`, and parentheses. Invalid rules are ignored and logged by the local server.

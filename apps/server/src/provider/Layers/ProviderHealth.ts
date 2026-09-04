@@ -20,7 +20,6 @@ import type {
 import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -41,7 +40,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
   compareCodexCliVersions,
@@ -65,6 +65,11 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import {
+  hasDevinApiKeyEnv,
+  readDevinStoredCredentials,
+  resolveDevinBinaryPath,
+} from "../acp/DevinAcpSupport";
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
@@ -103,7 +108,6 @@ import {
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
-import { ProviderAccountService } from "../../providerAccounts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -118,7 +122,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
-const KILO_PROVIDER = "kilo" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
@@ -132,7 +136,7 @@ const PROVIDERS = [
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
-  KILO_PROVIDER,
+  DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
@@ -179,15 +183,6 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   return (
     normalized.endsWith("/.opencode/bin/opencode") ||
     normalized.endsWith("/.opencode/bin/opencode.exe")
-  );
-}
-
-function isKiloNativeCommandPath(commandPath: string): boolean {
-  const normalized = normalizeCommandPath(commandPath);
-  return (
-    normalized.endsWith("/.kilo/bin/kilo") ||
-    normalized.endsWith("/.local/bin/kilo") ||
-    normalized.includes("/.local/share/kilo/bin/")
   );
 }
 
@@ -251,19 +246,6 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       args: () => ["update"],
       lockKey: "droid-native",
       strategy: "always",
-    },
-  },
-  kilo: {
-    provider: KILO_PROVIDER,
-    binaryName: "kilo",
-    npmPackageName: "@kilocode/cli",
-    homebrew: null,
-    nativeUpdate: {
-      executable: "kilo",
-      args: () => ["upgrade"],
-      lockKey: "kilo-native",
-      strategy: "matching-path",
-      isCommandPath: isKiloNativeCommandPath,
     },
   },
   opencode: {
@@ -482,7 +464,7 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
-const probeClaudeSubscription = (env: NodeJS.ProcessEnv = process.env) => {
+const probeClaudeSubscription = () => {
   const abort = new AbortController();
   return Effect.tryPromise(async () => {
     const { query: claudeQuery } = await loadClaudeAgentSdk();
@@ -497,7 +479,6 @@ const probeClaudeSubscription = (env: NodeJS.ProcessEnv = process.env) => {
         settingSources: ["user", "project", "local"],
         allowedTools: [],
         stderr: () => {},
-        env,
       },
     });
     const init = await q.initializationResult();
@@ -679,10 +660,7 @@ const runProviderCommand = (
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const prepared = prepareWindowsSafeProcess(executable, args, { env });
-    const command = ChildProcess.make(prepared.command, prepared.args, {
-      shell: prepared.shell,
-      ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    const command = makeEffectProcessCommand(executable, args, {
       env,
       // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
       // such as Antigravity waiting even after a read-only subcommand has finished.
@@ -740,15 +718,6 @@ const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
 
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
   runProviderCommand(executable, args, providerCommandEnv(OPENCODE_PROVIDER)).pipe(
-    Effect.flatMap((result) =>
-      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
-        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
-        : Effect.succeed(result),
-    ),
-  );
-
-const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
-  runProviderCommand(executable, args, providerCommandEnv(KILO_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1070,16 +1039,14 @@ export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
   homeDir?: string,
-  options?: {
-    readonly falseNegativeRetryDelayMs?: number;
-    readonly processEnv?: NodeJS.ProcessEnv;
-  },
+  options?: { readonly falseNegativeRetryDelayMs?: number },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const baseEnv = options?.processEnv ?? process.env;
-    const claudeEnv = buildClaudeProcessEnv(homeDir ? { env: baseEnv, homeDir } : { env: baseEnv });
+    const claudeEnv = buildClaudeProcessEnv(
+      homeDir ? { env: process.env, homeDir } : { env: process.env },
+    );
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* probeProviderCliVersion(
@@ -1486,76 +1453,6 @@ export const makeCheckOpenCodeProviderStatus = (
 
 export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 
-// ── Kilo health check ───────────────────────────────────────────────
-
-export const makeCheckKiloProviderStatus = (
-  binaryPath?: string,
-): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
-
-    const versionProbe = yield* probeProviderCliVersion(
-      runKiloCommand(["--version"], executable),
-      DEFAULT_TIMEOUT_MS,
-    );
-
-    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
-      const error = versionProbe.cause;
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message:
-          versionProbe.outcome === "missing"
-            ? "Kilo CLI (`kilo`) is not installed or not on PATH."
-            : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
-    }
-
-    if (versionProbe.outcome === "timeout") {
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Kilo CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    if (versionProbe.outcome === "nonzero") {
-      const version = versionProbe.result;
-      const detail = detailFromResult(version);
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Kilo CLI is installed but failed to run. ${detail}`
-          : "Kilo CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const version = versionProbe.result;
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-    return {
-      provider: KILO_PROVIDER,
-      status: "ready" as const,
-      available: true,
-      authStatus: "unknown" as const,
-      version: parsedVersion,
-      checkedAt,
-      message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
-    } satisfies ServerProviderStatus;
-  });
-
-export const checkKiloProviderStatus = makeCheckKiloProviderStatus();
-
 // ── Pi health check ─────────────────────────────────────────────
 
 export const checkPiProviderStatus = (
@@ -1928,6 +1825,88 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+  readStoredCredentials: typeof readDevinStoredCredentials = readDevinStoredCredentials,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = buildProviderChildEnvironment({ provider: DEVIN_PROVIDER });
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], env),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Devin CLI (`devin`) is not installed or not on PATH."
+            : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const versionResult = versionProbe.result;
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const storedCredentials = yield* Effect.promise(() => readStoredCredentials());
+    const hasApiKey = hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
+
+    return {
+      provider: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
+        : {
+            message:
+              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2128,9 +2107,6 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
-      const providerAccounts = Option.getOrUndefined(
-        yield* Effect.serviceOption(ProviderAccountService),
-      );
       const changesPubSub = yield* Effect.acquireRelease(
         PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
         PubSub.shutdown,
@@ -2190,12 +2166,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const claudeSubscriptionCache = yield* Cache.make({
         capacity: 1,
         timeToLive: Duration.minutes(5),
-        lookup: (_: "claude") =>
-          providerAccounts
-            ? providerAccounts
-                .resolveEnvironment("claudeAgent")
-                .pipe(Effect.flatMap((account) => probeClaudeSubscription(account.env)))
-            : probeClaudeSubscription(),
+        lookup: (_: "claude") => probeClaudeSubscription(),
       });
       const resolveClaudeSubscription = Cache.get(claudeSubscriptionCache, "claude").pipe(
         Effect.map((probe) => probe?.subscriptionType),
@@ -2215,12 +2186,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.grok.binaryPath;
           case "droid":
             return settings.providers.droid.binaryPath;
-          case "kilo":
-            return settings.providers.kilo.binaryPath;
           case "opencode":
             return settings.providers.opencode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
+          case "devin":
+            return settings.providers.devin.binaryPath;
         }
       };
 
@@ -2260,7 +2231,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2377,81 +2348,68 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         .pipe(
           Effect.flatMap(() => serverSettings.getSettings),
           Effect.flatMap((settings) =>
-            Effect.gen(function* () {
-              const codexAccount = providerAccounts
-                ? yield* providerAccounts.resolveEnvironment("codex")
-                : {
-                    accountId: "system",
-                    env: process.env,
-                    homePath: settings.providers.codex.homePath,
-                  };
-              const claudeAccount = providerAccounts
-                ? yield* providerAccounts.resolveEnvironment("claudeAgent")
-                : { accountId: "system", env: process.env };
-              return yield* Effect.all(
-                [
-                  checkProviderWhenEnabled(
-                    settings,
-                    CODEX_PROVIDER,
-                    makeCheckCodexProviderStatus(
-                      settings.providers.codex.binaryPath,
-                      codexAccount.homePath,
-                    ),
+            Effect.all(
+              [
+                checkProviderWhenEnabled(
+                  settings,
+                  CODEX_PROVIDER,
+                  makeCheckCodexProviderStatus(
+                    settings.providers.codex.binaryPath,
+                    settings.providers.codex.homePath,
                   ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    CLAUDE_AGENT_PROVIDER,
-                    makeCheckClaudeProviderStatus(
-                      resolveClaudeSubscription,
-                      settings.providers.claudeAgent.binaryPath,
-                      serverConfig.homeDir,
-                      { processEnv: claudeAccount.env },
-                    ),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  CLAUDE_AGENT_PROVIDER,
+                  makeCheckClaudeProviderStatus(
+                    resolveClaudeSubscription,
+                    settings.providers.claudeAgent.binaryPath,
+                    serverConfig.homeDir,
                   ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    CURSOR_PROVIDER,
-                    makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  CURSOR_PROVIDER,
+                  makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEVIN_PROVIDER,
+                  makeCheckDevinProviderStatus(settings.providers.devin?.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  ANTIGRAVITY_PROVIDER,
+                  checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  GROK_PROVIDER,
+                  makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DROID_PROVIDER,
+                  makeCheckDroidProviderStatus(settings.providers.droid.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  OPENCODE_PROVIDER,
+                  makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  PI_PROVIDER,
+                  checkPiProviderStatus(
+                    settings.providers.pi.agentDir,
+                    settings.providers.pi.binaryPath,
                   ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    ANTIGRAVITY_PROVIDER,
-                    checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
-                  ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    GROK_PROVIDER,
-                    makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
-                  ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    DROID_PROVIDER,
-                    makeCheckDroidProviderStatus(settings.providers.droid.binaryPath),
-                  ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    KILO_PROVIDER,
-                    makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
-                  ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    OPENCODE_PROVIDER,
-                    makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
-                  ),
-                  checkProviderWhenEnabled(
-                    settings,
-                    PI_PROVIDER,
-                    checkPiProviderStatus(
-                      settings.providers.pi.agentDir,
-                      settings.providers.pi.binaryPath,
-                    ),
-                  ),
-                ],
-                {
-                  concurrency: "unbounded",
-                },
-              );
-            }),
+                ),
+              ],
+              {
+                concurrency: "unbounded",
+              },
+            ),
           ),
         )
         .pipe(
@@ -2631,11 +2589,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 .join(OS.platform() === "win32" ? ";" : ":"),
             }
           : baseEnv;
-        const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: updateEnv });
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.command, input.args, {
             env: updateEnv,
           }),
         );

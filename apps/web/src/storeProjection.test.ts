@@ -567,9 +567,8 @@ describe("store projection", () => {
     expect(thread?.sourceThreadId).toBe(sourceThreadId);
   });
 
-  it("carries cross-thread provenance onto the sidebar summary and rebuilds it when only that field changes", () => {
+  it("carries creationSource onto the sidebar summary and rebuilds it when only that field changes", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const sourceThreadId = ThreadId.makeUnsafe("thread-origin");
     const initial = syncServerReadModel(
       makeState(makeThread({ id: threadId })),
       makeReadModel(makeReadModelThread({ id: threadId })),
@@ -579,53 +578,15 @@ describe("store projection", () => {
 
     const next = syncServerReadModel(
       initial,
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          creationSource: "synara_mcp",
-          sourceThreadId,
-        }),
-      ),
+      makeReadModel(makeReadModelThread({ id: threadId, creationSource: "automation_run" })),
     );
     const after = next.sidebarThreadSummaryById[threadId];
 
-    expect(after?.creationSource).toBe("synara_mcp");
-    expect(after?.sourceThreadId).toBe(sourceThreadId);
+    expect(after?.creationSource).toBe("automation_run");
     // The equality function must treat creationSource as significant: a snapshot changing
     // only this field (the 091 backfill replaying into a live client) must produce a fresh
     // summary object instead of reusing the stale one.
     expect(after).not.toBe(before);
-  });
-
-  it("rebuilds the sidebar summary when only the cross-thread source changes", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const initial = syncServerReadModel(
-      makeState(makeThread({ id: threadId })),
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          creationSource: "synara_mcp",
-          sourceThreadId: ThreadId.makeUnsafe("source-one"),
-        }),
-      ),
-    );
-    const before = initial.sidebarThreadSummaryById[threadId];
-
-    const next = syncServerReadModel(
-      initial,
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          creationSource: "synara_mcp",
-          sourceThreadId: ThreadId.makeUnsafe("source-two"),
-        }),
-      ),
-    );
-
-    expect(next.sidebarThreadSummaryById[threadId]?.sourceThreadId).toBe(
-      ThreadId.makeUnsafe("source-two"),
-    );
-    expect(next.sidebarThreadSummaryById[threadId]).not.toBe(before);
   });
 
   it("evicts high-cardinality thread detail while preserving its shell and sidebar summary", () => {
@@ -662,38 +623,6 @@ describe("store projection", () => {
     expect(evicted.messageIdsByThreadId?.[threadId]).toBeUndefined();
     expect(evicted.messageByThreadId?.[threadId]).toBeUndefined();
     expect(threadsOf(evicted).find((thread) => thread.id === threadId)?.messages).toEqual([]);
-  });
-
-  it("keeps a subagent spawn ordinal in the sidebar summary after its parent detail is evicted", () => {
-    const parentThreadId = ThreadId.makeUnsafe("thread-parent");
-    const childThreadId = ThreadId.makeUnsafe("subagent:thread-parent:child-two");
-    const parent = makeReadModelThread({
-      id: parentThreadId,
-      activities: [
-        {
-          id: EventId.makeUnsafe("spawn-children"),
-          createdAt: "2026-02-27T00:01:00.000Z",
-          kind: "agent.spawned",
-          summary: "Spawned subagents",
-          tone: "info",
-          payload: { data: { item: { receiverThreadIds: ["child-one", "child-two"] } } },
-          turnId: null,
-        },
-      ],
-    });
-    const child = makeReadModelThread({
-      id: childThreadId,
-      parentThreadId,
-      title: "Subagent child-two",
-    });
-    const readModel = makeReadModel(parent);
-    readModel.threads = [parent, child];
-
-    const hydrated = syncServerReadModel(makeState(makeThread({ id: parentThreadId })), readModel);
-    const evicted = evictThreadDetailFromClientState(hydrated, parentThreadId);
-
-    expect(hydrated.sidebarThreadSummaryById[childThreadId]?.subagentOrdinal).toBe(2);
-    expect(evicted.sidebarThreadSummaryById[childThreadId]?.subagentOrdinal).toBe(2);
   });
 
   it("adds the desktop bridge token to server attachment preview URLs", () => {

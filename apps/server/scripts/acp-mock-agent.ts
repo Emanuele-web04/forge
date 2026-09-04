@@ -31,6 +31,11 @@ const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === 
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
+const advertiseAuthMethods = process.env.SYNARA_ACP_ADVERTISE_AUTH_METHODS === "1";
+const requireAuthForSession = process.env.SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION === "1";
+const emitOrphanUpdate = process.env.SYNARA_ACP_EMIT_ORPHAN_UPDATE === "1";
+const orphanUpdateDelayMs = Number(process.env.SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS || "0");
+const finalSessionDelayMs = Number(process.env.SYNARA_ACP_FINAL_SESSION_DELAY_MS || "0");
 const loadReplayDelaysMs = (process.env.SYNARA_ACP_LOAD_REPLAY_DELAYS_MS ?? "")
   .split(",")
   .map((value) => value.trim())
@@ -43,8 +48,11 @@ const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOA
 const loadReplayModeId = process.env.SYNARA_ACP_LOAD_REPLAY_MODE_ID?.trim();
 const loadReplayAvailableCommands = process.env.SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
-const sessionId = "mock-session-1";
+const mainSessionId = "mock-session-1";
+const probeSessionId = "mock-session-probe";
+let sessionId = mainSessionId;
 
+let authenticated = false;
 let currentModeId = "ask";
 let currentModelId = "default";
 let parameterizedModelPicker = false;
@@ -342,12 +350,25 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
             ...(supportsSessionFork ? { fork: {} } : {}),
           },
         },
+        authMethods: advertiseAuthMethods
+          ? [{ id: "test-key", name: "Test Key" }]
+          : [
+              { id: "device-pairing", name: "Device Pairing" },
+              { id: "factory-api-key", name: "Factory API Key" },
+            ],
       };
     }),
   ),
 );
 
-app.onRequest(OfficialAcp.methods.agent.authenticate, () => ({}));
+app.onRequest(OfficialAcp.methods.agent.authenticate, () =>
+  runEffect(
+    Effect.sync(() => {
+      authenticated = true;
+      return {};
+    }),
+  ),
+);
 
 app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   sessionNewAttempts += 1;
@@ -360,19 +381,49 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {
+      const isAuthenticated = !requireAuthForSession || authenticated;
+      sessionId = isAuthenticated ? mainSessionId : probeSessionId;
       if (emitAvailableCommands) {
         yield* client.sessionUpdate({
           sessionId,
           update: {
             sessionUpdate: "available_commands_update",
-            availableCommands: [{ name: "compact", description: "Compact the current context" }],
+            availableCommands: isAuthenticated
+              ? [{ name: "compact", description: "Compact the current context" }]
+              : [{ name: "orphan-command", description: "Should not leak to final session" }],
           },
         });
+      }
+      if (emitOrphanUpdate && !isAuthenticated) {
+        const orphan = {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "orphan" },
+          },
+        } as const;
+        if (orphanUpdateDelayMs > 0) {
+          setTimeout(() => {
+            runEffect(client.sessionUpdate(orphan)).catch(() => {});
+          }, orphanUpdateDelayMs);
+        } else {
+          yield* client.sessionUpdate(orphan);
+        }
+      }
+      const configOptionsForSession = isAuthenticated
+        ? configOptions()
+        : configOptions().map((option) =>
+            option.id === "model" && option.type === "select"
+              ? Object.assign({}, option, { options: [] as typeof option.options })
+              : option,
+          );
+      if (isAuthenticated && finalSessionDelayMs > 0) {
+        yield* Effect.sleep(finalSessionDelayMs);
       }
       return {
         sessionId,
         modes: modeState(),
-        configOptions: configOptions(),
+        configOptions: configOptionsForSession,
       };
     }),
   );

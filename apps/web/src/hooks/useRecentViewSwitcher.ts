@@ -170,8 +170,10 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     const activeDraftThread = activeDraftThreadRef.current;
 
     const availableThreadIds = new Set<ThreadId>();
-    for (const threadId of Object.keys(sidebarThreadSummaryById)) {
-      availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+    for (const [threadId, thread] of Object.entries(sidebarThreadSummaryById)) {
+      if (!thread?.sidechatSourceThreadId) {
+        availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+      }
     }
     for (const threadId of Object.keys(draftThreadsByThreadId)) {
       availableThreadIds.add(ThreadId.makeUnsafe(threadId));

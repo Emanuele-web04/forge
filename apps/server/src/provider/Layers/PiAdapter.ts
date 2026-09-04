@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  spawn as spawnChildProcess,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -38,6 +34,10 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -113,12 +113,17 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-4-8",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
  * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ * and omitted Fable 5.1 / Fable 5 / Opus 4.8. Values mirror `@earendil-works/pi-ai`
+ * Anthropic models; Fable 5.1 follows Anthropic's published pricing until pi-ai ships it.
  */
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
@@ -134,6 +139,17 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
   "claude-fable-5": {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -181,7 +197,7 @@ export interface PiBashProcessSupervisorOptions {
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => ChildProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
@@ -189,7 +205,14 @@ export interface PiBashProcessSupervisorOptions {
 export function makePiBashProcessSupervisor(
   options: PiBashProcessSupervisorOptions,
 ): PiBashProcessSupervisor {
-  const spawnProcess = options.spawnProcess ?? spawnChildProcess;
+  const spawnProcess =
+    options.spawnProcess ??
+    ((command: string, args: ReadonlyArray<string>, spawnOptions: RuntimeSpawnOptions) =>
+      spawnPlatformProcess(command, args, {
+        ...spawnOptions,
+        requireExecutable: true,
+        ownProcessGroup: true,
+      }));
   const teardownProcessTree = options.teardownProcessTree ?? teardownProviderProcessTree;
   const activeProcesses = new Set<PiActiveProcess>();
   let configuredShellPath: string | undefined;
@@ -230,13 +253,11 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
-          detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-          windowsHide: true,
         },
       );
       const active: PiActiveProcess = {
@@ -542,8 +563,9 @@ export function getPiSupportedThinkingOptions(
 }
 
 /**
- * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
- * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ * When Anthropic is already authenticated, ensure Fable 5.1, Fable 5, and Opus 4.8
+ * appear even if an older pi-anthropic-oauth extension replaced the built-in
+ * Anthropic catalog.
  */
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,

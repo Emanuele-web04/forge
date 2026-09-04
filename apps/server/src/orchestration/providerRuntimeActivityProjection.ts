@@ -670,11 +670,9 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.warning",
           summary: isBackgroundMove
             ? "Moved to background"
-            : (event.provider === "opencode" || event.provider === "kilo") &&
+            : event.provider === "opencode" &&
                 (nativeType === "session.next.retried" || nativeType === "session.status")
-              ? event.provider === "opencode"
-                ? "OpenCode retrying"
-                : "Kilo retrying"
+              ? "OpenCode retrying"
               : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({

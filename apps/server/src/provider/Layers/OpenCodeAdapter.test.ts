@@ -27,11 +27,9 @@ import {
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
-import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import {
   appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapterLive,
-  makeKiloAdapterLive,
   normalizeOpenCodeTokenUsage,
 } from "./OpenCodeAdapter.ts";
 
@@ -1399,54 +1397,19 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(JSON.stringify(runtime.promptCalls[0])).toContain("Synara MCP control is unavailable");
   });
 
-  it("applies the same isolated gateway lifecycle to managed Kilo sessions", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const gateway = makeGatewayCredentials();
-    const threadId = asThreadId("thread-kilo-gateway");
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
-        yield* adapter.startSession({
-          provider: "kilo",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: "/repo",
-        });
-        yield* adapter.stopSession(threadId);
-      }).pipe(
-        Effect.provide(
-          makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.connectCalls[0]?.poolIsolationKey).toBeTruthy();
-    expect(runtime.mcpAddCalls[0]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
-    });
-    expect(gateway.revoked).toEqual(["gateway-token-1"]);
-  });
-
-  it("submits Kilo turns through the asynchronous prompt endpoint", async () => {
+  it("submits OpenCode turns through the asynchronous prompt endpoint", async () => {
     const runtime = createMockOpenCodeRuntime({
       prompt: async () => {
-        throw new Error("Kilo's blocking prompt endpoint must not be used");
+        throw new Error("OpenCode's blocking prompt endpoint must not be used");
       },
     });
-    const threadId = asThreadId("thread-kilo-async-prompt");
+    const threadId = asThreadId("thread-opencode-async-prompt");
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
+        const adapter = yield* OpenCodeAdapter;
         yield* adapter.startSession({
-          provider: "kilo",
+          provider: "opencode",
           threadId,
           runtimeMode: "full-access",
           cwd: "/repo",
@@ -1455,14 +1418,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "perform a long-running task",
           attachments: [],
-          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
+          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
         });
         yield* adapter.stopSession(threadId);
       }).pipe(
         Effect.provide(
-          makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
             Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
             ),
             Layer.provideMerge(NodeServices.layer),
           ),
@@ -1473,94 +1436,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.promptCallKinds).toEqual(["async"]);
     expect(runtime.promptCalls[0]).toMatchObject({
       sessionID: "opencode-session-1",
-      messageID: expect.stringMatching(/^msg_/),
     });
-  });
-
-  it("keeps shared external Kilo servers identity-only and never installs a token", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const gateway = makeGatewayCredentials();
-    const firstThread = asThreadId("thread-kilo-external-a");
-    const secondThread = asThreadId("thread-kilo-external-b");
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
-        for (const threadId of [firstThread, secondThread]) {
-          yield* adapter.startSession({
-            provider: "kilo",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: "/same/external/kilo-repo",
-            providerOptions: {
-              kilo: { serverUrl: "http://127.0.0.1:7777" },
-            },
-          });
-        }
-        yield* adapter.sendTurn({
-          threadId: firstThread,
-          input: "coordinate first",
-          attachments: [],
-          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
-        });
-        const secondTurn = yield* adapter
-          .sendTurn({
-            threadId: secondThread,
-            input: "coordinate second",
-            attachments: [],
-            modelSelection: { provider: "kilo", model: "openai/gpt-5" },
-          })
-          .pipe(Effect.forkChild);
-        yield* Effect.sleep(20);
-        expect(runtime.promptCalls).toHaveLength(2);
-        expect(
-          runtime.mcpAddCalls.filter(
-            (call) => (call.config as { enabled?: boolean } | undefined)?.enabled !== false,
-          ),
-        ).toHaveLength(0);
-
-        yield* adapter.stopSession(firstThread);
-        yield* Fiber.join(secondTurn);
-        expect(runtime.promptCalls).toHaveLength(2);
-        yield* adapter.stopSession(secondThread);
-      }).pipe(
-        Effect.provide(
-          makeKiloAdapterLive({
-            runtime: runtime.runtime,
-            promptSubmissionInlineWaitMs: 1,
-          }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.connectCalls).toHaveLength(2);
-    for (const connection of runtime.connectCalls) {
-      expect(connection).toMatchObject({
-        cwd: "/same/external/kilo-repo",
-        serverUrl: "http://127.0.0.1:7777",
-      });
-      expect(connection.poolIsolationKey).toBeUndefined();
-    }
-    expect(runtime.createClientCalls).toHaveLength(2);
-    expect(runtime.createClientCalls.map((call) => call.directory)).toEqual([
-      "/same/external/kilo-repo",
-      "/same/external/kilo-repo",
-    ]);
-    for (const clientInput of runtime.createClientCalls) {
-      expect(clientInput).not.toHaveProperty("workspaceId");
-    }
-    expect(runtime.mcpAddCalls).toEqual([]);
-    expect(gateway.ownerByToken.size).toBe(0);
-    expect(gateway.revoked).toEqual([]);
-    for (const prompt of runtime.promptCalls) {
-      expect(JSON.stringify(prompt)).toContain("Synara MCP control is unavailable");
-    }
   });
 
   it("revokes a managed gateway lease exactly once when the server exits unexpectedly", async () => {
@@ -2485,7 +2361,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("filters Kilo synthetic and ignored text parts from assistant transcript", async () => {
+  it("filters synthetic and ignored text parts from assistant transcript", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
     const client = runtime.runtime.createOpenCodeSdkClient({
@@ -2507,12 +2383,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
         yield* adapter.startSession({
           provider: "opencode",
-          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          threadId: asThreadId("thread-synthetic-parts"),
           runtimeMode: "full-access",
         });
 
         yield* adapter.sendTurn({
-          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          threadId: asThreadId("thread-synthetic-parts"),
           input: "hello",
           attachments: [],
           modelSelection: {
