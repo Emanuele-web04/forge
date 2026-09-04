@@ -13,6 +13,7 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { OpenCodeCliModelDescriptor } from "../opencodeRuntime.ts";
 import {
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
@@ -22,6 +23,7 @@ import {
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
   makePiUserInputOptions,
+  mergePiDescriptorsWithOpenCodeLive,
   PLAIN_PI_EXTENSION_THEME,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
@@ -561,5 +563,127 @@ describe("Pi extension UI helpers", () => {
     expect(PLAIN_PI_EXTENSION_THEME.fg("accent", "ready")).toBe("ready");
     expect(PLAIN_PI_EXTENSION_THEME.bold("done")).toBe("done");
     expect(PLAIN_PI_EXTENSION_THEME.getThinkingBorderColor("medium")("thinking")).toBe("thinking");
+  });
+});
+
+describe("mergePiDescriptorsWithOpenCodeLive", () => {
+  const piBase = [
+    {
+      slug: "opencode/nemotron-3-ultra-free",
+      name: "Nemotron 3 Ultra Free",
+      upstreamProviderId: "opencode",
+      upstreamProviderName: "OpenCode Zen",
+    },
+    {
+      slug: "anthropic/claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      upstreamProviderId: "anthropic",
+      upstreamProviderName: "Anthropic",
+    },
+  ];
+  const cliModel = (
+    overrides: Partial<OpenCodeCliModelDescriptor> = {},
+  ): OpenCodeCliModelDescriptor => ({
+    slug: "opencode/mimo-v2.5-free",
+    providerID: "opencode",
+    modelID: "mimo-v2.5-free",
+    name: "MiMo V2.5 Free",
+    variants: [],
+    supportedReasoningEfforts: [],
+    ...overrides,
+  });
+
+  it("fills missing live OpenCode models without touching Pi-owned slugs", () => {
+    const merged = mergePiDescriptorsWithOpenCodeLive({
+      piModels: piBase,
+      cliModels: [
+        cliModel(),
+        cliModel({
+          slug: "opencode/nemotron-3-ultra-free",
+          modelID: "nemotron-3-ultra-free",
+          name: "Stale CLI name must not win",
+        }),
+      ],
+    });
+
+    expect(merged.map((model) => model.slug)).toEqual([
+      "opencode/nemotron-3-ultra-free",
+      "anthropic/claude-opus-4-8",
+      "opencode/mimo-v2.5-free",
+    ]);
+    // Pi-owned descriptor keeps its own display name.
+    expect(merged[0]).toMatchObject({ name: "Nemotron 3 Ultra Free" });
+    // Live additions inherit Pi's OpenCode grouping label.
+    expect(merged[2]).toMatchObject({
+      name: "MiMo V2.5 Free",
+      upstreamProviderId: "opencode",
+      upstreamProviderName: "OpenCode Zen",
+    });
+  });
+
+  it("maps opencode-zen CLI providers into Pi's opencode slug space", () => {
+    const merged = mergePiDescriptorsWithOpenCodeLive({
+      piModels: piBase,
+      cliModels: [
+        cliModel({
+          slug: "opencode-zen/ling-3.0-flash-fin-free",
+          providerID: "opencode-zen",
+          modelID: "ling-3.0-flash-fin-free",
+          name: "Ling 3.0 Flash Fin Free",
+        }),
+      ],
+    });
+
+    expect(merged.map((model) => model.slug)).toContain("opencode/ling-3.0-flash-fin-free");
+  });
+
+  it("returns the Pi catalog unchanged when Pi has no opencode provider", () => {
+    const anthropicOnly = [piBase[1]!];
+    const merged = mergePiDescriptorsWithOpenCodeLive({
+      piModels: anthropicOnly,
+      cliModels: [cliModel()],
+    });
+
+    expect(merged).toEqual(anthropicOnly);
+  });
+
+  it("ignores non-OpenCode providers, blank ids, and already-known slugs", () => {
+    const merged = mergePiDescriptorsWithOpenCodeLive({
+      piModels: piBase,
+      cliModels: [
+        cliModel({ slug: "tokenrouter/x", providerID: "tokenrouter", modelID: "x" }),
+        cliModel({ slug: "opencode/", providerID: "opencode", modelID: "   " }),
+        cliModel({
+          slug: "opencode/nemotron-3-ultra-free",
+          providerID: "opencode",
+          modelID: "nemotron-3-ultra-free",
+          name: "Nemotron 3 Ultra Free",
+        }),
+      ],
+    });
+
+    expect(merged).toEqual(piBase);
+  });
+
+  it("carries reasoning efforts and context windows from the CLI", () => {
+    const merged = mergePiDescriptorsWithOpenCodeLive({
+      piModels: piBase,
+      cliModels: [
+        cliModel({
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+          contextWindowOptions: [{ value: "200k", label: "200K", isDefault: true }],
+          defaultContextWindow: "200k",
+        }),
+      ],
+    });
+    const added = merged.find((model) => model.slug === "opencode/mimo-v2.5-free");
+
+    expect(added).toMatchObject({
+      supportedReasoningEfforts: [{ value: "high", label: "High" }],
+      defaultReasoningEffort: "high",
+      contextWindowOptions: [{ value: "200k", label: "200K", isDefault: true }],
+      defaultContextWindow: "200k",
+    });
   });
 });
