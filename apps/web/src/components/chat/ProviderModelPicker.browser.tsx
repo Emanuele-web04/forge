@@ -821,8 +821,13 @@ describe("ProviderModelPicker", () => {
     try {
       await page.getByRole("button").click();
 
+      // The droid cost description ("0.4x Factory token rate") lands in the
+      // row's accessible name via an sr-only span, so an exact name match
+      // can never hit. Match by substring plus checked state instead: only
+      // the selected row is checked, which also disambiguates it from the
+      // "Custom GPT-5.6 Luna" row below.
       await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Luna", exact: true }))
+        .element(page.getByRole("menuitemradio", { name: "GPT-5.6 Luna", checked: true }))
         .toBeInTheDocument();
       // The user's own custom model stays selectable offline; the static
       // built-in that discovery owns stays hidden.
