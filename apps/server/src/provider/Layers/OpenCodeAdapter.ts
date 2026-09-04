@@ -4361,7 +4361,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
-        const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
         const requestedCwd = input.cwd?.trim();
         return Effect.gen(function* () {
           // A requested cwd that no longer exists makes both the OpenCode server

@@ -40,6 +40,7 @@ import {
   PubSub,
   Random,
   Scope,
+  ServiceMap,
   Stream,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -67,6 +68,7 @@ import {
   ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
+  type ProviderAdapterError,
 } from "../Errors.ts";
 import {
   classifyAcpPromptTurnCompletion,
@@ -86,6 +88,11 @@ import {
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
+import {
+  elicitationQuestionsFromRequest,
+  elicitationResponseFromAnswers,
+  isFormElicitationRequest,
+} from "../acp/AcpElicitationSupport.ts";
 import {
   type AcpSessionRuntimeShape,
   type AcpSessionStartupTimeouts,
@@ -117,7 +124,7 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
-import { ExternalAgentAdapter } from "../Services/ExternalAgentAdapter.ts";
+import { ExternalAgentAdapter, type ExternalAgentAdapterShape } from "../Services/ExternalAgentAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "external" as const;
@@ -567,7 +574,7 @@ function forkExternalCliNotificationFiber(input: {
     // Stream drained to completion (EOF / process exit): settle the in-flight
     // turn. This runs on the success path; the failure path below also settles.
     Effect.ensuring(settleOnStreamEnd()),
-    Effect.matchCause({
+        ).pipe(Effect.matchCauseEffect({
       onFailure: (cause) =>
         Effect.gen(function* () {
           // A failure (not a clean end) still ends the stream: settle the
@@ -642,7 +649,7 @@ function makeExternalAgentAcpRuntime(input: {
         ),
       ),
     );
-    return acpContext.get(AcpSessionRuntime);
+          return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
 }
 
@@ -684,7 +691,7 @@ function makeExternalAgentCliRuntime(input: {
         ),
       ),
     );
-    return cliContext.get(CliStructuredRuntime);
+    return ServiceMap.getUnsafe(cliContext, CliStructuredRuntime);
   });
 }
 
@@ -792,7 +799,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
       return turnId;
     };
 
-    const startSession: ExternalAgentAdapter["startSession"] = (input) =>
+    const startSession: ExternalAgentAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -900,6 +907,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
               nativeEventLogger,
               threadId: input.threadId,
             }).pipe(
+              Effect.provideService(Scope.Scope, sessionScope),
               Effect.mapError((cause) =>
                 cause instanceof Error
                   ? new ProviderAdapterProcessError({
@@ -953,6 +961,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
               agentGatewayCredentials,
               ...(resumeSessionId ? { resumeSessionId } : {}),
             }).pipe(
+              Effect.provideService(Scope.Scope, sessionScope),
               Effect.mapError((cause) =>
                 cause instanceof Error
                   ? new ProviderAdapterProcessError({
@@ -1027,6 +1036,13 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             yield* acp.handleElicitation((params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/elicitation", params);
+                if (!isFormElicitationRequest(params)) {
+                  return { action: "decline" as const };
+                }
+                const questions = elicitationQuestionsFromRequest(params);
+                if (questions.length === 0) {
+                  return { action: "decline" as const };
+                }
                 const requestId = ApprovalRequestId.makeUnsafe(randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
                 const answers = yield* Deferred.make<ProviderUserInputAnswers>();
@@ -1038,7 +1054,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                   threadId: input.threadId,
                   turnId: ctx?.activeTurnId,
                   requestId: runtimeRequestId,
-                  payload: { params },
+                  payload: { questions },
                   raw: {
                     source: "acp.jsonrpc",
                     method: "session/elicitation",
@@ -1056,16 +1072,18 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                   requestId: runtimeRequestId,
                   payload: { answers: resolved },
                 });
-                // Decline non-form elicitations: external connectors vary widely,
-                // so a structured answer is only returned when the request is a
-                // form the user answered. Empty answers decline politely.
-                return { action: "decline" as const };
+                return elicitationResponseFromAnswers(params, resolved);
               }),
             );
 
             const startedOption = yield* acp
               .start()
-              .pipe(Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS));
+              .pipe(
+                Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS),
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
+                ),
+              );
             const started = yield* Option.match(startedOption, {
               onNone: () => Effect.fail(externalAcpTimeoutError("session/start")),
               onSome: Effect.succeed,
@@ -1259,7 +1277,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                     }),
                   ),
                 ).pipe(
-                  Effect.catchAllCause((cause) =>
+                  Effect.catchCause((cause) =>
                     Effect.logWarning("external.acp.notification_stream_failed", {
                       threadId: ctx.threadId,
                       cause: String(cause),
@@ -1271,10 +1289,10 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
           sessionScopeTransferred = true;
           sessions.set(input.threadId, ctx);
           return ctx.session;
-        }),
+        }).pipe(Effect.scoped),
       );
 
-    const sendTurn: ExternalAgentAdapter["sendTurn"] = (input) =>
+    const sendTurn: ExternalAgentAdapterShape["sendTurn"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -1350,9 +1368,8 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
           ctx.activeInteractionMode = interactionMode;
           ctx.lastPlanFingerprint = undefined;
           ctx.lastTurnActivityAt = Date.now();
-          const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
           ctx.session = {
-            ...sessionWithoutLastError,
+            ...ctx.session,
             status: "running",
             activeTurnId: turnId,
             updatedAt: yield* nowIso,
@@ -1374,21 +1391,36 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
           // and settles on process exit / EOF (the idle watchdog is the
           // alive-but-silent backstop). Both return a { stopReason } result the
           // shared completion handler maps to turn.completed.
-          const runPrompt =
-            ctx.runtime.kind === "cli"
+          const runtime = ctx.runtime;
+          const runPrompt: Effect.Effect<
+            { readonly stopReason: string | null; readonly usage: Acp.Usage | null | undefined },
+            ProviderAdapterError
+          > =
+            runtime.kind === "cli"
               ? runExternalCliTurn({
                   ctx,
                   turnId,
                   promptText: cliPromptText,
                   logNative,
                 }).pipe(
-                  Effect.mapError((error) =>
-                    mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                  Effect.map((cliResult) => ({ ...cliResult, usage: undefined })),
+                  Effect.mapError(
+                    (error) =>
+                      new ProviderAdapterRequestError({
+                        provider: PROVIDER,
+                        method: "session/prompt",
+                        detail: error.message,
+                        cause: error,
+                      }),
                   ),
                 )
               : Effect.suspend(() =>
-                  ctx.stopped ? Effect.interrupt : ctx.runtime.acp.prompt({ prompt: promptParts }),
+                  ctx.stopped ? Effect.interrupt : runtime.acp.prompt({ prompt: promptParts }),
                 ).pipe(
+                  Effect.map((response) => ({
+                    stopReason: response.stopReason,
+                    usage: response.usage,
+                  })),
                   Effect.mapError((error) =>
                     mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
                   ),
@@ -1404,12 +1436,11 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                   const completedCost = finalizeExternalActiveTurnCost(ctx);
                   ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
                   const detail = error.message;
-                  const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                   ctx.session = {
-                    ...sessionWithoutLastError,
+                    ...ctx.session,
                     status: "error",
                     updatedAt: yield* nowIso,
-                    ...(model ? { model } : {}),
+                    model,
                     lastError: detail,
                   };
                   yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
@@ -1436,12 +1467,11 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                   if (!clearExternalActiveTurn(ctx, turnId)) return;
                   const completedCost = finalizeExternalActiveTurnCost(ctx);
                   ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-                  const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                   ctx.session = {
-                    ...sessionWithoutLastError,
+                    ...ctx.session,
                     status: "ready",
                     updatedAt: yield* nowIso,
-                    ...(model ? { model } : {}),
+                    model,
                   };
                   if (!hadAssistantContent && result.stopReason !== "cancelled") {
                     yield* Effect.logWarning("external.acp.turn_completed_without_content", {
@@ -1509,7 +1539,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         }),
       );
 
-    const interruptTurn: ExternalAgentAdapter["interruptTurn"] = (threadId, turnId) =>
+    const interruptTurn: ExternalAgentAdapterShape["interruptTurn"] = (threadId, turnId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -1541,7 +1571,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         }),
       );
 
-    const respondToRequest: ExternalAgentAdapter["respondToRequest"] = (
+    const respondToRequest: ExternalAgentAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
       decision,
@@ -1562,7 +1592,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: ExternalAgentAdapter["respondToUserInput"] = (
+    const respondToUserInput: ExternalAgentAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
       answers,
@@ -1583,7 +1613,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         yield* Deferred.succeed(pending.answers, answers);
       });
 
-    const stopSession: ExternalAgentAdapter["stopSession"] = (threadId) =>
+    const stopSession: ExternalAgentAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -1594,20 +1624,20 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         }),
       );
 
-    const listSessions: ExternalAgentAdapter["listSessions"] = () =>
+    const listSessions: ExternalAgentAdapterShape["listSessions"] = () =>
       Effect.sync(() =>
         Array.from(sessions.values())
           .filter((ctx) => !ctx.stopped)
           .map((ctx) => ctx.session),
       );
 
-    const hasSession: ExternalAgentAdapter["hasSession"] = (threadId) =>
+    const hasSession: ExternalAgentAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => {
         const ctx = sessions.get(threadId);
         return ctx !== undefined && !ctx.stopped;
       });
 
-    const readThread: ExternalAgentAdapter["readThread"] = (threadId) =>
+    const readThread: ExternalAgentAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         return {
@@ -1617,7 +1647,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         };
       });
 
-    const rollbackThread: ExternalAgentAdapter["rollbackThread"] = (threadId, numTurns) =>
+    const rollbackThread: ExternalAgentAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (numTurns <= 0) {
@@ -1638,14 +1668,14 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         };
       });
 
-    const stopAll: ExternalAgentAdapter["stopAll"] = () =>
+    const stopAll: ExternalAgentAdapterShape["stopAll"] = () =>
       Effect.gen(function* () {
         const threadIds = Array.from(sessions.keys());
         yield* Effect.forEach(threadIds, (threadId) => stopSession(threadId), { discard: true });
       });
 
     if (managedNativeEventLogger !== undefined) {
-      yield* Scope.addFinalizer(() => managedNativeEventLogger.close().pipe(Effect.ignore));
+      yield* Effect.addFinalizer(() => managedNativeEventLogger.close().pipe(Effect.ignore));
     }
 
     return {
@@ -1666,7 +1696,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
       rollbackThread,
       stopAll,
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
-    } satisfies ExternalAgentAdapter["Type"];
+    } satisfies ExternalAgentAdapterShape;
   });
 }
 
@@ -1700,8 +1730,7 @@ function clearExternalActiveTurn(
   ctx.activePromptFiber = undefined;
   ctx.activeInteractionMode = undefined;
   ctx.cliTurnDeferred = undefined;
-  const { activeTurnId: _activeTurnId, ...session } = ctx.session;
-  ctx.session = session;
+  ctx.session = { ...ctx.session, activeTurnId: undefined };
   return true;
 }
 

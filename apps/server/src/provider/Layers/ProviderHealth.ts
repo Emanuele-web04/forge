@@ -2000,6 +2000,8 @@ export function isProviderEnabledForSettings(
   provider: ProviderKind,
   settings: ServerSettings,
 ): boolean {
+  // External profiles have no per-provider settings entry; availability comes from the profile.
+  if (provider === "external") return true;
   return (
     settings.providers[provider]?.enabled !== false && settings.providers[provider] !== undefined
   );
@@ -2114,7 +2116,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const refreshScope = yield* Scope.make("sequential");
       yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
-      const cachePathByProvider = new Map(
+      const cachePathByProvider: Map<ProviderKind, string> = new Map(
         PROVIDERS.map(
           (provider) =>
             [
@@ -2429,8 +2431,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           statuses,
           (status) => {
             const { updateState: _updateState, ...statusToPersist } = status;
+            const filePath =
+              cachePathByProvider.get(status.provider) ??
+              resolveProviderStatusCachePath({
+                stateDir: serverConfig.stateDir,
+                provider: status.provider,
+              });
             return writeProviderStatusCache({
-              filePath: cachePathByProvider.get(status.provider)!,
+              filePath,
               provider: statusToPersist,
             }).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),

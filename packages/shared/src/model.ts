@@ -632,7 +632,8 @@ export function resolveModelSlug(
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
-  if (provider === "devin" || provider === "pi") {
+  // External profiles bring their own models, so there is no static default or allowlist.
+  if (provider === "devin" || provider === "pi" || provider === "external") {
     return normalized;
   }
   if (!normalized) {

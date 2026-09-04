@@ -10,6 +10,7 @@ export type ProviderChildKind =
   | "cursor"
   | "devin"
   | "droid"
+  | "external"
   | "grok"
   | "opencode"
   | "pi";
@@ -63,6 +64,8 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",
+  // External bundles may proxy to arbitrary upstreams, so they inherit the full env.
+  external: "all",
   opencode: "all",
   pi: "all",
 };

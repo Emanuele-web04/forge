@@ -22,7 +22,9 @@ export function providerDisabledSettingsMessage(provider: ProviderKind): string 
 export function ensureProviderEnabled(provider: ProviderKind, serverSettings: ServerSettingsShape) {
   return serverSettings.getSettings.pipe(
     Effect.flatMap((settings) =>
-      settings.providers[provider].enabled
+      // External agent profiles carry no settings toggle; the gate stays shared
+      // so the lookup below still runs, but disablement never applies to them.
+      provider === "external" || settings.providers[provider].enabled
         ? Effect.void
         : Effect.fail(new ProviderDisabledError(providerDisabledSettingsMessage(provider))),
     ),

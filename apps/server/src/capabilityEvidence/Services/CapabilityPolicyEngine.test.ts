@@ -248,8 +248,8 @@ describe("CapabilityPolicyEngine", () => {
       const runtimeAttest = makeObservation({
         source: "runtime",
         verifier: { verifierId: "runtime-turn-feedback" },
+        observedAt: new Date(Date.UTC(2026, 7, 16, 0, 0, 50)).toISOString(),
       });
-      runtimeAttest.observedAt = new Date(Date.UTC(2026, 7, 16, 0, 0, 50)).toISOString();
       const state = deriveEffectiveState([conformancePass, runtimeAttest], "v1");
       expect(state).toBe("verified");
     });

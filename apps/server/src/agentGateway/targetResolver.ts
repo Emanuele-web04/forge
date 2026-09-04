@@ -252,6 +252,12 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // External profiles carry connector-defined options, so the gateway has no static rules.
+  // The gateway rejects external targets outright; this entry only satisfies the registry.
+  external: {
+    primaryOptionKey: "modelVariant",
+    options: {},
+  },
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptionConfig {
@@ -261,7 +267,9 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  // External profiles bring their own models, so there is no static default.
+  if (provider === "pi" || provider === "external") return null;
+  return DEFAULT_MODEL_BY_PROVIDER[provider as Exclude<ProviderKind, "pi" | "external">];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {
@@ -289,6 +297,17 @@ export function loadAgentGatewayProviderCatalog(input: {
       available: false,
       ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
       error: unavailableReason,
+    });
+  }
+  // External profiles have no discovery-backed catalog; the gateway rejects them outright.
+  if (input.provider === "external") {
+    return Effect.succeed({
+      provider: input.provider,
+      defaultModel,
+      models: [],
+      enabled: true,
+      available: false,
+      error: `Provider "external" is not supported by the agent gateway.`,
     });
   }
   return input.discovery

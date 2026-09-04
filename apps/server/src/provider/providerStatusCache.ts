@@ -20,6 +20,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "devin",
   "opencode",
   "pi",
+  "external",
 ] as const satisfies ReadonlyArray<ServerProviderStatus["provider"]>;
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(

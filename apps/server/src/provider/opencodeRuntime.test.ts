@@ -785,7 +785,9 @@ openrouter/openrouter/free
 }
 `);
 
-    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    const freeSlugs = models
+      .filter((model) => "isFree" in model && model.isFree === true)
+      .map((model) => model.slug);
     expect(freeSlugs).toEqual(["opencode/deepseek-v4-flash-free"]);
   });
 
@@ -824,7 +826,9 @@ openrouter/google/lyria-3-clip-preview
 }
 `);
 
-    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    const freeSlugs = models
+      .filter((model) => "isFree" in model && model.isFree === true)
+      .map((model) => model.slug);
     expect(freeSlugs).toEqual(["kilo/kilo-auto/free", "kilo/cohere/north-mini-code:free"]);
   });
 
@@ -853,7 +857,9 @@ opencode/deepseek-v4-flash-free
 }
 `);
 
-    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    const freeSlugs = models
+      .filter((model) => "isFree" in model && model.isFree === true)
+      .map((model) => model.slug);
     expect(freeSlugs).toEqual(["opencode/deepseek-v4-flash-free"]);
   });
 

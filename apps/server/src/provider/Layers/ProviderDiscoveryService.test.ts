@@ -87,7 +87,7 @@ const makeRegistryLayer = (adapter: Partial<ProviderAdapterShape<ProviderAdapter
 const runListSkills = (input: {
   adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
   disabled?: string[];
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
 }) => {
   const baseLayer = Layer.mergeAll(
     makeConfigLayer(),
