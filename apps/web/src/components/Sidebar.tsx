@@ -35,6 +35,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
+import { APP_BASE_NAME } from "~/branding";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
@@ -1386,7 +1387,7 @@ function SidebarActivityBellButton({
 }
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
-  threads: { title: "Synara by nacholk", description: "Build, debug, and ship" },
+  threads: { title: `${APP_BASE_NAME} by nacholk`, description: "Build, debug, and ship" },
   studio: { title: "Studio", description: "Open-ended agent work" },
 };
 
