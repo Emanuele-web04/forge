@@ -2021,6 +2021,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           lifecycleGeneration: previousGeneration,
                           modelSelection: previousModelSelection,
                           providerOptions: previousProviderOptions,
+                          ...(restoredAccount.accountBinding !== undefined
+                            ? { accountBinding: restoredAccount.accountBinding }
+                            : {}),
                         }),
                       );
                       // The restored runtime stamps its events with the exact

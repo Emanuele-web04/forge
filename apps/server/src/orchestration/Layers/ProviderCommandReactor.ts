@@ -1601,10 +1601,10 @@ const make = Effect.gen(function* () {
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
-      // Threads that already ran a provider session predate account selection
-      // and stay on the native account 0. A persisted thread account binding
-      // still takes precedence inside ProviderService here.
-      ...(thread.session ? { accountOrdinal: 0 } : {}),
+      // No explicit account ordinal: ProviderService.resolveAccountForLaunch
+      // owns the precedence (persisted thread binding first, native
+      // account 0 for legacy threads). Pinning 0 here would fail closed
+      // with binding-conflict on managed threads that restart.
     };
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({
