@@ -48,8 +48,7 @@ export default Effect.gen(function* () {
       turn_id TEXT,
       op TEXT NOT NULL,
       weight_delta REAL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (memory_id) REFERENCES mind_memories(memory_id) ON DELETE CASCADE
+      created_at TEXT NOT NULL
     )
   `;
 

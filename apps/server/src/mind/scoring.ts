@@ -1,20 +1,10 @@
-import { MIND_RECALL_MAX_DIGEST_CHARS, type MindMemory } from "@synara/contracts";
+import { MIND_RECALL_MAX_DIGEST_CHARS, type MindMemory, type MindMemoryMatch } from "@synara/contracts";
 
 /** Lambda so that ~45 days of idle decays a weight-1.0 memory to ~0.05. */
 export const MIND_DECAY_LAMBDA = 0.0667;
 
 /** Multiplier applied to the decayed score for each exact query-token match. */
 const MIND_EXACT_TOKEN_MATCH_BOOST = 10.0;
-
-export interface EffectiveMindMemory extends MindMemory {
-  readonly decayedWeight: number;
-}
-
-export interface MindMemoryMatch {
-  readonly memory: MindMemory;
-  readonly rank: number;
-  readonly decayedWeight: number;
-}
 
 const MILLIS_PER_DAY = 1000 * 60 * 60 * 24;
 

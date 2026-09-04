@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-30.2";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-08-30.3";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -53,7 +53,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "Use the synara_remember, synara_recall_memories, synara_confirm_memory, synara_forget_memory, and synara_prune_memories tools to manage durable, project-scoped memory. These tools require the memory:use capability and are only available to the provider session that owns the thread.",
         "Call synara_remember to store a concise, project-scoped fact. Repeating the same text in one project reinforces the existing memory instead of creating a duplicate.",
         "Call synara_recall_memories with an optional query to retrieve up to eight relevant memories, ranked by recency and decay, plus a digest of the results.",
-        "Call synara_confirm_memory when a recalled memory is still accurate; it raises the memory's weight and resets decay.",
+        "Call synara_confirm_memory when a recalled memory is still accurate; it reinforces the memory and resets decay.",
         "Call synara_forget_memory to permanently remove a memory by its id.",
         "Call synara_prune_memories to safely remove stale, low-weight, unconfirmed memories from the caller's project.",
       ]

@@ -196,8 +196,8 @@ describe("Synara harness policy", () => {
   });
 
   it("bumps the harness policy version", () => {
-    assert.include(SYNARA_HARNESS_POLICY_VERSION, "2026-08-30.2");
-    assert.notEqual(SYNARA_HARNESS_POLICY_VERSION, "2026-08-25.2");
+    assert.include(SYNARA_HARNESS_POLICY_VERSION, "2026-08-30.3");
+    assert.notEqual(SYNARA_HARNESS_POLICY_VERSION, "2026-08-30.2");
   });
 
   it("includes memory tool standing orders when gateway control is available", () => {

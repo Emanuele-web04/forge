@@ -275,6 +275,39 @@ layer("MindRepository", (it) => {
     }),
   );
 
+  it.effect("prune deletes weight-1.0 memories once decayed below threshold", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      yield* setupMindTables(sql);
+
+      const stale = yield* repository.remember({
+        projectId,
+        text: "stale weight-1.0 memory",
+        now: "2026-04-01T00:00:00.000Z",
+      });
+      const fresh = yield* repository.remember({
+        projectId,
+        text: "fresh weight-1.0 memory",
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const deletedIds = yield* repository.prune({
+        projectId,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      assert.deepStrictEqual(deletedIds, [stale.memoryId]);
+
+      const freshReloaded = yield* repository.getById({
+        projectId,
+        memoryId: fresh.memoryId,
+      });
+      assert.isTrue(Option.isSome(freshReloaded));
+    }),
+  );
+
   it.effect("journal entry for forget has no text and records the correct columns", () =>
     Effect.gen(function* () {
       const repository = yield* MindRepository;
@@ -356,6 +389,29 @@ layer("MindRepository", (it) => {
       const filtered = yield* repository.list({ projectId: p2, query: "beta" });
       assert.lengthOf(filtered, 1);
       assert.strictEqual(filtered[0]?.text, "beta");
+    }),
+  );
+
+  it.effect("recall tolerates FTS operator characters in the query", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      yield* setupMindTables(sql);
+
+      const memory = yield* repository.remember({
+        projectId,
+        text: "deploy or rollback friday plan",
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* repository.recall({
+        projectId,
+        query: 'friday "deploy',
+      });
+
+      assert.lengthOf(results, 1);
+      assert.strictEqual(results[0]?.memoryId, memory.memoryId);
     }),
   );
 

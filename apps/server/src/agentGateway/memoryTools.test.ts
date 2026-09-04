@@ -8,8 +8,10 @@ import {
   ThreadId,
   TurnId,
   type MindConfirmResult,
+  type MindListResult,
   type MindMemory,
   type MindMemoryMatch,
+  type MindPinResult,
   type MindPruneResult,
   type MindRecallResult,
   type MindRememberResult,
@@ -110,6 +112,11 @@ function makeMockMindService(overrides?: Partial<MindServiceShape>): MindService
         alreadyConfirmedInTurn: false,
       } as MindConfirmResult),
     forget: () => Effect.succeed({ deleted: true }),
+    pin: ({ memoryId, projectId }) =>
+      Effect.succeed({
+        memory: memory(memoryId, projectId, "Pinned memory"),
+      } as MindPinResult),
+    list: () => Effect.succeed({ memories: [] } as MindListResult),
     prune: ({ projectId }) =>
       Effect.succeed({
         deletedIds: [MindMemoryId.makeUnsafe(`memory:${projectId}:pruned`)],

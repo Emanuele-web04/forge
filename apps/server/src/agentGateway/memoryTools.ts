@@ -18,7 +18,7 @@ import {
 import type { OrchestrationThreadShell, ProjectId } from "@synara/contracts";
 import { Effect } from "effect";
 
-import { MindService } from "../mind/Services/MindService.ts";
+import { MindService, type MindServiceShape } from "../mind/Services/MindService.ts";
 import { mcpToolResultJson } from "./protocol.ts";
 import { errorText, readStringArg, ToolInputError } from "./toolInput.ts";
 import {
@@ -29,14 +29,7 @@ import {
 } from "./toolRuntime.ts";
 
 export { MindService, MIND_MEMORY_TEXT_MAX_CHARS };
-
-export interface MindServiceShape {
-  readonly remember: (input: MindRememberInput) => Effect.Effect<MindRememberResult, MindError>;
-  readonly recall: (input: MindRecallInput) => Effect.Effect<MindRecallResult, MindError>;
-  readonly confirm: (input: MindConfirmInput) => Effect.Effect<MindConfirmResult, MindError>;
-  readonly forget: (input: MindForgetInput) => Effect.Effect<MindForgetResult, MindError>;
-  readonly prune: (input: MindPruneInput) => Effect.Effect<MindPruneResult, MindError>;
-}
+export type { MindServiceShape };
 
 export interface AgentGatewayMemoryToolDependencies {
   readonly mindService: MindServiceShape;
@@ -50,11 +43,11 @@ function toGatewayToolError(error: unknown): GatewayToolError {
   if (error instanceof ToolInputError) {
     return new GatewayToolError("invalid_input", error.message);
   }
-  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
-    return new GatewayToolError(String(error.code), String(error.message));
-  }
   if (error instanceof MindError) {
     return new GatewayToolError(error.code, error.message);
+  }
+  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+    return new GatewayToolError(String(error.code), String(error.message));
   }
   return new GatewayToolError("mind_error", errorText(error));
 }

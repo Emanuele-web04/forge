@@ -12,6 +12,7 @@ import {
   toPersistenceSqlError,
   toPersistenceSqlOrDecodeError,
 } from "../Errors.ts";
+import { MIND_DECAY_LAMBDA } from "../../mind/scoring.ts";
 import {
   ConfirmMindMemoryInput,
   CountMindMemoriesInput,
@@ -48,6 +49,23 @@ const toMemory = (row: MindMemoryDbRow) =>
   );
 
 const normalizeText = (text: string): string => text.trim().replace(/\s+/g, " ");
+
+/**
+ * Build a safe FTS5 MATCH query from raw user input. Each whitespace token
+ * becomes a quoted phrase (embedded quotes doubled) joined with AND, so
+ * punctuation and operators (quotes, *, OR/AND/NOT, parens) stay literal
+ * instead of throwing MATCH syntax errors. Returns null when no usable
+ * token remains so callers fall back to the unfiltered scan branch.
+ */
+const toFtsMatchQuery = (query: string): string | null => {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/"/g, ""))
+    .filter((token) => token.length > 0);
+  if (tokens.length === 0) return null;
+  return tokens.map((token) => `"${token}"`).join(" AND ");
+};
 
 const memoryIdFor = (projectId: string, text: string): MindMemoryId => {
   const normalized = normalizeText(text);
@@ -163,8 +181,8 @@ const makeMindRepository = Effect.gen(function* () {
     Request: RecallMindMemoriesInput,
     Result: MindMemoryDbRow,
     execute: ({ projectId, query }) => {
-      const q = query?.trim();
-      if (q !== undefined && q.length > 0) {
+      const q = query === undefined ? null : toFtsMatchQuery(query);
+      if (q !== null) {
         return sql`
           WITH matches AS (
             SELECT rowid, rank
@@ -258,8 +276,8 @@ const makeMindRepository = Effect.gen(function* () {
     Request: ListMindMemoriesInput,
     Result: MindMemoryDbRow,
     execute: ({ projectId, query }) => {
-      const q = query?.trim();
-      if (q !== undefined && q.length > 0) {
+      const q = query === undefined ? null : toFtsMatchQuery(query);
+      if (q !== null) {
         return sql`
           WITH matches AS (
             SELECT rowid
@@ -317,7 +335,7 @@ const makeMindRepository = Effect.gen(function* () {
       return sql`
         DELETE FROM mind_memories
         WHERE project_id = ${projectId}
-          AND weight < 0.1
+          AND weight * exp(-${MIND_DECAY_LAMBDA} * (julianday(${now}) - julianday(updated_at))) < 0.1
           AND access_count < 2
           AND updated_at < ${cutoff}
           AND pinned = 0
