@@ -8,13 +8,17 @@ What does not belong here: ordinary dependencies, even large ones (Effect, Pi). 
 
 Credit is not a license notice. If you copy code or prose, carry the upstream notice with it.
 <!-- Style: no em dashes in this file. Use commas or colons. -->
+
 ## Adapted work (license notice required)
-| Project | Author | Source | License | Used in + How |
-| ------- | ------ | ------ | ------- | ------------- |
-| mind | Da7-Tech | https://github.com/Da7-Tech/mind | MIT | Mind memory feature: storage foundation (PR #899: memory tables, scoring constants; upstream snapshot 2026-09-04) and standing-order prose (PR #909). Adapted: scoring constants, near-verbatim standing-order prose. |
+
+| Project | Author   | Source                           | License | Used in + How                                                                                                                                                                                                         |
+| ------- | -------- | -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature: storage foundation (PR #899: memory tables, scoring constants; upstream snapshot 2026-09-04) and standing-order prose (PR #909). Adapted: scoring constants, near-verbatim standing-order prose. |
 
 ### License notice for mind
+
 <!-- DO NOT EDIT below. Byte-match with upstream Da7-Tech/mind LICENSE. Do not move behind a link or details tag. -->
+
 ```text
 MIT License
 
@@ -40,7 +44,8 @@ SOFTWARE.
 ```
 
 ## Inspiration and reference (no code copied, no notice needed)
-| Project | Author | Source | License | Used in + How |
-| ------- | ------ | ------ | ------- | ------------- |
-| codex | OpenAI | https://github.com/openai/codex | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`). Inspired: protocol reference. |
-| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT | Agent-session UX flows and operational safeguards (AGENTS.md "Reference Repos"). Inspired: reference implementation. |
+
+| Project      | Author                      | Source                                    | License    | Used in + How                                                                                                        |
+| ------------ | --------------------------- | ----------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| codex        | OpenAI                      | https://github.com/openai/codex           | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`). Inspired: protocol reference.       |
+| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT        | Agent-session UX flows and operational safeguards (AGENTS.md "Reference Repos"). Inspired: reference implementation. |
