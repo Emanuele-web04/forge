@@ -80,7 +80,7 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
     const snapshot = readModel({ projects: [{ id: "project-1" }] });
     const repaired = readModel({
       projects: [{ id: "project-1" }],
-      threads: [{ id: "thread-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
     });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
@@ -88,7 +88,76 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
 
     expect(orchestration.repairState).toHaveBeenCalledTimes(1);
     expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
-    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(repaired);
+    // A valid repair installs through the fenced shell path; the project-only
+    // full snapshot still installs first (nothing held to contradict it).
+    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledTimes(2);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a repair that contradicts live threads the client already holds", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+    Object.assign(storeMocks, {
+      threads: [{ id: "thread-live", projectId: "project-1" }],
+      threadIds: ["thread-live"],
+    });
+    try {
+      await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(false);
+
+      expect(orchestration.repairState).toHaveBeenCalledTimes(1);
+      expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
+      expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledTimes(1);
+      expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
+    } finally {
+      delete (storeMocks as Record<string, unknown>)["threads"];
+      delete (storeMocks as Record<string, unknown>)["threadIds"];
+    }
+  });
+
+  it("rejects an incomplete repair that restores threads without projects", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-orphan" }],
+    });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(false);
+
+    expect(orchestration.repairState).toHaveBeenCalledTimes(1);
+    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledTimes(1);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs nothing once hydrated without a registered apply", async () => {
+    const shell = shellSnapshot({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
+    });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+    Object.assign(storeMocks, { threadsHydrated: true });
+    try {
+      // Hydration owns the store but the fenced apply is unavailable: every
+      // install below would be unfenced, so report not-done without fetching
+      // further. The caller retries after remount, when the registered apply
+      // preserves newer thread detail.
+      await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(false);
+
+      expect(orchestration.getShellSnapshot).not.toHaveBeenCalled();
+      expect(orchestration.getSnapshot).not.toHaveBeenCalled();
+      expect(orchestration.repairState).not.toHaveBeenCalled();
+      expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
+      expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
+    } finally {
+      delete (storeMocks as Record<string, unknown>)["threadsHydrated"];
+    }
   });
 
   it("stops at the shell when the full snapshot is only projects", async () => {

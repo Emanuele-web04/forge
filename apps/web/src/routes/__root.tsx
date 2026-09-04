@@ -127,7 +127,7 @@ import { createMissingThreadRecoveryController } from "../missingThreadRecovery"
 import {
   classifyDesktopHydrationRecovery,
   hasClientLiveThreadEvidence,
-  hasLiveThreadsWithMissingProjects,
+  shouldRepairDesktopProjectSnapshot,
   type DesktopHydrationRecoveryKind,
   resolveRepairedShellApplication,
 } from "../lib/desktopProjectRecovery";
@@ -1158,7 +1158,6 @@ function EventRouter() {
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
-    const pendingThreadReplayTargetById = new Map<ThreadId, number>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadSnapshotRefreshPending = new Set<ThreadId>();
     const threadSnapshotNotFoundRetryAttempted = new Set<ThreadId>();
@@ -1621,7 +1620,6 @@ function EventRouter() {
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
-      pendingThreadReplayTargetById.clear();
       threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
@@ -1943,9 +1941,6 @@ function EventRouter() {
       if (item.sequence <= shellSnapshotSequence) {
         return;
       }
-      const isNewShellThread =
-        item.kind === "thread-upserted" &&
-        useStore.getState().threadShellById?.[item.thread.id] === undefined;
       shellSnapshotSequence = item.sequence;
       const mutationApplied = applyFencedShellEvent(item);
       if (mutationApplied && item.kind === "thread-upserted") {
@@ -2452,15 +2447,15 @@ function DesktopProjectBootstrap() {
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
-        const needsRepair =
-          (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
-          hasLiveThreadsWithMissingProjects(snapshot);
+        // Gate on the shared guard so a doubly-empty shell only triggers a
+        // repair round-trip when the server marks it inconsistent; a genuine
+        // first-run shell falls through to the plain apply below.
+        const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
         if (!needsRepair) {
           if (lease !== getRecoveryMutationLease()) {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
           const snapshotApplied = tryApplyShellSnapshot(snapshot);
-          const recoveredState = useStore.getState();
           const recovered =
             snapshotApplied &&
             selectDesktopHydrationRecoveryKind(useStore.getState()) !== "repair-projects";
@@ -2526,4 +2521,8 @@ const selectDesktopHydrationRecoveryKind = (
     threadsHydrated: state.threadsHydrated,
     projects: state.projects,
     threads: selectAllThreads(state),
+    threadIds: state.threadIds,
+    threadShellById: state.threadShellById,
+    threadSessionById: state.threadSessionById,
+    threadTurnStateById: state.threadTurnStateById,
   });

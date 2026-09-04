@@ -9,7 +9,11 @@ import type {
   OrchestrationShellSnapshot,
 } from "@synara/contracts";
 
-import { hasLiveThreadsWithMissingProjects } from "./lib/desktopProjectRecovery";
+import {
+  hasClientLiveThreadEvidence,
+  hasLiveThreadsWithMissingProjects,
+  resolveRepairedShellApplication,
+} from "./lib/desktopProjectRecovery";
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
 import {
   getRecoveryMutationLease,
@@ -82,6 +86,13 @@ export async function refreshEmptyRouteRestoreSnapshot(
   if (!api) {
     return false;
   }
+  // Hydration owns the store but the fenced apply is unavailable (EventRouter
+  // remount window): every install below is either unfenced or escalates to
+  // one, so install nothing and report not-done. The caller retries after
+  // remount, when the registered apply preserves newer thread detail.
+  if (useStore.getState().threadsHydrated === true && !isShellSnapshotApplyRegistered()) {
+    return false;
+  }
 
   const lease = getRecoveryMutationLease();
   const shellSnapshot = await api.orchestration.getShellSnapshot();
@@ -89,6 +100,9 @@ export async function refreshEmptyRouteRestoreSnapshot(
     return false;
   }
   if (shellSnapshotHasProjectsOrThreads(shellSnapshot)) {
+    // The registered apply preserves newer thread detail and runs draft
+    // promotion; the direct write below only runs before hydration, when no
+    // detail can exist yet.
     if (isShellSnapshotApplyRegistered()) {
       tryApplyShellSnapshot(shellSnapshot);
     } else {
@@ -106,25 +120,47 @@ export async function refreshEmptyRouteRestoreSnapshot(
     return false;
   }
   if (readModelHasProjectsOrThreads(readModel)) {
-    useStore.getState().syncServerReadModel(readModel);
+    // A project-only full snapshot that contradicts live threads the client
+    // already holds is the empty-thread-list bug shape, not newer truth:
+    // installing it would evict held detail. Shelve it and let the guarded
+    // repair below decide instead.
+    const storeState = useStore.getState();
+    const contradictsHeldEvidence =
+      !readModelHasLiveThreads(readModel) && hasClientLiveThreadEvidence(storeState);
+    if (!contradictsHeldEvidence) {
+      storeState.syncServerReadModel(readModel);
+    }
     if (readModelHasLiveThreads(readModel)) {
       return true;
     }
     // A project-only read model can still be repaired into thread projections.
   }
-
+  // Only pay for the repair round-trip when the shell and full snapshot both
+  // failed to produce live thread projections.
   const repairedReadModel = await requestRepairState(api);
   if (lease !== getRecoveryMutationLease()) {
     return false;
   }
-  if (readModelHasProjectsOrThreads(repairedReadModel)) {
-    useStore.getState().syncServerReadModel(repairedReadModel);
+  // A repair that contradicts live threads the client already holds (or an
+  // incomplete repair missing projects) must not be installed: route the
+  // decision through the same guard the bootstrap recovery uses.
+  const decision = resolveRepairedShellApplication({
+    repaired: repairedReadModel,
+    observedLiveThreadEvidence:
+      hasClientLiveThreadEvidence(useStore.getState()) || readModelHasLiveThreads(readModel),
+  });
+  if (decision.action === "apply") {
+    // Same fence as the shell branch above: without the registered apply,
+    // only install before hydration.
+    const applyRegistered = isShellSnapshotApplyRegistered();
+    const applyHydrated = useStore.getState().threadsHydrated === true;
+    if (applyRegistered) {
+      tryApplyShellSnapshot(decision.shell);
+    } else if (!applyHydrated) {
+      useStore.getState().syncServerShellSnapshot(decision.shell);
+    }
+    return decision.shell.threads.length > 0 && (applyRegistered || !applyHydrated);
   }
-  if (readModelHasLiveThreads(repairedReadModel)) {
-    return true;
-  }
-
   return false;
 }
 
-export { readModelHasLiveThreads, shellSnapshotHasThreads };

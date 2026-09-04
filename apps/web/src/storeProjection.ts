@@ -632,29 +632,34 @@ function rebuildThreadShellRecords(
       continue;
     }
 
-    if (preserved && (previousSession !== undefined || previousTurnState !== undefined)) {
-      if (snapshotThread !== undefined) {
-        const next = normalizeThreadShellSnapshot(
-          snapshotThread,
-          getThreadFromState(state, threadId),
-        );
-        threadShellById[threadId] = resolveShellEntry(previousShell, next.shell);
-        const session = resolveSessionEntry(
-          previousSession ?? null,
-          previousSession ?? next.session,
-        );
-        if (session !== undefined) {
-          threadSessionById[threadId] = session;
-        }
-        threadTurnStateById[threadId] = previousTurnState ?? next.turnState;
-      } else {
-        if (previousSession !== undefined) {
-          threadSessionById[threadId] = previousSession;
-        }
-        if (previousTurnState !== undefined) {
-          threadTurnStateById[threadId] = previousTurnState;
-        }
+    // A preserved id with no shell anywhere (absent from the incoming
+    // snapshot and no previous shell entry) is not a renderable thread: the
+    // sidebar derives from shell records, so keeping its session/turn rows
+    // would leave an invisible id in threadIds that vetoes confirmed-empty
+    // repair forever. The live subscription that produced the newer detail
+    // re-delivers it; drop the orphan here.
+    if (preserved && previousShell === undefined && snapshotThread === undefined) {
+      continue;
+    }
+
+    // Reaching here with preserved set means previousShell is undefined (the
+    // defined case continues above) and snapshotThread is defined (the
+    // shell-less case continues above): install the snapshot row while
+    // keeping the newer session/turn detail.
+    if (preserved && snapshotThread !== undefined) {
+      const next = normalizeThreadShellSnapshot(
+        snapshotThread,
+        getThreadFromState(state, threadId),
+      );
+      threadShellById[threadId] = resolveShellEntry(previousShell, next.shell);
+      const session = resolveSessionEntry(
+        previousSession ?? null,
+        previousSession ?? next.session,
+      );
+      if (session !== undefined) {
+        threadSessionById[threadId] = session;
       }
+      threadTurnStateById[threadId] = previousTurnState ?? next.turnState;
       continue;
     }
 
@@ -1335,13 +1340,15 @@ export function syncServerShellSnapshot(
   const preservedIds = toPreservedThreadIds(options?.preserveDetailForThreadIds);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
   if (preservedIds) {
-    const previousSessions = state.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID;
-    const previousTurns = state.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID;
+    // A preserved id joins the visible set only with shell evidence behind
+    // it: a previous shell entry (kept verbatim by the rebuild) or a row in
+    // this snapshot. Session/turn rows alone describe an orphan the sidebar
+    // cannot render; admitting one leaves an invisible id that vetoes
+    // confirmed-empty repair forever.
     for (const threadId of preservedIds) {
       if (
         state.threadShellById?.[threadId] !== undefined ||
-        Object.hasOwn(previousSessions, threadId) ||
-        Object.hasOwn(previousTurns, threadId) ||
+        nextThreadIds.has(threadId) ||
         getThreadFromState(state, threadId) !== undefined
       ) {
         nextThreadIds.add(threadId);

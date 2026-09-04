@@ -2460,4 +2460,25 @@ describe("shell mutations fenced against newer thread detail", () => {
       }),
     ).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
   });
+  it("drops preserved orphans with no shell anywhere instead of vetoing repair", () => {
+    const withShell = syncServerReadModel(
+      makeState(makeThread({ id: ThreadId.makeUnsafe("thread-seed-1") })),
+      makeReadModel(runningDetailRow()),
+    );
+    const withDetail = syncServerThreadDetailHotPath(withShell, runningDetailRow());
+    // Simulate detail that outlives its shell entry: the orphan keeps
+    // session/turn rows but has no shell record and no snapshot row.
+    const shellLess = {
+      ...withDetail,
+      threadShellById: {},
+      threadIds: (withDetail.threadIds ?? []).filter((id) => id !== detailThreadId),
+    };
+    const next = syncServerShellSnapshot(shellLess, makeEmptyShellSnapshot(1), {
+      preserveDetailForThreadIds: [detailThreadId],
+    });
+    expect(next.threadIds).not.toContain(detailThreadId);
+    expect(next.threadSessionById?.[detailThreadId]).toBeUndefined();
+    expect(next.threadTurnStateById?.[detailThreadId]).toBeUndefined();
+    expect(hasClientLiveThreadEvidence(next)).toBe(false);
+  });
 });
