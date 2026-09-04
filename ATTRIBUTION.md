@@ -7,6 +7,7 @@ What belongs here: code, constants, or prose Synara copied or adapted, and featu
 What does not belong here: ordinary dependencies, even large ones (Effect, Pi). `package.json` and `bun.lock` already record those with their licenses.
 
 Credit is not a license notice. If you copy code or prose, carry the upstream notice with it.
+
 <!-- Style: no em dashes in this file. Use commas or colons. -->
 
 ## Adapted work (license notice required)
