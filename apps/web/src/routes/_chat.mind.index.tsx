@@ -147,7 +147,11 @@ function MindRouteView() {
   // Optimistic pin flip, same rollback shape as forget.
   const setPinnedMutation = useMutation({
     mutationFn: (input: { readonly memory: MindMemory; readonly pinned: boolean }) =>
-      ensureNativeApi().mind.setPinned({ projectId: input.memory.projectId, memoryId: input.memory.memoryId, pinned: input.pinned }),
+      ensureNativeApi().mind.setPinned({
+        projectId: input.memory.projectId,
+        memoryId: input.memory.memoryId,
+        pinned: input.pinned,
+      }),
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: mindQueryKey });
       const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
