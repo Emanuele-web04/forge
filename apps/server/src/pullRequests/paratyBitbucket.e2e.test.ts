@@ -19,7 +19,7 @@ import {
   type McpConnectionEvent,
   type McpConnectionServiceShape,
 } from "../outboundMcp/Services/McpConnectionService.ts";
-import { PARATY_BITBUCKET_CONSUMER_ID } from "./providers/paratyBitbucketBinding.ts";
+import { PARATY_BITBUCKET_CONSUMER_ID, paratyBitbucketPullRequestBinding, type ParatyBitbucketOperation } from "./providers/paratyBitbucketBinding.ts";
 import { makeParatyBitbucketPullRequestProvider } from "./providers/ParatyBitbucketPullRequestProvider.ts";
 import { PullRequestCapabilityError } from "./Errors.ts";
 import { makePullRequestService } from "./Layers/PullRequestService.ts";
@@ -115,7 +115,11 @@ function makeStubParatyMcp() {
   const listeners = new Set<(event: McpConnectionEvent) => void>();
   const state = { connected: false };
   const fixtures: Record<string, unknown> = {
-    list: { pagelen: 50, page: 1, size: 1, values: [rawPullRequest()] },
+    list: { pagelen: 50, page: 1, total_count: 1, has_more: false, skipped_count: 0,
+      pull_requests: [{ id: 42, title: "Read-only MCP acceptance", state: "OPEN", draft: false,
+        author: "Ada Lovelace", author_uuid: "{ada}", source_branch: "feature/mcp-acceptance",
+        destination_branch: "main", created_on: now, updated_on: now,
+        url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/42" }] },
     detail: rawPullRequest(),
     diff: {
       patch:
@@ -125,7 +129,6 @@ function makeStubParatyMcp() {
     comments: {
       pagelen: 50,
       page: 1,
-      size: 1,
       values: [
         {
           id: 7,
@@ -149,12 +152,20 @@ function makeStubParatyMcp() {
       if (!state.connected) {
         return Effect.fail(new McpConnectionServiceError({ category: "not-connected" }));
       }
-      return Effect.sync(() => {
+      return Effect.gen(function* () {
         calls.push({ consumerId, operation, args });
+        const binding = paratyBitbucketPullRequestBinding.operations[operation as ParatyBitbucketOperation];
+        const encoded = yield* binding.encode(args);
+        expect(encoded.repo_slug).toBe("payment-seeker");
+        expect(encoded).not.toHaveProperty("repository");
+        if (operation === "list") expect(encoded.states).toEqual(["OPEN"]);
         const fixture = fixtures[operation];
         if (fixture === undefined) throw new Error(`No ${operation} fixture`);
-        return fixture;
-      });
+        const response = operation === "diff"
+          ? { content: [{ type: "text", text: (fixture as { patch: string }).patch }] }
+          : { content: [{ type: "text", text: JSON.stringify(fixture) }] };
+        return yield* binding.decode(response);
+      }).pipe(Effect.mapError(() => new McpConnectionServiceError({ category: "invalid-response" })));
     },
     subscribe: (listener) =>
       Effect.sync(() => {

@@ -16,12 +16,13 @@ const Actor = Schema.Struct({
   display_name: NonEmptyString,
   nickname: Schema.NullOr(NonEmptyString),
   uuid: NonEmptyString,
-  links: Schema.Struct({ avatar: Link, html: Link }),
+  links: Schema.Struct({ avatar: Schema.NullOr(Link), html: Schema.NullOr(Link) }),
 });
 
 const PullRequest = Schema.Struct({
   id: PositiveInt,
   title: NonEmptyString,
+  draft: Schema.optional(Schema.Boolean),
   description: Schema.String,
   state: Schema.Literals(["OPEN", "MERGED", "DECLINED"]),
   created_on: NonEmptyString,
@@ -47,9 +48,36 @@ const Comment = Schema.Struct({
 const PageEnvelope = Schema.Struct({
   pagelen: Schema.Literal(50),
   page: Page,
-  size: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  size: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   next: Schema.optional(NonEmptyString),
   values: Schema.Array(Schema.Unknown),
+});
+
+const ListSummary = Schema.Struct({
+  id: PositiveInt,
+  title: NonEmptyString,
+  state: Schema.Literals(["OPEN", "MERGED", "DECLINED"]),
+  draft: Schema.Boolean,
+  author: Schema.optional(Schema.NullOr(NonEmptyString)),
+  author_uuid: Schema.optional(Schema.NullOr(NonEmptyString)),
+  source_branch: NonEmptyString,
+  destination_branch: NonEmptyString,
+  created_on: NonEmptyString,
+  updated_on: NonEmptyString,
+  url: NonEmptyString,
+});
+const ListEnvelope = Schema.Struct({
+  pagelen: Schema.Literal(50),
+  page: Page,
+  total_count: Schema.optional(Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))),
+  has_more: Schema.Boolean,
+  skipped_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  pull_requests: Schema.Array(Schema.Unknown),
+});
+const AggregatedComments = Schema.Struct({
+  values: Schema.Array(Schema.Unknown),
+  totalFetched: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  fetchedPages: PositiveInt,
 });
 
 const Diff = Schema.Struct({
@@ -100,7 +128,9 @@ function exactEncoder(
           throw inputError(operation);
         const record = input as Record<string, unknown>;
         if (Object.keys(record).some((key) => !keys.has(key))) throw inputError(operation);
-        return Schema.decodeUnknownSync(schema)(record) as Readonly<Record<string, unknown>>;
+        const decoded = Schema.decodeUnknownSync(schema)(record) as Readonly<Record<string, unknown>>;
+        const { repository, state, ...rest } = decoded;
+        return { ...rest, repo_slug: repository, ...(state === undefined ? {} : { states: [state] }) };
       },
       catch: () => inputError(operation),
     });
@@ -159,6 +189,7 @@ function payloadFromMcpResult(
       if (typeof result !== "object" || result === null || Array.isArray(result))
         throw decodeError(operation);
       const envelope = result as Record<string, unknown>;
+      if (envelope.isError === true) throw decodeError(operation);
       if (envelope.structuredContent !== undefined) return envelope.structuredContent;
       if (!Array.isArray(envelope.content)) throw decodeError(operation);
       const textItems = envelope.content.filter(
@@ -169,6 +200,16 @@ function payloadFromMcpResult(
           typeof (item as Record<string, unknown>).text === "string",
       );
       if (textItems.length !== 1) throw decodeError(operation);
+      if (operation === "diff") {
+        const text = textItems[0]!.text;
+        const marker = "\n\n[Truncated: exceeded character limit...]";
+        if (text === "" || text.startsWith("diff --git ")) {
+          return {
+            patch: text.endsWith(marker) ? text.slice(0, -marker.length) : text,
+            truncated: text.endsWith(marker),
+          };
+        }
+      }
       return JSON.parse(textItems[0]!.text) as unknown;
     },
     catch: () => decodeError(operation),
@@ -190,11 +231,13 @@ function decodePage<A>(
   operation: string,
   itemSchema: Schema.Decoder<A>,
   options: { readonly tolerateMalformedEntries: boolean },
+  normalize: (payload: unknown) => unknown = (payload) => payload,
 ) {
   return (result: unknown): Effect.Effect<ParatyBitbucketPage<A>, OutboundMcpDecodeError> =>
     payloadFromMcpResult(result, operation).pipe(
       Effect.flatMap((payload) =>
-        Schema.decodeUnknownEffect(PageEnvelope)(payload).pipe(
+        Effect.try({ try: () => normalize(payload), catch: () => decodeError(operation) }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(PageEnvelope)),
           Effect.mapError(() => decodeError(operation)),
           Effect.flatMap((page) =>
             Effect.try({
@@ -209,7 +252,7 @@ function decodePage<A>(
                     malformedCount += 1;
                   }
                 }
-                return { ...page, values, malformedCount };
+                return { ...page, size: page.size ?? page.values.length, values, malformedCount };
               },
               catch: () => decodeError(operation),
             }),
@@ -219,13 +262,65 @@ function decodePage<A>(
     );
 }
 
-export const decodeParatyBitbucketList = decodePage("list", PullRequest, {
-  tolerateMalformedEntries: true,
-});
+export const decodeParatyBitbucketList = (result: unknown) =>
+  decodeStrict("list", ListEnvelope)(result).pipe(
+    Effect.map((page): ParatyBitbucketPage<ParatyBitbucketPullRequest> => {
+      const values: ParatyBitbucketPullRequest[] = [];
+      let malformedCount = page.skipped_count;
+      for (const candidate of page.pull_requests) {
+        try {
+          const entry = Schema.decodeUnknownSync(ListSummary)(candidate);
+          // Normalize the compact MCP summary for the shared provider mapper.
+          // Detail-only fields are fetched separately by the detail operation.
+          values.push({
+            id: entry.id,
+            title: entry.title,
+            state: entry.state,
+            draft: entry.draft,
+            created_on: entry.created_on,
+            updated_on: entry.updated_on,
+            description: "",
+            merge_commit: null,
+            reviewers: [],
+            source: { branch: { name: entry.source_branch } },
+            destination: { branch: { name: entry.destination_branch } },
+            links: { html: { href: entry.url } },
+            author: entry.author
+              ? {
+                  display_name: entry.author,
+                  nickname: null,
+                  uuid: entry.author_uuid ?? entry.author,
+                  links: { avatar: null, html: null },
+                }
+              : null,
+          });
+        } catch {
+          malformedCount += 1;
+        }
+      }
+      return {
+        pagelen: page.pagelen,
+        page: page.page,
+        size: page.total_count ?? page.pull_requests.length,
+        ...(page.has_more ? { next: String(page.page + 1) } : {}),
+        values,
+        malformedCount,
+      };
+    }),
+  );
 export const decodeParatyBitbucketDetail = decodeStrict("detail", PullRequest);
-export const decodeParatyBitbucketComments = decodePage("comments", Comment, {
-  tolerateMalformedEntries: false,
-});
+export const decodeParatyBitbucketComments = decodePage(
+  "comments",
+  Comment,
+  { tolerateMalformedEntries: false },
+  (payload) => {
+    if (typeof payload === "object" && payload !== null && "totalFetched" in payload) {
+      const page = Schema.decodeUnknownSync(AggregatedComments)(payload);
+      return { pagelen: 50, page: 1, size: page.totalFetched, values: page.values };
+    }
+    return payload;
+  },
+);
 export const decodeParatyBitbucketDiff = (result: unknown) =>
   decodeStrict(
     "diff",

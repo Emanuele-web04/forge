@@ -542,7 +542,7 @@ describe("McpConnectionService", () => {
       fixture.service.beginAuthorization({ presetId: "paraty" }),
     );
 
-    expect(observedClientInformation).toBeUndefined();
+    expect(observedClientInformation).toEqual({ client_id: "mcp-paraty" });
     expect(result.authorizationUrl).toContain("https://new-auth.example.test/authorize");
     expect(await Effect.runPromise(fixture.credentials.read("paraty"))).toEqual({
       clientInformation: { client_id: "new-registered-client" },
@@ -1631,7 +1631,7 @@ describe("SDK OAuth lifecycle", () => {
       oauth.begin({ preset: PARATY_MCP_PRESET, attempt, credentials }),
     );
 
-    expect(observedClientInformation).toBeUndefined();
+    expect(observedClientInformation).toEqual({ client_id: "mcp-paraty" });
     expect(result.href).toContain("https://new-auth.example.test/authorize");
     expect(await Effect.runPromise(credentials.read("paraty"))).toEqual({
       clientInformation: { client_id: "new-registered-client" },
@@ -1666,7 +1666,7 @@ describe("SDK OAuth lifecycle", () => {
     );
 
     await expect(
-      Effect.runPromise(oauth.begin({ preset: PARATY_MCP_PRESET, attempt, credentials })),
+      Effect.runPromise(oauth.begin({ preset: { ...PARATY_MCP_PRESET, publicClientId: undefined }, attempt, credentials })),
     ).rejects.toMatchObject({ category: "incompatible-client" });
     expect(authorizeCalled).toBe(false);
   });

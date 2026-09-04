@@ -59,8 +59,8 @@ function actor(value: ParatyBitbucketActor | null): PullRequestActor | null {
   return {
     login: value.nickname ?? value.uuid,
     name: value.display_name,
-    avatarUrl: value.links.avatar.href,
-    url: value.links.html.href,
+    avatarUrl: value.links.avatar?.href ?? null,
+    url: value.links.html?.href ?? null,
   };
 }
 
@@ -91,7 +91,7 @@ function summary(
     headBranch: pullRequest.source.branch.name,
     baseBranch: pullRequest.destination.branch.name,
     state: state(pullRequest.state),
-    isDraft: false,
+    isDraft: pullRequest.draft ?? false,
     additions: null,
     deletions: null,
     createdAt: pullRequest.created_on,
@@ -338,7 +338,7 @@ export const makeParatyBitbucketPullRequestProvider = (
                 url: pullRequest.links.html.href,
                 author: actor(pullRequest.author),
                 state: state(pullRequest.state),
-                isDraft: false,
+                isDraft: pullRequest.draft ?? false,
                 mergeable: null,
                 mergeability: null,
                 mergeStateStatus: null,
