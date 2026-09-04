@@ -70,6 +70,7 @@ const PROJECTS = {
   prune: "project-mind-service-prune",
   forget: "project-mind-service-forget",
   ui: "project-mind-service-ui",
+  xproject: "project-mind-service-xproject",
 } as const;
 
 let memoryCounter = 0;
@@ -329,6 +330,7 @@ layer("MindService", (it) => {
       });
       yield* service.confirm({
         memoryId: confirmed.memoryId,
+        projectId,
         actor: { kind: "user" },
         threadId: null,
         turnId: "turn-rank-confirm",
@@ -353,6 +355,7 @@ layer("MindService", (it) => {
 
         const confirmed = yield* service.confirm({
           memoryId: remembered.memoryId,
+          projectId,
           actor: { kind: "user" },
           threadId: null,
           turnId: "turn-confirm-1",
@@ -362,6 +365,7 @@ layer("MindService", (it) => {
 
         const repeat = yield* service.confirm({
           memoryId: remembered.memoryId,
+          projectId,
           actor: { kind: "user" },
           threadId: null,
           turnId: "turn-confirm-1",
@@ -377,6 +381,7 @@ layer("MindService", (it) => {
         });
         const capped = yield* service.confirm({
           memoryId: cappedRow.memoryId,
+          projectId,
           actor: { kind: "user" },
           threadId: null,
           turnId: "turn-confirm-2",
@@ -386,6 +391,7 @@ layer("MindService", (it) => {
         const missing = yield* Effect.flip(
           service.confirm({
             memoryId: MindMemoryId.makeUnsafe("memory-missing-confirm"),
+            projectId,
             actor: { kind: "user" },
             threadId: null,
             turnId: "turn-confirm-3",
@@ -557,6 +563,7 @@ layer("MindService", (it) => {
 
       const forgotten = yield* service.forget({
         memoryId: remembered.memoryId,
+        projectId,
         actor: { kind: "user" },
         threadId: null,
         turnId: "turn-forget-1",
@@ -579,6 +586,7 @@ layer("MindService", (it) => {
 
       const again = yield* service.forget({
         memoryId: remembered.memoryId,
+        projectId,
         actor: { kind: "user" },
         threadId: null,
         turnId: "turn-forget-2",
@@ -603,6 +611,7 @@ layer("MindService", (it) => {
       );
       yield* service.confirm({
         memoryId: b.memoryId,
+        projectId,
         actor: { kind: "user" },
         threadId: null,
         turnId: "turn-ui-confirm",
@@ -610,6 +619,7 @@ layer("MindService", (it) => {
 
       const pinned = yield* service.setPinned({
         memoryId: a.memoryId,
+        projectId,
         pinned: true,
         actor: { kind: "user" },
         threadId: null,
@@ -645,6 +655,7 @@ layer("MindService", (it) => {
       const missing = yield* Effect.flip(
         service.setPinned({
           memoryId: MindMemoryId.makeUnsafe("memory-missing-ui"),
+          projectId,
           pinned: true,
           actor: { kind: "user" },
           threadId: null,
@@ -652,6 +663,54 @@ layer("MindService", (it) => {
         }),
       );
       assert.strictEqual(missing._tag, "MindMemoryNotFoundError");
+    }),
+  );
+
+  it.effect("confirm, forget, and setPinned reject foreign-project memory ids", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.xproject);
+      const otherProjectId = ProjectId.makeUnsafe(PROJECTS.retry);
+      yield* ensureProjectRow(PROJECTS.xproject);
+      yield* ensureProjectRow(PROJECTS.retry);
+      const seeded = yield* seedMemory({ projectId, textHash: "xproject-foreign" });
+
+      const confirmError = yield* Effect.flip(
+        service.confirm({
+          projectId: otherProjectId,
+          memoryId: seeded.memoryId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: "turn-xproject-confirm",
+        }),
+      );
+      assert.strictEqual(confirmError._tag, "MindMemoryNotFoundError");
+
+      const forgotten = yield* service.forget({
+        projectId: otherProjectId,
+        memoryId: seeded.memoryId,
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: "turn-xproject-forget",
+      });
+      assert.strictEqual(forgotten.deleted, false);
+      assert.strictEqual(forgotten.alreadyGone, true);
+      // The foreign row is untouched.
+      assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: seeded.memoryId })));
+
+      const pinError = yield* Effect.flip(
+        service.setPinned({
+          projectId: otherProjectId,
+          memoryId: seeded.memoryId,
+          pinned: true,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: "turn-xproject-pin",
+        }),
+      );
+      assert.strictEqual(pinError._tag, "MindMemoryNotFoundError");
     }),
   );
 });

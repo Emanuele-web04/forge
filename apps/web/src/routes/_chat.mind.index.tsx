@@ -122,7 +122,7 @@ function MindRouteView() {
   // idempotent, so the invalidate-on-settle only converges the count/cap meta.
   const forgetMutation = useMutation({
     mutationFn: (memory: MindMemory) =>
-      ensureNativeApi().mind.forget({ memoryId: memory.memoryId }),
+      ensureNativeApi().mind.forget({ projectId: memory.projectId, memoryId: memory.memoryId }),
     onMutate: async (memory) => {
       await queryClient.cancelQueries({ queryKey: mindQueryKey });
       const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
@@ -147,7 +147,7 @@ function MindRouteView() {
   // Optimistic pin flip, same rollback shape as forget.
   const setPinnedMutation = useMutation({
     mutationFn: (input: { readonly memory: MindMemory; readonly pinned: boolean }) =>
-      ensureNativeApi().mind.setPinned({ memoryId: input.memory.memoryId, pinned: input.pinned }),
+      ensureNativeApi().mind.setPinned({ projectId: input.memory.projectId, memoryId: input.memory.memoryId, pinned: input.pinned }),
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: mindQueryKey });
       const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);

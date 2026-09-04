@@ -60,6 +60,7 @@ export interface MindRecallRequest {
 }
 
 export interface MindConfirmRequest {
+  readonly projectId: ProjectId;
   readonly memoryId: MindMemoryId;
   readonly actor: MindActor;
   readonly threadId: ThreadId | null;
@@ -68,6 +69,7 @@ export interface MindConfirmRequest {
 }
 
 export interface MindForgetRequest {
+  readonly projectId: ProjectId;
   readonly memoryId: MindMemoryId;
   readonly actor: MindActor;
   readonly threadId: ThreadId | null;
@@ -99,6 +101,7 @@ export interface MindListRequest {
 }
 
 export interface MindSetPinnedRequest {
+  readonly projectId: ProjectId;
   readonly memoryId: MindMemoryId;
   readonly pinned: boolean;
   readonly actor: MindActor;

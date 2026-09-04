@@ -48,6 +48,8 @@ const PROJECTS = {
   forget: "project-memory-tools-forget",
   status: "project-memory-tools-status",
   statusOther: "project-memory-tools-status-other",
+  xproject: "project-memory-tools-xproject",
+  xprojectOther: "project-memory-tools-xproject-other",
   invalid: "project-memory-tools-invalid",
   missing: "project-memory-tools-missing",
 } as const;
@@ -647,6 +649,52 @@ layer("agent gateway memory tools", (it) => {
       );
       assert.equal(second.deleted, false);
       assert.equal(second.alreadyGone, true);
+    }),
+  );
+
+  it.effect("confirm and forget from another project cannot touch foreign memories", () =>
+    Effect.gen(function* () {
+      const mindService = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      yield* ensureProjectRow(PROJECTS.xproject);
+      yield* ensureProjectRow(PROJECTS.xprojectOther);
+      const { byName } = makeTools(mindService, PROJECTS.xproject, PROJECTS.xprojectOther);
+
+      const remembered = structuredPayload(
+        yield* callTool(
+          byName,
+          "synara_remember",
+          { text: "Mine, not yours", type: "semantic" },
+          makeContext(THREADS.alpha, "turn-xproject-create"),
+        ),
+      );
+      const memoryId = remembered.memoryId as string;
+
+      const confirmError = errorPayload(
+        yield* callTool(
+          byName,
+          "synara_confirm_memory",
+          { memoryId },
+          makeContext(THREADS.beta, "turn-xproject-confirm"),
+        ),
+      );
+      assert.equal(confirmError.code, "memory_not_found");
+
+      const forgotten = structuredPayload(
+        yield* callTool(
+          byName,
+          "synara_forget_memory",
+          { memoryId },
+          makeContext(THREADS.beta, "turn-xproject-forget"),
+        ),
+      );
+      assert.equal(forgotten.deleted, false);
+      assert.equal(forgotten.alreadyGone, true);
+      assert.equal(
+        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.xproject) }),
+        1,
+      );
     }),
   );
 

@@ -413,6 +413,14 @@ const makeMindService = Effect.gen(function* () {
         );
       }
       const row = existing.value;
+      if (row.projectId !== input.projectId) {
+        return yield* Effect.fail(
+          new MindMemoryNotFoundError({
+            memoryId: input.memoryId,
+            message: "No memory with this id; recall or list memories to get a valid id.",
+          }),
+        );
+      }
       const operationId =
         input.turnId === null ? null : `confirm:${input.turnId}:${input.memoryId}`;
       if (operationId !== null) {
@@ -489,6 +497,10 @@ const makeMindService = Effect.gen(function* () {
         return { memoryId: input.memoryId, deleted: false, alreadyGone: true };
       }
       const row = existing.value;
+      if (row.projectId !== input.projectId) {
+        // From the caller's project the memory is already gone: idempotent success.
+        return { memoryId: input.memoryId, deleted: false, alreadyGone: true };
+      }
       const deleted = yield* repository.deleteById({ memoryId: input.memoryId });
       if (!deleted) {
         return { memoryId: input.memoryId, deleted: false, alreadyGone: true };
@@ -548,6 +560,14 @@ const makeMindService = Effect.gen(function* () {
         );
       }
       const row = existing.value;
+      if (row.projectId !== input.projectId) {
+        return yield* Effect.fail(
+          new MindMemoryNotFoundError({
+            memoryId: input.memoryId,
+            message: "No memory with this id; list memories to get a valid id.",
+          }),
+        );
+      }
       yield* maybeSweep(row.projectId);
       const nowIso = yield* nowIsoNow;
       const updated = yield* repository.setPinned({

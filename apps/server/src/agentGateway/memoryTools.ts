@@ -246,10 +246,11 @@ export function makeAgentGatewayMemoryTools(
         const memoryId = MindMemoryId.makeUnsafe(
           readStringArg(args, "memoryId", { required: true })!,
         );
-        yield* requireCallerProjectId(context.callerThreadId);
+        const projectId = yield* requireCallerProjectId(context.callerThreadId);
         const memory = yield* mindService
           .confirm({
             memoryId,
+            projectId,
             actor: { kind: "agent", provider: context.callerProvider },
             threadId: ThreadId.makeUnsafe(context.callerThreadId),
             turnId: context.callerTurnId,
@@ -295,10 +296,11 @@ export function makeAgentGatewayMemoryTools(
         const memoryId = MindMemoryId.makeUnsafe(
           readStringArg(args, "memoryId", { required: true })!,
         );
-        yield* requireCallerProjectId(context.callerThreadId);
+        const projectId = yield* requireCallerProjectId(context.callerThreadId);
         const result = yield* mindService
           .forget({
             memoryId,
+            projectId,
             actor: { kind: "agent", provider: context.callerProvider },
             threadId: ThreadId.makeUnsafe(context.callerThreadId),
             turnId: context.callerTurnId,

@@ -100,11 +100,13 @@ export const MindListResult = Schema.Struct({
 export type MindListResult = typeof MindListResult.Type;
 
 export const MindForgetInput = Schema.Struct({
+  projectId: ProjectId,
   memoryId: MindMemoryId,
 });
 export type MindForgetInput = typeof MindForgetInput.Type;
 
 export const MindSetPinnedInput = Schema.Struct({
+  projectId: ProjectId,
   memoryId: MindMemoryId,
   pinned: Schema.Boolean,
 });

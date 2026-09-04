@@ -138,10 +138,16 @@ describe("Mind contracts", () => {
     );
   });
 
-  it("targets forget and setPinned by memory id", () => {
-    expect(decodes(MindForgetInput, { memoryId: "memory-1" })).toBe(true);
-    expect(decodes(MindForgetInput, { memoryId: "  " })).toBe(false);
-    expect(decodes(MindSetPinnedInput, { memoryId: "memory-1", pinned: true })).toBe(true);
-    expect(decodes(MindSetPinnedInput, { memoryId: "memory-1", pinned: "yes" })).toBe(false);
+  it("targets forget and setPinned by project and memory id", () => {
+    expect(decodes(MindForgetInput, { projectId: "project-1", memoryId: "memory-1" })).toBe(true);
+    expect(decodes(MindForgetInput, { memoryId: "memory-1" })).toBe(false);
+    expect(decodes(MindForgetInput, { projectId: "project-1", memoryId: "  " })).toBe(false);
+    expect(
+      decodes(MindSetPinnedInput, { projectId: "project-1", memoryId: "memory-1", pinned: true }),
+    ).toBe(true);
+    expect(decodes(MindSetPinnedInput, { memoryId: "memory-1", pinned: true })).toBe(false);
+    expect(
+      decodes(MindSetPinnedInput, { projectId: "project-1", memoryId: "memory-1", pinned: "yes" }),
+    ).toBe(false);
   });
 });
