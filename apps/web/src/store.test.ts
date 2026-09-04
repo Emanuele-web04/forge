@@ -762,6 +762,41 @@ describe("store facade", () => {
     }
   }, 15000);
 
+  it("preserves a legacy all-collapsed payload through the first sync after reload", async () => {
+    const storage = new Map<string, string>();
+    storage.set(PERSISTED_STATE_KEY, JSON.stringify({ expandedProjectCwds: [] }));
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+
+      const reloaded = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      reloaded.useStore.getState().syncServerReadModel(
+        makeProjectsReadModel([
+          makeReadModelProject({
+            id: project1,
+            title: "Project 1",
+            workspaceRoot: "/tmp/project-1",
+          }),
+          makeReadModelProject({
+            id: project2,
+            title: "Project 2",
+            workspaceRoot: "/tmp/project-2",
+          }),
+        ]),
+      );
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, expanded }) => ({ id, expanded })),
+      ).toEqual([
+        { id: project1, expanded: false },
+        { id: project2, expanded: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
   it("preserves mixed expansion state across a full reload", async () => {
     const storage = new Map<string, string>();
     const fakeWindow = makeFakeWindow(storage);

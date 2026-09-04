@@ -62,6 +62,13 @@ function resetRememberedProjectState(): void {
  * keep their shared history. Callers pass already-keyed cwds (`projectCwdKey`).
  */
 export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<string>): void {
+  // A legacy expansion-only payload carries no order keys, so an all-collapsed
+  // legacy load can never overlap the incoming set. Keep the legacy signal until
+  // modern order state is remembered; otherwise the first sync wipes it and every
+  // project hydrates expanded, destroying the user's collapse-all state.
+  if (persistedExpandedProjectCwdsDefined) {
+    return;
+  }
   if (incomingCwdKeys.size === 0) {
     resetRememberedProjectState();
     return;
