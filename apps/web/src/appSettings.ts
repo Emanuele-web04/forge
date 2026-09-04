@@ -1058,7 +1058,7 @@ export function getCustomModelsByProvider(
     droid: getCustomModelsForProvider(settings, "droid"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
-    external: settings.customExternalModels,
+    external: settings.customExternalModels ?? [],
   };
 }
 
