@@ -1,4 +1,8 @@
-import { MIND_RECALL_MAX_DIGEST_CHARS, type MindMemory, type MindMemoryMatch } from "@synara/contracts";
+import {
+  MIND_RECALL_MAX_DIGEST_CHARS,
+  type MindMemory,
+  type MindMemoryMatch,
+} from "@synara/contracts";
 
 /** Lambda so that ~45 days of idle decays a weight-1.0 memory to ~0.05. */
 export const MIND_DECAY_LAMBDA = 0.0667;
