@@ -258,7 +258,10 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
 
   const requestedProvider = input.provider;
   // External profiles have no usage fetcher or settings entry, so there is nothing to list.
-  if (requestedProvider && (requestedProvider === "external" || !settings.providers[requestedProvider].enabled)) {
+  if (
+    requestedProvider &&
+    (requestedProvider === "external" || !settings.providers[requestedProvider].enabled)
+  ) {
     return [];
   }
 

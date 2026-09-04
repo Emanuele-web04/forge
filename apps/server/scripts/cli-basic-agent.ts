@@ -54,9 +54,12 @@ rl.on("line", (raw) => {
   if (exitAfterEcho) {
     // One-shot: flush the echoed lines, then exit so the connector observes EOF
     // as the turn boundary. The delay is the last line's offset plus a margin.
-    const exitAt = setTimeout(() => {
-      process.exit(0);
-    }, slowLineDelayMs * echoLines + 50);
+    const exitAt = setTimeout(
+      () => {
+        process.exit(0);
+      },
+      slowLineDelayMs * echoLines + 50,
+    );
     exitAt.unref();
   }
 });

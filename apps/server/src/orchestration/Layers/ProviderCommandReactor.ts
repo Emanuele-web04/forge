@@ -1669,11 +1669,11 @@ const make = Effect.gen(function* () {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       modelSelection: desiredModelSelection,
-      ...(resolvedProviderOptions !== undefined ? { providerOptions: resolvedProviderOptions } : {}),
-      runtimeMode: desiredRuntimeMode,
-      ...(externalAgentLaunch !== undefined
-        ? { externalAgentLaunch }
+      ...(resolvedProviderOptions !== undefined
+        ? { providerOptions: resolvedProviderOptions }
         : {}),
+      runtimeMode: desiredRuntimeMode,
+      ...(externalAgentLaunch !== undefined ? { externalAgentLaunch } : {}),
     };
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({

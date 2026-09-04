@@ -23,7 +23,10 @@ import {
 } from "@synara/contracts";
 import { Effect, Fiber, type Scope } from "effect";
 
-import { cancelAgentGatewayTurn, type AgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
+import {
+  cancelAgentGatewayTurn,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { classifyAcpPromptTurnCompletion, mapAcpToAdapterError } from "./AcpAdapterSupport.ts";
 import { clearAcpActiveTurn, finalizeAcpActiveTurnCost } from "./AcpAdapterSessionSupport.ts";
 import type * as AcpErrors from "./AcpErrors.ts";
@@ -115,11 +118,18 @@ export interface AcpTurnOptions {
  * Failure handling matches every built-in adapter: a transport/prompt failure
  * makes the ACP child unusable, so the session is retired and the turn fails.
  */
-export const runAcpTurn = (
-  options: AcpTurnOptions,
-): Effect.Effect<ProviderRuntimeEvent, Error> =>
+export const runAcpTurn = (options: AcpTurnOptions): Effect.Effect<ProviderRuntimeEvent, Error> =>
   Effect.gen(function* () {
-    const { ctx, turnId, promptParts, model, interactionMode, offerRuntimeEvent, makeEventStamp, nowIso } = options;
+    const {
+      ctx,
+      turnId,
+      promptParts,
+      model,
+      interactionMode,
+      offerRuntimeEvent,
+      makeEventStamp,
+      nowIso,
+    } = options;
     if (options.awaitStartGate !== undefined) {
       yield* options.awaitStartGate;
     }
@@ -153,11 +163,13 @@ export const runAcpTurn = (
     };
     yield* offerRuntimeEvent(ctx.lifecycleGeneration, startedEvent);
 
-    const result = yield* ctx.acp.prompt({ prompt: [...promptParts] }).pipe(
-      Effect.mapError((error) =>
-        mapAcpToAdapterError(ctx.provider, ctx.threadId, "session/prompt", error),
-      ),
-    );
+    const result = yield* ctx.acp
+      .prompt({ prompt: [...promptParts] })
+      .pipe(
+        Effect.mapError((error) =>
+          mapAcpToAdapterError(ctx.provider, ctx.threadId, "session/prompt", error),
+        ),
+      );
 
     return yield* handleAcpPromptResult({ ...options, result });
   }).pipe(
@@ -180,7 +192,8 @@ export const handleAcpPromptResult = (
   options: AcpTurnOptions & { readonly result: Acp.PromptResponse },
 ): Effect.Effect<ProviderRuntimeEvent> =>
   Effect.gen(function* () {
-    const { ctx, turnId, promptParts, model, offerRuntimeEvent, makeEventStamp, nowIso, result } = options;
+    const { ctx, turnId, promptParts, model, offerRuntimeEvent, makeEventStamp, nowIso, result } =
+      options;
     if (options.drainQueuedEvents !== undefined) {
       yield* options.drainQueuedEvents(ctx);
     }
@@ -235,10 +248,14 @@ export const handleAcpPromptResult = (
  * the failure path every built-in adapter shares.
  */
 export const handleAcpPromptFailure = (
-  options: AcpTurnOptions & { readonly error: Error; readonly promptParts: ReadonlyArray<Acp.ContentBlock> },
+  options: AcpTurnOptions & {
+    readonly error: Error;
+    readonly promptParts: ReadonlyArray<Acp.ContentBlock>;
+  },
 ): Effect.Effect<ProviderRuntimeEvent> =>
   Effect.gen(function* () {
-    const { ctx, turnId, promptParts, model, offerRuntimeEvent, makeEventStamp, nowIso, error } = options;
+    const { ctx, turnId, promptParts, model, offerRuntimeEvent, makeEventStamp, nowIso, error } =
+      options;
     if (options.drainQueuedEvents !== undefined) {
       yield* options.drainQueuedEvents(ctx);
     }

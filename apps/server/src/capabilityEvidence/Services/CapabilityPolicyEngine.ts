@@ -91,9 +91,7 @@ const isEnvironmental = (observation: CapabilityObservation) =>
  * corroborated it — so cross-family verifier drift must not read `provisional`
  * forever. Staleness is only meaningful within a family.
  */
-const RUNTIME_FEEDBACK_VERIFIER_FAMILIES: ReadonlySet<string> = new Set([
-  "runtime-turn-feedback",
-]);
+const RUNTIME_FEEDBACK_VERIFIER_FAMILIES: ReadonlySet<string> = new Set(["runtime-turn-feedback"]);
 
 const isRuntimeVerifierFamily = (verifierId: string): boolean =>
   RUNTIME_FEEDBACK_VERIFIER_FAMILIES.has(verifierId);

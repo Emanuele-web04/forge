@@ -108,7 +108,9 @@ export function makeServerProviderLayer(
       providerIsEnabled: (provider) =>
         serverSettings.getSettings.pipe(
           // External profiles have no per-provider settings entry; availability comes from the profile.
-          Effect.map((settings) => (provider === "external" ? true : settings.providers[provider].enabled)),
+          Effect.map((settings) =>
+            provider === "external" ? true : settings.providers[provider].enabled,
+          ),
           Effect.mapError(
             (cause) =>
               new ProviderValidationError({

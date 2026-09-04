@@ -15,18 +15,14 @@ describe("summarizeCapabilityBadge", () => {
 
   it("renders unknown when every tracked state is unknown (AC4 honesty)", () => {
     expect(
-      summarizeCapabilityBadge([
-        { state: "unknown" },
-        { state: "unknown" },
-        { state: "unknown" },
-      ]),
+      summarizeCapabilityBadge([{ state: "unknown" }, { state: "unknown" }, { state: "unknown" }]),
     ).toBe("unknown");
   });
 
   it("renders degraded when unknown and degraded states are mixed", () => {
-    expect(
-      summarizeCapabilityBadge([{ state: "unknown" }, { state: "degraded" }]),
-    ).toBe("degraded");
+    expect(summarizeCapabilityBadge([{ state: "unknown" }, { state: "degraded" }])).toBe(
+      "degraded",
+    );
   });
 
   it("renders verified only when a non-unknown verified state exists", () => {
@@ -52,8 +48,8 @@ describe("summarizeCapabilityBadge", () => {
   });
 
   it("renders degraded when degraded and verified states are mixed", () => {
-    expect(
-      summarizeCapabilityBadge([{ state: "degraded" }, { state: "verified" }]),
-    ).toBe("degraded");
+    expect(summarizeCapabilityBadge([{ state: "degraded" }, { state: "verified" }])).toBe(
+      "degraded",
+    );
   });
 });
