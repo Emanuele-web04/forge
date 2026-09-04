@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFeedbackSubmission,
   FEEDBACK_CATEGORIES,
+  formatBugReportDiagnostics,
   formatFeedbackSummary,
   type FeedbackDiagnostics,
   type FeedbackThreadContext,
@@ -200,5 +201,31 @@ describe("buildFeedbackSubmission", () => {
     expect(submission.summary).not.toContain("sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX");
     expect(submission.summary).not.toContain("/Users/kartik");
     expect(submission.summary).toContain("Model: [REDACTED] fine-tune from ~/leak");
+  });
+});
+
+describe("formatBugReportDiagnostics", () => {
+  it("keeps the rows the issue template asks for and drops the raw browser strings", () => {
+    const report = formatBugReportDiagnostics({ category: "bug", diagnostics: DIAGNOSTICS });
+
+    expect(report).toContain("I ran into a bug in Synara 0.5.1, using codex with gpt-5.6-sol.");
+    expect(report).toContain("Report type: Bug");
+    expect(report).toContain("Platform: MacIntel, viewport 1440x900");
+    expect(report).toContain("At submission: the thread was in an error state");
+    expect(report).not.toContain("User agent:");
+    expect(report).not.toContain("Synara test agent");
+    expect(report).not.toContain("Language:");
+    expect(report).not.toContain("Submitted at:");
+  });
+
+  it("omits fields the session never set without changing the allow-list", () => {
+    const report = formatBugReportDiagnostics({
+      category: null,
+      diagnostics: { ...DIAGNOSTICS, provider: null, model: null },
+    });
+
+    expect(report).toContain("I have some feedback in Synara 0.5.1 outside an active chat.");
+    expect(report).not.toContain("Provider:");
+    expect(report).not.toContain("User agent:");
   });
 });

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { buildFeedbackSubmission } from "../feedback";
+import { buildFeedbackSubmission, formatBugReportDiagnostics } from "../feedback";
 import type { FeedbackThreadContext } from "../feedback";
 import { buildGithubIssueInterviewPrompt } from "../feedbackGithubIssue";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
@@ -61,15 +61,17 @@ export function GlobalFeedbackDialog() {
     if (!projectId) {
       throw new Error("No project available.");
     }
-
     const submission = buildFeedbackSubmission({ category: "bug", details, context });
-    // The summary is already sanitized by buildFeedbackSubmission; deriving the
-    // prompt diagnostics from it avoids re-building from raw diagnostics.
+    // The public-bound prompt gets the allow-listed rows only: raw user-agent,
+    // language, and submitted-at strings stay on the first-party feedback path.
+    // buildGithubIssueInterviewPrompt remains the single sanitization boundary.
     const prompt = buildGithubIssueInterviewPrompt({
       details: submission.details,
-      diagnosticsSummary: submission.summary,
+      diagnosticsSummary: formatBugReportDiagnostics({
+        category: "bug",
+        diagnostics: submission.diagnostics,
+      }),
     });
-
     const threadId = await handleNewThread(projectId, { fresh: true });
     if (!threadId) {
       throw new Error("Could not open a draft thread.");

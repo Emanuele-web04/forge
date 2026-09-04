@@ -78,9 +78,11 @@ const SECRET_PATTERNS = [
 ] as const;
 
 // Usernames may contain dots and other punctuation (john.doe), so the segment
-// after the home prefix stops only at path separators and whitespace.
+// after the home prefix stops only at path separators and whitespace. The
+// lookbehind also accepts a colon for PATH-style and error-style prefixes
+// (PATH=/Users/kartik/bin, Error:/Users/kartik/proj).
 const HOME_PATH_PATTERN =
-  /(?<=^|[\s'"`=(])(\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root\/[^/\s]+|C:\\Users\\[^/\\\s]+|C:\/Users\/[^/\s]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
+  /(?<=^|[\s'"`=(:])(\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root\/[^/\s]+|C:\\Users\\[^/\\\s]+|C:\/Users\/[^/\s]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
 
 /** Masks high-confidence secrets with `[REDACTED]` and returns the count. */
 export function redactObviousSecrets(text: string): { text: string; redactedCount: number } {
@@ -141,25 +143,8 @@ function formatStateFlags(diagnostics: FeedbackThreadContext): string {
   return flags.length > 0 ? `${flags.join(", ")}.` : "nothing pending.";
 }
 
-/**
- * Renders diagnostics as the report a maintainer reads first, since incoming
- * feedback arrives without any context about what the reporter was doing.
- */
-export function formatFeedbackSummary(input: {
-  category: FeedbackCategory | null;
-  diagnostics: FeedbackDiagnostics;
-}): string {
-  const { diagnostics } = input;
-  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
-  const lead = category?.lead ?? UNCATEGORIZED_LEAD;
-  const usageContext = diagnostics.provider
-    ? diagnostics.model
-      ? `, using ${diagnostics.provider} with ${diagnostics.model}`
-      : `, using ${diagnostics.provider}`
-    : " outside an active chat";
-
-  const rows: Array<[string, string | null]> = [
-    ["Report type", category?.label ?? "Unspecified"],
+function diagnosticRows(diagnostics: FeedbackDiagnostics): Array<[string, string | null]> {
+  return [
     ["App version", diagnostics.appVersion],
     ["Provider", diagnostics.provider],
     ["Model", diagnostics.model],
@@ -179,14 +164,86 @@ export function formatFeedbackSummary(input: {
     ["User agent", diagnostics.userAgent],
     ["Submitted at", diagnostics.submittedAt],
   ];
+}
 
+/**
+ * Labels the agent may quote in a public bug report: version, provider and
+ * model, project and session state. Raw user-agent, language, and
+ * submitted-at strings stay on the first-party feedback path only.
+ */
+const BUG_REPORT_DIAGNOSTIC_LABELS: Record<string, true> = {
+  "Report type": true,
+  "App version": true,
+  Provider: true,
+  Model: true,
+  "Project kind": true,
+  "Environment mode": true,
+  "Runtime mode": true,
+  "Interaction mode": true,
+  "Session status": true,
+  "Latest turn state": true,
+  "Thread size": true,
+  "At submission": true,
+  Platform: true,
+};
+
+function renderDiagnosticReport(lead: string, rows: Array<[string, string | null]>): string {
   const detailLines = rows
     .filter((row): row is [string, string] => row[1] !== null && row[1] !== "")
     .map(([label, value]) => `${label}: ${value}`);
+  return [`${lead}.`, "", ...detailLines].join("\n");
+}
 
-  return [`${lead} in Synara ${diagnostics.appVersion}${usageContext}.`, "", ...detailLines].join(
-    "\n",
-  );
+function feedbackLeadAndContext(input: {
+  category: FeedbackCategory | null;
+  diagnostics: FeedbackDiagnostics;
+}): string {
+  const { diagnostics } = input;
+  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
+  const lead = category?.lead ?? UNCATEGORIZED_LEAD;
+  const usageContext = diagnostics.provider
+    ? diagnostics.model
+      ? `, using ${diagnostics.provider} with ${diagnostics.model}`
+      : `, using ${diagnostics.provider}`
+    : " outside an active chat";
+  return `${lead} in Synara ${diagnostics.appVersion}${usageContext}`;
+}
+
+/**
+ * Renders diagnostics as the report a maintainer reads first, since incoming
+ * feedback arrives without any context about what the reporter was doing.
+ */
+export function formatFeedbackSummary(input: {
+  category: FeedbackCategory | null;
+  diagnostics: FeedbackDiagnostics;
+}): string {
+  const { diagnostics } = input;
+  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
+  const rows: Array<[string, string | null]> = [
+    ["Report type", category?.label ?? "Unspecified"],
+    ...diagnosticRows(diagnostics),
+  ];
+  return renderDiagnosticReport(feedbackLeadAndContext(input), rows);
+}
+
+/**
+ * Renders the allow-listed diagnostics rows for the public-bound bug-report
+ * prompt. The full summary carries raw user-agent, language, and
+ * submitted-at strings that the issue template never asks for.
+ */
+export function formatBugReportDiagnostics(input: {
+  category: FeedbackCategory | null;
+  diagnostics: FeedbackDiagnostics;
+}): string {
+  const { diagnostics } = input;
+  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
+  const rows: Array<[string, string | null]> = [
+    ["Report type", category?.label ?? "Unspecified"],
+    ...diagnosticRows(diagnostics).filter(
+      ([label]) => BUG_REPORT_DIAGNOSTIC_LABELS[label] === true,
+    ),
+  ];
+  return renderDiagnosticReport(feedbackLeadAndContext(input), rows);
 }
 
 export function buildFeedbackSubmission(input: {

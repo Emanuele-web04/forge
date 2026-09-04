@@ -92,12 +92,14 @@ describe("buildGithubIssueInterviewPrompt", () => {
       .find((line) => line.includes(`gh issue create -R ${SYNARA_UPSTREAM_REPO}`));
     expect(commandLine).toBeDefined();
     expect(commandLine).toContain('--title "$title"');
-    expect(commandLine).toContain("--body-file");
+    expect(commandLine).toContain('--body-file "$body_file"');
     expect(commandLine).not.toContain("--label");
     expect(commandLine).not.toContain("$(");
 
-    expect(prompt).toContain(`printf '%s\\n' "$title" > "$title_file"`);
+    expect(prompt).toContain('body_file=$(mktemp); chmod 600 "$body_file"');
     expect(prompt).toContain(`printf '%s\\n' "$body" > "$body_file"`);
+    expect(prompt).toContain('rm -f "$body_file"');
+    expect(prompt).not.toContain("$title_file");
     expect(prompt).toContain(BUG_REPORT_CONFIRMATION_QUESTION);
     expect(prompt).toContain(GITHUB_ISSUE_URL);
     expect(prompt).toContain("?title=<encoded title>&body=<encoded body>");
@@ -191,6 +193,7 @@ describe("normalizeHomePaths", () => {
     ["/Users/kartik, ok?", "~ ok?"],
     ["C:\\Users\\kartik\\Desktop", "~\\Desktop"],
     ["C:/Users/kartik/dev", "~/dev"],
+    ["Error:/Users/kartik/proj", "Error:~/proj"],
     ["HOME=/Users/kartik/dev", "HOME=~/dev"],
     ["PATH=/Users/kartik/bin:/usr/bin", "PATH=~/bin:/usr/bin"],
     ["(/Users/kartik/x)", "(~/x)"],
