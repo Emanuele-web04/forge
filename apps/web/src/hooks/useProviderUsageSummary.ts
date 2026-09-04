@@ -16,7 +16,6 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
-  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -46,7 +45,13 @@ export function resolveProviderUsageSummary(input: {
   localUsageSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   openUsageSnapshot?: unknown;
 }): ProviderUsageSummaryData {
-  const blocksFallback = isProviderUsageSnapshotNonOk(input.authoritativeLiveSnapshot);
+  // Explicit live failures are authoritative; only fall back when no live snapshot exists.
+  // "Unsupported" is an honest capability result, not a failed fetch. Keep
+  // runtime/local activity and thread-reported limits visible for providers
+  // that do not expose a safe account endpoint yet.
+  const blocksFallback =
+    input.authoritativeLiveSnapshot?.status === "needs-auth" ||
+    input.authoritativeLiveSnapshot?.status === "error";
   if (blocksFallback) {
     return {
       learnMoreHref: deriveProviderUsageLearnMoreHref(input.provider),
