@@ -1,31 +1,20 @@
 # Attribution
 
-Synara adapts ideas and, occasionally, code from other open-source projects. This file
-records the significant ones so credit is visible in one place.
+Synara adapts ideas and sometimes code from other open source projects. This file credits the ones that shaped a feature.
 
-What belongs here:
+What belongs here: code, constants, or prose Synara copied or adapted, and features materially shaped with no code copied.
 
-- Projects whose code, designs, constants, or prose Synara copied or adapted.
-- Projects that materially shaped a Synara feature, even when no code was copied.
+What does not belong here: ordinary dependencies, even large ones (Effect, Pi). `package.json` and `bun.lock` already record those with their licenses.
 
-What does not belong here:
-
-- Ordinary dependencies. `package.json` and `bun.lock` already record those, and each
-  package ships its own license.
-
-Attribution complements licenses; it never replaces them. If code or prose is copied or
-derived from an MIT/BSD-style project, carry the upstream copyright and permission notice
-alongside the copied portions as the license requires. A row in this table is not a
-substitute.
-
-## Adapted work
-
-| Project | Author   | Source                           | License | Used in                                                                                                                        | Nature                                                                                                      |
-| ------- | -------- | -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature — storage foundation in https://github.com/Emanuele-web04/synara/pull/899, feature integration in progress | Adapted — memory lifecycle concepts, scoring constants, and near-verbatim standing-order prose are adapted. |
+Credit is not a license notice. If you copy code or prose, carry the upstream notice with it.
+<!-- Style: no em dashes in this file. Use commas or colons. -->
+## Adapted work (license notice required)
+| Project | Author | Source | License | Used in + How |
+| ------- | ------ | ------ | ------- | ------------- |
+| mind | Da7-Tech | https://github.com/Da7-Tech/mind | MIT | Mind memory feature: storage foundation (PR #899: memory tables, scoring constants; upstream snapshot 2026-09-04) and standing-order prose (PR #909). Adapted: scoring constants, near-verbatim standing-order prose. |
 
 ### License notice for mind
-
+<!-- DO NOT EDIT below. Byte-match with upstream Da7-Tech/mind LICENSE. Do not move behind a link or details tag. -->
 ```text
 MIT License
 
@@ -50,9 +39,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Inspiration and reference (no code copied)
-
-| Project      | Author                      | Source                                    | License    | Used in                                                                         | Nature                                                                 |
-| ------------ | --------------------------- | ----------------------------------------- | ---------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| codex        | OpenAI                      | https://github.com/openai/codex           | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`) | Inspired. Protocol and behavior reference.                             |
-| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT        | Agent-session UX flows and operational safeguards                               | Inspired. Reference implementation, per `AGENTS.md` "Reference Repos". |
+## Inspiration and reference (no code copied, no notice needed)
+| Project | Author | Source | License | Used in + How |
+| ------- | ------ | ------ | ------- | ------------- |
+| codex | OpenAI | https://github.com/openai/codex | Apache-2.0 | Codex app-server protocol handling (`apps/server/src/codexAppServerManager.ts`). Inspired: protocol reference. |
+| CodexMonitor | Thomas Ricouard (Dimillian) | https://github.com/Dimillian/CodexMonitor | MIT | Agent-session UX flows and operational safeguards (AGENTS.md "Reference Repos"). Inspired: reference implementation. |
