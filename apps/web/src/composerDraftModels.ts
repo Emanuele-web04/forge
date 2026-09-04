@@ -27,6 +27,7 @@ import {
 } from "@synara/shared/model";
 import { resolveAppModelSelection } from "./appSettings";
 import type { ComposerThreadDraftState } from "./composerDraftDomain";
+import type { ProviderOptions } from "./providerModelOptions";
 import { classifyProviderReasoningEffortSupport } from "./lib/codexReasoningEffort";
 
 export const COMPOSER_PROVIDER_KINDS = [
@@ -65,7 +66,7 @@ export interface EffectiveComposerModelState {
 function mergeProviderModelOptionsFromSelections(
   ...selections: ReadonlyArray<ModelSelection | null | undefined>
 ): ProviderModelOptions | null {
-  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
+  const result: Partial<Record<Exclude<ProviderKind, "external">, ProviderOptions>> = {};
   for (const selection of selections) {
     if (!selection) continue;
     if (selection.provider === "external") continue;
@@ -95,13 +96,14 @@ function deriveEffectiveComposerModelOptions(input: {
     return baseOptions;
   }
 
-  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = baseOptions
+  const result: Partial<Record<Exclude<ProviderKind, "external">, ProviderOptions>> = baseOptions
     ? { ...baseOptions }
     : {};
   for (const [provider, selection] of Object.entries(draftSelections) as Array<
     [ProviderKind, ModelSelection | undefined]
   >) {
     if (!selection) continue;
+    if (provider === "external" || selection.provider === "external") continue;
     if (selection.options) {
       result[provider] = selection.options;
     } else {
@@ -138,9 +140,9 @@ function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
 }
 
 export function makeModelSelection(
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
   model: string,
-  options?: ProviderModelOptions[ProviderKind],
+  options?: ProviderOptions | null | undefined,
   supportsAutoMode?: boolean,
 ): ModelSelection {
   switch (provider) {
@@ -456,6 +458,22 @@ export function normalizeModelSelection(
   if (!model) {
     return null;
   }
+  if (provider === "external") {
+    const profileId = candidate?.profileId;
+    const revisionId = candidate?.revisionId;
+    if (typeof profileId !== "string" || typeof revisionId !== "string") {
+      return null;
+    }
+    // SAFETY: provider, model, profileId, and revisionId are validated above and
+    // options stay unknown by contract (connector-owned, Schema.Unknown).
+    return {
+      provider,
+      model,
+      profileId,
+      revisionId,
+      ...(candidate?.options !== undefined ? { options: candidate.options } : {}),
+    } as ModelSelection;
+  }
   const modelOptions = migratedGeminiSelection
     ? null
     : normalizeProviderModelOptions(
@@ -635,8 +653,8 @@ export function legacyMergeModelSelectionIntoProviderModelOptions(
 
 function legacyReplaceProviderModelOptions(
   currentModelOptions: ProviderModelOptions | null | undefined,
-  provider: ProviderKind,
-  nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+  provider: Exclude<ProviderKind, "external">,
+  nextProviderOptions: ProviderOptions | null | undefined,
 ): ProviderModelOptions | null {
   const { [provider]: _discardedProviderModelOptions, ...otherProviderModelOptions } =
     currentModelOptions ?? {};
@@ -808,12 +826,17 @@ export function resolvePreferredComposerModelSelection(input: {
       : null);
   const draftSelection = input.draft?.modelSelectionByProvider?.[preferredProvider] ?? null;
 
+  // External agent selections require connector-owned profileId and revisionId
+  // references, so a missing stored selection falls back to a built-in default
+  // instead of synthesizing an external selection that cannot validate.
+  const fallbackProvider =
+    preferredProvider === "pi" || preferredProvider === "external" ? "codex" : preferredProvider;
   return (
     (input.fresh
       ? (persistedSelection ?? draftSelection)
       : (draftSelection ?? persistedSelection)) ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
-      model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
+      provider: fallbackProvider,
+      model: getDefaultModel(fallbackProvider),
     }
   );
 }

@@ -440,6 +440,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          external: [],
         },
         "galapagos-alpha",
       ),
@@ -460,6 +461,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          external: [],
         },
         "",
       ),
@@ -480,6 +482,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          external: [],
         },
         "GPT-5.3 Codex",
       ),
@@ -500,6 +503,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          external: [],
         },
         "sonnet",
       ),
@@ -520,6 +524,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          external: [],
         },
         "custom/selected-model",
       ),
@@ -757,6 +762,7 @@ describe("provider-indexed custom model settings", () => {
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customExternalModels: ["partner/custom-model"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -770,12 +776,16 @@ describe("provider-indexed custom model settings", () => {
       "droid",
       "opencode",
       "pi",
+      "external",
     ]);
   });
 
   it("keeps Droid persistence compatible without advertising unsupported custom slugs", () => {
     expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
       "droid",
+    );
+    expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
+      "external",
     );
   });
 
@@ -788,6 +798,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+    expect(getCustomModelsForProvider(settings, "external")).toEqual(["partner/custom-model"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -801,6 +812,7 @@ describe("provider-indexed custom model settings", () => {
       customDevinModels: ["adaptive"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
+      customExternalModels: ["partner/default-model"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -816,6 +828,9 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "external")).toEqual([
+      "partner/default-model",
+    ]);
   });
 
   it("patches custom models for codex", () => {
@@ -872,6 +887,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for external", () => {
+    expect(patchCustomModels("external", ["partner/custom-model"])).toEqual({
+      customExternalModels: ["partner/custom-model"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -883,6 +904,7 @@ describe("provider-indexed custom model settings", () => {
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      external: ["partner/custom-model"],
     });
   });
 
@@ -915,6 +937,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );
+    expect(
+      modelOptionsByProvider.external.some((option) => option.slug === "partner/custom-model"),
+    ).toBe(true);
   });
 
   it("normalizes and deduplicates custom model options per provider", () => {
@@ -939,6 +964,11 @@ describe("provider-indexed custom model settings", () => {
         " anthropic/claude-sonnet-4-5 ",
         "anthropic/custom-pi",
         "anthropic/custom-pi",
+      ],
+      customExternalModels: [
+        " partner/custom-model ",
+        "partner/custom-model",
+        "partner/custom-model",
       ],
     });
 
@@ -978,6 +1008,9 @@ describe("provider-indexed custom model settings", () => {
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.external.filter((option) => option.slug === "partner/custom-model"),
     ).toHaveLength(1);
   });
 });

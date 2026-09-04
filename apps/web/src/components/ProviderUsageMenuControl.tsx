@@ -8,6 +8,7 @@ import {
 } from "@synara/contracts";
 import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import { useAppSettings } from "~/appSettings";
 import {

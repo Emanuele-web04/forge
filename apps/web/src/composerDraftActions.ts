@@ -886,6 +886,11 @@ export const createComposerDraftStoreState =
       if (normalizedProvider === null) {
         return;
       }
+      if (normalizedProvider === "external") {
+        // External agent profiles carry connector-owned options that Synara-side
+        // trait patches cannot rebuild; preserve the stored selection untouched.
+        return;
+      }
       // Normalize just this provider's options
       const normalizedOpts = normalizeProviderModelOptions(
         { [normalizedProvider]: nextProviderOptions },

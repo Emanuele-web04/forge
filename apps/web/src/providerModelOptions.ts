@@ -30,7 +30,7 @@ import {
 } from "@synara/contracts";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
-export type ProviderOptions = ProviderModelOptions[ProviderKind];
+export type ProviderOptions = ProviderModelOptions[Exclude<ProviderKind, "external">];
 
 export interface ProviderModelOption {
   slug: string;
@@ -502,5 +502,10 @@ export function buildModelSelection(
             options: options as PiModelOptions,
           }
         : { provider, model };
+    case "external":
+      // External agent selections require connector-owned profileId and revisionId
+      // references, which cannot be synthesized from a bare provider/model pair.
+      // Callers holding a stored external selection must preserve it directly.
+      throw new Error("buildModelSelection does not support the external provider");
   }
 }

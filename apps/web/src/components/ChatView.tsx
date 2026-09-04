@@ -976,6 +976,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
+    case "external":
+      return null;
   }
 }
 
@@ -2380,6 +2382,7 @@ export default function ChatView({
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
+      external: resolveHint("external"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -3877,7 +3880,8 @@ export default function ChatView({
     [selectedModel, selectedProvider],
   );
   const supportsFastSlashCommand = selectedModelCaps.supportsFastMode;
-  const currentProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const currentProviderModelOptions =
+    selectedProvider === "external" ? undefined : composerModelOptions?.[selectedProvider];
   const fastModeEnabled =
     supportsFastSlashCommand &&
     (currentProviderModelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
@@ -7925,14 +7929,17 @@ export default function ChatView({
     // Keep an optimistically selected Space across the command/snapshot race. The server
     // validates this best-effort target and degrades genuinely stale/deleted ids to Void.
     const activeSpaceIdForSend = readActiveSpaceId();
-    const firstSendDefaultModelSelection = buildModelSelection(
-      selectedModelSelectionForSend.provider,
-      selectedModelSelectionForSend.model ||
-        selectedModelForSend ||
-        getDefaultModel(selectedModelSelectionForSend.provider) ||
-        DEFAULT_MODEL_BY_PROVIDER.codex,
-      selectedModelSelectionForSend.options,
-    );
+    const firstSendDefaultModelSelection =
+      selectedModelSelectionForSend.provider === "external"
+        ? selectedModelSelectionForSend
+        : buildModelSelection(
+            selectedModelSelectionForSend.provider,
+            selectedModelSelectionForSend.model ||
+              selectedModelForSend ||
+              getDefaultModel(selectedModelSelectionForSend.provider) ||
+              DEFAULT_MODEL_BY_PROVIDER.codex,
+            selectedModelSelectionForSend.options,
+          );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,
@@ -9716,7 +9723,8 @@ export default function ChatView({
     },
     [scheduleComposerFocus, setPrompt],
   );
-  const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const selectedProviderModelOptions =
+    selectedProvider === "external" ? undefined : composerModelOptions?.[selectedProvider];
   const composerTraitSelection = getComposerTraitSelection(
     selectedProvider,
     selectedModel,
@@ -11410,9 +11418,7 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
-    activeProvider: builtInProviderOrNull(
-      activeThread.session?.provider ?? activeThread.modelSelection.provider,
-    ),
+    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     isStudioChat: isStudioContainer,
     studioFolderPath: isStudioContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,

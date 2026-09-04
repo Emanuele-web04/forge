@@ -434,6 +434,10 @@ export function PluginLibrary() {
       plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
     },
+    external: {
+      plugins: false,
+      skills: false,
+    },
   };
 
   // Auto-fallback: when the current tab/provider combo is unsupported, render

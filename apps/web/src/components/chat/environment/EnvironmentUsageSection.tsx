@@ -1,7 +1,6 @@
 // FILE: EnvironmentUsageSection.tsx
 // Purpose: "Usage" section of the Environment panel — compact menu for the active provider.
 
-import type { DisplayProvider } from "~/lib/providerIdentity";
 import type { ProviderKind } from "@synara/contracts";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useQuery } from "@tanstack/react-query";
@@ -35,7 +34,9 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
   const snapshot = (usageQuery.data ?? []).find((entry) => entry.provider === provider);
   const model = useProviderUsageMenuModel(provider, { providerSnapshot: snapshot });
 
-  if (settingsQuery.data?.providers[provider].enabled === false) {
+  const isProviderDisabled =
+    provider === "external" ? false : settingsQuery.data?.providers[provider]?.enabled === false;
+  if (isProviderDisabled) {
     return null;
   }
   // Nothing displayable yet (first fetch still running, sign-in required, or the provider

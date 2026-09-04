@@ -67,7 +67,8 @@ export function resolveAvailableHandoffTargetProviders(input: {
     isEligibleHandoffTargetProvider({
       sourceProvider: input.sourceProvider,
       targetProvider,
-      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
+      targetProviderEnabled:
+        targetProvider === "external" ? false : input.providerSettings?.[targetProvider]?.enabled,
       targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
     }),
   );
@@ -225,6 +226,9 @@ export function resolveThreadHandoffModelSelection(input: {
   }
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return input.projectDefaultModelSelection;
+  }
+  if (input.targetProvider === "external") {
+    throw new Error("Select an external agent profile before handing off to an external agent.");
   }
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {

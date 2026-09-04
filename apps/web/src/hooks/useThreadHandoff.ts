@@ -58,7 +58,10 @@ export function useThreadHandoff() {
       !isEligibleHandoffTargetProvider({
         sourceProvider: thread.modelSelection.provider,
         targetProvider,
-        targetProviderEnabled: serverSettingsQuery.data?.providers[targetProvider].enabled,
+        targetProviderEnabled:
+          targetProvider === "external"
+            ? false
+            : serverSettingsQuery.data?.providers[targetProvider]?.enabled,
         targetProviderStatus: targetAvailability.status,
       })
     ) {

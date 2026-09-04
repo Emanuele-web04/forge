@@ -73,6 +73,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   droid: DroidIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  external: PiIcon,
 };
 
 export function providerIconToneClassName(

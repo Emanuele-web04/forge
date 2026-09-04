@@ -171,6 +171,8 @@ export function providerModelsPrefetchQueryOptions(input: {
         agentDir: settings.piAgentDir || null,
         cwd,
       });
+    case "external":
+      throw new Error("External agents have no built-in model catalog to prefetch.");
   }
 }
 
@@ -364,6 +366,9 @@ export function prefetchModelsForNewThread(
   const statusesReconciled = input.statusesReconciled === true;
   const providerStatuses = input.providerStatuses ?? EMPTY_PROVIDER_STATUSES;
   const isProviderWarmable = (provider: ProviderKind): boolean => {
+    if (provider === "external") {
+      return false;
+    }
     // Mirrors useProviderModelCatalog.shouldDiscoverProvider exactly:
     // the enabled flag short-circuits even the selected provider, then the
     // selected provider always wins, then hidden providers are skipped.

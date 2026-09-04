@@ -111,6 +111,9 @@ export function useHandleNewThread() {
       if (!options?.provider) {
         return;
       }
+      if (options.provider === "external") {
+        return;
+      }
       const defaultModel = getDefaultModel(options.provider);
       if (!defaultModel) {
         return;

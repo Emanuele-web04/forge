@@ -105,6 +105,7 @@ function isProviderEnabled(
   if (!serverSettings) {
     return false;
   }
+  if (provider === "external") return true;
   return serverSettings.providers[provider]?.enabled !== false;
 }
 

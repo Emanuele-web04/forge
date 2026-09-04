@@ -43,7 +43,7 @@ export type ComposerProviderStateInput = {
 export type ComposerProviderState = {
   provider: ProviderKind | "external";
   promptEffort: string | null;
-  modelOptionsForDispatch: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptionsForDispatch: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   composerFrameClassName?: string;
   composerSurfaceClassName?: string;
   modelPickerIconClassName?: string;
@@ -55,7 +55,7 @@ type ProviderTraitRenderInput = {
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
@@ -130,7 +130,7 @@ function getProviderStateFromCapabilities(
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 
   let rawEffort: string | null = null;
-  let normalizedOptions: ProviderModelOptions[ProviderKind] | undefined;
+  let normalizedOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
 
   switch (provider) {
     case "codex": {
@@ -307,7 +307,7 @@ function getProviderStateFromCapabilities(
   };
 }
 
-const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
+const composerProviderRegistry: Record<Exclude<ProviderKind, "external">, ProviderRegistryEntry> = {
   codex: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("codex", input),
@@ -372,13 +372,13 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
 }
 
 export function renderProviderTraitsMenuContent(input: {
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
@@ -403,13 +403,13 @@ export function renderProviderTraitsMenuContent(input: {
 }
 
 export function renderProviderTraitsPicker(input: {
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   open?: boolean;
