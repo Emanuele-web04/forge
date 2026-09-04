@@ -333,7 +333,13 @@ function buildBreakdown(
       const sessions = new Set(group.map((message) => message.sessionId)).size;
       const tokens = sumTokens(group);
       if (first.providerId) {
-        return { model: first.modelId, upstreamProviderId: first.providerId, sessions, tokens, recordedCostUsd };
+        return {
+          model: first.modelId,
+          upstreamProviderId: first.providerId,
+          sessions,
+          tokens,
+          recordedCostUsd,
+        };
       }
       return { model: first.modelId, sessions, tokens, recordedCostUsd };
     })

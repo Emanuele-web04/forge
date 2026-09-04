@@ -846,7 +846,12 @@ async function loadClaudeUsageSnapshot(input: {
     .map((sample): MachineActivitySample => {
       const tokens = { total: sample.totalTokens };
       if (sample.model) {
-        return { sessionId: sample.sessionId, timestampMs: sample.timestampMs, model: sample.model, tokens };
+        return {
+          sessionId: sample.sessionId,
+          timestampMs: sample.timestampMs,
+          model: sample.model,
+          tokens,
+        };
       }
       return { sessionId: sample.sessionId, timestampMs: sample.timestampMs, tokens };
     });
