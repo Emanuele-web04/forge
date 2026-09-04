@@ -12,6 +12,7 @@ import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/ico
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -307,6 +308,7 @@ export default function BranchToolbar({
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
+  const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
@@ -484,10 +486,10 @@ export default function BranchToolbar({
     !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
   );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
-
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
     threads,
+    codexHomePath: settings.codexHomePath || null,
     fetchOpenUsageData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
