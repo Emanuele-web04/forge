@@ -8,6 +8,7 @@ import type {
   ServerGetProviderUsageSnapshotResult,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import {
   normalizeOpenUsageSnapshot,
@@ -93,14 +94,15 @@ export function resolveProviderUsageSummary(input: {
 }
 
 export function useProviderUsageSummary(input: {
-  provider: ProviderKind | null | undefined;
+  provider: DisplayProvider | null | undefined;
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
-  const provider = input.provider ?? null;
+  // External agent profiles have no Synara usage tracking.
+  const provider = input.provider === "external" ? null : (input.provider ?? null);
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
   const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(

@@ -61,6 +61,11 @@ export const ProviderSessionStartInput = Schema.Struct({
   sandboxMode: Schema.optional(ProviderSandboxMode),
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
+  // Resolved external agent launch spec (profile + revision + expanded credential
+  // env). Carries secret env values, so it is intentionally opaque to the
+  // shared schema boundary and never persisted: it lives only long enough to
+  // hand the spawn command/args/env to the external adapter's startSession.
+  externalAgentLaunch: Schema.optional(Schema.Unknown),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

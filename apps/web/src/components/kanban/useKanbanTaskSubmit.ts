@@ -109,7 +109,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     const modelSelection = buildModelSelection(
       selectedProvider,
       selectedModel,
-      storedModelSelection?.options,
+      storedModelSelection?.provider === "external" ? undefined : storedModelSelection?.options,
       selectedProvider === "claudeAgent"
         ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
         : undefined,
@@ -137,7 +137,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
 
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
-      provider: modelSelection.provider,
+      provider: modelSelection.provider === "external" ? "codex" : modelSelection.provider,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });

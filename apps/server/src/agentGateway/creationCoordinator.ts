@@ -469,6 +469,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               new ToolInputError("External MCP task creation requires an explicit projectId."),
             );
           }
+          if (spec.target.provider === "external") {
+            return yield* Effect.fail(
+              new ToolInputError(
+                "External agent profile targets are not supported for agent gateway tasks.",
+              ),
+            );
+          }
           const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
           if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
             return yield* Effect.fail(

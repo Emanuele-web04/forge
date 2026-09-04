@@ -222,6 +222,11 @@ export function planProviderRuntimeReconciliation(input: {
     // nothing left that could ever settle it - so fall back to the thread's own
     // provider instead of dropping the candidate.
     const provider = binding?.provider ?? thread.modelSelection.provider;
+    if (provider === "external") {
+      // External agent profiles have no runtime pump or binding in this build;
+      // reconciliation for built-in providers does not own them.
+      continue;
+    }
     const detail = pumpDetail(provider, healthByProvider);
     const abandoned =
       lifecycleAgeMs >= maxTurnAgeMs && threadActivityAgeMs(thread, input.nowMs) >= maxTurnAgeMs;

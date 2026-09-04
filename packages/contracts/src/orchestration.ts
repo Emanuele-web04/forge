@@ -13,6 +13,8 @@ import {
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -65,6 +67,12 @@ export const ProviderKind = Schema.Literals([
   "opencode",
   "pi",
   "devin",
+  // `external` is a profile-driven connector: its launch command/args/env come
+  // from an AgentProfileRevision resolved at session start, not from a fixed
+  // binary path. It shares the adapter registry and provider-service dispatch
+  // path with built-in providers, but has no built-in model catalog or settings
+  // binary — the profile supplies everything needed to spawn the agent.
+  "external",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -172,8 +180,19 @@ export const DevinModelSelection = Schema.Struct({
   options: Schema.optional(DevinModelOptions),
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
+export const ExternalAgentModelSelection = Schema.Struct({
+  provider: Schema.Literal("external"),
+  profileId: AgentProfileId,
+  revisionId: AgentProfileRevisionId,
+  model: TrimmedNonEmptyString,
+  // Connector-specific model options. The shape is defined by the external
+  // agent connector, so it is intentionally untyped here.
+  options: Schema.optional(Schema.Unknown),
+});
+export type ExternalAgentModelSelection = typeof ExternalAgentModelSelection.Type;
 
 export const ModelSelection = Schema.Union([
+  ExternalAgentModelSelection,
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,

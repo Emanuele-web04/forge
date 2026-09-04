@@ -62,6 +62,8 @@ import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
+import { providerDisplayName } from "~/lib/providerIdentity";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
@@ -76,7 +78,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeThreadEntryPoint: ThreadPrimarySurface;
-  activeProvider: ProviderKind;
+  activeProvider: DisplayProvider;
   activeProjectName: string | undefined;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
@@ -100,8 +102,8 @@ interface ChatHeaderProps {
   handoffActionLabel: string;
   handoffDisabled: boolean;
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
-  handoffBadgeSourceProvider: ProviderKind | null;
-  handoffBadgeTargetProvider: ProviderKind | null;
+  handoffBadgeSourceProvider: DisplayProvider | null;
+  handoffBadgeTargetProvider: DisplayProvider | null;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -237,7 +239,7 @@ function EditorRailTabs(props: {
   projectId: ProjectId;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
-  activeProvider: ProviderKind;
+  activeProvider: DisplayProvider;
   activeSurface: "chat" | "terminal";
   terminalAvailable: boolean;
   terminalHasRunningActivity: boolean;
@@ -599,7 +601,7 @@ export function ChatHeader({
     return () => observer.disconnect();
   }, [isSplitPane]);
 
-  const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
+  const renderProviderIcon = (provider: DisplayProvider | null, className: string) => {
     return (
       <ProviderIcon
         provider={provider}
@@ -717,7 +719,7 @@ export function ChatHeader({
                     title={
                       threadIconKind === "terminal"
                         ? "Terminal"
-                        : PROVIDER_DISPLAY_NAMES[activeProvider]
+                        : providerDisplayName(activeProvider)
                     }
                   >
                     {threadIconKind === "terminal" ? (

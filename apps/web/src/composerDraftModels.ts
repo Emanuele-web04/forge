@@ -55,6 +55,8 @@ export type LegacyCodexFields = typeof LegacyCodexFields.Type;
 
 const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thinking"]);
 
+type BuiltInModelSelection = Exclude<ModelSelection, { readonly provider: "external" }>;
+
 export interface EffectiveComposerModelState {
   selectedModel: ModelSlug;
   modelOptions: ProviderModelOptions | null;
@@ -66,6 +68,7 @@ function mergeProviderModelOptionsFromSelections(
   const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
   for (const selection of selections) {
     if (!selection) continue;
+    if (selection.provider === "external") continue;
     if (selection.options) {
       result[selection.provider] = selection.options;
     } else {
@@ -506,6 +509,11 @@ export function reconcileProviderScopedModelSelection(
   requested: ModelSelection,
   current: ModelSelection | null | undefined,
 ): ModelSelection {
+  // External agent selections carry connector-owned options that the built-in
+  // trait reconciliation cannot interpret.
+  if (requested.provider === "external") {
+    return requested;
+  }
   if (requested.options !== undefined || current?.provider !== requested.provider) {
     return requested;
   }
@@ -596,8 +604,8 @@ export function legacySyncModelSelectionOptions(
   modelSelection: ModelSelection | null,
   modelOptions: ProviderModelOptions | null | undefined,
 ): ModelSelection | null {
-  if (modelSelection === null) {
-    return null;
+  if (modelSelection === null || modelSelection.provider === "external") {
+    return modelSelection;
   }
   const normalizedOptions =
     modelSelection.provider === "grok"
@@ -615,7 +623,7 @@ export function legacyMergeModelSelectionIntoProviderModelOptions(
   modelSelection: ModelSelection | null,
   currentModelOptions: ProviderModelOptions | null | undefined,
 ): ProviderModelOptions | null {
-  if (modelSelection?.options === undefined) {
+  if (modelSelection?.provider === "external" || modelSelection?.options === undefined) {
     return normalizeProviderModelOptions(currentModelOptions);
   }
   return legacyReplaceProviderModelOptions(
@@ -646,8 +654,8 @@ function legacyReplaceProviderModelOptions(
 export function legacyToModelSelectionByProvider(
   modelSelection: ModelSelection | null,
   modelOptions: ProviderModelOptions | null | undefined,
-): Partial<Record<ProviderKind, ModelSelection>> {
-  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+): Partial<Record<ProviderKind, BuiltInModelSelection>> {
+  const result: Partial<Record<ProviderKind, BuiltInModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
     for (const provider of COMPOSER_PROVIDER_KINDS) {
@@ -656,17 +664,20 @@ export function legacyToModelSelectionByProvider(
         const model =
           modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
         if (model) {
+          // Provider is a built-in literal from COMPOSER_PROVIDER_KINDS, so the
+          // constructed selection is built-in by construction; the generic
+          // overload cannot prove that to the type system.
           result[provider] = makeModelSelection(
             provider,
             model,
             provider === "grok" ? normalizeGrokModelOptions(model, modelOptions.grok) : options,
-          );
+          ) as BuiltInModelSelection;
         }
       }
     }
   }
   // Add/overwrite the active selection (it's authoritative for its provider)
-  if (modelSelection) {
+  if (modelSelection && modelSelection.provider !== "external") {
     result[modelSelection.provider] = modelSelection;
   }
   return result;
@@ -767,16 +778,24 @@ export function resolvePreferredComposerModelSelection(input: {
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider = input.fresh
-    ? (input.threadModelSelection?.provider ??
-      input.projectModelSelection?.provider ??
+    ? ((input.threadModelSelection?.provider !== "external"
+        ? input.threadModelSelection?.provider
+        : undefined) ??
+      (input.projectModelSelection?.provider !== "external"
+        ? input.projectModelSelection?.provider
+        : undefined) ??
       input.defaultProvider ??
       input.draft?.activeProvider ??
       draftProviderWithSelection ??
       "codex")
     : (input.draft?.activeProvider ??
       draftProviderWithSelection ??
-      input.threadModelSelection?.provider ??
-      input.projectModelSelection?.provider ??
+      (input.threadModelSelection?.provider !== "external"
+        ? input.threadModelSelection?.provider
+        : undefined) ??
+      (input.projectModelSelection?.provider !== "external"
+        ? input.projectModelSelection?.provider
+        : undefined) ??
       input.defaultProvider ??
       "codex");
 

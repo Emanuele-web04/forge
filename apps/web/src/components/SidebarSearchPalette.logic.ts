@@ -4,6 +4,7 @@
 import type { ComponentType } from "react";
 
 import type { ProviderKind } from "@synara/contracts";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import { basenameOfPath } from "../file-icons";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 
@@ -60,7 +61,7 @@ export interface SidebarSearchThread {
   projectName: string;
   projectRemoteName: string;
   spaceName: string;
-  provider: ProviderKind;
+  provider: DisplayProvider;
   createdAt: string;
   updatedAt?: string | undefined;
   messages: readonly {

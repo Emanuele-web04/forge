@@ -12,7 +12,7 @@ import {
 export { normalizeRuntimeModeForProvider, providerSupportsAutoRuntimeMode };
 
 export function providerModelSupportsAutoRuntimeMode(
-  provider: ProviderKind,
+  provider: ProviderKind | "external",
   runtimeModel?: ProviderModelDescriptor,
   providerStatus?: ServerProviderStatus | null,
 ): boolean {

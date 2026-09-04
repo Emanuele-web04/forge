@@ -4,6 +4,7 @@
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
 import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { legacyAcpProfileId, legacyAcpRevisionId } from "../externalAgents/agentProfileIdentity";
 
 type ModelProviderKind =
   | "codex"
@@ -202,6 +203,18 @@ export function normalizeLegacyModelSelection(input: {
   readonly model: string;
   readonly options: unknown;
 }): Record<string, unknown> {
+  // The single legacy generic-ACP slot migrates deterministically to the
+  // canonical external profile: a fixed profile identity plus the fixed
+  // content-addressed revision of the migrated slot payload.
+  if (input.provider === "acp") {
+    return {
+      provider: "external",
+      profileId: legacyAcpProfileId(),
+      revisionId: legacyAcpRevisionId(),
+      model: input.model,
+      ...(input.options === undefined ? {} : { options: input.options }),
+    };
+  }
   const provider = inferLegacyModelProvider(input.provider, input.model);
   const migratedGeminiSelection = input.provider === "gemini";
   const normalizedOptions = migratedGeminiSelection
@@ -236,6 +249,12 @@ export function normalizeLegacyModelSelection(input: {
 
 export function normalizePersistedModelSelection(input: unknown): unknown {
   if (!isRecord(input)) {
+    return input;
+  }
+
+  // External agent selections already carry canonical provider identity;
+  // pass them through untouched instead of re-inferring a built-in kind.
+  if (input.provider === "external") {
     return input;
   }
 

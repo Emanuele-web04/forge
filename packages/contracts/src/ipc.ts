@@ -15,12 +15,43 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceInvalidateResult,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceQueryResult,
+  CapabilityEvidenceRecordInput,
+  CapabilityEvidenceRecordResult,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
+} from "./capabilityEvidence";
+import type {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpCreateIntegrationResult,
   ExternalMcpIntegration,
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import type {
+  ExternalAgentProfileCreateInput,
+  ExternalAgentProfileCreateResult,
+  ExternalAgentProfileGetInput,
+  ExternalAgentProfileGetResult,
+  ExternalAgentProfileListResult,
+  ExternalAgentProfileTombstoneInput,
+  ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUpdateInput,
+  ExternalAgentProfileUpdateResult,
+} from "./externalAgent";
+import type {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -813,6 +844,40 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listExternalAgentProfiles: () => Promise<ExternalAgentProfileListResult>;
+    getExternalAgentProfile: (
+      input: ExternalAgentProfileGetInput,
+    ) => Promise<ExternalAgentProfileGetResult>;
+    createExternalAgentProfile: (
+      input: ExternalAgentProfileCreateInput,
+    ) => Promise<ExternalAgentProfileCreateResult>;
+    updateExternalAgentProfile: (
+      input: ExternalAgentProfileUpdateInput,
+    ) => Promise<ExternalAgentProfileUpdateResult>;
+    tombstoneExternalAgentProfile: (
+      input: ExternalAgentProfileTombstoneInput,
+    ) => Promise<ExternalAgentProfileTombstoneResult>;
+    queryCapabilityEvidence: (
+      input: CapabilityEvidenceQuery,
+    ) => Promise<CapabilityEvidenceQueryResult>;
+    recordCapabilityEvidence: (
+      input: CapabilityEvidenceRecordInput,
+    ) => Promise<CapabilityEvidenceRecordResult>;
+    demoteCapabilityEvidence: (
+      input: CapabilityEvidenceDemoteInput,
+    ) => Promise<CapabilityEvidenceDemoteResult>;
+    queryCapabilityEvidenceBadge: (
+      input: CapabilityEvidenceBadge,
+    ) => Promise<CapabilityEvidenceBadgeResult>;
+    recordRuntimeTurnFeedback: (
+      input: RuntimeTurnFeedbackInput,
+    ) => Promise<RuntimeTurnFeedbackResult>;
+    listConnectionCandidates: (
+      input: ConnectionCandidateListInput,
+    ) => Promise<ConnectionCandidateListResult>;
+    resolveConnectionPlan: (
+      input: ConnectionPlanResolveInput,
+    ) => Promise<ConnectionPlanResolveResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

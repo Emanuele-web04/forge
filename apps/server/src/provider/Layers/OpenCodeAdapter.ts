@@ -4361,12 +4361,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+        const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
+        const requestedCwd = input.cwd?.trim();
         return Effect.gen(function* () {
+          // A requested cwd that no longer exists makes both the OpenCode server
+          // spawn and `opencode models` fail (ENOENT). Retry the CLI listing
+          // without a cwd so it runs in the server's own (valid) working
+          // directory; otherwise the picker would error out and fall back to a
+          // single static model instead of the full catalog.
           const cliModelsEffect = openCodeRuntime
             .listOpenCodeCliModels({
               binaryPath,
               cliSpec: adapterConfig.cliSpec,
-              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(requestedCwd ? { cwd: requestedCwd } : {}),
             })
             .pipe(
               Effect.catch((error) =>
@@ -4375,6 +4382,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   detail: openCodeRuntimeErrorDetail(error),
                 }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
               ),
+            )
+            .pipe(
+              Effect.flatMap((cliModels) => {
+                if (cliModels.length > 0 || !requestedCwd) {
+                  return Effect.succeed(cliModels);
+                }
+                return openCodeRuntime
+                  .listOpenCodeCliModels({
+                    binaryPath,
+                    cliSpec: adapterConfig.cliSpec,
+                  })
+                  .pipe(
+                    Effect.catch((error) =>
+                      Effect.logDebug(
+                        `${adapterConfig.displayName} CLI model discovery retry without cwd failed`,
+                        {
+                          binaryPath,
+                          detail: openCodeRuntimeErrorDetail(error),
+                        },
+                      ).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
+                    ),
+                  );
+              }),
             );
           const inventoryEffect = withDiscoveryInventory(
             { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },

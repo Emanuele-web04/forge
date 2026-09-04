@@ -1,17 +1,20 @@
 import type { ProviderKind, RuntimeMode } from "@synara/contracts";
 
 const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent"]);
+const AUTO_RUNTIME_MODE_PROVIDER_KINDS = AUTO_RUNTIME_MODE_PROVIDERS as ReadonlySet<
+  ProviderKind | "external"
+>;
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
   "full-access": 2,
 } as const satisfies Record<RuntimeMode, number>;
 
-export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean {
-  return AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
+export function providerSupportsAutoRuntimeMode(provider: ProviderKind | "external"): boolean {
+  return AUTO_RUNTIME_MODE_PROVIDER_KINDS.has(provider);
 }
 
-export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): string {
+export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind | "external"): string {
   return `Provider "${provider}" does not support Auto runtime mode. Auto is available only for Codex and Claude Code.`;
 }
 
@@ -23,7 +26,7 @@ export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): strin
 export function autoRuntimeModeSelectionIssue(input: {
   readonly runtimeMode: RuntimeMode;
   readonly modelSelection: {
-    readonly provider: ProviderKind;
+    readonly provider: ProviderKind | "external";
     readonly model: string;
     readonly supportsAutoMode?: boolean | undefined;
   };
@@ -57,7 +60,7 @@ export function runtimeModeEscalatesPrivilege(
 
 export function normalizeRuntimeModeForProvider(
   runtimeMode: RuntimeMode,
-  provider: ProviderKind,
+  provider: ProviderKind | "external",
 ): RuntimeMode {
   return runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)
     ? "approval-required"

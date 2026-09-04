@@ -21,6 +21,7 @@ import type {
   ThreadMarkerId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";

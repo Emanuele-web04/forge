@@ -21,6 +21,7 @@ const emitUpstreamAssistantMessageIds =
 const emitReasoningThenToolCall = process.env.SYNARA_ACP_EMIT_REASONING_THEN_TOOL_CALL === "1";
 const emitGenericToolPlaceholders = process.env.SYNARA_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.SYNARA_ACP_EMIT_ASK_QUESTION === "1";
+const emitRequestPermission = process.env.SYNARA_ACP_EMIT_REQUEST_PERMISSION === "1";
 const failSessionNewOnce = process.env.SYNARA_ACP_FAIL_SESSION_NEW_ONCE === "1";
 const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";

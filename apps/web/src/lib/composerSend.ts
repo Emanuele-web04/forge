@@ -195,11 +195,16 @@ export function readFileAsDataUrl(file: File): Promise<string> {
 // Provider-specific prompt massaging. Claude prompt-injected efforts must be
 // applied before filtering skill/mention references and before dispatch.
 export function formatOutgoingComposerPrompt(params: {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   model: string | null;
   effort: string | null;
   text: string;
 }): string {
+  // External agent prompts pass through verbatim: no built-in effort prefix
+  // applies to connector-owned model options.
+  if (params.provider === "external") {
+    return params.text;
+  }
   const caps = getModelCapabilities(params.provider, params.model);
   if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
     return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
@@ -230,6 +235,8 @@ export function resolvePromptEffortFromModelSelection(
         (modelSelection.options?.fastMode === true ? "fast" : null)
       );
     case "opencode":
+      return null;
+    case "external":
       return null;
   }
 }

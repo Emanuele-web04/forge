@@ -7,6 +7,7 @@
 // Exports: resolve + prefetch helpers that mirror ChatView's listModels query keys.
 
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
+import { isBuiltInModelProvider, type AnyModelProvider } from "./providerIdentity";
 import type { QueryClient } from "@tanstack/react-query";
 
 import type { AppSettings } from "../appSettings";
@@ -60,16 +61,18 @@ export function resolveNewThreadModelPrefetchProvider(input: {
   providerOverride?: ProviderKind | null | undefined;
   draftActiveProvider?: ProviderKind | null | undefined;
   stickyActiveProvider?: ProviderKind | null | undefined;
-  projectDefaultProvider?: ProviderKind | null | undefined;
+  projectDefaultProvider?: AnyModelProvider | null | undefined;
   defaultProvider: ProviderKind;
 }): ProviderKind {
-  return (
+  const resolved =
     input.providerOverride ??
     input.draftActiveProvider ??
     input.stickyActiveProvider ??
     input.projectDefaultProvider ??
-    input.defaultProvider
-  );
+    input.defaultProvider ??
+    "codex";
+  // External agent profiles have no built-in model discovery to warm.
+  return isBuiltInModelProvider(resolved) ? resolved : (input.defaultProvider ?? "codex");
 }
 
 export function resolveNewThreadModelPrefetchCwd(input: {
@@ -253,6 +256,25 @@ export function prefetchProviderModelsForNewThread(
  * discovery spins a disposable ACP session per model (expensive), so it must
  * never run from idle project focus.
  */
+/**
+ * Discovery cache key for an external agent profile. Keyed by profile
+ * identity (profileId plus the pinned revisionId), never a shared provider
+ * bucket, so model discovery and health caches stay per-profile. The generic
+ * connector foundation owns the actual discovery; this helper keeps the cache
+ * namespace stable for it.
+ */
+export function externalAgentModelDiscoveryCacheKey(input: {
+  profileId: string;
+  revisionId: string;
+}) {
+  return ["external-agent-discovery", "models", input.profileId, input.revisionId] as const;
+}
+
+/**
+ * Warm Droid model discovery on explicit new-thread intent only. Droid
+ * discovery spins a disposable ACP session per model (expensive), so it must
+ * never run from idle project focus.
+ */
 export function prefetchDroidModelsForNewThread(
   queryClient: QueryClient,
   input: {
@@ -299,7 +321,7 @@ export function prefetchModelsForNewThread(
     providerOverride?: ProviderKind | null;
     draftActiveProvider?: ProviderKind | null;
     stickyActiveProvider?: ProviderKind | null;
-    projectDefaultProvider?: ProviderKind | null;
+    projectDefaultProvider?: AnyModelProvider | null;
     projectCwd?: string | null;
     draftWorktreePath?: string | null;
     serverCwd?: string | null;

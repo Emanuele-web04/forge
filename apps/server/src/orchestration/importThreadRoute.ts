@@ -348,6 +348,12 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     }
     const thread = threadOption.value;
 
+    if (thread.modelSelection.provider === "external") {
+      return yield* Effect.fail(
+        importMessagesError("Importing threads from external agent profiles is not supported."),
+      );
+    }
+
     if (thread.session && thread.session.status !== "stopped") {
       return yield* Effect.fail(
         importMessagesError(`Thread '${body.threadId}' already has an active provider session.`),

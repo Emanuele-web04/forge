@@ -297,7 +297,11 @@ function buildThreadCard(
     column,
     title: thread.title,
     provider:
-      column === "draft" && composerDraft.provider ? composerDraft.provider : threadProvider,
+      column === "draft" && composerDraft.provider
+        ? composerDraft.provider
+        : threadProvider === "external"
+          ? null
+          : threadProvider,
     isTerminal,
     branch: thread.branch,
     envMode: thread.envMode ?? null,
@@ -336,7 +340,7 @@ function buildUnsentPromptCard(
     projectId: thread.projectId,
     column: "draft",
     title: buildPromptThreadTitleFallback(titleSeed),
-    provider: composerDraft.provider ?? threadProvider,
+    provider: composerDraft.provider ?? (threadProvider === "external" ? null : threadProvider),
     isTerminal,
     branch: thread.branch,
     envMode: thread.envMode ?? null,

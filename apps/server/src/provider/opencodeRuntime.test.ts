@@ -739,6 +739,124 @@ openai/gpt-5.4
     ]);
   });
 
+  it("classifies opencode-owned zero-cost models as free (CLI 1.18 lacks isFree)", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+opencode/deepseek-v4-flash-free
+{
+  "id": "deepseek-v4-flash-free",
+  "providerID": "opencode",
+  "name": "DeepSeek V4 Flash Free",
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  }
+}
+opencode/gpt-5
+{
+  "id": "gpt-5",
+  "providerID": "opencode",
+  "name": "GPT-5",
+  "cost": {
+    "input": 1.07,
+    "output": 8.5,
+    "cache": {
+      "read": 0.107,
+      "write": 0
+    }
+  }
+}
+openrouter/openrouter/free
+{
+  "id": "openrouter/free",
+  "providerID": "openrouter",
+  "name": "OpenRouter Free",
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  }
+}
+`);
+
+    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    expect(freeSlugs).toEqual(["opencode/deepseek-v4-flash-free"]);
+  });
+
+  it("classifies kilo-owned zero-cost models as free without touching third-party providers", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+kilo/kilo-auto/free
+{
+  "id": "kilo-auto/free",
+  "providerID": "kilo",
+  "name": "Kilo Auto Free",
+  "isFree": true,
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+kilo/cohere/north-mini-code:free
+{
+  "id": "cohere/north-mini-code:free",
+  "providerID": "kilo",
+  "name": "North Mini Code Free",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+openrouter/google/lyria-3-clip-preview
+{
+  "id": "google/lyria-3-clip-preview",
+  "providerID": "openrouter",
+  "name": "Lyria 3 Clip Preview",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+`);
+
+    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    expect(freeSlugs).toEqual(["kilo/kilo-auto/free", "kilo/cohere/north-mini-code:free"]);
+  });
+
+  it("lets an explicit isFree:false win over the zero-cost heuristic", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+opencode/gpt-5
+{
+  "id": "gpt-5",
+  "providerID": "opencode",
+  "name": "GPT-5",
+  "isFree": false,
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+opencode/deepseek-v4-flash-free
+{
+  "id": "deepseek-v4-flash-free",
+  "providerID": "opencode",
+  "name": "DeepSeek V4 Flash Free",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+`);
+
+    const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
+    expect(freeSlugs).toEqual(["opencode/deepseek-v4-flash-free"]);
+  });
+
   it("keeps verbose reasoning metadata from CLI output", () => {
     const models = parseOpenCodeCliModelsOutput(`
 openai/gpt-5.4

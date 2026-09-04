@@ -48,6 +48,11 @@ import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import {
+  AgentProfileService,
+  ExternalAgentProfileError,
+} from "../src/externalAgents/AgentProfileService.ts";
+import type { AgentProfileServiceShape } from "../src/externalAgents/AgentProfileService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
 import { SidechatExpiryReactorLive } from "../src/orchestration/Layers/SidechatExpiryReactor.ts";
@@ -358,6 +363,18 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(
+        Layer.succeed(AgentProfileService, {
+          resolveSessionLaunch: () =>
+            Effect.fail(
+              new ExternalAgentProfileError({
+                code: "profile-not-found",
+                message: "External agent profiles are not configured in this harness.",
+                status: 404,
+              }),
+            ),
+        } as unknown as AgentProfileServiceShape),
+      ),
     );
 
     const runtime = ManagedRuntime.make(

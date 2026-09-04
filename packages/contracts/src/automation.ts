@@ -146,7 +146,7 @@ export const AutomationAllowedCapability = Schema.Literals([
 export type AutomationAllowedCapability = typeof AutomationAllowedCapability.Type;
 
 export const AutomationPermissionSnapshot = Schema.Struct({
-  provider: ProviderKind,
+  provider: Schema.Union([ProviderKind, Schema.Literal("external")]),
   settingsRevision: Schema.optional(NonNegativeInt),
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),

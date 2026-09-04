@@ -2,6 +2,8 @@
 // Purpose: Shared web-app view models for threads, projects, terminal layout, and sidebar rows.
 // Exports: Runtime UI types consumed across store, routes, and components.
 
+import type { DisplayProvider } from "./lib/providerIdentity";
+
 import type {
   ModelSelection,
   MessageDispatchOrigin,
@@ -371,7 +373,7 @@ export interface ComposerThreadMentionSource {
   id: ThreadId;
   projectId: ProjectId;
   title: string;
-  provider: ProviderKind;
+  provider: DisplayProvider;
   createdAt: string;
   archivedAt?: string | null;
   lastVisitedAt?: string | undefined;

@@ -1,3 +1,8 @@
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vitest";
 
 import * as OfficialAcp from "@agentclientprotocol/sdk";
@@ -8,6 +13,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   AcpSessionRuntime,
+  type AcpSessionRequestLogEvent,
   assistantItemId,
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
@@ -734,4 +740,72 @@ describe("AcpSessionRuntime startup timeouts", () => {
     },
     TEST_TIMEOUT_MS,
   );
+});
+
+describe("startup authentication negotiation", () => {
+  const bunExe = process.execPath;
+  const mockAgentPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../scripts/acp-mock-agent.ts",
+  );
+  const conformanceAgentPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../scripts/acp-conformance-agent.ts",
+  );
+
+  effectIt.effect("starts a no-auth agent and skips authenticate", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+
+      expect(started.sessionId).toBe("mock-session-1");
+      expect(started.sessionSetupMethod).toBe("new");
+      expect(requestEvents.filter((event) => event.method === "authenticate")).toEqual([]);
+      expect(
+        requestEvents.some((event) => event.method === "session/new" && event.status === "started"),
+      ).toBe(true);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  effectIt.effect("keeps failing when an agent advertises methods but none resolve", () => {
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const failure = yield* runtime.start().pipe(Effect.flip);
+      expect(failure._tag).toBe("AcpRequestError");
+      if (failure._tag === "AcpRequestError") {
+        expect(failure.errorMessage).toBe("ACP agent did not provide an authentication method.");
+      }
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [conformanceAgentPath],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
 });

@@ -3,6 +3,7 @@
 // Layer: Route-level screen
 // Exports: PluginLibrary
 
+import { builtInProviderOrNull } from "~/lib/providerIdentity";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -371,8 +372,8 @@ export function PluginLibrary() {
   const activeProject = focusedProject ?? firstProject ?? null;
 
   const preferredProvider =
-    activeThread?.modelSelection.provider ??
-    activeProject?.defaultModelSelection?.provider ??
+    builtInProviderOrNull(activeThread?.modelSelection.provider) ??
+    builtInProviderOrNull(activeProject?.defaultModelSelection?.provider) ??
     "codex";
 
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind>(preferredProvider);

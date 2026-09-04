@@ -494,7 +494,9 @@ export const createComposerDraftStoreState =
       const rawNormalized = normalizeModelSelection(modelSelection);
       const normalized = rawNormalized ? stripNonStickyModelOptions(rawNormalized) : null;
       set((state) => {
-        if (!normalized) {
+        // External agent selections are not sticky composer state: the draft
+        // model map is keyed by built-in provider kinds.
+        if (!normalized || normalized.provider === "external") {
           return state;
         }
         const nextMap: Partial<Record<ProviderKind, ModelSelection>> = {
@@ -788,11 +790,14 @@ export const createComposerDraftStoreState =
         }
         const base = existing ?? createEmptyThreadDraft();
         const nextMap = { ...base.modelSelectionByProvider };
-        if (normalized) {
+        if (normalized && normalized.provider !== "external") {
           const current = nextMap[normalized.provider];
           nextMap[normalized.provider] = reconcileProviderScopedModelSelection(normalized, current);
         }
-        const nextActiveProvider = normalized?.provider ?? base.activeProvider;
+        const nextActiveProvider =
+          normalized && normalized.provider !== "external"
+            ? normalized.provider
+            : base.activeProvider;
         if (
           Equal.equals(base.modelSelectionByProvider, nextMap) &&
           base.activeProvider === nextActiveProvider
@@ -816,7 +821,9 @@ export const createComposerDraftStoreState =
     setModelSelectionAndSticky: (threadId, modelSelection) => {
       get().setModelSelection(threadId, modelSelection);
       const correctedSelection =
-        get().draftsByThreadId[threadId]?.modelSelectionByProvider[modelSelection.provider];
+        modelSelection.provider !== "external"
+          ? get().draftsByThreadId[threadId]?.modelSelectionByProvider[modelSelection.provider]
+          : undefined;
       get().setStickyModelSelection(correctedSelection ?? modelSelection);
     },
     setModelOptions: (threadId, modelOptions) => {

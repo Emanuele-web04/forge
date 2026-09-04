@@ -102,6 +102,10 @@ const PersistedTerminalContextDraft = Schema.Struct({
 
 type PersistedTerminalContextDraft = typeof PersistedTerminalContextDraft.Type;
 
+// Persisted composer drafts hold built-in provider selections only; external
+// agent selections live in the thread projection, not the composer draft.
+type BuiltInModelSelection = Exclude<ModelSelection, { readonly provider: "external" }>;
+
 const PersistedQueuedTerminalContextDraft = Schema.Struct({
   id: Schema.String,
   threadId: ThreadId,
@@ -586,6 +590,7 @@ function normalizePersistedQueuedTurns(
       previewText.length === 0 ||
       selectedProvider === null ||
       modelSelection === null ||
+      modelSelection.provider === "external" ||
       runtimeMode === null ||
       seenIds.has(id)
     ) {
@@ -904,17 +909,23 @@ function normalizePersistedDraftsByThreadId(
     );
     // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
-    let modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
+    let modelSelectionByProvider: Partial<Record<ProviderKind, BuiltInModelSelection>> = {};
     let activeProvider: ProviderKind | null = null;
 
     if (
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
-      // v3 format
-      modelSelectionByProvider = normalizePersistedModelSelectionMap(
+      // v3 format. External agent selections are not composer draft state;
+      // they are dropped here so the persisted draft record stays built-in.
+      const sourceMap = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
+      for (const [provider, selection] of Object.entries(sourceMap)) {
+        if (selection && selection.provider !== "external") {
+          modelSelectionByProvider[provider as ProviderKind] = selection;
+        }
+      }
       activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
     } else {
       // v2 or legacy format: migrate
@@ -945,7 +956,8 @@ function normalizePersistedDraftsByThreadId(
         modelSelection,
         mergedModelOptions,
       );
-      activeProvider = modelSelection?.provider ?? null;
+      activeProvider =
+        modelSelection && modelSelection.provider !== "external" ? modelSelection.provider : null;
     }
 
     const normalizedQueuedTurns = queuedTurns ?? [];
@@ -1020,6 +1032,11 @@ export function partializeComposerDraftStoreState(
       NonNullable<PersistedComposerThreadDraftState["queuedTurns"]>
     > = [];
     for (const queuedTurn of draft.queuedTurns) {
+      // Queued turns with external agent selections cannot be re-dispatched in
+      // this build; drop them from persisted draft state.
+      if (queuedTurn.modelSelection.provider === "external") {
+        continue;
+      }
       if (queuedTurn.kind === "chat") {
         // File attachments are intentionally in-memory only; persisting the
         // queued turn without them would make a later send incomplete.
@@ -1260,7 +1277,12 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(hasModelData
         ? {
-            modelSelectionByProvider: draft.modelSelectionByProvider,
+            modelSelectionByProvider: Object.fromEntries(
+              Object.entries(draft.modelSelectionByProvider).filter(
+                (entry): entry is [string, BuiltInModelSelection] =>
+                  entry[1] !== undefined && entry[1].provider !== "external",
+              ),
+            ),
             activeProvider: draft.activeProvider,
           }
         : {}),

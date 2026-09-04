@@ -76,7 +76,10 @@ const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
 ]);
 
 const isTestHarnessKey = (key: string, env: NodeJS.ProcessEnv): boolean =>
-  Boolean(env.VITEST) && (key.startsWith("SYNARA_FAKE_") || key.startsWith("SYNARA_ACP_"));
+  Boolean(env.VITEST) &&
+  (key.startsWith("SYNARA_FAKE_") ||
+    key.startsWith("SYNARA_ACP_") ||
+    key.startsWith("SYNARA_CLI_"));
 
 export function buildProviderChildEnvironment(input: {
   readonly provider: ProviderChildKind;

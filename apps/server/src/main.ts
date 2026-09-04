@@ -54,6 +54,7 @@ import { createClaudeCredentialKeepaliveController } from "./provider/claudeCred
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
+import { ProfileLifecycleServiceLive } from "./externalAgents/ProfileLifecycleService";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
@@ -360,12 +361,20 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
+  // Profile lifecycle (KAR-529) needs both the runtime services (evidence,
+  // conformance, repository) and the provider layer (session directory) to
+  // enforce quarantine and re-certification. Its deps span both graphs.
+  const profileLifecycleLayer = ProfileLifecycleServiceLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+  );
 
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
     Layer.provideMerge(providerSessionReaperLayer),
     Layer.provideMerge(providerRuntimeReconcilerLayer),
+    Layer.provideMerge(profileLifecycleLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(ServerConfigLive(input)),

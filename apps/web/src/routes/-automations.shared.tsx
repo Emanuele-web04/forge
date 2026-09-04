@@ -891,6 +891,11 @@ export function AutomationModelPicker({
   readonly onChange: (value: ModelSelection) => void;
   readonly onAutoModeSupportChange?: (supported: boolean) => void;
 }) {
+  // The automation model picker is built-in only; external agent profiles are
+  // not dispatchable through it.
+  if (value.provider === "external") {
+    return null;
+  }
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();

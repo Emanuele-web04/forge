@@ -697,7 +697,10 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
     disabledProviders: getServerDisabledProviders(settings),
-    textGenerationProvider: settings.textGenerationModelSelection.provider,
+    textGenerationProvider:
+      settings.textGenerationModelSelection.provider === "external"
+        ? "codex"
+        : settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }

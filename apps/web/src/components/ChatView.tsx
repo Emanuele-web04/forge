@@ -1,3 +1,5 @@
+import { builtInProviderOrDefault, builtInProviderOrNull } from "~/lib/providerIdentity";
+
 import {
   type AutomationDefinition,
   type AutomationSchedule,
@@ -105,6 +107,7 @@ import {
   serverQueryKeys,
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { externalAgentProfilesQueryOptions } from "~/lib/externalAgentProfiles";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
@@ -2303,7 +2306,8 @@ export default function ChatView({
   const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
-    activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
+    builtInProviderOrNull(activeThread?.modelSelection.provider) ??
+    builtInProviderOrNull(activeProject?.defaultModelSelection?.provider);
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
@@ -2346,6 +2350,16 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const externalAgentProfilesQuery = useQuery(externalAgentProfilesQueryOptions());
+  const externalAgentProfilePickerEntries = useMemo(
+    () =>
+      (externalAgentProfilesQuery.data?.profiles ?? []).map((profile) => ({
+        profileId: profile.profileId,
+        name: profile.name,
+        removed: profile.status === "retired",
+      })),
+    [externalAgentProfilesQuery.data],
+  );
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -7724,7 +7738,7 @@ export default function ChatView({
     }
     sendPreflightInFlightRef.current = true;
     const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
-      provider: selectedModelSelectionForSend.provider,
+      provider: builtInProviderOrDefault(selectedModelSelectionForSend.provider),
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     }).finally(() => {
@@ -8417,13 +8431,15 @@ export default function ChatView({
       }
 
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedModelSelectionForSend.provider,
+        builtInProviderOrDefault(selectedModelSelectionForSend.provider),
         selectedModelSelectionForSend.model ||
           selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
           getDefaultModel(selectedModelSelectionForSend.provider) ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        selectedModelSelectionForSend.options,
+        selectedModelSelectionForSend.provider === "external"
+          ? undefined
+          : selectedModelSelectionForSend.options,
         selectedModelSelectionForSend.provider === "claudeAgent"
           ? selectedModelSelectionForSend.supportsAutoMode
           : undefined,
@@ -8598,7 +8614,7 @@ export default function ChatView({
       });
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: selectedModelSelectionForSend.provider,
+        provider: builtInProviderOrDefault(selectedModelSelectionForSend.provider),
         providerOptions: providerOptionsForDispatchForSend,
       });
       await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
@@ -9153,7 +9169,7 @@ export default function ChatView({
           : undefined;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: modelSelectionForPlanDispatch.provider,
+        provider: builtInProviderOrDefault(modelSelectionForPlanDispatch.provider),
         providerOptions: providerOptionsForPlanDispatch,
       });
       await api.orchestration.dispatchCommand({
@@ -9599,7 +9615,7 @@ export default function ChatView({
       .then(() => {
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
-          provider: selectedModelSelection.provider,
+          provider: builtInProviderOrDefault(selectedModelSelection.provider),
           providerOptions: providerOptionsForDispatch,
         });
         return api.orchestration.dispatchCommand({
@@ -9815,6 +9831,12 @@ export default function ChatView({
         discoveryErrorsByProvider={discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
+        externalProfiles={externalAgentProfilePickerEntries}
+        activeExternalProfileId={
+          activeThread?.modelSelection.provider === "external"
+            ? activeThread.modelSelection.profileId
+            : null
+        }
         onProviderModelChange={onProviderModelSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
@@ -11388,7 +11410,9 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
-    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
+    activeProvider: builtInProviderOrNull(
+      activeThread.session?.provider ?? activeThread.modelSelection.provider,
+    ),
     isStudioChat: isStudioContainer,
     studioFolderPath: isStudioContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,

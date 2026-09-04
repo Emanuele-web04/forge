@@ -175,3 +175,44 @@ it("infers Devin from provider-less model slugs containing devin", () => {
     model: "devin-core",
   });
 });
+
+it("migrates legacy provider:acp state to the canonical external profile", () => {
+  const migrated = normalizePersistedModelSelection({
+    provider: "acp",
+    model: "claude-sonnet-4-6",
+  });
+  assert.deepEqual(migrated, {
+    provider: "external",
+    profileId: "agentprofile_legacy-acp",
+    revisionId: "rev_fb10364281f76b69bbd9d5b86c677c66a4ddb9697820cb362209891ce5aee563",
+    model: "claude-sonnet-4-6",
+  });
+});
+
+it("migrates legacy provider:acp selections deterministically", () => {
+  const first = normalizePersistedModelSelection({
+    provider: "acp",
+    model: "gpt-5.5",
+  }) as Record<string, unknown>;
+  const second = normalizePersistedModelSelection({ provider: "acp", model: "gpt-5.5" });
+  assert.deepEqual(first, second);
+  assert.strictEqual(first.profileId, "agentprofile_legacy-acp");
+  assert.strictEqual(first.provider, "external");
+});
+
+it("passes external agent selections through unchanged", () => {
+  const selection = {
+    provider: "external",
+    profileId: "agentprofile_abc",
+    revisionId: "rev_1234",
+    model: "my-agent-model",
+  };
+  assert.deepEqual(normalizePersistedModelSelection(selection), selection);
+});
+
+it("keeps built-in provider selections on their existing paths", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ provider: "codex", model: "gpt-5.5" }), {
+    provider: "codex",
+    model: "gpt-5.5",
+  });
+});

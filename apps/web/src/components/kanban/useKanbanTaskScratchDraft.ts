@@ -60,7 +60,8 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     stickyModelSelectionByProvider[selectedProvider];
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
-  const selectedProviderModelOptions = draftModelSelection?.options;
+  const selectedProviderModelOptions =
+    draftModelSelection?.provider === "external" ? undefined : draftModelSelection?.options;
   const selectedModelSupportsAutoMode =
     draftModelSelection?.provider === "claudeAgent"
       ? draftModelSelection.supportsAutoMode

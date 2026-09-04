@@ -45,7 +45,7 @@ function isImportableThreadActivity(
 }
 
 export function isEligibleHandoffTargetProvider(input: {
-  readonly sourceProvider: ProviderKind;
+  readonly sourceProvider: ProviderKind | "external";
   readonly targetProvider: ProviderKind;
   readonly targetProviderEnabled: boolean | null | undefined;
   readonly targetProviderStatus: ServerProviderStatus | null | undefined;
@@ -59,7 +59,7 @@ export function isEligibleHandoffTargetProvider(input: {
 }
 
 export function resolveAvailableHandoffTargetProviders(input: {
-  readonly sourceProvider: ProviderKind;
+  readonly sourceProvider: ProviderKind | "external";
   readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
   readonly providerStatuses: readonly ServerProviderStatus[];
 }): ReadonlyArray<ProviderKind> {
@@ -77,7 +77,11 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  const sourceProviderName =
+    thread.handoff.sourceProvider === "external"
+      ? "external agent"
+      : PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider];
+  return `Handoff from ${sourceProviderName}`;
 }
 
 // Preserve the visible source thread name when creating the destination thread.

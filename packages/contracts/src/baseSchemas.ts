@@ -49,6 +49,10 @@ export const AutomationId = makeEntityId("AutomationId");
 export type AutomationId = typeof AutomationId.Type;
 export const AutomationRunId = makeEntityId("AutomationRunId");
 export type AutomationRunId = typeof AutomationRunId.Type;
+export const AgentProfileId = makeEntityId("AgentProfileId");
+export type AgentProfileId = typeof AgentProfileId.Type;
+export const AgentProfileRevisionId = makeEntityId("AgentProfileRevisionId");
+export type AgentProfileRevisionId = typeof AgentProfileRevisionId.Type;
 export const TurnId = makeEntityId("TurnId");
 export type TurnId = typeof TurnId.Type;
 
