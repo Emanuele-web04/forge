@@ -44,9 +44,7 @@ export type ComposerProviderState = {
   modelPickerIconClassName?: string;
 };
 
-export function getComposerProviderState(
-  input: ComposerProviderStateInput,
-): ComposerProviderState {
+export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
   const { provider, model, runtimeModel, prompt, modelOptions } = input;
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 

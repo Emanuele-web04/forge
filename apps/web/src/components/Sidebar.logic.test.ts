@@ -1861,9 +1861,7 @@ describe("deriveSidebarProjectData", () => {
     const project = makeProject({ expanded: false });
     const data = deriveSidebarProjectData({
       projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
-        makeSidebarThreadSummary(),
-      ]),
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([makeSidebarThreadSummary()]),
       pinnedThreadIds: [],
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
@@ -1889,11 +1887,7 @@ describe("deriveSidebarProjectData", () => {
     });
     const data = deriveSidebarProjectData({
       projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
-        firstThread,
-        parent,
-        child,
-      ]),
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([firstThread, parent, child]),
       pinnedThreadIds: [],
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,

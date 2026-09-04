@@ -1447,25 +1447,17 @@ describe("chat/editor shortcuts", () => {
 
   it("matches browser.toggle shortcut outside terminal focus", () => {
     assert.equal(
-      resolveShortcutCommand(
-        event({ key: "b", metaKey: true, shiftKey: true }),
-        DEFAULT_BINDINGS,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: false },
-        },
-      ),
+      resolveShortcutCommand(event({ key: "b", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
       "browser.toggle",
     );
     assert.notEqual(
-      resolveShortcutCommand(
-        event({ key: "b", metaKey: true, shiftKey: true }),
-        DEFAULT_BINDINGS,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: true },
-        },
-      ),
+      resolveShortcutCommand(event({ key: "b", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
       "browser.toggle",
     );
   });
