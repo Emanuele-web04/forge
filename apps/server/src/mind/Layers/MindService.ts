@@ -568,7 +568,6 @@ const makeMindService = Effect.gen(function* () {
           }),
         );
       }
-      yield* maybeSweep(row.projectId);
       const nowIso = yield* nowIsoNow;
       const updated = yield* repository.setPinned({
         memoryId: input.memoryId,
@@ -591,6 +590,10 @@ const makeMindService = Effect.gen(function* () {
         turnId: input.turnId,
         createdAt: nowIso,
       });
+      // Sweep after the mutation: pinning a prune-eligible row must protect it.
+      // A sweep before the update would delete the row first and fail below
+      // with "deleted while pinning". Mirrors confirm.
+      yield* maybeSweep(row.projectId);
       return toMindMemory(updated.value, nowIso);
     });
 

@@ -70,6 +70,7 @@ const PROJECTS = {
   prune: "project-mind-service-prune",
   forget: "project-mind-service-forget",
   ui: "project-mind-service-ui",
+  pinSweep: "project-mind-service-pin-sweep",
   xproject: "project-mind-service-xproject",
 } as const;
 
@@ -547,6 +548,39 @@ layer("MindService", (it) => {
         assert.isTrue(Option.isNone(yield* repository.getById({ memoryId: recent.memoryId })));
       }),
   );
+
+  it.effect("setPinned pins a prune-eligible row instead of sweeping it first", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.pinSweep);
+      yield* ensureProjectRow(PROJECTS.pinSweep);
+      const aged = new Date((yield* Clock.currentTimeMillis) - 46 * DAY_MS).toISOString();
+      const target = yield* seedMemory({
+        projectId,
+        textHash: "pin-sweep-eligible",
+        text: "stale but about to be pinned",
+        peakWeight: 0.05,
+        createdAt: aged,
+        lastAccessedAt: aged,
+      });
+
+      // The row satisfies the prune predicate (light, untouched, 46d idle);
+      // pinning must protect it, not fail with "deleted while pinning".
+      const pinned = yield* service.setPinned({
+        memoryId: target.memoryId,
+        projectId,
+        pinned: true,
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: "turn-pin-sweep",
+      });
+      assert.isTrue(pinned.pinned);
+      assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: target.memoryId })));
+    }),
+  );
+
 
   it.effect("forget deletes for real, journals op-only, and is idempotent for missing ids", () =>
     Effect.gen(function* () {
