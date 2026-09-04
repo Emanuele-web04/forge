@@ -76,6 +76,7 @@ import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { fetchOpenRouterModels } from "../OpenRouterDiscovery.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -2764,9 +2765,28 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             );
             return descriptor ? [descriptor] : [];
           });
+
+          // Supplement with OpenRouter models fetched directly from their API.
+          // This ensures newly released OpenRouter models appear in the picker
+          // even when the Pi extension registry hasn't been updated yet.
+          const existingSlugs = new Set(models.map((m) => m.slug));
+          const openRouterModels = (await fetchOpenRouterModels()).filter(
+            (orModel) => !existingSlugs.has(orModel.slug),
+          );
+
+          const mergedModels =
+            openRouterModels.length > 0 ? [...models, ...openRouterModels] : models;
+
           return {
-            models,
-            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+            models: mergedModels,
+            source:
+              extensionCount > 0 && openRouterModels.length > 0
+                ? "pi.sdk+extensions+openrouter"
+                : extensionCount > 0
+                  ? "pi.sdk+extensions"
+                  : openRouterModels.length > 0
+                    ? "pi.sdk+openrouter"
+                    : "pi.sdk",
             cached: false,
           } satisfies ProviderListModelsResult;
         },
