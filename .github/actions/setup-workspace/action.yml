@@ -4,7 +4,6 @@ description: Shared tool setup, dependency install, and caches for Synara CI job
 inputs:
   electron:
     description: Install the Electron runtime binary.
-    required: false
     default: "false"
 
 runs:
@@ -24,7 +23,7 @@ runs:
       uses: actions/cache@v5
       with:
         path: ~/.bun/install/cache
-        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
         restore-keys: |
           ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
 

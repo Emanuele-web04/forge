@@ -1,3 +1,6 @@
+# Lane rule: static is fast checks with no special runtime, unit is bun test, browser owns Playwright and is the long pole, build owns Electron and desktop output.
+# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static.
+# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
 name: CI
 
 on:
@@ -6,6 +9,7 @@ on:
     branches:
       - main
 
+# Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -49,7 +53,6 @@ jobs:
         uses: ./.github/actions/setup-workspace
 
       - name: Verify Linux terminal PTY native dependency
-        if: runner.os == 'Linux'
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test
@@ -98,7 +101,7 @@ jobs:
   build:
     name: Desktop Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -108,15 +111,6 @@ jobs:
         with:
           electron: "true"
 
-      # Only the build job produces a meaningful .turbo cache, so it is cached
-      # here rather than in the shared setup action. Exact key only: build
-      # outputs must never be restored from a prefix-matched key.
-      - name: Cache Turbo build outputs
-        uses: actions/cache@v5
-        with:
-          path: .turbo
-          key: ${{ runner.os }}-turbo-build-${{ github.sha }}
-
       - name: Build desktop pipeline
         run: bun run build:desktop
 
@@ -125,6 +119,7 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
+  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
     runs-on: ubuntu-24.04
@@ -132,8 +127,7 @@ jobs:
     needs: [static, unit, browser, build]
     if: always()
     steps:
-      - name: Check quality results
-        shell: bash
+      - name: Aggregate lane results
         env:
           STATIC: ${{ needs.static.result }}
           UNIT: ${{ needs.unit.result }}
@@ -142,6 +136,7 @@ jobs:
         run: |
           if [ "$STATIC" != "success" ] || [ "$UNIT" != "success" ] || [ "$BROWSER" != "success" ] || [ "$BUILD" != "success" ]; then
             echo "static=$STATIC unit=$UNIT browser=$BROWSER build=$BUILD"
+            echo "Open the red lane above, not this gate."
             exit 1
           fi
 
