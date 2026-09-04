@@ -16,6 +16,7 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
+  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -26,7 +27,10 @@ import {
   mergeProviderRateLimits,
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
-import { serverAllProviderUsageQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverAllProviderUsageQueryOptions,
+  serverProviderUsageSnapshotQueryOptions,
+} from "~/lib/serverReactQuery";
 
 export interface ProviderUsageSummaryData {
   readonly learnMoreHref: string | null;
@@ -93,13 +97,22 @@ export function useProviderUsageSummary(input: {
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  codexHomePath?: string | null;
   fetchOpenUsageData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
+  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
+    }),
+  );
+  const localUsageSnapshotQuery = useQuery(
+    serverProviderUsageSnapshotQueryOptions({
+      provider,
+      homePath: provider === "codex" ? input.codexHomePath || null : null,
+      enabled: shouldFetchLocalProviderUsage,
     }),
   );
   const openUsageSnapshotQuery = useQuery(

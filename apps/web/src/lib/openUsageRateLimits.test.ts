@@ -21,11 +21,10 @@ describe("openUsageRateLimits", () => {
           "antigravity",
           "grok",
           "droid",
-          "kilo",
           "pi",
         ] satisfies ProviderKind[]
       ).map((provider) => openUsageProviderIdForProvider(provider)),
-    ).toEqual(["codex", "claude", "cursor", "opencode", null, null, null, null, null]);
+    ).toEqual(["codex", "claude", "cursor", "opencode", null, null, null, null]);
   });
 
   it("normalizes OpenUsage progress lines into shared provider rate limits", () => {

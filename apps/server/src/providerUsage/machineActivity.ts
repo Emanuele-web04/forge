@@ -148,10 +148,10 @@ function readMessage(row: Record<string, unknown>): OpenCodeMessage | null {
 async function databaseFiles(input: {
   homeDir: string;
   env: NodeJS.ProcessEnv;
-  provider: "opencode" | "kilo";
+  provider: "opencode";
 }): Promise<DatabaseFiles> {
   const family = input.provider;
-  const dataEnv = input.env[family === "opencode" ? "OPENCODE_DATA_DIR" : "KILO_DATA_DIR"];
+  const dataEnv = input.env.OPENCODE_DATA_DIR;
   const xdgData = input.env.XDG_DATA_HOME?.trim();
   const xdgConfig = input.env.XDG_CONFIG_HOME?.trim();
   const roots = [
@@ -473,7 +473,7 @@ export async function scanLocalProviderActivity(input: {
       nowMs: input.nowMs ?? Date.now(),
     });
   }
-  if (input.provider !== "opencode" && input.provider !== "kilo") {
+  if (input.provider !== "opencode") {
     return null;
   }
   const nowMs = input.nowMs ?? Date.now();

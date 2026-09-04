@@ -17,6 +17,7 @@ import type {
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
 } from "@synara/contracts";
+import { LEGACY_PROVIDER_MIGRATIONS } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -454,9 +455,13 @@ function arcName(startHour: number): string {
 
 function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
   const provider = nonEmptyString(value);
-  return provider && PROVIDER_KINDS.has(provider as ProviderKind)
-    ? (provider as ProviderKind)
-    : "unknown";
+  if (!provider) {
+    return "unknown";
+  }
+  // Durable payloads predate the Kilo/Gemini retirements: fold legacy names
+  // through the shared migration map so old rows attribute to OpenCode.
+  const migrated = LEGACY_PROVIDER_MIGRATIONS[provider] ?? provider;
+  return PROVIDER_KINDS.has(migrated as ProviderKind) ? (migrated as ProviderKind) : "unknown";
 }
 
 interface TokenModelUsageCount {
@@ -549,7 +554,7 @@ function upstreamProviderIdForModel(
   provider: ProviderKind | "unknown",
   model: string,
 ): string | undefined {
-  if (provider !== "opencode" && provider !== "kilo") {
+  if (provider !== "opencode") {
     return undefined;
   }
   const separator = model.indexOf("/");

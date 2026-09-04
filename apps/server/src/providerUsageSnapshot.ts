@@ -567,7 +567,7 @@ async function listRecentClaudeTranscriptFiles(
     try {
       real = await fs.realpath(candidate);
     } catch {
-      return;
+      continue;
     }
     resolvedCandidates.add(real);
   }
@@ -939,7 +939,6 @@ async function loadProviderUsageSnapshot(input: {
         ...(input.env ? { env: input.env } : {}),
       });
     case "opencode":
-    case "kilo":
     case "grok":
       return loadMachineActivitySnapshot({
         provider: input.provider,

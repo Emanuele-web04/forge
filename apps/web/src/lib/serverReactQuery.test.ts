@@ -14,6 +14,7 @@ import {
   refreshServerConfigAfterTransportOpen,
   serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
+  serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
   studioThreadOutputsQueryOptions,

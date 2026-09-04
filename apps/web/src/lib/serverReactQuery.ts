@@ -1,4 +1,5 @@
 import type {
+  ProviderKind,
   ServerConfig,
   ServerListProviderUsageInput,
   ServerProviderStatus,
@@ -293,6 +294,29 @@ export async function invalidateProviderUsageQueries(queryClient: QueryClient): 
     queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() }),
     queryClient.invalidateQueries({ queryKey: serverQueryKeys.providerUsageRoot() }),
   ]);
+}
+
+export function serverProviderUsageSnapshotQueryOptions(input: {
+  provider: ProviderKind | null | undefined;
+  homePath?: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: serverQueryKeys.providerUsage(input.provider, input.homePath),
+    enabled: (input.enabled ?? true) && input.provider !== null && input.provider !== undefined,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => {
+      if (!input.provider) return null;
+      const api = ensureNativeApi();
+      return api.server.getProviderUsageSnapshot({
+        provider: input.provider,
+        ...(input.homePath ? { homePath: input.homePath } : {}),
+      });
+    },
+  });
 }
 
 // Local profile + shareable-card core statistics. The client passes its own fixed

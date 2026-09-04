@@ -163,7 +163,7 @@ describe("scanLocalProviderActivity", () => {
   it("keeps an honest unavailable state when a known database has no token-bearing messages", async () => {
     const db = await makeDatabase([]);
     const result = await scanLocalProviderActivity({
-      provider: "kilo",
+      provider: "opencode",
       homeDir: "/tmp/synara-test-home",
       databasePaths: [db],
       nowMs: Date.parse("2026-08-09T00:00:00.000Z"),
@@ -172,7 +172,7 @@ describe("scanLocalProviderActivity", () => {
       expect.objectContaining({
         status: "unavailable",
         scope: "machine",
-        source: "kilo-local-sqlite",
+        source: "opencode-local-sqlite",
         periods: [],
       }),
     );

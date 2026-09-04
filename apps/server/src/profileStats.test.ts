@@ -2002,10 +2002,10 @@ describe("ProfileStatsQuery", () => {
 
         const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
         const usage = tokenStats.providerUsage;
-        // OpenCode/Kilo per-message totals sum raw (190 + 325 = 515); a
+        // OpenCode/Kilo per-message totals sum raw (190 + 325 = 515 each);
+        // legacy Kilo rows migrate to OpenCode, so OpenCode totals 1030. A
         // cumulative provider stays delta-based (190 + 135 = 325).
-        expect(usage?.find((entry) => entry.provider === "opencode")?.tokens).toBe(515);
-        expect(usage?.find((entry) => entry.provider === "kilo")?.tokens).toBe(515);
+        expect(usage?.find((entry) => entry.provider === "opencode")?.tokens).toBe(1030);
         expect(usage?.find((entry) => entry.provider === "cursor")?.tokens).toBe(325);
       }),
     );
