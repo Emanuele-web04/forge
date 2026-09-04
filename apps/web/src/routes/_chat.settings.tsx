@@ -404,7 +404,6 @@ function SettingsRouteView() {
     setResetEpoch((current) => current + 1);
   }
 
-
   // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
   // key, with the standard "reset to default" affordance shown only when changed.
   // Rows with bespoke controls (e.g. the desktop-notifications Test button) keep

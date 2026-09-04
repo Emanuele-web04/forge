@@ -652,10 +652,7 @@ function rebuildThreadShellRecords(
         getThreadFromState(state, threadId),
       );
       threadShellById[threadId] = resolveShellEntry(previousShell, next.shell);
-      const session = resolveSessionEntry(
-        previousSession ?? null,
-        previousSession ?? next.session,
-      );
+      const session = resolveSessionEntry(previousSession ?? null, previousSession ?? next.session);
       if (session !== undefined) {
         threadSessionById[threadId] = session;
       }

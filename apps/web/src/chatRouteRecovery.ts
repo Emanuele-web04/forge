@@ -163,4 +163,3 @@ export async function refreshEmptyRouteRestoreSnapshot(
   }
   return false;
 }
-
