@@ -581,7 +581,6 @@ layer("MindService", (it) => {
     }),
   );
 
-
   it.effect("forget deletes for real, journals op-only, and is idempotent for missing ids", () =>
     Effect.gen(function* () {
       const service = yield* MindService;
