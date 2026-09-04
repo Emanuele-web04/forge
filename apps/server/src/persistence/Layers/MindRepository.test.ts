@@ -25,8 +25,6 @@ const PROJECTS = {
   pin: "project-mind-pin",
   forget: "project-mind-forget",
   journal: "project-mind-journal",
-  deleteWhereIds: "project-mind-delete-where-ids",
-  deleteWhereIdsOther: "project-mind-delete-where-ids-other",
   count: "project-mind-count",
   countOther: "project-mind-count-other",
   receipt: "project-mind-receipt",
@@ -353,37 +351,6 @@ layer("MindRepository", (it) => {
         turnId: "turn-retry-1",
       });
       assert.isTrue(Option.isNone(otherOp));
-    }),
-  );
-
-  it.effect("deleteWhereIds removes only the given ids of one project", () =>
-    Effect.gen(function* () {
-      const repository = yield* MindRepository;
-      yield* runMigrations();
-      const projectId = ProjectId.makeUnsafe(PROJECTS.deleteWhereIds);
-
-      const first = yield* repository.insert(memoryInput({ projectId }));
-      yield* repository.insert(memoryInput({ projectId }));
-      const third = yield* repository.insert(memoryInput({ projectId }));
-      yield* repository.insert(
-        memoryInput({ projectId: ProjectId.makeUnsafe(PROJECTS.deleteWhereIdsOther) }),
-      );
-
-      const deleted = yield* repository.deleteWhereIds({
-        projectId,
-        memoryIds: [first.memoryId, third.memoryId],
-      });
-      assert.strictEqual(deleted, 2);
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 1);
-      assert.strictEqual(
-        yield* repository.countByProject({
-          projectId: ProjectId.makeUnsafe(PROJECTS.deleteWhereIdsOther),
-        }),
-        1,
-      );
-
-      const nothing = yield* repository.deleteWhereIds({ projectId, memoryIds: [] });
-      assert.strictEqual(nothing, 0);
     }),
   );
 

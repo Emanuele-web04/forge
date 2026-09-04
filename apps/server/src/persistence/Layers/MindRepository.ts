@@ -23,7 +23,6 @@ import {
   ApplyMindConfirmInput,
   AppendMindJournalInput,
   CountMindMemoriesInput,
-  DeleteMindMemoriesByIdsInput,
   DeleteMindMemoryInput,
   FindMindJournalOpInput,
   FindMindMemoryByTextHashInput,
@@ -379,18 +378,6 @@ const makeMindRepository = Effect.gen(function* () {
       `,
   });
 
-  const deleteMemoryRowsByIds = SqlSchema.findAll({
-    Request: DeleteMindMemoriesByIdsInput,
-    Result: Schema.Struct({ memoryId: MindMemoryId }),
-    execute: ({ projectId, memoryIds }) =>
-      sql`
-        DELETE FROM mind_memories
-        WHERE project_id = ${projectId}
-          AND id IN ${sql.in(memoryIds)}
-        RETURNING id AS "memoryId"
-      `,
-  });
-
   const appendJournalRow = SqlSchema.void({
     Request: AppendMindJournalInput,
     execute: ({ projectId, memoryId, op, actor, threadId, turnId, createdAt }) =>
@@ -555,16 +542,6 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.length > 0),
     );
 
-  const deleteWhereIds: MindRepositoryShape["deleteWhereIds"] = (input) => {
-    if (input.memoryIds.length === 0) {
-      return Effect.succeed(0);
-    }
-    return deleteMemoryRowsByIds(input).pipe(
-      Effect.mapError(toPersistenceSqlError("MindRepository.deleteWhereIds:delete")),
-      Effect.map((rows) => rows.length),
-    );
-  };
-
   const appendJournal: MindRepositoryShape["appendJournal"] = (input) =>
     appendJournalRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.appendJournal:insert")),
@@ -602,7 +579,6 @@ const makeMindRepository = Effect.gen(function* () {
     applyConfirm,
     setPinned,
     deleteById,
-    deleteWhereIds,
     appendJournal,
     findJournalOp,
     countByProject,

@@ -105,12 +105,6 @@ export const DeleteMindMemoryInput = Schema.Struct({
 });
 export type DeleteMindMemoryInput = typeof DeleteMindMemoryInput.Type;
 
-export const DeleteMindMemoriesByIdsInput = Schema.Struct({
-  projectId: ProjectId,
-  memoryIds: Schema.Array(MindMemoryId),
-});
-export type DeleteMindMemoriesByIdsInput = typeof DeleteMindMemoriesByIdsInput.Type;
-
 export const AppendMindJournalInput = Schema.Struct({
   projectId: ProjectId,
   memoryId: MindMemoryId,
@@ -202,13 +196,6 @@ export interface MindRepositoryShape {
   readonly deleteById: (
     input: DeleteMindMemoryInput,
   ) => Effect.Effect<boolean, MindRepositoryError>;
-  /**
-   * Deletes the given memories of one project (prune sweep). Returns how many
-   * rows were deleted; unknown ids are ignored.
-   */
-  readonly deleteWhereIds: (
-    input: DeleteMindMemoriesByIdsInput,
-  ) => Effect.Effect<number, MindRepositoryError>;
   /** Appends an op-only journal row. Journal rows never carry memory text. */
   readonly appendJournal: (
     input: AppendMindJournalInput,
