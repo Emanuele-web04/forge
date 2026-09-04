@@ -42,7 +42,7 @@ export async function createOrRecoverProjectFromPath(input: {
   spaceId?: SpaceId | null;
   /** Persisted default provider (settings.defaultProvider) that seeds the new
    * project's default model selection. Defaults to codex when omitted, and pi
-   * falls back to codex because it has no default model slug. */
+   * and external fall back to codex because they have no default model slug. */
   defaultProvider?: ProviderKind;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
@@ -64,7 +64,9 @@ export async function createOrRecoverProjectFromPath(input: {
   const createdAt = new Date().toISOString();
   const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
   const seedProvider =
-    input.defaultProvider === "pi" ? "codex" : (input.defaultProvider ?? "codex");
+    input.defaultProvider === "pi" || input.defaultProvider === "external"
+      ? "codex"
+      : (input.defaultProvider ?? "codex");
 
   try {
     await input.api.orchestration.dispatchCommand({
@@ -77,7 +79,7 @@ export async function createOrRecoverProjectFromPath(input: {
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
         provider: seedProvider,
-        model: getDefaultModel(seedProvider),
+        model: getDefaultModel(seedProvider) ?? getDefaultModel("codex"),
       },
       // A project created while a space is active belongs to that space — filing it
       // afterwards would bounce the sidebar back to Void to follow the new project.

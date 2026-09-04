@@ -1,4 +1,6 @@
 import type {
+  AgentProfileId,
+  AgentProfileRevisionId,
   ModelSelection,
   OrchestrationSession,
   RuntimeMode,
@@ -16,6 +18,26 @@ export function deriveTurnStartModelSelection(input: {
       input.canAdoptRequestedProvider)
     ? requestedModelSelection
     : input.currentModelSelection;
+}
+
+/**
+ * KAR-529 attribution: narrows a model selection to the external agent profile
+ * and revision that spawned it. Non-external selections (built-in providers)
+ * return null/null so attribution stays unset for regular turns.
+ */
+export function deriveTurnAttribution(input: {
+  readonly modelSelection: ModelSelection | undefined;
+}): {
+  readonly externalAgentRevisionId: AgentProfileRevisionId | null;
+  readonly spawningProfileId: AgentProfileId | null;
+} {
+  if (input.modelSelection?.provider === "external") {
+    return {
+      externalAgentRevisionId: input.modelSelection.revisionId,
+      spawningProfileId: input.modelSelection.profileId,
+    };
+  }
+  return { externalAgentRevisionId: null, spawningProfileId: null };
 }
 
 export function deriveTurnStartSession(input: {

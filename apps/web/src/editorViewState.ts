@@ -5,6 +5,7 @@
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 import { isProviderKind } from "./providerOrdering";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 const EDITOR_VIEW_STATE_STORAGE_KEY = "synara.editor.viewStateByThreadId";
 const EDITOR_RAIL_CHAT_TABS_STORAGE_KEY = "synara.editor.railChatTabsByProjectId";
@@ -25,7 +26,7 @@ type PersistedEditorViewStateMap = Record<string, PersistedEditorViewState>;
 export interface EditorRailChatTabSnapshot {
   id: ThreadId;
   title: string;
-  provider: ProviderKind;
+  provider: DisplayProvider;
 }
 
 type PersistedEditorRailChatTabsMap = Record<string, ReadonlyArray<EditorRailChatTabSnapshot>>;

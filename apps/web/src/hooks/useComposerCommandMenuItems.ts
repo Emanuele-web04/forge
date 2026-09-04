@@ -8,6 +8,7 @@ import type {
   ProviderSkillDescriptor,
 } from "@synara/contracts";
 import { getAgentMentionAutocompleteAliases } from "@synara/contracts";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import {
   buildCommandSearchFields,
   buildPluginSearchFields,

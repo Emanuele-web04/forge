@@ -8,6 +8,7 @@ import {
 } from "@synara/contracts";
 import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -111,7 +112,7 @@ export function ProviderUsageMenuPopup({
   showUsageLines = false,
   children,
 }: {
-  provider: ProviderKind;
+  provider: DisplayProvider;
   model: ProviderUsageMenuModel;
   align?: "start" | "end";
   showUsageLines?: boolean;
@@ -138,7 +139,7 @@ export function ProviderUsageMenuPopup({
   );
 }
 
-export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
+export function ProviderUsageMenuControl({ provider }: { provider: DisplayProvider }) {
   const model = useProviderUsageMenuModel(provider);
 
   if (!model.primaryRow) {

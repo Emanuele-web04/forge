@@ -1125,6 +1125,9 @@ function ModelOptionRows({
   readonly onChange: (next: ModelSelection) => void;
 }) {
   const { provider, model } = modelSelection;
+  if (provider === "external") {
+    return null;
+  }
   const caps = getModelCapabilities(provider, model);
   const descriptors = getProviderOptionDescriptors({
     provider,

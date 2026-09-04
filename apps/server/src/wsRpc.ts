@@ -28,6 +28,8 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
+  type ConnectionCandidate,
+  type ConnectionPlanResolveResult,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
@@ -110,6 +112,14 @@ import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { CapabilityEvidenceService } from "./capabilityEvidence/Services/CapabilityEvidenceService";
+import { AgentProfileService } from "./externalAgents/AgentProfileService";
+import { DiscoveryService } from "./discovery/DiscoveryService";
+import {
+  buildConnectionPlan,
+  ConnectionPlanPolicyViolation,
+} from "./discovery/ConnectionPlanPolicy";
+import { ProfileLifecycleService } from "./externalAgents/ProfileLifecycleService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -307,6 +317,38 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
+/**
+ * Builds a launch plan for a single candidate, failing with a structured
+ * `WsRpcError` policy code when the candidate cannot launch (C6a): a
+ * catalog-only display entry, a configured-but-missing binary, or an unsafe
+ * launch target. A `ConnectionPlanPolicyViolation` is a typed non-install
+ * reason — never a defect — so its `code`/-`reason` pair is surfaced as the
+ * RPC error code/message instead of a generic failure.
+ */
+export function resolveConnectionPlanForCandidate(input: {
+  readonly candidate: ConnectionCandidate;
+  readonly cwd?: string;
+}): Effect.Effect<ConnectionPlanResolveResult, WsRpcError> {
+  return Effect.try({
+    try: () => {
+      const plan = buildConnectionPlan({
+        candidate: input.candidate,
+        planId: `plan:${input.candidate.candidateId}`,
+        resolvedAt: new Date().toISOString(),
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      });
+      return { plan };
+    },
+    catch: (cause) =>
+      cause instanceof ConnectionPlanPolicyViolation
+        ? new WsRpcError({
+            message: cause.reason,
+            code: `POLICY_${cause.code.toUpperCase()}`,
+          })
+        : toWsRpcError(cause, "Failed to resolve connection plan"),
+  });
+}
+
 // Process-wide so a subscriber's restart chain survives its own reconnects
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
@@ -345,6 +387,10 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const capabilityEvidence = yield* CapabilityEvidenceService;
+      const agentProfiles = yield* AgentProfileService;
+      const discovery = yield* DiscoveryService;
+      const profileLifecycle = yield* ProfileLifecycleService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1691,6 +1737,107 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.capabilityEvidenceRecord]: (input) =>
+          rpcEffect(capabilityEvidence.record(input), "Failed to record capability evidence"),
+        [WS_METHODS.capabilityEvidenceQuery]: (input) =>
+          rpcEffect(capabilityEvidence.query(input), "Failed to query capability evidence"),
+        [WS_METHODS.capabilityEvidenceInvalidate]: (input) =>
+          rpcEffect(
+            capabilityEvidence.invalidate(input),
+            "Failed to invalidate capability evidence",
+          ),
+        [WS_METHODS.capabilityEvidenceDemote]: (input) =>
+          rpcEffect(capabilityEvidence.demote(input), "Failed to demote capability evidence"),
+        [WS_METHODS.capabilityEvidenceBadge]: (input) =>
+          rpcEffect(
+            capabilityEvidence.queryBadge(input),
+            "Failed to load capability evidence badge",
+          ),
+        [WS_METHODS.runtimeTurnFeedbackRecord]: (input) =>
+          rpcEffect(
+            capabilityEvidence.recordRuntimeTurnFeedback(input),
+            "Failed to record runtime turn feedback",
+          ),
+        [WS_METHODS.serverListExternalAgentProfiles]: () =>
+          rpcEffect(
+            agentProfiles.listProfiles().pipe(Effect.map((profiles) => ({ profiles }))),
+            "Failed to list external agent profiles",
+          ),
+        [WS_METHODS.serverGetExternalAgentProfile]: (input) =>
+          rpcEffect(
+            agentProfiles.getProfile(input.profileId),
+            "Failed to load external agent profile",
+          ),
+        [WS_METHODS.serverCreateExternalAgentProfile]: (input) =>
+          rpcEffect(agentProfiles.createProfile(input), "Failed to create external agent profile"),
+        [WS_METHODS.serverUpdateExternalAgentProfile]: (input) =>
+          rpcEffect(agentProfiles.updateProfile(input), "Failed to update external agent profile"),
+        [WS_METHODS.serverTombstoneExternalAgentProfile]: (input) =>
+          rpcEffect(
+            agentProfiles
+              .tombstoneProfile(input.profileId)
+              .pipe(Effect.map((profile) => ({ profile }))),
+            "Failed to remove external agent profile",
+          ),
+        [WS_METHODS.serverListConnectionCandidates]: (input) =>
+          rpcEffect(
+            discovery.listCandidates({
+              ...(input.customCommands !== undefined && input.customCommands.length > 0
+                ? { customCommands: input.customCommands }
+                : {}),
+            }),
+            "Failed to list connection candidates",
+          ),
+        [WS_METHODS.serverResolveConnectionPlan]: (input) =>
+          rpcEffect(
+            discovery.listCandidates().pipe(
+              Effect.flatMap((result) => {
+                const candidate = result.candidates.find(
+                  (c) => c.candidateId === input.candidateId,
+                );
+                if (candidate === undefined) {
+                  return Effect.fail(
+                    new WsRpcError({
+                      message: `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
+                      code: "CONNECTION_CANDIDATE_NOT_FOUND",
+                    }),
+                  );
+                }
+                // `buildConnectionPlan` throws ConnectionPlanPolicyViolation for
+                // candidates that cannot launch (registry-only, missing binary,
+                // unsafe target). Mapping it here — rather than letting
+                // `Effect.sync` swallow the throw as a defect — keeps the
+                // structured non-install reason visible as a typed policy code
+                // instead of a generic RPC failure (C6a).
+                return resolveConnectionPlanForCandidate({
+                  candidate,
+                  ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+                });
+              }),
+            ),
+            "Failed to resolve connection plan",
+          ),
+        [WS_METHODS.serverQuarantineExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .quarantineProfile(input.profileId)
+              .pipe(Effect.map(({ profile, stoppedSessions }) => ({ profile, stoppedSessions }))),
+            "Failed to quarantine external agent profile",
+          ),
+        [WS_METHODS.serverUnquarantineExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .unquarantineProfile(input.profileId)
+              .pipe(Effect.map((profile) => ({ profile }))),
+            "Failed to un-quarantine external agent profile",
+          ),
+        [WS_METHODS.serverRecertifyExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .recertifyProfile(input.profileId)
+              .pipe(Effect.map(({ profile, states }) => ({ profile, states }))),
+            "Failed to re-certify external agent profile",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

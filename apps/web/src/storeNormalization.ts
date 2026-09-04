@@ -9,6 +9,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadActivity,
+  type ModelSelection,
   type ProviderKind,
   ThreadId,
   type TurnId,
@@ -341,11 +342,15 @@ export function deepEqualJson(left: unknown, right: unknown): boolean {
   return true;
 }
 
-export function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
-  value: T,
-  previous: T | null | undefined,
-): T {
-  const normalizedModel = normalizeModelSlug(value.model, value.provider) ?? value.model;
+export function normalizeModelSelection<
+  T extends { provider: ModelSelection["provider"]; model: string },
+>(value: T, previous: T | null | undefined): T {
+  // External agent selections carry connector-owned model strings; the
+  // built-in slug normalization does not apply to them.
+  const normalizedModel =
+    value.provider === "external"
+      ? value.model
+      : (normalizeModelSlug(value.model, value.provider) ?? value.model);
   const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
   return previous && deepEqualJson(previous, next) ? previous : next;
 }

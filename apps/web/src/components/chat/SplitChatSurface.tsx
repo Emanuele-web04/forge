@@ -1,4 +1,10 @@
-import { type ProjectId, type ProviderKind, type ThreadId, type TurnId } from "@synara/contracts";
+import {
+  type ModelSelection,
+  type ProjectId,
+  type ProviderKind,
+  type ThreadId,
+  type TurnId,
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   type CSSProperties,
@@ -243,7 +249,7 @@ function SplitPaneEmptyState(props: {
     id: ThreadId;
     title: string | null;
     projectId: ProjectId;
-    modelSelection: { provider: ProviderKind };
+    modelSelection: { provider: ModelSelection["provider"] };
   }[];
   projects: readonly { id: ProjectId; name: string }[];
   excludedThreadIds: ReadonlySet<ThreadId>;
@@ -470,7 +476,7 @@ function SplitPaneSurface(props: {
     id: ThreadId;
     title: string | null;
     projectId: ProjectId;
-    modelSelection: { provider: ProviderKind };
+    modelSelection: { provider: ModelSelection["provider"] };
   }[];
   projects: readonly { id: ProjectId; name: string }[];
   onFocus: () => void;

@@ -45,7 +45,7 @@ function isImportableThreadActivity(
 }
 
 export function isEligibleHandoffTargetProvider(input: {
-  readonly sourceProvider: ProviderKind;
+  readonly sourceProvider: ProviderKind | "external";
   readonly targetProvider: ProviderKind;
   readonly targetProviderEnabled: boolean | null | undefined;
   readonly targetProviderStatus: ServerProviderStatus | null | undefined;
@@ -59,7 +59,7 @@ export function isEligibleHandoffTargetProvider(input: {
 }
 
 export function resolveAvailableHandoffTargetProviders(input: {
-  readonly sourceProvider: ProviderKind;
+  readonly sourceProvider: ProviderKind | "external";
   readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
   readonly providerStatuses: readonly ServerProviderStatus[];
 }): ReadonlyArray<ProviderKind> {
@@ -67,7 +67,8 @@ export function resolveAvailableHandoffTargetProviders(input: {
     isEligibleHandoffTargetProvider({
       sourceProvider: input.sourceProvider,
       targetProvider,
-      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
+      targetProviderEnabled:
+        targetProvider === "external" ? false : input.providerSettings?.[targetProvider]?.enabled,
       targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
     }),
   );
@@ -77,7 +78,11 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  const sourceProviderName =
+    thread.handoff.sourceProvider === "external"
+      ? "external agent"
+      : PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider];
+  return `Handoff from ${sourceProviderName}`;
 }
 
 // Preserve the visible source thread name when creating the destination thread.
@@ -221,6 +226,9 @@ export function resolveThreadHandoffModelSelection(input: {
   }
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return input.projectDefaultModelSelection;
+  }
+  if (input.targetProvider === "external") {
+    throw new Error("Select an external agent profile before handing off to an external agent.");
   }
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {

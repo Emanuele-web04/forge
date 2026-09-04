@@ -33,7 +33,7 @@ import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./co
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   prompt: string;
@@ -41,9 +41,9 @@ export type ComposerProviderStateInput = {
 };
 
 export type ComposerProviderState = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   promptEffort: string | null;
-  modelOptionsForDispatch: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptionsForDispatch: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   composerFrameClassName?: string;
   composerSurfaceClassName?: string;
   modelPickerIconClassName?: string;
@@ -55,7 +55,7 @@ type ProviderTraitRenderInput = {
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
@@ -120,10 +120,17 @@ function getProviderStateFromCapabilities(
   input: ComposerProviderStateInput,
 ): ComposerProviderState {
   const { provider, model, runtimeModel, prompt, modelOptions } = input;
+  if (provider === "external") {
+    return {
+      provider: "external",
+      promptEffort: null,
+      modelOptionsForDispatch: undefined,
+    };
+  }
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 
   let rawEffort: string | null = null;
-  let normalizedOptions: ProviderModelOptions[ProviderKind] | undefined;
+  let normalizedOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
 
   switch (provider) {
     case "codex": {
@@ -300,7 +307,7 @@ function getProviderStateFromCapabilities(
   };
 }
 
-const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
+const composerProviderRegistry: Record<Exclude<ProviderKind, "external">, ProviderRegistryEntry> = {
   codex: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("codex", input),
@@ -348,18 +355,30 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   },
 };
 
+const EXTERNAL_AGENT_COMPOSER_STATE: ComposerProviderState = {
+  // External agent profiles expose no Synara-side composer traits: effort,
+  // context windows, and mode flags are connector-owned until the connector
+  // foundation lands.
+  provider: "external",
+  promptEffort: null,
+  modelOptionsForDispatch: undefined,
+};
+
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
+  if (input.provider === "external") {
+    return EXTERNAL_AGENT_COMPOSER_STATE;
+  }
   return composerProviderRegistry[input.provider].getState(input);
 }
 
 export function renderProviderTraitsMenuContent(input: {
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
@@ -384,13 +403,13 @@ export function renderProviderTraitsMenuContent(input: {
 }
 
 export function renderProviderTraitsPicker(input: {
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   includeFastMode?: boolean;
   open?: boolean;

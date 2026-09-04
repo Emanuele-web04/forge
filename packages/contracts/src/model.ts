@@ -880,6 +880,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
+  // External agents resolve their model catalog from the profile's connector at
+  // runtime; there is no built-in catalog to surface in the picker.
+  external: [],
   cursor: [
     {
       // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
@@ -1116,7 +1119,9 @@ export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
-export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
+// `pi` and `external` have no built-in default model: Pi discovers its catalog at
+// runtime, and external agents resolve the model from their profile's connector.
+export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi" | "external">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-5.5",
@@ -1300,6 +1305,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     sonnet: "claude-sonnet-5",
     fable: "claude-fable-5",
   },
+  external: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1342,4 +1348,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
+  external: "External Agent",
 };

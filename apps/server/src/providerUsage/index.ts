@@ -248,13 +248,20 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
     (provider) => PROVIDER_USAGE_FETCHERS[provider] !== undefined,
   );
   const enabledProviders = supportedProviders.filter(
-    (provider) => settings.providers[provider].enabled,
+    (provider) => provider !== "external" && settings.providers[provider].enabled,
   );
   invalidateProviderUsageSnapshots(
-    supportedProviders.filter((provider) => !settings.providers[provider].enabled),
+    supportedProviders.filter(
+      (provider) => provider !== "external" && !settings.providers[provider].enabled,
+    ),
   );
 
-  if (input.provider && !settings.providers[input.provider].enabled) {
+  const requestedProvider = input.provider;
+  // External profiles have no usage fetcher or settings entry, so there is nothing to list.
+  if (
+    requestedProvider &&
+    (requestedProvider === "external" || !settings.providers[requestedProvider].enabled)
+  ) {
     return [];
   }
 

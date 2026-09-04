@@ -72,17 +72,18 @@ describe("agent gateway target resolver", () => {
         ],
       };
       const codexGuidance = agentGatewayTargetOptionGuidance(codexCatalog);
-      assert.deepEqual(codexGuidance.exampleTarget, {
-        provider: "codex",
+      const codexExampleTarget = {
+        provider: "codex" as const,
         model: "gpt-5.6-terra",
         options: { reasoningEffort: "low" },
-      });
+      };
+      assert.deepEqual(codexGuidance.exampleTarget, codexExampleTarget);
       assert.deepEqual(
         yield* resolveAgentGatewayTarget({
-          target: codexGuidance.exampleTarget!,
+          target: codexExampleTarget,
           discovery,
         }),
-        codexGuidance.exampleTarget,
+        codexExampleTarget,
       );
 
       const antigravityGuidance = agentGatewayTargetOptionGuidance({
@@ -131,12 +132,17 @@ describe("agent gateway target resolver", () => {
             ],
           }),
       } as unknown as ProviderDiscoveryServiceShape;
+      const antigravityExampleTarget = {
+        provider: "antigravity" as const,
+        model: "Gemini 3.5 Flash",
+        options: { reasoningEffort: "low" },
+      };
       assert.deepEqual(
         yield* resolveAgentGatewayTarget({
-          target: antigravityGuidance.exampleTarget!,
+          target: antigravityExampleTarget,
           discovery: antigravityDiscovery,
         }),
-        antigravityGuidance.exampleTarget,
+        antigravityExampleTarget,
       );
     }),
   );

@@ -27,6 +27,7 @@ import {
 } from "../composerDraftStore";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { readNativeApi } from "../nativeApi";
+import { builtInProviderOrDefault } from "./providerIdentity";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SidebarThreadSummary } from "../types";
@@ -244,7 +245,7 @@ async function dispatchKanbanDraftThreadOnce(
   kanbanUi.markOptimisticDispatch(threadId, {
     projectId,
     title: thread?.title ?? fallbackTitle,
-    provider: modelSelection.provider,
+    provider: builtInProviderOrDefault(modelSelection.provider),
     baselineTurnId: thread?.latestTurn?.turnId ?? null,
     droppedAtMs,
   });

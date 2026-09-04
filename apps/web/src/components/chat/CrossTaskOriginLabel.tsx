@@ -3,6 +3,7 @@
 // Layer: Chat transcript UI
 
 import { type ProviderKind, type ThreadId } from "@synara/contracts";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import { memo, type ReactNode } from "react";
 
 import { SynaraLogo } from "../SynaraLogo";
@@ -10,7 +11,7 @@ import { cn } from "~/lib/utils";
 
 export interface CrossTaskOrigin {
   readonly sourceThreadId: ThreadId;
-  readonly sourceProvider: ProviderKind | null;
+  readonly sourceProvider: DisplayProvider | null;
 }
 
 // A single, app-level attribution: the message reached this thread from another

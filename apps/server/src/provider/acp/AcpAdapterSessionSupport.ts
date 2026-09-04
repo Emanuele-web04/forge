@@ -16,6 +16,14 @@ import type {
 import { Deferred, Effect, Option, Scope, Semaphore, SynchronizedRef } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 
+import {
+  buildAcpSynaraMcpServers,
+  type AcpInitializeCapabilitiesView,
+} from "../../agentGateway/mcpInjection.ts";
+import type {
+  AgentGatewayMcpConnection,
+  AgentGatewayStdioProxySpawn,
+} from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import type { AcpSessionMode, AcpSessionModeState, AcpToolCallState } from "./AcpRuntimeModel.ts";
 import { forkAcpTurnIdleWatchdog } from "./AcpTurnIdleWatchdog.ts";
 
@@ -327,4 +335,36 @@ export function acceptAcpPlanUpdate(
   if (context.lastPlanFingerprint === fingerprint) return false;
   context.lastPlanFingerprint = fingerprint;
   return true;
+}
+
+/**
+ * Builds the `buildMcpServers` runtime option from a live agent gateway lease.
+ *
+ * Shared by every ACP adapter so gateway injection rules cannot drift between
+ * first-party agents and future generic ACP agents. The result is spread into
+ * `AcpSessionRuntimeOptions`; it is empty when the gateway is not running, so
+ * ACP sessions then start without gateway injection. The builder negotiates
+ * the transport from the agent's advertised `mcpCapabilities`: streamable HTTP
+ * when supported, otherwise the stdio -> HTTP proxy that keeps the bearer
+ * token out of provider processes.
+ */
+export function buildAcpGatewayMcpServers(input: {
+  readonly gatewaySessionLease: { readonly connection: AgentGatewayMcpConnection } | undefined;
+  readonly agentGatewayCredentials:
+    | { readonly stdioProxy: AgentGatewayStdioProxySpawn }
+    | undefined;
+}): {
+  readonly buildMcpServers?: (
+    initializeResult: AcpInitializeCapabilitiesView,
+  ) => Array<Acp.McpServer>;
+} {
+  if (input.gatewaySessionLease === undefined || input.agentGatewayCredentials === undefined) {
+    return {};
+  }
+  const { connection } = input.gatewaySessionLease;
+  const { stdioProxy } = input.agentGatewayCredentials;
+  return {
+    buildMcpServers: (initializeResult) =>
+      buildAcpSynaraMcpServers({ connection, initializeResult, stdioProxy }),
+  };
 }

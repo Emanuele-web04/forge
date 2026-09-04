@@ -1,7 +1,16 @@
-import { ThreadId, type OrchestrationSession } from "@synara/contracts";
+import {
+  AgentProfileId,
+  AgentProfileRevisionId,
+  ThreadId,
+  type OrchestrationSession,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
+import {
+  deriveTurnAttribution,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "./turnStartSession.ts";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-turn-start-session");
 const REQUESTED_AT = "2026-07-21T00:00:00.000Z";
@@ -80,6 +89,33 @@ describe("deriveTurnStartSession", () => {
       status: "starting",
       activeTurnId: null,
       lastError: null,
+    });
+  });
+});
+
+describe("deriveTurnAttribution", () => {
+  it("pins the external agent revision and spawning profile for an external selection", () => {
+    const profileId = AgentProfileId.makeUnsafe("agentprofile_attribution");
+    const revisionId = AgentProfileRevisionId.makeUnsafe("rev_attribution");
+    expect(
+      deriveTurnAttribution({
+        modelSelection: { provider: "external", profileId, revisionId, model: "cline" },
+      }),
+    ).toEqual({ externalAgentRevisionId: revisionId, spawningProfileId: profileId });
+  });
+
+  it("returns null attribution for built-in provider selections", () => {
+    expect(
+      deriveTurnAttribution({
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      }),
+    ).toEqual({ externalAgentRevisionId: null, spawningProfileId: null });
+  });
+
+  it("returns null attribution when no model selection is present", () => {
+    expect(deriveTurnAttribution({ modelSelection: undefined })).toEqual({
+      externalAgentRevisionId: null,
+      spawningProfileId: null,
     });
   });
 });

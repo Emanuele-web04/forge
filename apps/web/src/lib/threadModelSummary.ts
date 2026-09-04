@@ -14,9 +14,10 @@ import {
   showsComposerFastModeBadge,
 } from "~/components/chat/composerTraits";
 import { formatProviderModelOptionName, type ProviderOptions } from "~/providerModelOptions";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 export interface ThreadModelSummary {
-  provider: ProviderKind;
+  provider: DisplayProvider;
   /** Display name of the selected model, e.g. "Sonnet 4.5". */
   modelLabel: string;
   /** Reasoning effort / thinking label, e.g. "High"; null when the model has none. */
@@ -33,6 +34,16 @@ export function resolveThreadModelSummary(
   // Deliberately the selection's provider, not `resolveThreadDisplayProvider`:
   // the glyph and the model name must describe the same selection, and a live
   // session can briefly report a different provider than the stored selection.
+  if (modelSelection.provider === "external") {
+    // External agent profiles have no built-in trait surface; the model string
+    // is connector-owned and shown verbatim.
+    return {
+      provider: "external",
+      modelLabel: modelSelection.model,
+      statusLabel: null,
+      fastMode: false,
+    };
+  }
   const provider = modelSelection.provider;
   const modelLabel = formatProviderModelOptionName({ provider, slug: modelSelection.model });
   if (modelLabel.length === 0) {

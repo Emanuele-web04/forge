@@ -54,6 +54,10 @@ function createMockOpenCodeRuntime(options?: {
   readonly inventoryError?: OpenCodeRuntimeError;
   readonly connectError?: OpenCodeRuntimeError;
   readonly cliModelsError?: OpenCodeRuntimeError;
+  /** Per-call CLI model results; overrides `cliModels`/`cliModelsError` when present. */
+  readonly cliModelsByCall?: ReadonlyArray<
+    ReadonlyArray<OpenCodeCliModelDescriptor> | { readonly error: OpenCodeRuntimeError }
+  >;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
   readonly events?: AsyncIterable<unknown>;
   readonly eventSubscriptions?: ReadonlyArray<AsyncIterable<unknown>>;
@@ -246,6 +250,14 @@ function createMockOpenCodeRuntime(options?: {
     listOpenCodeCliModels: (input) =>
       Effect.gen(function* () {
         cliModelCalls.push(input);
+        const byCall = options?.cliModelsByCall;
+        if (byCall && byCall.length > 0) {
+          const result = byCall[Math.min(cliModelCalls.length, byCall.length) - 1]!;
+          if ("error" in result) {
+            return yield* result.error;
+          }
+          return result;
+        }
         if (options?.cliModelsError) {
           return yield* options.cliModelsError;
         }
@@ -973,6 +985,137 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/server-startup-fails" });
     expect(runtime.cliModelCalls).toHaveLength(1);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/server-startup-fails" });
+  });
+
+  it("retries the CLI model listing without a cwd when the requested cwd fails", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      connectError: new OpenCodeRuntimeError({
+        operation: "connectToOpenCodeServer",
+        detail: "OpenCode server failed to start.",
+      }),
+      cliModelsByCall: [
+        {
+          error: new OpenCodeRuntimeError({
+            operation: "listOpenCodeCliModels",
+            detail: "Failed to execute 'opencode models --verbose' (exit code 1).",
+            cause: {
+              code: 1,
+              stdout: "",
+              stderr: "error: The current working directory was deleted",
+            },
+          }),
+        },
+        [
+          {
+            slug: "opencode/deepseek-v4-flash-free",
+            providerID: "opencode",
+            modelID: "deepseek-v4-flash-free",
+            name: "DeepSeek V4 Flash Free",
+            variants: [],
+            supportedReasoningEfforts: [],
+          },
+        ],
+      ],
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/deleted-cwd",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toMatchObject({
+      source: "opencode-cli",
+      cached: false,
+    });
+    expect(result?.models.map((model) => model.slug)).toEqual(["opencode/deepseek-v4-flash-free"]);
+    // First attempt used the requested (bad) cwd; the retry dropped it.
+    expect(runtime.cliModelCalls).toHaveLength(2);
+    expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/deleted-cwd" });
+    expect(runtime.cliModelCalls[1]).not.toHaveProperty("cwd");
+  });
+
+  it("degrades to the adapter error when both the cwd attempt and the retry fail", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      connectError: new OpenCodeRuntimeError({
+        operation: "connectToOpenCodeServer",
+        detail: "OpenCode server failed to start.",
+      }),
+      cliModelsByCall: [
+        {
+          error: new OpenCodeRuntimeError({
+            operation: "listOpenCodeCliModels",
+            detail: "Failed to execute 'opencode models --verbose' (exit code 1).",
+            cause: {
+              code: 1,
+              stdout: "",
+              stderr: "error: The current working directory was deleted",
+            },
+          }),
+        },
+        {
+          error: new OpenCodeRuntimeError({
+            operation: "listOpenCodeCliModels",
+            detail: "Failed to execute 'opencode models --verbose' (exit code 1).",
+            cause: {
+              code: 1,
+              stdout: "",
+              stderr: "error: still failing without cwd",
+            },
+          }),
+        },
+      ],
+    });
+
+    // Both CLI attempts failed; the inventory also failed (connectError), so
+    // listModels surfaces the adapter request error and the client falls back
+    // to the static model catalog.
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/deleted-cwd",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(runtime.cliModelCalls).toHaveLength(2);
+    expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/deleted-cwd" });
+    expect(runtime.cliModelCalls[1]).not.toHaveProperty("cwd");
   });
 
   it("lists OpenCode agents from the active discovery cwd", async () => {

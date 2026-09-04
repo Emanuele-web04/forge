@@ -49,6 +49,7 @@ import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 import { ProviderIcon } from "../ProviderIcon";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 // ── Serialized Types ──────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ export type SerializedComposerMentionNode = Spread<
   {
     kind?: MentionChipKind;
     path: string;
-    provider?: ProviderKind;
+    provider?: DisplayProvider;
     threadId?: string;
     type: "composer-mention";
     version: 1;
@@ -124,7 +125,7 @@ function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
   kind: MentionChipKind,
-  provider?: ProviderKind,
+  provider?: DisplayProvider,
 ): void {
   resetInlineChipContainer(container);
 
@@ -233,7 +234,7 @@ function ComposerLinkDecorator(props: { url: string }) {
 export class ComposerMentionNode extends TextNode {
   __kind: MentionChipKind;
   __path: string;
-  __provider: ProviderKind | undefined;
+  __provider: DisplayProvider | undefined;
   __threadId: string | undefined;
 
   static override getType(): string {
@@ -262,7 +263,7 @@ export class ComposerMentionNode extends TextNode {
   constructor(
     path: string,
     kind: MentionChipKind = "path",
-    provider?: ProviderKind,
+    provider?: DisplayProvider,
     threadId?: string,
     key?: NodeKey,
   ) {
@@ -278,11 +279,11 @@ export class ComposerMentionNode extends TextNode {
     return this.getLatest().__threadId;
   }
 
-  getMentionProvider(): ProviderKind | undefined {
+  getMentionProvider(): DisplayProvider | undefined {
     return this.getLatest().__provider;
   }
 
-  setMentionProvider(provider: ProviderKind): void {
+  setMentionProvider(provider: DisplayProvider): void {
     const self = this.getWritable();
     self.__provider = provider;
   }
@@ -345,7 +346,7 @@ export class ComposerMentionNode extends TextNode {
 export function $createComposerMentionNode(
   path: string,
   kind: MentionChipKind = "path",
-  provider?: ProviderKind,
+  provider?: DisplayProvider,
   threadId?: string,
 ): ComposerMentionNode {
   return $applyNodeReplacement(new ComposerMentionNode(path, kind, provider, threadId));

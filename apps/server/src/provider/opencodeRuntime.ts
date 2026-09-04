@@ -605,6 +605,29 @@ function parseOpenCodeCliModelJson(
       : null) ??
     undefined;
   const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
+  // OpenCode CLI versions differ in how they mark free models: newer ones emit
+  // `isFree`, but 1.18.x only encodes free-ness as a zeroed `cost` block. Treat a
+  // model as free when either signal is present so the Kilo free-only filter and
+  // any free-model UI stay correct across CLI versions.
+  //
+  // The zero-cost heuristic only applies to models owned by the CLI's own
+  // provider id (opencode for the opencode CLI, kilo for the kilo CLI). Third
+  // party providers in the same output (e.g. openrouter `:free` entries, preview
+  // models with zeroed pricing) are not a reliable free signal. An explicit
+  // `isFree: false` always wins over the heuristic.
+  const ownProviderCostFree =
+    parsedSlug.providerID === "opencode" ||
+    parsedSlug.providerID === "kilo" ||
+    providerID === "opencode" ||
+    providerID === "kilo";
+  const zeroCostFree =
+    ownProviderCostFree &&
+    object.cost &&
+    typeof object.cost === "object" &&
+    !Array.isArray(object.cost) &&
+    (object.cost as Record<string, unknown>).input === 0 &&
+    (object.cost as Record<string, unknown>).output === 0;
+  const isFree = object.isFree === true ? true : object.isFree === false ? false : zeroCostFree;
 
   return {
     slug,
@@ -615,6 +638,9 @@ function parseOpenCodeCliModelJson(
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(contextWindowOptions ?? {}),
+    // Only surface `isFree: true`; a false/absent value is the same as no
+    // signal and must not change the descriptor shape for paid models.
+    ...(isFree === true ? { isFree: true as const } : {}),
   };
 }
 

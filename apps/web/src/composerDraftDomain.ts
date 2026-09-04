@@ -313,7 +313,7 @@ export interface ComposerDraftStoreState {
   setProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
-    nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+    nextProviderOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | null | undefined,
     options?: {
       model?: string | null;
       persistSticky?: boolean;

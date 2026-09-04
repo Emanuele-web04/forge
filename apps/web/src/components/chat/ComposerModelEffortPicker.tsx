@@ -67,7 +67,7 @@ type ComposerModelEffortPickerProps = {
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  modelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
 

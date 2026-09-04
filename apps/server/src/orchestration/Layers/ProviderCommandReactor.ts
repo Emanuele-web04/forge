@@ -7,6 +7,7 @@ import {
   type CheckpointRef,
   CommandId,
   EventId,
+  type ExternalAgentModelSelection,
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
@@ -98,6 +99,10 @@ import { resolveTextGenerationInputForSelection } from "../../git/textGeneration
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
+import {
+  AgentProfileService,
+  type ExternalAgentSessionLaunch,
+} from "../../externalAgents/AgentProfileService.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -658,6 +663,7 @@ const make = Effect.gen(function* () {
     }
     return completed.value;
   });
+
   const managedAttachments = yield* ManagedAttachmentRepository;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -1122,6 +1128,37 @@ const make = Effect.gen(function* () {
     return yield* resolveConfiguredTextGenerationInput();
   });
 
+  /**
+   * External agent profile session start: resolve the pinned revision, refuse
+   * new sessions for missing or removed profiles, and expand credential
+   * references into the launch environment. Returns the resolved launch spec
+   * (profile, revision, env) for the ExternalAgentAdapter to spawn. The error
+   * mapping preserves profile-not-found / tombstoned / missing-credential as
+   * attributable validation failures instead of silent misroutes.
+   */
+  const resolveExternalAgentSessionStart = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly selection: ExternalAgentModelSelection;
+  }) {
+    const agentProfiles = yield* AgentProfileService;
+    const launch = yield* agentProfiles
+      .resolveSessionLaunch({
+        profileId: input.selection.profileId,
+        revisionId: input.selection.revisionId,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: "external",
+              operation: "thread.turn.start",
+              issue: error.message,
+            }),
+        ),
+      );
+    return launch;
+  });
+
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
     readonly kind:
@@ -1372,7 +1409,9 @@ const make = Effect.gen(function* () {
     const provider = projectedThread
       ? Schema.is(ProviderKind)(projectedThread.session?.providerName)
         ? projectedThread.session?.providerName
-        : projectedThread.modelSelection.provider
+        : Schema.is(ProviderKind)(projectedThread.modelSelection.provider)
+          ? projectedThread.modelSelection.provider
+          : undefined
       : undefined;
     const rebuildsContext =
       provider !== undefined &&
@@ -1578,15 +1617,42 @@ const make = Effect.gen(function* () {
       currentProvider ??
       thread.modelSelection.provider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const threadProvider = currentProvider ?? thread.modelSelection.provider;
+    // External agent profiles dispatch through the same provider-service path as
+    // built-in providers, but their launch spec (profile + credential env) is
+    // resolved here and handed to the ExternalAgentAdapter. External has no
+    // settings-binary or built-in model catalog, so it skips the settings
+    // enabled/providerOptions resolution below.
+    let externalAgentLaunch: ExternalAgentSessionLaunch | undefined;
+    if (desiredModelSelection.provider === "external") {
+      externalAgentLaunch = yield* resolveExternalAgentSessionStart({
+        threadId,
+        selection: desiredModelSelection,
+      });
+    } else if (threadProvider === "external") {
+      // Unreachable: external selections are handled in the branch above, and a
+      // requested built-in switch from an external thread fails the mismatch
+      // check above. Kept as a narrow safety net for future refactors.
+      return yield* Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: threadProvider,
+          operation: "thread.turn.start",
+          issue: `Thread '${threadId}' is bound to external agent profile '${thread.modelSelection.provider}'.`,
+        }),
+      );
+    }
     const settings = yield* serverSettings.getSettings;
-    if (!settings.providers[preferredProvider].enabled) {
+    if (preferredProvider !== "external" && !settings.providers[preferredProvider].enabled) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
         issue: `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`,
       });
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
+    const resolvedProviderOptions =
+      preferredProvider !== "external"
+        ? providerStartOptionsFromServerSettings(settings)
+        : undefined;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -1603,8 +1669,11 @@ const make = Effect.gen(function* () {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       modelSelection: desiredModelSelection,
-      providerOptions: resolvedProviderOptions,
+      ...(resolvedProviderOptions !== undefined
+        ? { providerOptions: resolvedProviderOptions }
+        : {}),
       runtimeMode: desiredRuntimeMode,
+      ...(externalAgentLaunch !== undefined ? { externalAgentLaunch } : {}),
     };
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({
@@ -4067,7 +4136,9 @@ const make = Effect.gen(function* () {
     const provider = thread
       ? Schema.is(ProviderKind)(thread.session?.providerName)
         ? thread.session?.providerName
-        : thread.modelSelection.provider
+        : Schema.is(ProviderKind)(thread.modelSelection.provider)
+          ? thread.modelSelection.provider
+          : undefined
       : undefined;
     const rebuildsContext =
       provider !== undefined &&

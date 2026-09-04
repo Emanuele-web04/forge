@@ -260,6 +260,10 @@
       "types": "./src/providerMetadata.ts",
       "import": "./src/providerMetadata.ts"
     },
+    "./capabilityEvidence": {
+      "types": "./src/capabilityEvidence.ts",
+      "import": "./src/capabilityEvidence.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"

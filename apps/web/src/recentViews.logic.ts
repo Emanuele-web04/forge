@@ -4,6 +4,7 @@
 // Exports: recent view types plus MRU update, pruning, and display derivation helpers
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import type { DisplayProvider } from "./lib/providerIdentity";
 import type {
   ResolvedTerminalVisualIdentity,
   TerminalIconKey,
@@ -37,13 +38,13 @@ export interface RecentViewDisplayEntry {
   isPinned: boolean;
   isSplit: boolean;
   isTerminal: boolean;
-  provider?: ProviderKind | undefined;
+  provider?: DisplayProvider | undefined;
   terminalVisualIdentity?: ResolvedTerminalVisualIdentity | undefined;
 }
 
 export type RecentViewDisplayIcon =
   | { kind: "chat" }
-  | { kind: "provider"; provider: ProviderKind }
+  | { kind: "provider"; provider: DisplayProvider }
   | { kind: "terminal"; iconKey: TerminalIconKey }
   | { kind: "settings" }
   | { kind: "plugins" };
@@ -180,7 +181,7 @@ function normalizeAvailableView(
 }
 
 function resolveThreadDisplayIcon(input: {
-  provider?: ProviderKind | undefined;
+  provider?: DisplayProvider | undefined;
   terminalVisualIdentity?: ResolvedTerminalVisualIdentity | null | undefined;
 }): RecentViewDisplayIcon {
   if (input.terminalVisualIdentity) {

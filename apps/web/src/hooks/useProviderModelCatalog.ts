@@ -89,6 +89,9 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
+    // External agent profiles resolve from their connector; there is no
+    // discovery pipeline or server toggle for them.
+    if (provider === "external") return false;
     // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
     // undefined while the settings query is in flight and stays undefined if it
     // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
@@ -294,6 +297,11 @@ export function useProviderModelCatalog(input: {
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
       devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
+      external: getAppModelOptions(
+        "external",
+        customModelsByProvider.external,
+        modelHintByProvider?.external,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -312,6 +320,7 @@ export function useProviderModelCatalog(input: {
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
+      external: undefined,
     };
     for (const provider of [
       "claudeAgent",
@@ -381,6 +390,7 @@ export function useProviderModelCatalog(input: {
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
+      external: [],
     }),
     [
       antigravityModelsQuery.data?.models,

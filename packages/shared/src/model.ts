@@ -37,6 +37,8 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   pi: new Set<ModelSlug>(),
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
+  // External model ids come from the profile's connector at runtime.
+  external: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -65,7 +67,7 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi";
+  return provider !== "pi" && provider !== "external";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -630,7 +632,8 @@ export function resolveModelSlug(
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
-  if (provider === "devin" || provider === "pi") {
+  // External profiles bring their own models, so there is no static default or allowlist.
+  if (provider === "devin" || provider === "pi" || provider === "external") {
     return normalized;
   }
   if (!normalized) {

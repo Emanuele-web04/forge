@@ -87,6 +87,9 @@ export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind)
     queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (provider === "external") {
+        throw new Error("External agents have no composer capabilities discovery.");
+      }
       return api.provider.getComposerCapabilities({ provider });
     },
     staleTime: Infinity,
@@ -104,6 +107,9 @@ export function providerSkillsQueryOptions(input: {
     queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (input.provider === "external") {
+        throw new Error("External agents have no skill discovery.");
+      }
       if (!input.cwd) {
         throw new Error("Skill discovery is unavailable.");
       }
@@ -162,6 +168,9 @@ export function providerCommandsQueryOptions(input: {
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (input.provider === "external") {
+        throw new Error("External agents have no command discovery.");
+      }
       if (!input.cwd) {
         throw new Error("Command discovery is unavailable.");
       }
@@ -215,9 +224,11 @@ export function providerModelsQueryOptions(input: {
     ),
     queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
+      if (input.provider === "external") {
+        throw new Error("External agents have no model catalog discovery.");
+      }
       return api.provider.listModels({
         provider: input.provider,
-        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -251,9 +262,11 @@ export function providerAgentsQueryOptions(input: {
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (input.provider === "external") {
+        throw new Error("External agents have no agent discovery.");
+      }
       return api.provider.listAgents({
         provider: input.provider,
-        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
@@ -273,9 +286,11 @@ export function providerPluginsQueryOptions(input: {
     queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd, input.threadId ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (input.provider === "external") {
+        throw new Error("External agents have no plugin discovery.");
+      }
       return api.provider.listPlugins({
         provider: input.provider,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
       });
     },

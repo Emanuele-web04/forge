@@ -80,7 +80,7 @@ export function useComposerSlashCommands(input: {
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
   providerCommandDiscoveryCwd: string | null;
   selectedProvider: ProviderKind;
-  currentProviderModelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  currentProviderModelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   selectedModelSelection: ModelSelection;
   environmentMode: string | null;
   runtimeMode: RuntimeMode;
@@ -95,7 +95,7 @@ export function useComposerSlashCommands(input: {
   setComposerDraftProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
-    nextProviderOptions: ProviderModelOptions[ProviderKind],
+    nextProviderOptions: ProviderModelOptions[Exclude<ProviderKind, "external">],
     options?: { persistSticky?: boolean },
   ) => void;
   editorActions: {

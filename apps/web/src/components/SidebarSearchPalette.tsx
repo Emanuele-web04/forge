@@ -4,6 +4,8 @@
  * Keeps the sidebar search UX aligned with the shared command primitives so
  * keyboard navigation and shortcut labels behave like the rest of the app.
  */
+import type { DisplayProvider } from "~/lib/providerIdentity";
+
 import {
   BugIcon,
   CheckIcon,
@@ -275,7 +277,7 @@ const THEME_MODE_ICONS: Record<"system" | "light" | "dark", IconComponent> = {
   dark: MoonIcon,
 };
 
-function ProviderIcon(props: { provider: ProviderKind }) {
+function ProviderIcon(props: { provider: DisplayProvider }) {
   return (
     <div className="flex size-5 shrink-0 items-center justify-center">
       <SharedProviderIcon provider={props.provider} className="size-[15px]" />

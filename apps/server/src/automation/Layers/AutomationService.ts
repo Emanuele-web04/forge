@@ -611,11 +611,14 @@ export const AutomationServiceLive = Layer.effect(
     const serverSettings = yield* ServerSettingsService;
     const providerDisabledReason = (definition: AutomationDefinition) =>
       serverSettings.getSettings.pipe(
-        Effect.map((settings) =>
-          settings.providers[definition.modelSelection.provider].enabled
+        Effect.map((settings) => {
+          const provider = definition.modelSelection.provider;
+          // External profiles have no per-provider settings entry; availability comes from the profile.
+          if (provider === "external") return null;
+          return settings.providers[provider].enabled
             ? null
-            : providerDisabledSettingsMessage(definition.modelSelection.provider),
-        ),
+            : providerDisabledSettingsMessage(provider);
+        }),
         Effect.mapError(toServiceError("Failed to read provider settings.")),
       );
     const completionEvaluationProviderDisabledReason = (definition: AutomationDefinition) =>
@@ -630,6 +633,7 @@ export const AutomationServiceLive = Layer.effect(
             (hasDedicatedTextGenerationProvider(settings.textGenerationModelSelection.provider)
               ? settings.textGenerationModelSelection.provider
               : "codex");
+          if (provider === "external") return null;
           return settings.providers[provider].enabled
             ? null
             : providerDisabledSettingsMessage(provider);
