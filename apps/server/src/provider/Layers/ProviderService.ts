@@ -76,7 +76,11 @@ import {
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
-import { observeProviderStartup, ProviderStartupLifecycle } from "../providerStartupLifecycle.ts";
+import {
+  observeProviderStartup,
+  ProviderStartupLifecycle,
+  startupPhaseDurations,
+} from "../providerStartupLifecycle.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
@@ -1830,10 +1834,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               );
               lease.commit();
               startupLifecycle.transition("running");
+              const startupSnapshot = startupLifecycle.snapshot();
               yield* Effect.logDebug("provider.session.started", {
                 threadId,
                 provider: input.provider,
-                startup: startupLifecycle.snapshot(),
+                startup: startupSnapshot,
+                startupDurationsMs: startupPhaseDurations(startupSnapshot),
               });
               if (
                 replacementFence !== undefined &&

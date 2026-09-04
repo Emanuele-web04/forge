@@ -6,6 +6,7 @@ import {
   classifyProviderStartupFailure,
   observeProviderStartup,
   ProviderStartupLifecycle,
+  startupPhaseDurations,
 } from "./providerStartupLifecycle";
 
 function handshakingLifecycle(): ProviderStartupLifecycle {
@@ -28,6 +29,26 @@ describe("ProviderStartupLifecycle", () => {
       "running",
     ]);
     expect(() => lifecycle.transition("starting")).toThrow(/Invalid provider startup transition/);
+  });
+
+  it("attributes elapsed time to each phase and totals the span", () => {
+    let now = 1_000;
+    const lifecycle = new ProviderStartupLifecycle({ now: () => (now += 250) });
+    lifecycle.transition("starting");
+    lifecycle.transition("handshaking");
+    lifecycle.transition("ready");
+    lifecycle.transition("running");
+    expect(startupPhaseDurations(lifecycle.snapshot())).toEqual({
+      totalMs: 1_000,
+      byPhase: { starting: 250, handshaking: 250, ready: 250, running: 250 },
+    });
+  });
+
+  it("reports zero durations for an empty snapshot", () => {
+    expect(startupPhaseDurations({ phase: "discovering", transitions: [] })).toEqual({
+      totalMs: 0,
+      byPhase: {},
+    });
   });
 
   it("keeps the first terminal outcome", () => {

@@ -82,6 +82,7 @@ import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  awaitInflightClaimSettlement,
   classifyProviderAttemptOutcome,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
@@ -11500,5 +11501,69 @@ describe("ProviderCommandReactor", () => {
     });
     // With no active turn the same event applies by ensuring the session.
     expect(harness.startSession.mock.calls.length).toBe(1);
+  });
+});
+
+describe("awaitInflightClaimSettlement", () => {
+  it("returns immediately when the claim already settled", async () => {
+    let reads = 0;
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return { state: "succeeded", claimOwner: "owner-a", claimExpiresAt: null };
+          }),
+        deadlineMs: 5_000,
+        pollIntervalMs: 5,
+      }),
+    );
+    expect(result).toMatchObject({ state: "succeeded" });
+    expect(reads).toBe(1);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("waits out the deadline when the claim never settles", async () => {
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.succeed({
+            state: "inflight",
+            claimOwner: "owner-a",
+            claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          }),
+        deadlineMs: 60,
+        pollIntervalMs: 10,
+      }),
+    );
+    expect(result).toMatchObject({ state: "inflight" });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(40);
+  });
+
+  it("wakes early when the claim settles mid-wait", async () => {
+    let reads = 0;
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return reads < 3
+              ? {
+                  state: "inflight",
+                  claimOwner: "owner-a",
+                  claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+                }
+              : { state: "succeeded", claimOwner: "owner-a", claimExpiresAt: null };
+          }),
+        deadlineMs: 5_000,
+        pollIntervalMs: 5,
+      }),
+    );
+    expect(result).toMatchObject({ state: "succeeded" });
+    expect(reads).toBe(3);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 });
