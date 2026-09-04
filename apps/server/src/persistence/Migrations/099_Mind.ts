@@ -13,8 +13,7 @@ export default Effect.gen(function* () {
       access_count INTEGER NOT NULL DEFAULT 0,
       pinned INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+      updated_at TEXT NOT NULL
     )
   `;
 
