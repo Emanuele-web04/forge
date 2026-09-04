@@ -56,7 +56,8 @@ function createQueryClient() {
 describe("ProviderUsageSettingsPanel", () => {
   it("renders a partial machine activity detail when no periods exist", () => {
     const queryClient = createQueryClient();
-    const detail = "The opencode history is partial because the scan is limited to 12 local databases.";
+    const detail =
+      "The opencode history is partial because the scan is limited to 12 local databases.";
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot({
         provider: "opencode",
