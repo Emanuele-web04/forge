@@ -774,6 +774,8 @@ describe("startup authentication negotiation", () => {
           },
           cwd: process.cwd(),
           clientInfo: { name: "synara-test", version: "0.0.0" },
+          // No-auth agents skip authenticate; the on-demand policy only authenticates when setup demands it.
+          authPolicy: "on-demand",
           requestLogger: (event) =>
             Effect.sync(() => {
               requestEvents.push(event);

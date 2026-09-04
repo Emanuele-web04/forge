@@ -233,6 +233,8 @@ export function runScopedAcpProbe(input: {
         cwd: workspace,
         ...(input.resumeSessionId !== undefined ? { resumeSessionId: input.resumeSessionId } : {}),
         clientInfo: CONFORMANCE_CLIENT_INFO,
+        // Fixtures exercise session behavior without auth; authenticate only if setup demands it.
+        authPolicy: "on-demand",
         startupTimeouts: {
           initializeMs: deadlineSeconds * 1_000,
           authenticateMs: deadlineSeconds * 1_000,

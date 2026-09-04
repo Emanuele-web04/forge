@@ -97,6 +97,8 @@ export const runAcpInitializeProbe = (input: {
       cwd,
       clientInfo: { name: "synara-discovery-probe", version: "1.0.0" },
       startupTimeouts: DEFAULT_ACP_PROBE_TIMEOUTS,
+      // Discovery only reads `initialize`; authenticate on demand so no-auth agents probe "ok".
+      authPolicy: "on-demand",
     });
 
     const runProbe = Effect.gen(function* () {
