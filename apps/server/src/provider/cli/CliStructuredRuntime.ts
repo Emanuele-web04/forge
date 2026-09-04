@@ -20,7 +20,6 @@ import {
   CLI_STRUCTURED_PROTOCOL_VERSION,
   CliStructuredEvent as CliStructuredEventSchema,
 } from "@synara/contracts";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -34,7 +33,8 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
@@ -213,17 +213,11 @@ const makeCliStructuredRuntime = (
       provider: "acp",
       baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
     });
-    const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
-      cwd: options.spawn.cwd,
-      env,
-    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(prepared.command, prepared.args, {
+        makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
-          shell: prepared.shell,
-          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }),
       )
       .pipe(

@@ -27,7 +27,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -124,7 +123,10 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
-import { ExternalAgentAdapter, type ExternalAgentAdapterShape } from "../Services/ExternalAgentAdapter.ts";
+import {
+  ExternalAgentAdapter,
+  type ExternalAgentAdapterShape,
+} from "../Services/ExternalAgentAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "external" as const;
@@ -196,7 +198,11 @@ interface ExternalAgentSessionContext {
   readonly scope: Scope.Closeable;
   readonly runtime:
     | { readonly kind: "acp"; readonly acp: AcpSessionRuntimeShape }
-    | { readonly kind: "cli"; readonly cli: CliStructuredRuntimeShape; readonly tier: CliStructuredTier };
+    | {
+        readonly kind: "cli";
+        readonly cli: CliStructuredRuntimeShape;
+        readonly tier: CliStructuredTier;
+      };
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
@@ -345,7 +351,10 @@ function cancelExternalRuntime(ctx: ExternalAgentSessionContext): Effect.Effect<
 function mapCliRuntimeEventToProviderEvent(input: {
   readonly ctx: ExternalAgentSessionContext;
   readonly event: CliRuntimeEvent;
-  readonly makeStamp: () => Effect.Effect<{ readonly eventId: EventId; readonly createdAt: string }>;
+  readonly makeStamp: () => Effect.Effect<{
+    readonly eventId: EventId;
+    readonly createdAt: string;
+  }>;
 }): Effect.Effect<ProviderRuntimeEvent | undefined, never, never> {
   const { ctx, event, makeStamp } = input;
   const activeTurnId = ctx.activeTurnId;
@@ -424,11 +433,7 @@ function runExternalCliTurn(input: {
   readonly ctx: ExternalAgentSessionContext;
   readonly turnId: TurnId;
   readonly promptText: string;
-  readonly logNative: (
-    threadId: ThreadId,
-    method: string,
-    payload: unknown,
-  ) => Effect.Effect<void>;
+  readonly logNative: (threadId: ThreadId, method: string, payload: unknown) => Effect.Effect<void>;
 }): Effect.Effect<ExternalCliTurnResult, Error, never> {
   return Effect.gen(function* () {
     const { ctx, turnId, promptText } = input;
@@ -480,12 +485,11 @@ function forkExternalCliNotificationFiber(input: {
   readonly ctx: ExternalAgentSessionContext;
   readonly sessionScope: Scope.Closeable;
   readonly offerRuntimeEvent: (event: ProviderRuntimeEvent) => Effect.Effect<void>;
-  readonly makeEventStamp: () => Effect.Effect<{ readonly eventId: EventId; readonly createdAt: string }>;
-  readonly logNative: (
-    threadId: ThreadId,
-    method: string,
-    payload: unknown,
-  ) => Effect.Effect<void>;
+  readonly makeEventStamp: () => Effect.Effect<{
+    readonly eventId: EventId;
+    readonly createdAt: string;
+  }>;
+  readonly logNative: (threadId: ThreadId, method: string, payload: unknown) => Effect.Effect<void>;
   readonly lifecycleGeneration: string | undefined;
 }): Effect.Effect<Fiber.Fiber<void, never>, never, never> {
   const { ctx, sessionScope, offerRuntimeEvent, makeEventStamp } = input;
@@ -530,7 +534,10 @@ function forkExternalCliNotificationFiber(input: {
           const deferred = ctx.cliTurnDeferred;
           if (deferred !== undefined) {
             ctx.cliTurnDeferred = undefined;
-            yield* Deferred.fail(deferred, event.error).pipe(Effect.asVoid, Effect.catchCause(() => Effect.void));
+            yield* Deferred.fail(deferred, event.error).pipe(
+              Effect.asVoid,
+              Effect.catchCause(() => Effect.void),
+            );
           }
           return;
         }
@@ -564,36 +571,43 @@ function forkExternalCliNotificationFiber(input: {
           }
         }
         // Non-terminal event (turn.text, turn.started, or a basic line).
-        const mapped = yield* mapCliRuntimeEventToProviderEvent({ ctx, event, makeStamp: makeEventStamp });
+        const mapped = yield* mapCliRuntimeEventToProviderEvent({
+          ctx,
+          event,
+          makeStamp: makeEventStamp,
+        });
         if (mapped !== undefined) {
           yield* offerRuntimeEvent(mapped);
         }
       }),
     ),
-  ).pipe(
-    // Stream drained to completion (EOF / process exit): settle the in-flight
-    // turn. This runs on the success path; the failure path below also settles.
-    Effect.ensuring(settleOnStreamEnd()),
-        ).pipe(Effect.matchCauseEffect({
-      onFailure: (cause) =>
-        Effect.gen(function* () {
-          // A failure (not a clean end) still ends the stream: settle the
-          // deferred so the turn runner is never stuck.
-          yield* settleOnStreamEnd();
-          if (tier === "basic") {
-            // Basic stream end is expected behavior, not a failure to warn on.
-            return;
-          }
-          yield* Effect.logWarning("external.cli.notification_stream_failed", {
-            threadId: ctx.threadId,
-            tier,
-            cause: String(cause),
-          });
-        }),
-      onSuccess: () => Effect.void,
-    }),
-    Effect.forkIn(sessionScope),
-  );
+  )
+    .pipe(
+      // Stream drained to completion (EOF / process exit): settle the in-flight
+      // turn. This runs on the success path; the failure path below also settles.
+      Effect.ensuring(settleOnStreamEnd()),
+    )
+    .pipe(
+      Effect.matchCauseEffect({
+        onFailure: (cause) =>
+          Effect.gen(function* () {
+            // A failure (not a clean end) still ends the stream: settle the
+            // deferred so the turn runner is never stuck.
+            yield* settleOnStreamEnd();
+            if (tier === "basic") {
+              // Basic stream end is expected behavior, not a failure to warn on.
+              return;
+            }
+            yield* Effect.logWarning("external.cli.notification_stream_failed", {
+              threadId: ctx.threadId,
+              tier,
+              cause: String(cause),
+            });
+          }),
+        onSuccess: () => Effect.void,
+      }),
+      Effect.forkIn(sessionScope),
+    );
 }
 
 function externalAcpTimeoutError(method: string): ProviderAdapterRequestError {
@@ -616,7 +630,9 @@ function makeExternalAgentAcpRuntime(input: {
   readonly threadId: ThreadId;
   readonly gatewaySessionLease: AgentGatewaySessionLease | undefined;
   readonly agentGatewayCredentials:
-    | { readonly stdioProxy: import("../../agentGateway/Services/AgentGatewayCredentials.ts").AgentGatewayStdioProxySpawn }
+    | {
+        readonly stdioProxy: import("../../agentGateway/Services/AgentGatewayCredentials.ts").AgentGatewayStdioProxySpawn;
+      }
     | undefined;
   readonly resumeSessionId?: string;
 }): Effect.Effect<AcpSessionRuntimeShape, Error, Scope.Scope> {
@@ -649,7 +665,7 @@ function makeExternalAgentAcpRuntime(input: {
         ),
       ),
     );
-          return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
+    return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
 }
 
@@ -767,15 +783,15 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
         ctx.notificationFiber = undefined;
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals).pipe(Effect.ignore);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs).pipe(Effect.ignore);
-        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId).pipe(Effect.ignore);
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId).pipe(
+          Effect.ignore,
+        );
         const { activeTurnId: _activeTurnId, ...sessionWithoutActiveTurn } = ctx.session;
         ctx.session = {
           ...sessionWithoutActiveTurn,
           status: "closed",
           updatedAt: yield* nowIso,
-          ...(cleanup?.exitKind === "error" && cleanup.reason
-            ? { lastError: cleanup.reason }
-            : {}),
+          ...(cleanup?.exitKind === "error" && cleanup.reason ? { lastError: cleanup.reason } : {}),
         };
         yield* Effect.ignore(cancelExternalRuntime(ctx));
         yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
@@ -821,7 +837,8 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
           }
           const cwd = resolveAcpSessionCwd({
             inputCwd: input.cwd,
-            sessionCwd: launch.revision.launch.kind === "command" ? launch.revision.launch.cwd : undefined,
+            sessionCwd:
+              launch.revision.launch.kind === "command" ? launch.revision.launch.cwd : undefined,
             serverCwd: serverConfig.cwd,
             homeDir: serverConfig.homeDir ?? "",
           });
@@ -895,9 +912,10 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             const cliSpawn: ExternalAgentLaunchSpawn = {
               command: cliTier.spawn.command,
               args: [...cliTier.spawn.args],
-              cwd: cliTier.spawn.cwd && cliTier.spawn.cwd.trim().length > 0
-                ? nodePath.resolve(cliTier.spawn.cwd.trim())
-                : cwd,
+              cwd:
+                cliTier.spawn.cwd && cliTier.spawn.cwd.trim().length > 0
+                  ? nodePath.resolve(cliTier.spawn.cwd.trim())
+                  : cwd,
               env: { ...launch.env },
             };
             const cli = yield* makeExternalAgentCliRuntime({
@@ -924,23 +942,24 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
               ),
             );
             yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, cli.awaitExit);
-            const cliStarted: CliSessionStartResult = yield* cli
-              .start()
-              .pipe(
-                Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS),
-                Effect.flatMap(Option.match({
+            const cliStarted: CliSessionStartResult = yield* cli.start().pipe(
+              Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS),
+              Effect.flatMap(
+                Option.match({
                   onNone: () => Effect.fail(externalAcpTimeoutError("session/start")),
                   onSome: (value) => Effect.succeed(value),
-                })),
-                Effect.mapError((cause) =>
+                }),
+              ),
+              Effect.mapError(
+                (cause) =>
                   new ProviderAdapterProcessError({
                     provider: PROVIDER,
                     threadId: input.threadId,
                     detail: `Failed to start external CLI agent '${launch.profile.name}': ${cause instanceof Error ? cause.message : String(cause)}`,
                     ...(cause instanceof Error ? { cause } : {}),
                   }),
-                ),
-              );
+              ),
+            );
             yield* logNative(input.threadId, "cli/session.hello", {
               tier: cliStarted.tier,
               agentName: cliStarted.agentName,
@@ -985,7 +1004,9 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                 });
                 if (policyOutcome !== undefined) {
                   return policyOutcome.outcome === "selected"
-                    ? { outcome: { outcome: "selected" as const, optionId: policyOutcome.optionId } }
+                    ? {
+                        outcome: { outcome: "selected" as const, optionId: policyOutcome.optionId },
+                      }
                     : { outcome: { outcome: "cancelled" as const } };
                 }
                 const permissionRequest = parsePermissionRequest(params);
@@ -1076,14 +1097,12 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
               }),
             );
 
-            const startedOption = yield* acp
-              .start()
-              .pipe(
-                Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS),
-                Effect.mapError((error) =>
-                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
-                ),
-              );
+            const startedOption = yield* acp.start().pipe(
+              Effect.timeoutOption(EXTERNAL_ACP_REQUEST_TIMEOUT_MS),
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
+              ),
+            );
             const started = yield* Option.match(startedOption, {
               onNone: () => Effect.fail(externalAcpTimeoutError("session/start")),
               onSome: Effect.succeed,
@@ -1168,9 +1187,16 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                         case "AssistantItemStarted":
                           return;
                         case "AssistantItemCompleted": {
-                          const activeTurnId = resolveExternalAssistantItemTurnId(ctx, event.itemId);
+                          const activeTurnId = resolveExternalAssistantItemTurnId(
+                            ctx,
+                            event.itemId,
+                          );
                           if (activeTurnId === undefined) return;
-                          const scopedItemId = scopeAcpRuntimeItemIdForTurn(PROVIDER, activeTurnId, event.itemId);
+                          const scopedItemId = scopeAcpRuntimeItemIdForTurn(
+                            PROVIDER,
+                            activeTurnId,
+                            event.itemId,
+                          );
                           if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
                             return;
                           }
@@ -1190,7 +1216,10 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                           return;
                         }
                         case "ContentDelta": {
-                          const activeTurnId = resolveExternalAssistantItemTurnId(ctx, event.itemId);
+                          const activeTurnId = resolveExternalAssistantItemTurnId(
+                            ctx,
+                            event.itemId,
+                          );
                           if (activeTurnId === undefined) return;
                           if (event.text.length === 0) return;
                           const itemId = event.itemId
@@ -1239,7 +1268,11 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
                         case "ToolCallUpdated": {
                           const activeTurnId = ctx.activeTurnId;
                           if (activeTurnId === undefined) return;
-                          const scoped = scopeAcpToolCallStateForTurn(PROVIDER, activeTurnId, event.toolCall);
+                          const scoped = scopeAcpToolCallStateForTurn(
+                            PROVIDER,
+                            activeTurnId,
+                            event.toolCall,
+                          );
                           const failedDetail = readAcpFailedToolDetail(event.toolCall);
                           if (failedDetail !== undefined) {
                             ctx.activeTurnFailedToolDetail = failedDetail;
@@ -1513,8 +1546,7 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             checkIntervalMs: EXTERNAL_TURN_WATCHDOG_INTERVAL_MS,
             scope: ctx.scope,
             isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-            isAwaitingHuman: () =>
-              ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
+            isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
             lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
             touchActivity: () => {
               ctx.lastTurnActivityAt = Date.now();
@@ -1716,10 +1748,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 void isRecord;
 
-function clearExternalActiveTurn(
-  ctx: ExternalAgentSessionContext,
-  turnId: TurnId,
-): boolean {
+function clearExternalActiveTurn(ctx: ExternalAgentSessionContext, turnId: TurnId): boolean {
   if (ctx.activeTurnId !== turnId) {
     return false;
   }
@@ -1754,8 +1783,6 @@ export const ExternalAgentAdapterLive = Layer.effect(
   makeExternalAgentAdapter(),
 );
 
-export function makeExternalAgentAdapterLive(
-  options?: ExternalAgentAdapterLiveOptions,
-) {
+export function makeExternalAgentAdapterLive(options?: ExternalAgentAdapterLiveOptions) {
   return Layer.effect(ExternalAgentAdapter, makeExternalAgentAdapter(options));
 }
