@@ -9,7 +9,12 @@ describe("pullRequestActionMutationOptions", () => {
   it("cancels an ordinary list refetch before applying optimistic fields", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
+    const identity = {
+      projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 42,
+    } as const;
     const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
     queryClient.setQueryData(listKey, {
       entries: [{ ...identity, state: "open", isDraft: false, isPinned: false }],
@@ -47,6 +52,7 @@ describe("pullRequestActionMutationOptions", () => {
     const otherProjectId = "project-b" as ProjectId;
     const input = {
       projectId,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
       action: "ready",
@@ -59,6 +65,7 @@ describe("pullRequestActionMutationOptions", () => {
     const detailKey = pullRequestQueryKeys.detail(input);
     const otherDetailKey = pullRequestQueryKeys.detail({
       projectId,
+      provider: "github",
       repository: "acme/widgets",
       number: 7,
     });
@@ -71,6 +78,7 @@ describe("pullRequestActionMutationOptions", () => {
       entries: [
         {
           projectId,
+          provider: "github",
           repository: "acme/widgets",
           number: 42,
           state: "open",
@@ -83,6 +91,7 @@ describe("pullRequestActionMutationOptions", () => {
       entries: [
         {
           projectId: otherProjectId,
+          provider: "github",
           repository: "other/repository",
           number: 9,
           state: "open",
@@ -129,6 +138,7 @@ describe("pullRequestActionMutationOptions", () => {
     const projectId = "project-a" as ProjectId;
     const input = {
       projectId,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
       action: "merge",
@@ -137,15 +147,23 @@ describe("pullRequestActionMutationOptions", () => {
     const selectedDetail = pullRequestQueryKeys.detail(input);
     const lowerStackDetail = pullRequestQueryKeys.detail({
       projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 41,
+    });
+    const bitbucketDetail = pullRequestQueryKeys.detail({
+      projectId,
+      provider: "bitbucket",
       repository: "acme/widgets",
       number: 41,
     });
     const unrelatedDetail = pullRequestQueryKeys.detail({
       projectId,
+      provider: "github",
       repository: "acme/other",
       number: 41,
     });
-    for (const key of [selectedDetail, lowerStackDetail, unrelatedDetail]) {
+    for (const key of [selectedDetail, lowerStackDetail, bitbucketDetail, unrelatedDetail]) {
       queryClient.setQueryData(key, {});
     }
 
@@ -161,7 +179,37 @@ describe("pullRequestActionMutationOptions", () => {
 
     expect(queryClient.getQueryState(selectedDetail)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(lowerStackDetail)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(bitbucketDetail)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(unrelatedDetail)?.isInvalidated).toBe(false);
+  });
+
+  it("patches optimistic action fields only for the matching provider", async () => {
+    const queryClient = new QueryClient();
+    const projectId = "project-a" as ProjectId;
+    const listKey = pullRequestQueryKeys.list({ state: "open", projectId: null });
+    const github = {
+      projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 42,
+      state: "open",
+      isDraft: true,
+      isPinned: false,
+    } as const;
+    const bitbucket = { ...github, provider: "bitbucket" } as const;
+    queryClient.setQueryData(listKey, { entries: [github, bitbucket] });
+    const input = { ...github, action: "ready" } as const;
+    const options = pullRequestActionMutationOptions(queryClient);
+    if (!options.onMutate) throw new Error("Action onMutate hook is missing.");
+
+    await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+
+    expect(queryClient.getQueryData(listKey)).toEqual({
+      entries: [
+        { ...github, isDraft: false },
+        bitbucket,
+      ],
+    });
   });
 
   it("updates the global row when an action starts from another associated project", async () => {
@@ -170,6 +218,7 @@ describe("pullRequestActionMutationOptions", () => {
     const projectB = "project-b" as ProjectId;
     const input = {
       projectId: projectA,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
       action: "ready",
@@ -179,6 +228,7 @@ describe("pullRequestActionMutationOptions", () => {
       entries: [
         {
           projectId: projectB,
+          provider: "github",
           repository: "acme/widgets",
           number: 42,
           state: "open",
@@ -208,6 +258,7 @@ describe("pullRequestActionMutationOptions", () => {
     const projectId = "project-a" as ProjectId;
     const input = {
       projectId,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
       action: "ready",
@@ -244,6 +295,7 @@ describe("pullRequestActionMutationOptions", () => {
     const projectId = "project-a" as ProjectId;
     const input = {
       projectId,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
       action: "merge",
@@ -282,7 +334,12 @@ describe("pullRequestActionMutationOptions", () => {
   it("rolls list-owned fields back even when no detail cache exists", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
+    const identity = {
+      projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 42,
+    } as const;
     const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
     queryClient.setQueryData(listKey, {
       entries: [{ ...identity, state: "open", isDraft: false, isPinned: false, title: "before" }],

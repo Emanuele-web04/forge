@@ -29,7 +29,7 @@ export function usePullRequestPaneStateIcon(
     <PullRequestStateGlyph
       state={detail.state}
       isDraft={detail.isDraft}
-      mergeability={detail.mergeability}
+      mergeability={detail.mergeability ?? undefined}
       className={CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME}
     />
   );

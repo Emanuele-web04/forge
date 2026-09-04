@@ -15,6 +15,62 @@ afterEach(() => {
 });
 
 describe("pullRequestSetPinnedMutationOptions", () => {
+  it("serializes rapid toggles per provider identity", async () => {
+    const queryClient = new QueryClient();
+    const projectId = "project-a" as ProjectId;
+    const githubGate = deferred<Record<string, unknown>>();
+    const githubSecondGate = deferred<Record<string, unknown>>();
+    const bitbucketGate = deferred<Record<string, unknown>>();
+    const calls: string[] = [];
+    const setPinned = vi.fn(
+      (input: {
+        provider: "github" | "bitbucket";
+        number: number;
+        isPinned: boolean;
+      }): Promise<Record<string, unknown>> => {
+        calls.push(`${input.provider}:${input.number}:${input.isPinned}`);
+        if (input.provider === "github" && input.isPinned) return githubGate.promise;
+        if (input.provider === "github") return githubSecondGate.promise;
+        return bitbucketGate.promise;
+      },
+    );
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      pullRequests: { setPinned },
+    } as never);
+    const options = pullRequestSetPinnedMutationOptions(queryClient);
+    const mutationCache = queryClient.getMutationCache();
+    const firstGithub = mutationCache.build(queryClient, options);
+    const secondGithub = mutationCache.build(queryClient, options);
+    const bitbucket = mutationCache.build(queryClient, options);
+    const githubInput = {
+      projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 42,
+      isPinned: true,
+    } as const;
+    const githubUnpinInput = { ...githubInput, isPinned: false } as const;
+    const bitbucketInput = { ...githubInput, provider: "bitbucket" } as const;
+
+    const firstGithubPromise = firstGithub.execute(githubInput);
+    await vi.waitFor(() => expect(calls).toEqual(["github:42:true"]));
+    const secondGithubPromise = secondGithub.execute(githubUnpinInput);
+    const bitbucketPromise = bitbucket.execute(bitbucketInput);
+    await vi.waitFor(() =>
+      expect(calls).toEqual(["github:42:true", "bitbucket:42:true"]),
+    );
+
+    bitbucketGate.resolve(bitbucketInput);
+    await bitbucketPromise;
+    githubGate.resolve(githubInput);
+    await firstGithubPromise;
+    await vi.waitFor(() =>
+      expect(calls).toEqual(["github:42:true", "bitbucket:42:true", "github:42:false"]),
+    );
+    githubSecondGate.resolve(githubUnpinInput);
+    await secondGithubPromise;
+  });
+
   it("serializes rapid toggles per identity without blocking a different pull request", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;

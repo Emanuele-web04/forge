@@ -10,13 +10,15 @@ export function isFocusInsideRightDock(activeElement: Element | null): boolean {
  * the detail URL is cleared. */
 export function focusPullRequestRow(
   root: ParentNode,
-  input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
+  input: Pick<PullRequestDetailInput, "projectId" | "provider" | "repository" | "number">,
 ): boolean {
+  const provider = input.provider ?? "github";
   const repository = input.repository.toLowerCase();
   const candidates = Array.from(
     root.querySelectorAll<HTMLButtonElement>("button[data-pull-request-row]"),
   ).filter(
     (candidate) =>
+      (candidate.dataset.provider ?? "github") === provider &&
       candidate.dataset.repository?.toLowerCase() === repository &&
       candidate.dataset.pullRequestNumber === String(input.number),
   );

@@ -4,7 +4,12 @@
  * Repository keys are canonical values supplied by callers. This service owns only
  * persistence and never derives or normalizes repository identity.
  */
-import { PositiveInt, ProjectId, TrimmedNonEmptyString } from "@synara/contracts";
+import {
+  PositiveInt,
+  ProjectId,
+  PullRequestProvider,
+  TrimmedNonEmptyString,
+} from "@synara/contracts";
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -36,6 +41,7 @@ export type ProjectPullRequestPinsError =
 
 export const ProjectPullRequestPin = Schema.Struct({
   projectId: ProjectId,
+  provider: PullRequestProvider,
   repositoryKey: TrimmedNonEmptyString,
   number: PositiveInt,
 });
@@ -49,6 +55,7 @@ export type ListProjectPullRequestPinsByProjectIdsInput =
 
 export const SetProjectPullRequestPinnedInput = Schema.Struct({
   projectId: ProjectId,
+  provider: PullRequestProvider,
   repositoryKey: TrimmedNonEmptyString,
   number: PositiveInt,
   isPinned: Schema.Boolean,

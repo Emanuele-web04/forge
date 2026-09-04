@@ -20,6 +20,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
   return {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
+    provider: "github",
     repository: "acme/widgets",
     number: 1,
     title: "Untitled",
@@ -68,32 +69,36 @@ describe("isValidGitHubRepositoryNameWithOwner", () => {
 });
 
 describe("pullRequestListCacheKey", () => {
-  it("separates involvement filters and normalizes repository casing", () => {
-    expect(pullRequestListCacheKey("OpenAI/Codex", "open", "authored", "OctoCat")).toBe(
-      "openai/codex:open:authored:octocat",
+  it("separates involvement filters and normalizes provider/repository casing", () => {
+    expect(pullRequestListCacheKey("github", "OpenAI/Codex", "open", "authored", "OctoCat")).toBe(
+      "github:openai/codex:open:authored:octocat",
     );
-    expect(pullRequestListCacheKey("openai/codex", "open", "reviewing", "octocat")).not.toBe(
-      pullRequestListCacheKey("openai/codex", "open", "all", "octocat"),
+    expect(
+      pullRequestListCacheKey("github", "openai/codex", "open", "reviewing", "octocat"),
+    ).not.toBe(pullRequestListCacheKey("github", "openai/codex", "open", "all", "octocat"));
+    expect(pullRequestListCacheKey("github", "openai/codex", "open", "all", "octocat")).not.toBe(
+      pullRequestListCacheKey("bitbucket", "openai/codex", "open", "all", "octocat"),
     );
   });
 
   it("separates cached lists belonging to different authenticated viewers", () => {
-    expect(pullRequestListCacheKey("openai/codex", "open", "authored", "alice")).not.toBe(
-      pullRequestListCacheKey("openai/codex", "open", "authored", "bob"),
+    expect(pullRequestListCacheKey("github", "openai/codex", "open", "authored", "alice")).not.toBe(
+      pullRequestListCacheKey("github", "openai/codex", "open", "authored", "bob"),
     );
   });
 
   it("invalidates every sibling involvement without changing repository, state, or viewer", () => {
     expect(
       pullRequestListForceRefreshCacheKeys({
+        provider: "github",
         repository: "OpenAI/Codex",
         state: "closed",
         viewer: "OctoCat",
       }),
     ).toEqual([
-      "openai/codex:closed:all:octocat",
-      "openai/codex:closed:authored:octocat",
-      "openai/codex:closed:reviewing:octocat",
+      "github:openai/codex:closed:all:octocat",
+      "github:openai/codex:closed:authored:octocat",
+      "github:openai/codex:closed:reviewing:octocat",
     ]);
   });
 });
@@ -102,12 +107,14 @@ describe("project pull request priority", () => {
   it("keeps identical repository PRs independent across projects and repository casing", () => {
     const first = projectPullRequestIdentityKey({
       projectId: "project-1",
+      provider: "github",
       repository: " Acme/Widgets ",
       number: 42,
     });
     expect(first).toBe(
       projectPullRequestIdentityKey({
         projectId: "project-1",
+        provider: "github",
         repository: "acme/widgets",
         number: 42,
       }),
@@ -115,6 +122,15 @@ describe("project pull request priority", () => {
     expect(first).not.toBe(
       projectPullRequestIdentityKey({
         projectId: "project-2",
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    );
+    expect(first).not.toBe(
+      projectPullRequestIdentityKey({
+        projectId: "project-1",
+        provider: "bitbucket",
         repository: "acme/widgets",
         number: 42,
       }),
@@ -123,14 +139,41 @@ describe("project pull request priority", () => {
 
   it("recovers only missing pins from truncated batches owned by the same project", () => {
     const pins = [
-      { projectId: "project-a", repositoryKey: "acme/widgets", number: 1 },
-      { projectId: "project-b", repositoryKey: "acme/widgets", number: 2 },
-      { projectId: "project-a", repositoryKey: "acme/complete", number: 3 },
-      { projectId: "project-a", repositoryKey: "acme/widgets", number: 4 },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 1,
+      },
+      {
+        projectId: "project-b",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 2,
+      },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/complete",
+        number: 3,
+      },
+      {
+        projectId: "project-a",
+        provider: "github" as const,
+        repositoryKey: "acme/widgets",
+        number: 4,
+      },
+      {
+        projectId: "project-a",
+        provider: "bitbucket" as const,
+        repositoryKey: "acme/widgets",
+        number: 5,
+      },
     ];
     const presentKeys = new Set([
       projectPullRequestIdentityKey({
         projectId: "project-a",
+        provider: "github",
         repository: "acme/widgets",
         number: 4,
       }),
@@ -139,8 +182,8 @@ describe("project pull request priority", () => {
       pins,
       presentKeys,
       repositoryKeysByProject: new Map([
-        ["project-a", new Set(["acme/widgets", "acme/complete"])],
-        ["project-b", new Set(["acme/other"])],
+        ["project-a", new Set(["github\0acme/widgets", "github\0acme/complete"])],
+        ["project-b", new Set(["github\0acme/other"])],
       ]),
       batches: [
         {
@@ -160,11 +203,44 @@ describe("project pull request priority", () => {
   });
 
   it("coalesces remote lookups across projects without coalescing different repositories", () => {
-    expect(repositoryPullRequestIdentityKey({ repository: " Acme/Widgets ", number: 42 })).toBe(
-      repositoryPullRequestIdentityKey({ repository: "acme/widgets", number: 42 }),
+    expect(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: " Acme/Widgets ",
+        number: 42,
+      }),
+    ).toBe(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
     );
-    expect(repositoryPullRequestIdentityKey({ repository: "acme/widgets", number: 42 })).not.toBe(
-      repositoryPullRequestIdentityKey({ repository: "acme/other", number: 42 }),
+    expect(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    ).not.toBe(
+      repositoryPullRequestIdentityKey({
+        provider: "bitbucket",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    );
+    expect(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    ).not.toBe(
+      repositoryPullRequestIdentityKey({
+        provider: "github",
+        repository: "acme/other",
+        number: 42,
+      }),
     );
   });
 
@@ -248,6 +324,13 @@ describe("pull request list filtering", () => {
         true,
       ),
     ).toBe(false);
+  });
+
+  it("matches unknown viewer involvement only in all-involvement results", () => {
+    const bitbucket = { viewerInvolvement: "unknown" } as const;
+    expect(pullRequestMatchesInvolvement(bitbucket, "all", "viewer")).toBe(true);
+    expect(pullRequestMatchesInvolvement(bitbucket, "reviewing", "viewer")).toBe(false);
+    expect(pullRequestMatchesInvolvement(bitbucket, "authored", "viewer")).toBe(false);
   });
 
   it("loads the team-aware companion query only for open all-involvement results", () => {

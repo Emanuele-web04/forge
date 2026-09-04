@@ -115,6 +115,8 @@ import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts
 import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
 import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
 import Migration0099 from "./Migrations/099_ProjectSources.ts";
+import Migration0100 from "./Migrations/100_OutboundMcpConnections.ts";
+import Migration0101 from "./Migrations/101_ProjectPullRequestPinProviders.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -229,6 +231,8 @@ export const migrationEntries = [
   [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
   [98, "MigrateKiloToOpenCode", Migration0098],
   [99, "ProjectSources", Migration0099],
+  [100, "OutboundMcpConnections", Migration0100],
+  [101, "ProjectPullRequestPinProviders", Migration0101],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -324,6 +328,27 @@ export interface MigrationLineageAlias {
 }
 
 export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
+  // Canary builds of the Bitbucket MCP feature occupied these slots before
+  // integration advanced. Remove all three tracker entries so the canonical
+  // sidechat and Kilo migrations run; the relocated migrations are idempotent.
+  {
+    historicalId: 97,
+    historicalName: "ProjectSources",
+    currentId: 99,
+    historicalSlotRequiresRerun: true,
+  },
+  {
+    historicalId: 98,
+    historicalName: "OutboundMcpConnections",
+    currentId: 100,
+    historicalSlotRequiresRerun: true,
+  },
+  {
+    historicalId: 99,
+    historicalName: "ProjectPullRequestPinProviders",
+    currentId: 101,
+    historicalSlotRequiresRerun: true,
+  },
   {
     // Shipped in v0.5.5. Migration 54 is now `Effect.void` (see
     // `Migrations/054_ReservedDurableProviderCommandDelivery.ts`), so the slot

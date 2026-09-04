@@ -1,10 +1,10 @@
 // FILE: PullRequestCommentCard.tsx
 // Purpose: One review/issue comment as a plain collapsible row (hairline-separated, no card
 //          chrome): avatar + author leading, timestamp + per-row collapse chevron trailing,
-//          finding-style comments elevated into a title + severity subheading, and a "Reply"
-//          affordance that always opens the comment's own GitHub URL externally (falling back
-//          to the PR URL when the comment has none) — never the in-app browser, since replying
-//          has to happen on GitHub itself.
+//          finding-style comments elevated into a title + severity subheading, and an optional
+//          "Reply" affordance that opens the provider's comment URL externally (falling back to
+//          the PR URL when the comment has none) — never the in-app browser, since replying has
+//          to happen on the provider itself.
 // Layer: Pull request presentation
 // Exports: PullRequestCommentCard
 
@@ -35,11 +35,13 @@ export function PullRequestCommentCard({
   comment,
   prUrl,
   workspaceRoot,
+  canReply,
   defaultOpen: defaultOpenProp,
 }: {
   comment: PullRequestComment;
   prUrl: string;
   workspaceRoot: string;
+  canReply: boolean;
   /** Long threads start older comments collapsed so the tab doesn't eagerly render
    *  dozens of markdown trees. */
   defaultOpen?: boolean;
@@ -100,18 +102,20 @@ export function PullRequestCommentCard({
             fallback="_No review body._"
             cwd={workspaceRoot}
           />
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => void ensureNativeApi().shell.openExternal(replyUrl)}
-              className={cn(
-                PR_META_TEXT_CLASS_NAME,
-                "rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
-              )}
-            >
-              Reply
-            </button>
-          </div>
+          {canReply ? (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => void ensureNativeApi().shell.openExternal(replyUrl)}
+                className={cn(
+                  PR_META_TEXT_CLASS_NAME,
+                  "rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
+                )}
+              >
+                Reply
+              </button>
+            </div>
+          ) : null}
         </div>
       </CollapsiblePanel>
     </Collapsible>

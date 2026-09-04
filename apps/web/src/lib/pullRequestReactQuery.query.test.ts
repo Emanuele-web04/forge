@@ -50,6 +50,7 @@ describe("pull request list query options", () => {
     const options = pullRequestDetailQueryOptions(
       {
         projectId: "project-a" as ProjectId,
+        provider: "github",
         repository: "acme/widgets",
         number: 42,
       },
@@ -88,6 +89,26 @@ describe("pull request list query options", () => {
     expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
       pullRequestQueryKeys.list({ state: "closed", projectId: projectA }),
     );
+  });
+
+  it("keeps aggregate list keys provider-neutral but scopes detail and diff by provider", () => {
+    const projectId = "project-a" as ProjectId;
+    const github = {
+      projectId,
+      provider: "github",
+      repository: "acme/widgets",
+      number: 42,
+    } as const;
+    const bitbucket = { ...github, provider: "bitbucket" } as const;
+
+    expect(pullRequestQueryKeys.list({ state: "open", projectId: null })).toEqual([
+      "pull-requests",
+      "list",
+      "open",
+      null,
+    ]);
+    expect(pullRequestQueryKeys.detail(github)).not.toEqual(pullRequestQueryKeys.detail(bitbucket));
+    expect(pullRequestQueryKeys.diff(github)).not.toEqual(pullRequestQueryKeys.diff(bitbucket));
   });
 
   it("uses a compact, independently cached review-request count query", () => {
@@ -137,6 +158,7 @@ describe("invalidateOtherPullRequestListQueries", () => {
     const otherProjectKey = pullRequestQueryKeys.list({ state: "open", projectId: projectB });
     const detailInput = {
       projectId: projectA,
+      provider: "github",
       repository: "acme/widgets",
       number: 42,
     } as const;

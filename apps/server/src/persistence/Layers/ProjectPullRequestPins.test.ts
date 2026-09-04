@@ -27,12 +27,14 @@ layer("ProjectPullRequestPins", (it) => {
 
       yield* pins.setPinned({
         projectId: projectA,
+        provider: "github",
         repositoryKey: "acme/synara",
         number: 42,
         isPinned: true,
       });
       yield* pins.setPinned({
         projectId: projectB,
+        provider: "github",
         repositoryKey: "acme/synara",
         number: 42,
         isPinned: true,
@@ -41,6 +43,7 @@ layer("ProjectPullRequestPins", (it) => {
       assert.deepStrictEqual(yield* pins.listByProjectIds({ projectIds: [projectA] }), [
         {
           projectId: projectA,
+          provider: "github",
           repositoryKey: "acme/synara",
           number: 42,
         },
@@ -48,6 +51,7 @@ layer("ProjectPullRequestPins", (it) => {
       assert.deepStrictEqual(yield* pins.listByProjectIds({ projectIds: [projectB] }), [
         {
           projectId: projectB,
+          provider: "github",
           repositoryKey: "acme/synara",
           number: 42,
         },
@@ -60,6 +64,7 @@ layer("ProjectPullRequestPins", (it) => {
       const pins = yield* ProjectPullRequestPins;
       const identity = {
         projectId: idempotenceProject,
+        provider: "github" as const,
         repositoryKey: "acme/idempotent",
         number: 7,
       } as const;
@@ -96,18 +101,21 @@ layer("ProjectPullRequestPins", (it) => {
 
       yield* pins.setPinned({
         projectId: orderingProject,
+        provider: "github",
         repositoryKey: "acme/older",
         number: 1,
         isPinned: true,
       });
       yield* pins.setPinned({
         projectId: orderingProject,
+        provider: "github",
         repositoryKey: "acme/newer-b",
         number: 3,
         isPinned: true,
       });
       yield* pins.setPinned({
         projectId: orderingProject,
+        provider: "github",
         repositoryKey: "acme/newer-a",
         number: 2,
         isPinned: true,
@@ -115,11 +123,11 @@ layer("ProjectPullRequestPins", (it) => {
 
       const listed = yield* pins.listByProjectIds({ projectIds: [orderingProject] });
       assert.deepStrictEqual(
-        listed.map(({ repositoryKey, number }) => [repositoryKey, number]),
+        listed.map(({ provider, repositoryKey, number }) => [provider, repositoryKey, number]),
         [
-          ["acme/newer-a", 2],
-          ["acme/newer-b", 3],
-          ["acme/older", 1],
+          ["github", "acme/newer-a", 2],
+          ["github", "acme/newer-b", 3],
+          ["github", "acme/older", 1],
         ],
       );
     }),
@@ -134,6 +142,7 @@ layer("ProjectPullRequestPins", (it) => {
       for (let number = 1; number <= PROJECT_PULL_REQUEST_PIN_LIMIT; number += 1) {
         yield* pins.setPinned({
           projectId: cappedProject,
+          provider: number % 2 === 0 ? "bitbucket" : "github",
           repositoryKey: "acme/capped",
           number,
           isPinned: true,
@@ -143,6 +152,7 @@ layer("ProjectPullRequestPins", (it) => {
       // Establishing an already-present pin remains idempotent at the cap.
       yield* pins.setPinned({
         projectId: cappedProject,
+        provider: "github",
         repositoryKey: "acme/capped",
         number: 1,
         isPinned: true,
@@ -151,6 +161,7 @@ layer("ProjectPullRequestPins", (it) => {
       const error = yield* Effect.flip(
         pins.setPinned({
           projectId: cappedProject,
+          provider: "bitbucket",
           repositoryKey: "acme/capped",
           number: PROJECT_PULL_REQUEST_PIN_LIMIT + 1,
           isPinned: true,
@@ -160,6 +171,7 @@ layer("ProjectPullRequestPins", (it) => {
 
       yield* pins.setPinned({
         projectId: independentProject,
+        provider: "bitbucket",
         repositoryKey: "acme/capped",
         number: PROJECT_PULL_REQUEST_PIN_LIMIT + 1,
         isPinned: true,
@@ -183,24 +195,85 @@ layer("ProjectPullRequestPins", (it) => {
         yield* sql`
           INSERT INTO project_pull_request_pins (
             project_id,
+            provider,
             repository_key,
             pull_request_number
-          ) VALUES (${projectId}, ${"acme/direct"}, ${number})
+          ) VALUES (
+            ${projectId},
+            ${number % 2 === 0 ? "bitbucket" : "github"},
+            ${"acme/direct"},
+            ${number}
+          )
         `;
       }
 
       const overflow = yield* Effect.exit(sql`
         INSERT INTO project_pull_request_pins (
           project_id,
+          provider,
           repository_key,
           pull_request_number
         ) VALUES (
           ${projectId},
+          ${"bitbucket"},
           ${"acme/direct"},
           ${PROJECT_PULL_REQUEST_PIN_LIMIT + 1}
         )
       `);
       assert.isTrue(Exit.isFailure(overflow));
+    }),
+  );
+
+  it.effect("isolates the same repository and pull request number by provider", () =>
+    Effect.gen(function* () {
+      const pins = yield* ProjectPullRequestPins;
+      const projectId = ProjectId.makeUnsafe("project-provider-identity");
+
+      yield* pins.setPinned({
+        projectId,
+        provider: "github",
+        repositoryKey: "acme/shared",
+        number: 42,
+        isPinned: true,
+      });
+      yield* pins.setPinned({
+        projectId,
+        provider: "bitbucket",
+        repositoryKey: "acme/shared",
+        number: 42,
+        isPinned: true,
+      });
+
+      assert.deepStrictEqual(yield* pins.listByProjectIds({ projectIds: [projectId] }), [
+        {
+          projectId,
+          provider: "bitbucket",
+          repositoryKey: "acme/shared",
+          number: 42,
+        },
+        {
+          projectId,
+          provider: "github",
+          repositoryKey: "acme/shared",
+          number: 42,
+        },
+      ]);
+
+      yield* pins.setPinned({
+        projectId,
+        provider: "github",
+        repositoryKey: "acme/shared",
+        number: 42,
+        isPinned: false,
+      });
+      assert.deepStrictEqual(yield* pins.listByProjectIds({ projectIds: [projectId] }), [
+        {
+          projectId,
+          provider: "bitbucket",
+          repositoryKey: "acme/shared",
+          number: 42,
+        },
+      ]);
     }),
   );
 });

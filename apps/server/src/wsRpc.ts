@@ -124,6 +124,10 @@ import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import {
+  McpConnectionService,
+  type McpConnectionServiceShape,
+} from "./outboundMcp/Services/McpConnectionService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { KeepAwakeService } from "./keepAwake";
@@ -171,6 +175,7 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import { PullRequestProviderError } from "./pullRequests/Services/PullRequestProvider";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
   GitHubProjectProvisioningError,
@@ -322,6 +327,50 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
+export function toPullRequestsRpcError(cause: unknown, fallbackMessage: string) {
+  const githubUnavailable =
+    (cause instanceof GitHubCliError &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated")) ||
+    (cause instanceof PullRequestProviderError &&
+      cause.provider === "github" &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated"));
+  if (githubUnavailable) {
+    return new PullRequestsUnavailableError({
+      reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
+      message: cause instanceof GitHubCliError ? cause.detail : cause.message,
+    });
+  }
+  return toWsRpcError(cause, fallbackMessage);
+}
+
+export function makeOutboundMcpLifecycleRpcHandlers<AuthorizationError, AuthorizationRequirements>(
+  outboundMcp: McpConnectionServiceShape,
+  authorizeManagement: Effect.Effect<void, AuthorizationError, AuthorizationRequirements>,
+) {
+  const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
+    effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+  const managedEffect = <A, E, R>(
+    operation: () => Effect.Effect<A, E, R>,
+    fallbackMessage: string,
+  ) =>
+    rpcEffect(authorizeManagement.pipe(Effect.andThen(Effect.suspend(operation))), fallbackMessage);
+  return {
+    [WS_METHODS.serverListOutboundMcpConnections]: () =>
+      managedEffect(
+        () => outboundMcp.list().pipe(Effect.map((connections) => ({ connections }))),
+        "Failed to load outbound MCP connections",
+      ),
+    [WS_METHODS.serverBeginOutboundMcpAuthorization]: (input: { readonly presetId: string }) =>
+      managedEffect(
+        () => outboundMcp.beginAuthorization(input),
+        "Failed to start MCP authorization",
+      ),
+    [WS_METHODS.serverDisconnectOutboundMcpConnection]: (input: {
+      readonly connectionId: string;
+    }) => managedEffect(() => outboundMcp.disconnect(input), "Failed to disconnect MCP service"),
+  } as const;
+}
+
 // Process-wide so a subscriber's restart chain survives its own reconnects
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
@@ -361,6 +410,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const outboundMcp = yield* McpConnectionService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -507,20 +557,6 @@ const makeWsRpcHandlersLayer = () =>
             yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
           }
         });
-
-      const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
-        error instanceof GitHubCliError &&
-        (error.reason === "not-installed" || error.reason === "not-authenticated");
-
-      const toPullRequestsRpcError = (cause: unknown, fallbackMessage: string) => {
-        if (isGlobalGitHubCliError(cause)) {
-          return new PullRequestsUnavailableError({
-            reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
-            message: cause.detail,
-          });
-        }
-        return toWsRpcError(cause, fallbackMessage);
-      };
 
       const pullRequestsEffect = <A, E, R>(
         effect: Effect.Effect<A, E, R>,
@@ -871,7 +907,7 @@ const makeWsRpcHandlersLayer = () =>
             ),
           );
 
-      const requireOwner = Effect.gen(function* () {
+      const requireLocalMcpOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
           return yield* Effect.fail(
             new WsRpcError({ message: "Owner authorization is required for this operation." }),
@@ -1689,17 +1725,17 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
             "Failed to list external MCP integrations",
           ),
         [WS_METHODS.serverCreateExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
             "Failed to create external MCP integration",
           ),
         [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(
+            requireLocalMcpOwner.pipe(
               Effect.andThen(externalMcp.revokeIntegration(input.integrationId)),
               Effect.map((revoked) => ({ revoked })),
             ),
@@ -1707,9 +1743,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverRefreshExternalMcpPairing]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
+        ...makeOutboundMcpLifecycleRpcHandlers(outboundMcp, requireLocalMcpOwner),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),

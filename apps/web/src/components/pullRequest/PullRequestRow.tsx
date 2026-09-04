@@ -21,8 +21,10 @@ import {
 import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
+import { PullRequestProviderBadge } from "./PullRequestProviderBadge";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
 import { PullRequestStackPosition } from "./PullRequestStackPosition";
+import { visibleRowFields } from "./pullRequestCapabilities";
 
 function TruncatedTitle({ title, number }: { title: string; number: number }) {
   return (
@@ -67,6 +69,7 @@ export const PullRequestRow = function PullRequestRow({
   const showProjectTitle = showProjectTitleProp ?? false;
   const showDiffColors = showDiffColorsProp ?? true;
   const isPinned = entry.isPinned === true;
+  const rowFields = visibleRowFields(entry);
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
     projectContexts.length > 1 ? `${projectContexts.length} projects` : entry.projectTitle;
@@ -94,6 +97,7 @@ export const PullRequestRow = function PullRequestRow({
         type="button"
         data-pull-request-row
         data-project-id={entry.projectId}
+        data-provider={entry.provider}
         data-repository={entry.repository}
         data-pull-request-number={entry.number}
         aria-current={selected ? "true" : undefined}
@@ -102,13 +106,14 @@ export const PullRequestRow = function PullRequestRow({
       >
         <PullRequestStateGlyph
           state={entry.state}
-          isDraft={entry.isDraft}
-          mergeability={entry.mergeability}
+          isDraft={rowFields.showDraft}
+          mergeability={entry.mergeability ?? undefined}
           size="md"
         />
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <TruncatedTitle title={entry.title} number={entry.number} />
+            <PullRequestProviderBadge provider={entry.provider ?? "github"} />
             {entry.stack ? <PullRequestStackPosition stack={entry.stack} /> : null}
           </span>
           {/* Fine print, set once on the line: author, repository and branch are one thought at

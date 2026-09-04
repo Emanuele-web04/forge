@@ -31,6 +31,12 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import {
+  OutboundMcpBeginAuthorizationInput,
+  OutboundMcpBeginAuthorizationResult,
+  OutboundMcpDisconnectInput,
+  OutboundMcpListResult,
+} from "./outboundMcp";
+import {
   DEVICE_WS_METHODS,
   DeviceAttachInput,
   DeviceBootInput,
@@ -1000,6 +1006,33 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
+export const WsServerListOutboundMcpConnectionsRpc = Rpc.make(
+  WS_METHODS.serverListOutboundMcpConnections,
+  {
+    payload: Schema.Struct({}),
+    success: OutboundMcpListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerBeginOutboundMcpAuthorizationRpc = Rpc.make(
+  WS_METHODS.serverBeginOutboundMcpAuthorization,
+  {
+    payload: OutboundMcpBeginAuthorizationInput,
+    success: OutboundMcpBeginAuthorizationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerDisconnectOutboundMcpConnectionRpc = Rpc.make(
+  WS_METHODS.serverDisconnectOutboundMcpConnection,
+  {
+    payload: OutboundMcpDisconnectInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1376,6 +1409,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
+  WsServerListOutboundMcpConnectionsRpc,
+  WsServerBeginOutboundMcpAuthorizationRpc,
+  WsServerDisconnectOutboundMcpConnectionRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,

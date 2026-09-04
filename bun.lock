@@ -83,6 +83,7 @@
         "@earendil-works/pi-coding-agent": "^0.81.1",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-bun": "catalog:",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/sdk": "^1.15.13",
         "@pierre/diffs": "^1.2.12",
         "@xterm/headless": "^6.0.0",

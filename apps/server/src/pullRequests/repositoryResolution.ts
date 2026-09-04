@@ -1,4 +1,7 @@
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import {
+  parseRemoteRepositoryUrl,
+  type RemoteRepositoryRef,
+} from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "../git/Services/GitCore";
@@ -10,6 +13,12 @@ export interface GitHubRepositoryLink {
 
 export interface GitHubRepositoryInventory {
   readonly repositories: ReadonlyArray<GitHubRepositoryLink>;
+  /** False means discovery was incomplete and must never drive destructive cleanup. */
+  readonly authoritative: boolean;
+}
+
+export interface RemoteRepositoryInventory {
+  readonly repositories: ReadonlyArray<RemoteRepositoryRef>;
   /** False means discovery was incomplete and must never drive destructive cleanup. */
   readonly authoritative: boolean;
 }
@@ -29,7 +38,7 @@ function uniqueRemoteCandidates(candidates: ReadonlyArray<string | null>): strin
 }
 
 function readCurrentBranch(git: GitCoreShape, cwd: string) {
-  const operation = "PullRequestService.githubRepository.currentBranch";
+  const operation = "PullRequestService.remoteRepository.currentBranch";
   return git
     .execute({
       operation,
@@ -60,11 +69,6 @@ type RepositoryConfig = {
   readonly pushDefaultRemote: string | null;
   readonly remoteUrls: ReadonlyMap<string, string>;
 };
-
-function gitHubRepositoryLinkFromRemoteUrl(remoteUrl: string): GitHubRepositoryLink | null {
-  const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-  return nameWithOwner ? { nameWithOwner, url: `https://github.com/${nameWithOwner}` } : null;
-}
 
 function parseRepositoryConfig(stdout: string, branch: string | null): RepositoryConfig {
   let branchRemote: string | null = null;
@@ -103,7 +107,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
   const branchPattern = branch ? `branch\\.${escapeGitConfigKeyForRegex(branch)}\\.remote|` : "";
   return git
     .execute({
-      operation: "PullRequestService.githubRepository.config",
+      operation: "PullRequestService.remoteRepository.config",
       cwd,
       args: [
         "config",
@@ -125,7 +129,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
         return Effect.fail(
           new Error(
             result.stderr.trim() ||
-              `PullRequestService.githubRepository.config failed with exit code ${result.code}.`,
+              `PullRequestService.remoteRepository.config failed with exit code ${result.code}.`,
           ),
         );
       }),
@@ -133,7 +137,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
 }
 
 function readExpandedRemoteUrl(git: GitCoreShape, cwd: string, remoteName: string) {
-  const operation = "PullRequestService.githubRepository.expandedRemoteUrl";
+  const operation = "PullRequestService.remoteRepository.expandedRemoteUrl";
   return git
     .execute({
       operation,
@@ -155,24 +159,22 @@ function readExpandedRemoteUrl(git: GitCoreShape, cwd: string, remoteName: strin
     );
 }
 
-function resolveGitHubRemote(
+function resolveRemoteRepository(
   git: GitCoreShape,
   cwd: string,
   remoteName: string,
   configuredUrl: string,
 ) {
-  const direct = gitHubRepositoryLinkFromRemoteUrl(configuredUrl);
+  const direct = parseRemoteRepositoryUrl(configuredUrl);
   if (direct) return Effect.succeed(direct);
 
   // Preserve the two-process common path. Only URLs the parser cannot understand need a
   // targeted Git call so aliases such as `gh:owner/repo.git` are expanded correctly.
-  return readExpandedRemoteUrl(git, cwd, remoteName).pipe(
-    Effect.map(gitHubRepositoryLinkFromRemoteUrl),
-  );
+  return readExpandedRemoteUrl(git, cwd, remoteName).pipe(Effect.map(parseRemoteRepositoryUrl));
 }
 
-/** Resolve every unique GitHub repository configured by a workspace, in remote preference order. */
-export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
+/** Resolve every supported repository configured by a workspace, in remote preference order. */
+export function resolveRemoteRepositories(git: GitCoreShape, cwd: string) {
   return Effect.gen(function* () {
     // A branch query succeeds with empty output in detached/unborn repositories and fails when
     // `cwd` is not a repository, so it also preserves the old authoritative repo boundary.
@@ -200,22 +202,38 @@ export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
     });
     const resolved = yield* Effect.forEach(
       candidates,
-      ({ remoteName, configuredUrl }) => resolveGitHubRemote(git, cwd, remoteName, configuredUrl),
+      ({ remoteName, configuredUrl }) =>
+        resolveRemoteRepository(git, cwd, remoteName, configuredUrl),
       { concurrency: 6 },
     );
 
-    const repositories: GitHubRepositoryLink[] = [];
+    const repositories: RemoteRepositoryRef[] = [];
     const seen = new Set<string>();
     for (const repository of resolved) {
       if (!repository) continue;
-      const key = repository.nameWithOwner.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
+      if (!seen.has(repository.identityKey)) {
+        seen.add(repository.identityKey);
         repositories.push(repository);
       }
     }
-    return { repositories, authoritative: true } satisfies GitHubRepositoryInventory;
+    return { repositories, authoritative: true } satisfies RemoteRepositoryInventory;
   });
+}
+
+/** Compatibility projection for current GitHub-only RPC and pull-request service consumers. */
+export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
+  return resolveRemoteRepositories(git, cwd).pipe(
+    Effect.map(
+      ({ repositories, authoritative }): GitHubRepositoryInventory => ({
+        authoritative,
+        repositories: repositories.flatMap((repository) =>
+          repository.provider === "github"
+            ? [{ nameWithOwner: repository.displayName, url: repository.webUrl }]
+            : [],
+        ),
+      }),
+    ),
+  );
 }
 
 /** Resolve the preferred link while retaining all configured repositories for callers that list. */

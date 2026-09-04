@@ -78,8 +78,8 @@ export function withStableCheckKeys(
 }
 
 export interface PullRequestDiffStat {
-  additions: number;
-  deletions: number;
+  additions: number | null;
+  deletions: number | null;
   /** e.g. "3 files" — null when the file count was not reported */
   filesLabel: string | null;
 }
@@ -95,8 +95,8 @@ export function summarizePullRequestDiffStat(pr: {
     return null;
   }
   return {
-    additions: pr.additions ?? 0,
-    deletions: pr.deletions ?? 0,
+    additions: pr.additions,
+    deletions: pr.deletions,
     filesLabel:
       pr.changedFiles === null ? null : `${pr.changedFiles} ${pluralize(pr.changedFiles, "file")}`,
   };

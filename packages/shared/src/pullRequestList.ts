@@ -1,20 +1,52 @@
-import type { ProjectId, PullRequestListEntry, PullRequestProjectContext } from "@synara/contracts";
+import type {
+  ProjectId,
+  PullRequestListEntry,
+  PullRequestProjectContext,
+  PullRequestProvider,
+} from "@synara/contracts";
 
 type ProjectAwarePullRequestEntry = Pick<
   PullRequestListEntry,
   "projectId" | "repository" | "number" | "isPinned"
 > & {
+  readonly provider?: PullRequestProvider | undefined;
   readonly projectTitle?: string | undefined;
   readonly headBranch?: string | undefined;
   readonly projectContexts?: ReadonlyArray<PullRequestProjectContext> | undefined;
 };
 
-/** Remote identity for a pull request. A PR belongs to a GitHub repository, not to each local
+type ProviderAwarePullRequestIdentity = {
+  readonly provider?: PullRequestProvider | undefined;
+  readonly repository: string;
+  readonly number: number;
+};
+
+export function normalizePullRequestProvider(
+  provider: PullRequestProvider | undefined,
+): PullRequestProvider {
+  return provider ?? "github";
+}
+
+/** Remote identity for a pull request. A PR belongs to a provider repository, not to each local
  * project or worktree that happens to have that repository checked out. */
 export function pullRequestListRepositoryIdentity(
-  entry: Pick<PullRequestListEntry, "repository" | "number">,
+  entry: ProviderAwarePullRequestIdentity,
 ): string {
-  return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
+  return [
+    normalizePullRequestProvider(entry.provider),
+    entry.repository.trim().toLowerCase(),
+    entry.number,
+  ].join("\u0000");
+}
+
+export function pullRequestRemoteIdentityKey(input: ProviderAwarePullRequestIdentity): string {
+  return pullRequestListRepositoryIdentity(input);
+}
+
+export function pullRequestProjectIdentityKey(
+  input: ProviderAwarePullRequestIdentity & { readonly projectId: ProjectId | string },
+): string {
+  return `${input.projectId}\u0000${pullRequestRemoteIdentityKey(input)}`;
 }
 
 /** Project associations for a repository-level row, with a legacy fallback for older payloads. */
@@ -88,7 +120,7 @@ function preferredProjectContext(
   );
 }
 
-/** Collapse project/worktree fan-out into one visible row per GitHub PR while retaining every
+/** Collapse project/worktree fan-out into one visible row per remote PR while retaining every
  * local project association. The chosen top-level project is only the context used to open the
  * detail panel; remote identity and aggregate pin state remain repository-level. */
 export function coalescePullRequestListEntries(

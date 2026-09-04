@@ -51,6 +51,9 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { outboundMcpRouteLayer } from "./outboundMcp/httpRoute";
+import { OutboundMcpCallbackEndpoint } from "./outboundMcp/callbackEndpoint";
+import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -61,6 +64,8 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | OutboundMcpCallbackEndpoint
+    | McpConnectionService
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
@@ -140,6 +145,7 @@ export const createEffectServer = Effect.fn(function* (
   const serverSettings = yield* ServerSettingsService;
   const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const outboundMcpCallbackEndpoint = yield* OutboundMcpCallbackEndpoint;
   const readiness = yield* makeServerReadiness;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
@@ -172,6 +178,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    outboundMcpRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
@@ -179,6 +186,12 @@ export const createEffectServer = Effect.fn(function* (
     .pipe(
       Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerServe", cause })),
     );
+
+  yield* outboundMcpCallbackEndpoint.configure({
+    config,
+    serverAddress: (nodeServer as http.Server | null)?.address() ?? null,
+  });
+  yield* Effect.addFinalizer(() => outboundMcpCallbackEndpoint.clear);
 
   const listeningPort = resolveListeningPort(
     (nodeServer as http.Server | null)?.address() ?? null,

@@ -68,6 +68,7 @@ describe("pull request pane", () => {
       paneId: "pr-1",
       kind: "pullRequest",
       pullRequestProjectId: "project-1" as never,
+      pullRequestProvider: "github",
       pullRequestRepository: "acme/one",
       pullRequestNumber: 12,
       pullRequestInitialTab: "summary",
@@ -76,6 +77,7 @@ describe("pull request pane", () => {
       paneId: "pr-2",
       kind: "pullRequest",
       pullRequestProjectId: "project-2" as never,
+      pullRequestProvider: "bitbucket",
       pullRequestRepository: "acme/two",
       pullRequestNumber: 24,
       pullRequestInitialTab: "code",
@@ -83,9 +85,27 @@ describe("pull request pane", () => {
     expect(reopened.panes).toHaveLength(1);
     expect(reopened.activePaneId).toBe("pr-1");
     expect(reopened.panes[0]?.pullRequestProjectId).toBe("project-2");
+    expect(reopened.panes[0]?.pullRequestProvider).toBe("bitbucket");
     expect(reopened.panes[0]?.pullRequestRepository).toBe("acme/two");
     expect(reopened.panes[0]?.pullRequestNumber).toBe(24);
     expect(reopened.panes[0]?.pullRequestInitialTab).toBe("code");
+  });
+
+  it("defaults old persisted pull request panes to GitHub", () => {
+    const sanitized = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "pr-1",
+      panes: [
+        {
+          id: "pr-1",
+          kind: "pullRequest",
+          pullRequestProjectId: "project-1",
+          pullRequestRepository: "acme/widgets",
+          pullRequestNumber: 42,
+        },
+      ],
+    });
+    expect(sanitized.panes[0]?.pullRequestProvider).toBe("github");
   });
 
   it("drops a non-integer persisted pull request number", () => {

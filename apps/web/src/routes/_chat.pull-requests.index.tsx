@@ -2,6 +2,7 @@ import type {
   ProjectId,
   PullRequestInvolvement,
   PullRequestListEntry,
+  PullRequestProvider,
   PullRequestState,
 } from "@synara/contracts";
 import {
@@ -33,6 +34,10 @@ import {
   isFocusInsideRightDock,
 } from "~/components/pullRequest/pullRequestFocus";
 import { PullRequestList } from "~/components/pullRequest/PullRequestList";
+import {
+  needsBitbucketConnection,
+  PullRequestBitbucketConnectPrompt,
+} from "~/components/pullRequest/PullRequestBitbucketConnectPrompt";
 import {
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
@@ -84,6 +89,7 @@ export interface PullRequestsSearch {
   state: PullRequestState;
   projectId?: ProjectId;
   selectedProjectId?: ProjectId;
+  selectedProvider?: PullRequestProvider;
   selectedRepo?: string;
   number?: number;
   q?: string;
@@ -94,6 +100,7 @@ interface PullRequestsSearchPatch {
   state?: PullRequestState;
   projectId?: ProjectId | undefined;
   selectedProjectId?: ProjectId | undefined;
+  selectedProvider?: PullRequestProvider | undefined;
   selectedRepo?: string | undefined;
   number?: number | undefined;
   q?: string | undefined;
@@ -103,6 +110,7 @@ interface PullRequestsSearchPatch {
 // patch in one place so a new selection field can't be forgotten by one of the call sites.
 const CLEARED_SELECTION = {
   selectedProjectId: undefined,
+  selectedProvider: undefined,
   selectedRepo: undefined,
   number: undefined,
 } as const satisfies PullRequestsSearchPatch;
@@ -112,8 +120,19 @@ const CLEARED_SELECTION = {
 const PULL_REQUESTS_ROUTE_PANE_ID = "pull-requests-route:pull-request";
 const PullRequestDockPane = lazy(() => import("~/components/pullRequest/PullRequestDockPane"));
 
-export const Route = createFileRoute("/_chat/pull-requests/")({
-  validateSearch: (raw): PullRequestsSearch => ({
+function isPullRequestProvider(value: unknown): value is PullRequestProvider {
+  return value === "github" || value === "bitbucket";
+}
+
+export function normalizePullRequestsRouteSearch(raw: Record<string, unknown>): PullRequestsSearch {
+  const selectedRepo =
+    typeof raw.selectedRepo === "string" && isValidGitHubRepositoryNameWithOwner(raw.selectedRepo)
+      ? raw.selectedRepo.trim()
+      : undefined;
+  const selectedProvider = isPullRequestProvider(raw.selectedProvider)
+    ? raw.selectedProvider
+    : "github";
+  return {
     involvement:
       raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
     state: raw.state === "closed" || raw.state === "merged" ? raw.state : "open",
@@ -123,15 +142,16 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
-    ...(typeof raw.selectedRepo === "string" &&
-    isValidGitHubRepositoryNameWithOwner(raw.selectedRepo)
-      ? { selectedRepo: raw.selectedRepo.trim() }
-      : {}),
+    ...(selectedRepo ? { selectedProvider, selectedRepo } : {}),
     ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0
       ? { number: raw.number }
       : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
-  }),
+  };
+}
+
+export const Route = createFileRoute("/_chat/pull-requests/")({
+  validateSearch: normalizePullRequestsRouteSearch,
   component: PullRequestsRouteView,
 });
 
@@ -150,6 +170,7 @@ function PullRequestsRouteView() {
   const { settings } = useAppSettings();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
+  const navigateToSettings = useNavigate();
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((store) => store.projects);
@@ -177,6 +198,7 @@ function PullRequestsRouteView() {
             state: next.state,
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedRepo ? { selectedProvider: next.selectedProvider ?? "github" } : {}),
             ...(next.selectedRepo ? { selectedRepo: next.selectedRepo } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.q ? { q: next.q } : {}),
@@ -277,6 +299,7 @@ function PullRequestsRouteView() {
     selectionMatchesScope && search.selectedProjectId && search.selectedRepo && search.number
       ? {
           projectId: search.selectedProjectId,
+          provider: search.selectedProvider ?? "github",
           repository: search.selectedRepo,
           number: search.number,
         }
@@ -292,7 +315,7 @@ function PullRequestsRouteView() {
     // selectedInput is a fresh object literal every render; depend on its primitive
     // fields instead so this only re-fires when the actual selection changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.selectedProjectId, search.selectedRepo, search.number]);
+  }, [search.selectedProjectId, search.selectedProvider, search.selectedRepo, search.number]);
   useEffect(() => {
     if (detailOpen) return;
     const timeout = window.setTimeout(() => setRenderedInput(null), 300);
@@ -319,6 +342,7 @@ function PullRequestsRouteView() {
       paneId: PULL_REQUESTS_ROUTE_PANE_ID,
       kind: "pullRequest",
       pullRequestProjectId: renderedInput.projectId,
+      pullRequestProvider: renderedInput.provider,
       pullRequestRepository: renderedInput.repository,
       pullRequestNumber: renderedInput.number,
     });
@@ -340,6 +364,7 @@ function PullRequestsRouteView() {
     (entry: PullRequestListEntry) =>
       updateSearch({
         selectedProjectId: entry.projectId,
+        selectedProvider: entry.provider,
         selectedRepo: entry.repository,
         number: entry.number,
       }),
@@ -378,6 +403,15 @@ function PullRequestsRouteView() {
 
   const truncatedRepositoryCount =
     activeListData?.repositoryBatches.filter((batch) => batch.truncated).length ?? 0;
+  // One restrained prompt when Bitbucket remotes are eligible but Paraty is not connected:
+  // the GitHub results stay visible below it, and there is never one card per repository.
+  const showBitbucketConnectPrompt =
+    needsBitbucketConnection(activeListData?.providerRequirements) &&
+    !initialListError &&
+    !initialExactInvolvementError;
+  const openIntegrations = useCallback(() => {
+    void navigateToSettings({ to: "/settings", search: { section: "integrations" } });
+  }, [navigateToSettings]);
 
   return (
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
@@ -500,6 +534,7 @@ function PullRequestsRouteView() {
                   grouped={grouped}
                   showDiffColors={settings.showPullRequestDiffColors}
                   selectedProjectId={search.selectedProjectId}
+                  selectedProvider={search.selectedProvider}
                   selectedRepo={search.selectedRepo}
                   selectedNumber={search.number}
                   showProjectTitle={search.projectId === undefined}
@@ -507,6 +542,9 @@ function PullRequestsRouteView() {
                   onTogglePinned={handleTogglePinned}
                 />
               )}
+              {showBitbucketConnectPrompt ? (
+                <PullRequestBitbucketConnectPrompt onOpenIntegrations={openIntegrations} />
+              ) : null}
               {!exactInvolvementPending &&
               !initialExactInvolvementError &&
               truncatedRepositoryCount > 0 ? (
@@ -558,6 +596,7 @@ function PullRequestsRouteView() {
                 renderedInput &&
                 updateSearch({
                   selectedProjectId: renderedInput.projectId,
+                  selectedProvider: renderedInput.provider,
                   selectedRepo: renderedInput.repository,
                   number,
                 })
