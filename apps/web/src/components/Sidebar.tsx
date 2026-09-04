@@ -1386,7 +1386,7 @@ function SidebarActivityBellButton({
 }
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
-  threads: { title: "Synara", description: "Build, debug, and ship" },
+  threads: { title: "Synara by nacholk", description: "Build, debug, and ship" },
   studio: { title: "Studio", description: "Open-ended agent work" },
 };
 
