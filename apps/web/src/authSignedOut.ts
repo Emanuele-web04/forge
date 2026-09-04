@@ -7,7 +7,7 @@ function renderSignedOutScreen(): void {
   const root = document.getElementById("root");
   if (!root) return;
 
-  document.title = "Signed out · Synara";
+  document.title = "Signed out · Claudex";
   root.innerHTML = `
     <main aria-labelledby="signed-out-title" style="min-height:100vh;box-sizing:border-box;display:grid;place-items:center;padding:32px;background:#10110f;color:#f3f0e8;font-family:'DM Sans',sans-serif">
       <section style="position:relative;width:min(100%,560px);overflow:hidden;border:1px solid #373a34;background:#171915;padding:clamp(30px,6vw,56px);box-shadow:12px 12px 0 #080907">
