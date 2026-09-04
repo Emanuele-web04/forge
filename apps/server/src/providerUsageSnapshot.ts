@@ -841,18 +841,20 @@ async function loadClaudeUsageSnapshot(input: {
   );
   // The machine card only covers the recent 30-day window; months-old samples
   // must not inflate the "30 days" period.
+  const claudeSamples: MachineActivitySample[] = usageSamples
+    .filter((sample) => sample.timestampMs >= cutoff30d)
+    .map((sample): MachineActivitySample => {
+      const tokens = { total: sample.totalTokens };
+      if (sample.model) {
+        return { sessionId: sample.sessionId, timestampMs: sample.timestampMs, model: sample.model, tokens };
+      }
+      return { sessionId: sample.sessionId, timestampMs: sample.timestampMs, tokens };
+    });
   const activity = buildMachineUsageActivity({
     provider: "claudeAgent",
     source: "claude-project-transcripts",
     nowMs,
-    samples: usageSamples
-      .filter((sample) => sample.timestampMs >= cutoff30d)
-      .map((sample) => ({
-        sessionId: sample.sessionId,
-        timestampMs: sample.timestampMs,
-        ...(sample.model ? { model: sample.model } : {}),
-        tokens: { total: sample.totalTokens },
-      })),
+    samples: claudeSamples,
     partial,
     ...(partialDetail ? { partialDetail } : {}),
   });

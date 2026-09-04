@@ -330,13 +330,12 @@ function buildBreakdown(
       const first = group[0];
       if (!first) return null;
       const recordedCostUsd = optionalCost(group);
-      return {
-        model: first.modelId,
-        ...(first.providerId ? { upstreamProviderId: first.providerId } : {}),
-        sessions: new Set(group.map((message) => message.sessionId)).size,
-        tokens: sumTokens(group),
-        recordedCostUsd,
-      };
+      const sessions = new Set(group.map((message) => message.sessionId)).size;
+      const tokens = sumTokens(group);
+      if (first.providerId) {
+        return { model: first.modelId, upstreamProviderId: first.providerId, sessions, tokens, recordedCostUsd };
+      }
+      return { model: first.modelId, sessions, tokens, recordedCostUsd };
     })
     .filter((entry): entry is ServerProviderUsageActivityBreakdown => entry !== null)
     .toSorted((left, right) => right.tokens.total - left.tokens.total)
@@ -653,12 +652,14 @@ export async function scanGrokLocalActivity(input: {
   const files = (await Promise.all(selection.files.map(readGrokSignalFile))).filter(
     (file): file is GrokSignalFile => file !== null,
   );
-  const samples: MachineActivitySample[] = files.map((file) => ({
-    sessionId: nodePath.basename(nodePath.dirname(file.path)),
-    timestampMs: file.mtimeMs,
-    ...(file.model !== undefined ? { model: file.model } : {}),
-    tokens: { total: file.tokensTotal },
-  }));
+  const samples: MachineActivitySample[] = files.map((file): MachineActivitySample => {
+    const sessionId = nodePath.basename(nodePath.dirname(file.path));
+    const tokens = { total: file.tokensTotal };
+    if (file.model !== undefined) {
+      return { sessionId, timestampMs: file.mtimeMs, model: file.model, tokens };
+    }
+    return { sessionId, timestampMs: file.mtimeMs, tokens };
+  });
   return buildMachineUsageActivity({
     provider: "grok",
     source: "grok-session-signals",
