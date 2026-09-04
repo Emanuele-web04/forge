@@ -37,7 +37,7 @@ describe("desktopIdentity", () => {
     expect(SYNARA_CANARY_DESKTOP_ENTRY_URL).toBe("synara-canary://app/index.html");
     expect(synaraDesktopIdentity("canary")).toEqual({
       flavor: "canary",
-      displayName: "Synara Canary",
+      displayName: "Claudex Canary",
       bundleId: SYNARA_CANARY_BUNDLE_ID,
       scheme: "synara-canary",
       origin: SYNARA_CANARY_DESKTOP_ORIGIN,
@@ -73,5 +73,11 @@ describe("desktopIdentity", () => {
     expect(synaraDesktopIdentity("development").defaultHomeDirectoryName).toBe(".synara-dev");
     expect(synaraDesktopIdentity("canary").defaultHomeDirectoryName).toBe(".synara-canary");
     expect(synaraDesktopIdentity("production").defaultHomeDirectoryName).toBe(".synara");
+  });
+
+  it("uses Claudex as the visible application name for every desktop flavor", () => {
+    expect(synaraDesktopIdentity("production").displayName).toBe("Claudex");
+    expect(synaraDesktopIdentity("development").displayName).toBe("Claudex (Dev)");
+    expect(synaraDesktopIdentity("canary").displayName).toBe("Claudex Canary");
   });
 });
