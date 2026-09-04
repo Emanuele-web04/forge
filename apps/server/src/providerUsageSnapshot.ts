@@ -567,6 +567,7 @@ async function listRecentClaudeTranscriptFiles(
     try {
       real = await fs.realpath(candidate);
     } catch {
+      // The transcript vanished between readdir and realpath; skip it.
       continue;
     }
     resolvedCandidates.add(real);

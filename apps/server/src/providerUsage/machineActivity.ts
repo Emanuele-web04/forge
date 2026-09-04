@@ -1,7 +1,7 @@
 // FILE: providerUsage/machineActivity.ts
 // Purpose: Read provider-owned local history without reading credentials or sending telemetry.
-// The first structured scanner targets OpenCode's SQLite history and the compatible Kilo data
-// directory. Account limits remain a separate plane in providerUsage/registry.ts.
+// The first structured scanner targets OpenCode's SQLite history. Account limits remain a
+// separate plane in providerUsage/registry.ts.
 
 import type {
   ProviderKind,
@@ -189,7 +189,7 @@ async function databaseFiles(input: {
 
 // Detect the epoch unit stored in a provider database's `message.time_created`
 // column with a cheap one-row probe, cached per database while its mtime is
-// unchanged. Most OpenCode/Kilo databases store milliseconds; seconds-unit
+// unchanged. Most OpenCode databases store milliseconds; seconds-unit
 // exports are accommodated by branching the main query (below) on the detected
 // unit so an index on `time_created` can serve both the predicate and the sort.
 // A NULL/errored probe falls back to the millisecond branch (the historical

@@ -367,13 +367,12 @@ export function ProviderUsageSettingsPanel() {
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
         Account limits come from provider-owned sources: Codex, Claude, and Cursor read the provider
-        backend through stored credentials; Kilo reads the Kilo usage API with the `kilo login`
-        token; Antigravity reads the local Antigravity process quota server when it is running.
-        Providers without a safe source (Grok, Droid, OpenCode, Pi) stay marked “Unsupported” rather
-        than showing invented numbers. “On this machine” history comes from provider-owned local
-        archives (Codex, Claude, OpenCode, Kilo, Grok) when Synara has a safe reader; “Actual usage”
-        below is Synara-observed activity. Account limits never include local totals. If a provider
-        shows “Not signed in”, re-authenticate with its CLI.
+        backend through stored credentials; Antigravity reads the local Antigravity process quota
+        server when it is running. Providers without a safe source (Grok, Droid, OpenCode, Pi) stay
+        marked “Unsupported” rather than showing invented numbers. “On this machine” history comes
+        from provider-owned local archives (Codex, Claude, OpenCode, Grok) when Synara has a safe
+        reader; “Actual usage” below is Synara-observed activity. Account limits never include local
+        totals. If a provider shows “Not signed in”, re-authenticate with its CLI.
       </p>
     </SettingsSectionShell>
   );
