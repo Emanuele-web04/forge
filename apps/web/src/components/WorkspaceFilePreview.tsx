@@ -653,6 +653,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         lineEnding: activeEditBuffer.lineEnding,
       });
       const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
+      // A watcher read started before the save must not replace the saved snapshot.
+      await queryClient.cancelQueries({ queryKey: options.queryKey, exact: true });
       queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (current) =>
         current ? { ...current, contents: contentsToSave, version: result.version } : current,
       );

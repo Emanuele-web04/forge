@@ -395,3 +395,61 @@ it("keeps oversized and mixed-line-ending files read-only", async () => {
     restoreNativeApi();
   }
 });
+
+it("keeps a successful save when an older watcher read resolves afterwards", async () => {
+  let completeRead!: (result: ProjectReadFileResult) => void;
+  const pendingRead = new Promise<ProjectReadFileResult>((resolve) => {
+    completeRead = resolve;
+  });
+  const readFile = vi.fn().mockResolvedValueOnce(loadedFile()).mockReturnValueOnce(pendingRead);
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
+  const subscription: { listener?: (event: ProjectFileChangeEvent) => void } = {};
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, callback: (event: ProjectFileChangeEvent) => void) => {
+      subscription.listener = callback;
+      return vi.fn();
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, writeFile, onFileChange },
+  } as unknown as NativeApi);
+  const queryClient = makeQueryClient();
+  try {
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+    subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: 1 });
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
+    await editor.fill("saved contents\n");
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(document.querySelector('[aria-label="Unsaved changes"]')).toBeNull(),
+    );
+    completeRead(loadedFile());
+    await pendingRead;
+    await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await expect.element(editor).toHaveValue("saved contents\n");
+    await editor.fill("next saved contents\n");
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenNthCalledWith(2, {
+        cwd: WORKSPACE_ROOT,
+        relativePath: FILE_PATH,
+        contents: "next saved contents\n",
+        expectedVersion: SAVED_VERSION,
+        encoding: "utf8",
+        lineEnding: "lf",
+      }),
+    );
+  } finally {
+    completeRead(loadedFile());
+    queryClient.clear();
+    restoreNativeApi();
+  }
+});
