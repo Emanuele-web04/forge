@@ -7,6 +7,13 @@ import { ChildProcess } from "effect/unstable/process";
 
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform">;
 
+// The pinned Effect revision predates these Node-only Windows options. The
+// tracked platform-node-shared patch reads them from the command at runtime.
+type EffectWindowsCommandOptions = ChildProcess.CommandOptions & {
+  readonly windowsHide?: boolean;
+  readonly windowsVerbatimArguments?: boolean;
+};
+
 export type EffectProcessRuntimeOptions = Omit<
   ChildProcess.CommandOptions,
   "shell" | "windowsVerbatimArguments"
@@ -14,8 +21,9 @@ export type EffectProcessRuntimeOptions = Omit<
   ProcessPlanningOptions;
 
 /**
- * Creates an Effect command without leaking `.cmd`, `cmd.exe`, WSL, or
- * windowsVerbatimArguments decisions into provider/application code.
+ * Creates an Effect command without leaking `.cmd`, `cmd.exe`, WSL,
+ * windowsHide, or windowsVerbatimArguments decisions into
+ * provider/application code.
  *
  * Unlike the Node runtime there is deliberately no `requireExecutable`: the
  * Effect spawner is injectable, so a missing executable surfaces as the
@@ -49,9 +57,12 @@ export function makeEffectProcessCommand(
     ...(env !== undefined ? { env } : {}),
   });
 
-  return ChildProcess.make(plan.command, plan.args, {
+  const effectOptions: EffectWindowsCommandOptions = {
     ...commandOptions,
     shell: false,
+    ...(plan.windowsHide ? { windowsHide: true } : {}),
     ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  });
+  };
+
+  return ChildProcess.make(plan.command, plan.args, effectOptions);
 }

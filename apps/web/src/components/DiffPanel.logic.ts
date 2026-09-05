@@ -255,6 +255,19 @@ export function filterRenderableFilesForSearch(
   });
 }
 
+export function resolveWatchedDiffFilePath(
+  selectedFilePath: string | null,
+  files: ReadonlyArray<FileDiffMetadata>,
+): string | null {
+  if (
+    selectedFilePath &&
+    files.some((fileDiff) => resolveFileDiffPath(fileDiff) === selectedFilePath)
+  ) {
+    return selectedFilePath;
+  }
+  return files[0] ? resolveFileDiffPath(files[0]) : null;
+}
+
 export function areAllRenderableFilesCollapsed(
   files: ReadonlyArray<FileDiffMetadata>,
   collapsedFiles: ReadonlySet<string>,

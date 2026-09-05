@@ -21,6 +21,7 @@ import {
   GitBranchIcon,
   GitCommitIcon,
   ListChecksIcon,
+  RefreshCwIcon,
   Rows3Icon,
   XIcon,
 } from "~/lib/icons";
@@ -98,6 +99,7 @@ interface DiffPanelToolbarProps {
   diffIgnoreWhitespace: boolean;
   diffCopyText: string | null;
   isDiffCopied: boolean;
+  reloading: boolean;
   allFilesCollapsed: boolean;
   onSelectRepoScope: (scope: RepoDiffScope) => void;
   onSelectAllTurns: () => void;
@@ -109,6 +111,7 @@ interface DiffPanelToolbarProps {
   onDiffWordWrapChange: (enabled: boolean) => void;
   onDiffIgnoreWhitespaceChange: (enabled: boolean) => void;
   onCopyDiff: () => void;
+  onReload: () => void;
   onToggleCollapseAll: () => void;
   scopePickerOpen?: boolean;
   onScopePickerOpenChange?: (open: boolean) => void;
@@ -291,6 +294,17 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
 
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
         <div className="flex items-center gap-1">
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            className={DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME}
+            label="Reload diff"
+            title="Reload diff"
+            onClick={props.onReload}
+          >
+            <RefreshCwIcon className={cn("size-3.5", props.reloading && "animate-spin")} />
+          </IconButton>
+
           <Menu>
             <MenuTrigger
               render={

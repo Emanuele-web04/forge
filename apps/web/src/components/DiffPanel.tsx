@@ -2,7 +2,7 @@
 // Purpose: Coordinates diff-panel data sources, toolbar state, and patch body rendering.
 // Layer: Diff panel container
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
@@ -10,6 +10,8 @@ import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } fr
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   gitBranchesQueryOptions,
+  gitQueryKeys,
+  refreshGitWorkingTreeDiffsForCwd,
   gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
   gitWorkingTreeDiffStatsQueryOptions,
@@ -25,6 +27,7 @@ import {
   buildFileDiffRenderKey,
   getRenderablePatch,
   resolveDiffCopyText,
+  resolveFileDiffPath,
   sortFileDiffsByPath,
   summarizeRenderablePatchStats,
 } from "../lib/diffRendering";
@@ -33,6 +36,7 @@ import {
   appendComposerPromptText,
   buildDiffSelectionReference,
   buildWhyChangedPrompt,
+  normalizeSelectionSnippet,
 } from "../lib/chatReferences";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
@@ -61,6 +65,7 @@ import {
   resolveDiffSelectAllWithinViewport,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
+  resolveWatchedDiffFilePath,
   type DiffPanelTurnScopeIntent,
   type DiffViewKind,
 } from "./DiffPanel.logic";
@@ -72,6 +77,7 @@ import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { closestThroughShadow } from "./chat/chatSelectionActions";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { useProjectFileChangeSubscription } from "../hooks/useProjectFileChangeSubscription";
 import {
   createDiffPanelRepoLiveRefreshSelector,
   createDiffPanelThreadCatalogSelector,
@@ -377,6 +383,7 @@ export default function DiffPanel({
   onRenderableFilesChange,
   onEditorDiffOptionsChange,
 }: DiffPanelProps) {
+  const queryClient = useQueryClient();
   const mode = modeProp ?? "inline";
   const liveRefreshEnabled = liveRefreshEnabledProp ?? true;
   const queriesEnabled = queriesEnabledProp ?? true;
@@ -715,6 +722,11 @@ export default function DiffPanel({
   const activeReviewError = diffViewKind === "repo" ? repoDiffError : checkpointDiffError;
   const activeReviewIsLoading =
     diffViewKind === "repo" ? repoDiffQuery.isLoading : isLoadingCheckpointDiff;
+  const activeDiffIsFetching =
+    diffViewKind === "repo" ? repoDiffQuery.isFetching : activeCheckpointDiffQuery.isFetching;
+  const handleDiffReload = useCallback(() => {
+    void (diffViewKind === "repo" ? repoDiffQuery.refetch() : activeCheckpointDiffQuery.refetch());
+  }, [activeCheckpointDiffQuery, diffViewKind, repoDiffQuery]);
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
   // The parsed patch is structural and theme-agnostic — theming is applied
@@ -729,6 +741,20 @@ export default function DiffPanel({
     }
     return sortFileDiffsByPath(renderablePatch.files);
   }, [renderablePatch]);
+  const watchedRepoFilePath =
+    diffViewKind === "repo" ? resolveWatchedDiffFilePath(selectedFilePath, renderableFiles) : null;
+  const handleWatchedRepoFileChange = useCallback(() => {
+    if (!activeCwd) {
+      return;
+    }
+    void refreshGitWorkingTreeDiffsForCwd(queryClient, activeCwd);
+  }, [activeCwd, queryClient]);
+  useProjectFileChangeSubscription({
+    cwd: activeCwd,
+    relativePath: watchedRepoFilePath,
+    enabled: diffQueriesEnabled && liveRefreshEnabled && watchedRepoFilePath !== null,
+    onChange: handleWatchedRepoFileChange,
+  });
   useEffect(() => {
     onRenderableFilesChange?.(renderableFiles, activeReviewIsLoading);
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
@@ -914,12 +940,10 @@ export default function DiffPanel({
       return null;
     }
     const filePath = anchorRow.getAttribute("data-diff-file-path") ?? "";
-    const text = selection
-      .toString()
-      .replace(/\r\n/g, "\n")
-      .replace(/^\n+|\n+$/g, "")
-      .trim();
-    if (filePath.length === 0 || text.length === 0) {
+    // Read the text from the selection rather than its range: ranges are
+    // retargeted at the shadow host, so `range.toString()` would be empty.
+    const text = normalizeSelectionSnippet(selection.toString());
+    if (filePath.length === 0 || text === null) {
       return null;
     }
     return { filePath, text };
@@ -1142,6 +1166,7 @@ export default function DiffPanel({
           diffIgnoreWhitespace={diffIgnoreWhitespace}
           diffCopyText={diffCopyText}
           isDiffCopied={isDiffCopied}
+          reloading={activeDiffIsFetching}
           allFilesCollapsed={allFilesCollapsed}
           onSelectRepoScope={selectRepoScope}
           onSelectAllTurns={selectAllTurns}
@@ -1153,6 +1178,7 @@ export default function DiffPanel({
           onDiffWordWrapChange={setDiffWordWrap}
           onDiffIgnoreWhitespaceChange={setDiffIgnoreWhitespace}
           onCopyDiff={copyDiff}
+          onReload={handleDiffReload}
           onToggleCollapseAll={toggleCollapseAll}
           scopePickerOpen={scopePickerOpen}
           onScopePickerOpenChange={handleScopePickerOpenChange}
@@ -1176,6 +1202,7 @@ export default function DiffPanel({
       ) : null,
     [
       activeCwd,
+      activeDiffIsFetching,
       activePatchStat,
       activeThreadId,
       allFilesCollapsed,
@@ -1189,6 +1216,7 @@ export default function DiffPanel({
       inferredCheckpointTurnCountByTurnId,
       isDiffCopied,
       handleScopePickerOpenChange,
+      handleDiffReload,
       onClosePanel,
       orderedTurnDiffSummaries,
       scopePickerOpen,

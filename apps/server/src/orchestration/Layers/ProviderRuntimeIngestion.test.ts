@@ -1147,6 +1147,148 @@ describe("ProviderRuntimeIngestion", () => {
     expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(false);
   });
 
+  it.each(["success", "restart-failure", "user-interrupt", "user-cancel"] as const)(
+    "preserves Devin recovery goal ownership through %s",
+    async (outcome) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("devin-recovery-old-turn");
+      const replacementTurnId = asTurnId("devin-recovery-new-turn");
+      const base = { provider: "devin" as const, threadId, createdAt: new Date().toISOString() };
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("goal-before-recovery"),
+          threadId,
+          goal: "Finish the task",
+        }),
+      );
+      harness.emit({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("recovery-old-started"),
+        turnId,
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+      harness.emit({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("recovery-old-cancelled"),
+        turnId,
+        payload: {
+          state: "cancelled",
+          stopReason: outcome === "user-cancel" ? "cancelled" : "synara.devin.wedge-recovery",
+        },
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "interrupted");
+      await harness.drain();
+      let thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      )!;
+      expect(thread.session?.activeTurnId).toBeNull();
+      expect(thread.latestTurn?.state).toBe("interrupted");
+      expect(thread.goalPausedAt != null).toBe(outcome === "user-cancel");
+      const eventsBeforeRestart = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      expect(
+        eventsBeforeRestart.some((event) => event.type === "thread.goal-continuation-requested"),
+      ).toBe(false);
+
+      if (outcome === "user-interrupt") {
+        // A user stop in the session gap pauses independently of provider events.
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("user-stop-during-recovery"),
+            threadId,
+            turnId,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      }
+      harness.emit({
+        ...base,
+        type: "session.exited",
+        eventId: asEventId("recovery-old-exited"),
+        payload: { exitKind: "graceful" },
+      });
+      await waitForThread(harness.engine, (entry) => entry.session?.status === "stopped");
+      await harness.drain();
+      thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      )!;
+      expect(thread.goalPausedAt != null).toBe(
+        outcome === "user-cancel" || outcome === "user-interrupt",
+      );
+      if (outcome === "restart-failure") {
+        harness.emit({
+          ...base,
+          type: "runtime.error",
+          eventId: asEventId("recovery-failed"),
+          turnId,
+          payload: {
+            message: "Arbitrary failure message",
+            class: "transport_error",
+            detail: { reason: "synara.devin.wedge-recovery" },
+          },
+        });
+        thread = await waitForThread(
+          harness.engine,
+          (entry) => entry.session?.status === "error" && entry.goalPausedAt != null,
+        );
+        expect(thread.session?.lastError).toBe("Arbitrary failure message");
+        expect(thread.latestTurn?.state).not.toBe("running");
+        await harness.drain();
+        const events = Array.from(
+          await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+        );
+        expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(
+          false,
+        );
+        return;
+      }
+      if (outcome !== "success") return;
+      harness.emit({
+        ...base,
+        type: "session.started",
+        eventId: asEventId("recovery-session-started"),
+        payload: {},
+      });
+      harness.emit({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("recovery-new-started"),
+        turnId: replacementTurnId,
+      });
+      thread = await waitForThread(
+        harness.engine,
+        (entry) => entry.session?.activeTurnId === replacementTurnId,
+      );
+      expect(thread.goalPausedAt).toBeNull();
+      expect(thread.latestTurn?.state).toBe("running");
+      harness.emit({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("recovery-new-completed"),
+        turnId: replacementTurnId,
+        payload: { state: "completed" },
+      });
+      await waitForThread(harness.engine, (entry) => entry.session?.status === "ready");
+      await harness.drain();
+      const events = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      expect(events.filter((event) => event.type === "thread.goal-continuation-requested")).toEqual(
+        [
+          expect.objectContaining({
+            payload: expect.objectContaining({ sourceTurnId: replacementTurnId }),
+          }),
+        ],
+      );
+    },
+  );
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = new Date().toISOString();

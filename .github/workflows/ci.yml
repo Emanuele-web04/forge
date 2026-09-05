@@ -1,3 +1,6 @@
+# Lane rule: static is fast checks with no special runtime, unit is bun test, browser owns Playwright and is the long pole, build owns Electron and desktop output.
+# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static.
+# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
 name: CI
 
 on:
@@ -6,72 +9,22 @@ on:
     branches:
       - main
 
+# Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
-  quality:
-    name: Format, Lint, Typecheck, Test, Browser Test, Build
+  static:
+    name: Static Checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Cache Bun and Turbo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.bun/install/cache
-            .turbo
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Cache Electron runtime
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-
-
-      - name: Install dependencies
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
-
-      - name: Install Electron test runtime
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if node apps/desktop/node_modules/electron/install.js; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-
-      - name: Verify Linux terminal PTY native dependency
-        if: runner.os == 'Linux'
-        run: node scripts/node-pty-smoke.mjs
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
 
       - name: Verify Synara identity
         run: bun run brand:check
@@ -88,8 +41,39 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Verify Linux terminal PTY native dependency
+        run: node scripts/node-pty-smoke.mjs
+
       - name: Test
         run: bun run test
+
+  browser:
+    name: Browser Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
 
       # Run the workspace-local playwright binary directly: bunx stalled after
       # the chromium download on hosted runners. The step timeout stops any
@@ -114,6 +98,19 @@ jobs:
         timeout-minutes: 10
         run: bun run --cwd apps/web test:browser:geometry
 
+  build:
+    name: Desktop Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          electron: "true"
+
       - name: Build desktop pipeline
         run: bun run build:desktop
 
@@ -121,6 +118,27 @@ jobs:
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
+
+  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
+  quality:
+    name: Format, Lint, Typecheck, Test, Browser Test, Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [static, unit, browser, build]
+    if: always()
+    steps:
+      - name: Aggregate lane results
+        env:
+          STATIC: ${{ needs.static.result }}
+          UNIT: ${{ needs.unit.result }}
+          BROWSER: ${{ needs.browser.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          if [ "$STATIC" != "success" ] || [ "$UNIT" != "success" ] || [ "$BROWSER" != "success" ] || [ "$BUILD" != "success" ]; then
+            echo "static=$STATIC unit=$UNIT browser=$BROWSER build=$BUILD"
+            echo "Open the red lane above, not this gate."
+            exit 1
+          fi
 
   windows_process:
     name: Windows Process Regression
@@ -215,6 +233,7 @@ jobs:
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6

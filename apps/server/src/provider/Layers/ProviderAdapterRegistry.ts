@@ -10,7 +10,10 @@
 import { Effect, Layer } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
-import { assertProviderAdapterConformance } from "../providerAdapterConformance.ts";
+import {
+  assertProviderAdapterConformance,
+  providerAdapterRegistrationIssues,
+} from "../providerAdapterConformance.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
   ProviderAdapterRegistry,
@@ -49,6 +52,13 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
 
     for (const adapter of adapters) {
       assertProviderAdapterConformance(adapter);
+    }
+    const registrationIssues = providerAdapterRegistrationIssues(adapters);
+    if (registrationIssues.length > 0) {
+      const detail = registrationIssues
+        .map((issue) => `${issue.provider} at index ${issue.duplicateIndex}`)
+        .join(", ");
+      throw new Error(`Duplicate provider adapter registrations: ${detail}.`);
     }
 
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));

@@ -13,6 +13,7 @@ import {
   ChevronRightIcon,
   MinusIcon,
   PlusIcon,
+  RefreshCwIcon,
 } from "~/lib/icons";
 import { formatZoomPercent, PDF_ZOOM_PRESETS, type PdfZoomMode } from "~/lib/pdf/pdfZoom";
 import { cn } from "~/lib/utils";
@@ -39,6 +40,7 @@ interface PdfViewerToolbarProps {
   onFitWidth: () => void;
   onFitPage: () => void;
   openInTarget: string | null;
+  onReload?: (() => void) | undefined;
 }
 
 function zoomSelectionValue(mode: PdfZoomMode, scale: number): string {
@@ -146,6 +148,11 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
           </ChatHeaderIconButton>
         </div>
 
+        {props.onReload ? (
+          <ChatHeaderIconButton label="Reload file from disk" tone="plain" onClick={props.onReload}>
+            <RefreshCwIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
+        ) : null}
         <OpenInPicker
           openInTarget={props.openInTarget}
           labelMode="always"

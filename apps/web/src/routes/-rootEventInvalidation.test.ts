@@ -77,6 +77,46 @@ describe("root event invalidation", () => {
     ).toBe(null);
   });
 
+  it("invalidates project files and git diffs after tools that may mutate the workspace", () => {
+    const threadId = ThreadId.makeUnsafe("thread-tools");
+    const completedTool = (itemType?: string) =>
+      event("thread.activity-appended", {
+        threadId,
+        activity: {
+          kind: "tool.completed",
+          payload: itemType ? { itemType } : {},
+        },
+      });
+
+    for (const itemType of [
+      "command_execution",
+      "file_change",
+      "mcp_tool_call",
+      "dynamic_tool_call",
+      "collab_agent_tool_call",
+      "image_generation",
+    ]) {
+      const toolEvent = completedTool(itemType);
+      expect(getProjectFileInvalidationThreadIdForEvent(toolEvent)).toBe(threadId);
+      expect(shouldInvalidateGitQueriesForEvent(toolEvent)).toBe(true);
+    }
+
+    expect(getProjectFileInvalidationThreadIdForEvent(completedTool())).toBe(threadId);
+    expect(getProjectFileInvalidationThreadIdForEvent(completedTool("web_search"))).toBe(null);
+    expect(shouldInvalidateGitQueriesForEvent(completedTool("image_view"))).toBe(false);
+  });
+
+  it("invalidates project files when a turn diff or rollback settles", () => {
+    const threadId = ThreadId.makeUnsafe("thread-checkpoint");
+
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(event("thread.turn-diff-completed", { threadId })),
+    ).toBe(threadId);
+    expect(getProjectFileInvalidationThreadIdForEvent(event("thread.reverted", { threadId }))).toBe(
+      threadId,
+    );
+  });
+
   it("extracts affected thread ids for scoped git invalidation", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
 

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderAdapterShape } from "./Services/ProviderAdapter.ts";
 import {
   assertProviderAdapterConformance,
+  providerAdapterRegistrationIssues,
   providerAdapterConformanceIssues,
 } from "./providerAdapterConformance.ts";
 
@@ -98,5 +99,23 @@ describe("provider adapter conformance", () => {
     expect(() => assertProviderAdapterConformance(adapter)).toThrow(
       'Provider adapter "opencode" has invalid capabilities: supportsSkillDiscovery requires listSkills(), supportsRuntimeModelList requires listModels().',
     );
+  });
+
+  it("reports duplicate provider registrations instead of allowing silent overwrite", () => {
+    const first = makeAdapter({ provider: "codex" });
+    const second = makeAdapter({ provider: "codex" });
+
+    expect(providerAdapterRegistrationIssues([first, second])).toEqual([
+      { provider: "codex", duplicateIndex: 1 },
+    ]);
+  });
+
+  it("rejects adapters missing required runtime methods", () => {
+    const adapter = makeAdapter();
+    Reflect.deleteProperty(adapter, "stopAll");
+
+    expect(providerAdapterConformanceIssues(adapter)).toContainEqual({
+      missingMethod: "stopAll",
+    });
   });
 });

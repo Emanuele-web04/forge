@@ -56,7 +56,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
-import { settleTurnStateFromSession } from "./turnLifecycle.ts";
+import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -1167,7 +1167,7 @@ export function projectEvent(
                           : null,
                     }
                 : settleLatestTurnForSessionStatus(thread.latestTurn, session),
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1296,7 +1296,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });

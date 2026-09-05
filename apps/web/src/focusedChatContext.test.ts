@@ -1,63 +1,18 @@
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { ProjectId, ThreadId } from "@synara/contracts";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
 import { type DraftThreadState } from "./composerDraftStore";
-import { resolveFocusedChatContext } from "./focusedChatContext";
+import { useFocusedChatContext, type FocusedChatContext } from "./focusedChatContext";
+import { initialState, type AppState } from "./storeState";
+import { makeProject, makeThread } from "./storeTestFixtures";
 import type { Project, Thread } from "./types";
 import type { SplitView } from "./splitViewStore";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 const THREAD_B = ThreadId.makeUnsafe("thread-b");
-
-function makeProject(): Project {
-  return {
-    id: PROJECT_ID,
-    kind: "project",
-    name: "Project",
-    remoteName: "Project",
-    folderName: "project",
-    localName: null,
-    cwd: "/tmp/project",
-    defaultModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
-    expanded: true,
-    spaceId: null,
-    scripts: [],
-  };
-}
-
-function makeThread(threadId: ThreadId, overrides: Partial<Thread> = {}): Thread {
-  return {
-    id: threadId,
-    codexThreadId: null,
-    projectId: PROJECT_ID,
-    title: `Thread ${threadId}`,
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    session: null,
-    messages: [],
-    proposedPlans: [],
-    error: null,
-    createdAt: "2026-04-07T10:00:00.000Z",
-    updatedAt: "2026-04-07T10:00:00.000Z",
-    latestTurn: {
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "completed",
-      requestedAt: "2026-04-07T10:00:00.000Z",
-      startedAt: "2026-04-07T10:00:00.000Z",
-      completedAt: "2026-04-07T10:01:00.000Z",
-      assistantMessageId: null,
-      sourceProposedPlan: undefined,
-    },
-    lastVisitedAt: "2026-04-07T10:01:00.000Z",
-    branch: null,
-    worktreePath: null,
-    turnDiffSummaries: [],
-    activities: [],
-    ...overrides,
-  };
-}
 
 function makeDraftThread(overrides: Partial<DraftThreadState> = {}): DraftThreadState {
   return {
@@ -123,12 +78,87 @@ function makeSplitView(overrides: SplitViewLayoutOverrides = {}): SplitView {
   };
 }
 
-describe("resolveFocusedChatContext", () => {
+const fixtures = vi.hoisted(() => ({
+  appState: null as AppState | null,
+  params: {} as { threadId?: string },
+  search: {} as { splitViewId?: string },
+  draftState: { draftThreadsByThreadId: {} as Record<string, DraftThreadState> },
+  splitState: { splitViewsById: {} as Record<string, SplitView> },
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+  useParams: ({ select }: { select: (params: typeof fixtures.params) => unknown }) =>
+    select(fixtures.params),
+  useSearch: ({ select }: { select: (search: typeof fixtures.search) => unknown }) =>
+    select(fixtures.search),
+}));
+
+vi.mock("./store", () => ({
+  useStore: (select: (state: AppState) => unknown) => {
+    if (!fixtures.appState) throw new Error("Missing focused-chat app state.");
+    return select(fixtures.appState);
+  },
+}));
+
+vi.mock("./composerDraftStore", () => ({
+  useComposerDraftStore: (select: (state: typeof fixtures.draftState) => unknown) =>
+    select(fixtures.draftState),
+}));
+
+vi.mock("./splitViewStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./splitViewStore")>()),
+  useSplitViewStore: (select: (state: typeof fixtures.splitState) => unknown) =>
+    select(fixtures.splitState),
+}));
+
+function readFocusedChatContext(input: {
+  routeThreadId: ThreadId | null;
+  splitView: SplitView | null;
+  threads: readonly Thread[];
+  projects: Project[];
+  draftThreadsByThreadId: Record<string, DraftThreadState>;
+}): FocusedChatContext {
+  fixtures.params = input.routeThreadId ? { threadId: input.routeThreadId } : {};
+  fixtures.search = input.splitView ? { splitViewId: input.splitView.id } : {};
+  fixtures.splitState.splitViewsById = input.splitView
+    ? { [input.splitView.id]: input.splitView }
+    : {};
+  fixtures.draftState.draftThreadsByThreadId = input.draftThreadsByThreadId;
+  fixtures.appState = {
+    ...initialState,
+    projects: input.projects,
+    threadShellById: Object.fromEntries(input.threads.map((thread) => [thread.id, thread])),
+  };
+  const captured: { current: FocusedChatContext | null } = { current: null };
+  function Probe() {
+    captured.current = useFocusedChatContext();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  if (!captured.current) throw new Error("Focused-chat probe did not render.");
+  return captured.current;
+}
+
+describe("useFocusedChatContext", () => {
+  it("uses the route thread when no split is selected", () => {
+    const context = readFocusedChatContext({
+      routeThreadId: THREAD_A,
+      splitView: null,
+      threads: [makeThread({ id: THREAD_A })],
+      projects: [makeProject()],
+      draftThreadsByThreadId: {},
+    });
+
+    expect(context.focusedThreadId).toBe(THREAD_A);
+    expect(context.activeThread?.id).toBe(THREAD_A);
+    expect(context.activeProject?.id).toBe(PROJECT_ID);
+  });
+
   it("uses the focused split pane thread instead of the route thread", () => {
-    const context = resolveFocusedChatContext({
+    const context = readFocusedChatContext({
       routeThreadId: THREAD_A,
       splitView: makeSplitView(),
-      threads: [makeThread(THREAD_A), makeThread(THREAD_B)],
+      threads: [makeThread({ id: THREAD_A }), makeThread({ id: THREAD_B })],
       projects: [makeProject()],
       draftThreadsByThreadId: {},
     });
@@ -139,13 +169,13 @@ describe("resolveFocusedChatContext", () => {
   });
 
   it("falls back to the split owner project when the focused pane is empty", () => {
-    const context = resolveFocusedChatContext({
+    const context = readFocusedChatContext({
       routeThreadId: THREAD_A,
       splitView: makeSplitView({
         secondThreadId: null,
         focusedSide: "second",
       }),
-      threads: [makeThread(THREAD_A)],
+      threads: [makeThread({ id: THREAD_A })],
       projects: [makeProject()],
       draftThreadsByThreadId: {},
     });
@@ -153,25 +183,28 @@ describe("resolveFocusedChatContext", () => {
     expect(context.focusedThreadId).toBeNull();
     expect(context.activeThread).toBeNull();
     expect(context.activeProjectId).toBe(PROJECT_ID);
+    expect(context.activeProject?.id).toBe(PROJECT_ID);
   });
 
   it("prefers the focused draft thread when the pane points at a draft-only thread", () => {
     const draftThreadId = ThreadId.makeUnsafe("thread-draft");
-    const context = resolveFocusedChatContext({
+    const draftProjectId = ProjectId.makeUnsafe("project-draft");
+    const context = readFocusedChatContext({
       routeThreadId: THREAD_A,
       splitView: makeSplitView({
         secondThreadId: draftThreadId,
         focusedSide: "second",
       }),
-      threads: [makeThread(THREAD_A)],
-      projects: [makeProject()],
+      threads: [makeThread({ id: THREAD_A })],
+      projects: [makeProject(), makeProject({ id: draftProjectId })],
       draftThreadsByThreadId: {
-        [draftThreadId]: makeDraftThread({ branch: "feature/split" }),
+        [draftThreadId]: makeDraftThread({ projectId: draftProjectId, branch: "feature/split" }),
       },
     });
 
     expect(context.focusedThreadId).toBe(draftThreadId);
     expect(context.activeDraftThread?.branch).toBe("feature/split");
-    expect(context.activeProjectId).toBe(PROJECT_ID);
+    expect(context.activeProjectId).toBe(draftProjectId);
+    expect(context.activeProject?.id).toBe(draftProjectId);
   });
 });
