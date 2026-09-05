@@ -158,6 +158,9 @@ jobs:
         with:
           node-version-file: package.json
 
+      - name: Diagnose Windows bridge without credentials
+        run: node scripts/droid-windows-diagnostics.mjs
+
       - name: Install dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
