@@ -2605,7 +2605,11 @@ export function makeDevinAdapter(
                 provider: PROVIDER,
                 threadId: ctx.threadId,
                 turnId,
-                payload: { message: detail, class: "transport_error" },
+                payload: {
+                  message: detail,
+                  class: "transport_error",
+                  detail: { reason: "synara.devin.wedge-recovery" },
+                },
               });
             }),
           ),
@@ -2909,7 +2913,11 @@ export function makeDevinAdapter(
                   turnId,
                   payload: {
                     state: completion.state,
-                    stopReason: result.stopReason ?? null,
+                    stopReason:
+                      completion.state === "cancelled" &&
+                      wedgeRecoveries.get(input.threadId)?.turnId === turnId
+                        ? "synara.devin.wedge-recovery"
+                        : (result.stopReason ?? null),
                     ...(completion.errorMessage !== undefined
                       ? { errorMessage: completion.errorMessage }
                       : {}),
@@ -2946,7 +2954,12 @@ export function makeDevinAdapter(
                 turnId,
                 payload: {
                   state: "cancelled",
-                  stopReason: "cancelled",
+                  // Public stop/interrupt revokes ownership before cancelling.
+                  // Keep technical recovery distinct from a user's goal pause.
+                  stopReason:
+                    wedgeRecoveries.get(input.threadId)?.turnId === turnId
+                      ? "synara.devin.wedge-recovery"
+                      : "cancelled",
                   ...completedCost,
                 },
               });

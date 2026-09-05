@@ -413,69 +413,80 @@ describe("Devin wedge auto-recovery", () => {
     vi.useRealTimers();
   });
 
-  it("recovers a stall-watch wedge: cancels the turn, restarts, and continues", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const factory = makeWedgeRuntimeFactory({
-      prompts: [
-        () => Effect.never,
-        () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
-      ],
-    });
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* DevinAdapter;
-        const threadId = ThreadId.makeUnsafe("thread-devin-wedge-stall");
-        const runtimeEvents: Array<{
-          type: string;
-          turnId?: string | undefined;
-          payload?: Record<string, unknown> | undefined;
-        }> = [];
-        yield* adapter.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() =>
-              runtimeEvents.push({
-                type: event.type,
-                ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
-                payload: event.payload as Record<string, unknown> | undefined,
-              }),
+  it.each(["fiber-interrupt", "cancel-response"] as const)(
+    "recovers a stall-watch wedge with %s: cancels the turn, restarts, and continues",
+    async (settlement) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const cancelledResponse = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [
+          () =>
+            settlement === "cancel-response" ? Deferred.await(cancelledResponse) : Effect.never,
+          () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+        ],
+        cancel: () =>
+          settlement === "cancel-response"
+            ? Deferred.succeed(cancelledResponse, {
+                stopReason: "cancelled",
+              } as Acp.PromptResponse).pipe(Effect.andThen(flushTimers()))
+            : Effect.void,
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-devin-wedge-stall");
+          const runtimeEvents: Array<{
+            type: string;
+            turnId?: string | undefined;
+            payload?: Record<string, unknown> | undefined;
+          }> = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() =>
+                runtimeEvents.push({
+                  type: event.type,
+                  ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
+                  payload: event.payload as Record<string, unknown> | undefined,
+                }),
+              ),
             ),
-          ),
-          Effect.forkScoped,
-        );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
-        const wedgedTurn = yield* adapter.sendTurn({
-          threadId,
-          input: "do the task",
-          attachments: [],
-        });
-        yield* flushTimers();
-        expect(factory.stderrTaps.length).toBe(1);
-        factory.stderrTaps[0]!(STALL_WATCH_LINE);
-        yield* advanceThroughRecovery();
-        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["do the task", "continue"]);
-        expect(factory.stderrTaps.length).toBe(2);
-        const session = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
-        expect(session?.status).toBe("ready");
-        const warning = runtimeEvents.find((event) => event.type === "runtime.warning");
-        expect(String(warning?.payload?.message)).toContain(
-          "restarting this session automatically",
-        );
-        const settled = runtimeEvents.find(
-          (event) =>
-            event.type === "turn.completed" &&
-            event.turnId === String(wedgedTurn.turnId) &&
-            event.payload?.state === "cancelled",
-        );
-        expect(settled).toBeDefined();
-      }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
-    );
-  });
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+          });
+          const wedgedTurn = yield* adapter.sendTurn({
+            threadId,
+            input: "do the task",
+            attachments: [],
+          });
+          yield* flushTimers();
+          expect(factory.stderrTaps.length).toBe(1);
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceThroughRecovery();
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["do the task", "continue"]);
+          expect(factory.stderrTaps.length).toBe(2);
+          const session = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(session?.status).toBe("ready");
+          const warning = runtimeEvents.find((event) => event.type === "runtime.warning");
+          expect(String(warning?.payload?.message)).toContain(
+            "restarting this session automatically",
+          );
+          const settled = runtimeEvents.find(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.turnId === String(wedgedTurn.turnId) &&
+              event.payload?.state === "cancelled",
+          );
+          expect(settled?.payload?.stopReason).toBe("synara.devin.wedge-recovery");
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
 
   it("recovers a spawn-stall wedge when a command never reaches shell-ready", async () => {
     vi.useFakeTimers();
@@ -702,6 +713,15 @@ describe("Devin wedge auto-recovery", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
+        const completions: Array<unknown> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              if (event.type === "turn.completed") completions.push(event.payload);
+            }),
+          ),
+          Effect.forkScoped,
+        );
         const threadId = ThreadId.makeUnsafe("thread-wedge-cancel-notification");
         yield* adapter.startSession({
           provider: "devin",
@@ -721,6 +741,9 @@ describe("Devin wedge auto-recovery", () => {
         yield* Deferred.succeed(release, undefined);
         yield* advanceThroughRecovery();
         yield* Fiber.join(cancelled);
+        expect(completions).toEqual([
+          expect.objectContaining({ state: "cancelled", stopReason: "cancelled" }),
+        ]);
         expect(factory.stderrTaps).toHaveLength(1);
         expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
         expect((yield* adapter.listSessions())[0]?.status).toBe("ready");
@@ -779,7 +802,10 @@ describe("Devin wedge auto-recovery", () => {
         expect(events.filter((event) => event.type === "runtime.error")).toEqual([
           expect.objectContaining({
             turnId: turn.turnId,
-            payload: expect.objectContaining({ message: expect.stringContaining("start failed") }),
+            payload: expect.objectContaining({
+              message: expect.stringContaining("start failed"),
+              detail: { reason: "synara.devin.wedge-recovery" },
+            }),
           }),
         ]);
       }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
