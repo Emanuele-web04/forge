@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -21,7 +22,7 @@ import {
 } from "../../lib/automationDraft";
 import { createAllThreadsSelector } from "../../storeSelectors";
 import { useStore } from "../../store";
-import type { ChatMessage } from "../../types";
+import type { ChatMessage, Thread } from "../../types";
 
 export interface PendingAutomationConversation {
   readonly threadId: ThreadId;
@@ -48,7 +49,8 @@ const EMPTY_WARNING_CONTEXT: AutomationDraftWarningContext = {
   generatedNeedsConfirmation: false,
 };
 
-const selectAllThreads = createAllThreadsSelector();
+const EMPTY_THREADS: Thread[] = [];
+const selectNoThreads = () => EMPTY_THREADS;
 
 export function useChatAutomationSetup({
   threadId,
@@ -57,7 +59,14 @@ export function useChatAutomationSetup({
   setComposerDraftPrompt,
 }: UseChatAutomationSetupInput) {
   const automationProjects = useStore((state) => state.projects);
-  const automationThreads = useStore(selectAllThreads);
+  const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
+  // Only the open dialog needs other transcripts; hidden streams must not render ChatView.
+  // Release the selector's cached transcript maps when the dialog closes.
+  const selectAutomationThreads = useMemo(
+    () => (automationDraftOpen ? createAllThreadsSelector() : selectNoThreads),
+    [automationDraftOpen],
+  );
+  const automationThreads = useStore(selectAutomationThreads);
   const { data: automationData, updateMutation: automationUpdateMutation } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
   const [automationDraftWarnings, setAutomationDraftWarnings] = useState<
@@ -68,7 +77,6 @@ export function useChatAutomationSetup({
   const [acknowledgedAutomationWarnings, setAcknowledgedAutomationWarnings] = useState<
     ReadonlySet<AutomationDraftWarningId>
   >(() => new Set());
-  const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
   const [isAutomationDraftSubmitting, setIsAutomationDraftSubmitting] = useState(false);
   const automationDraftSubmittingRef = useRef(false);
   const [pendingAutomationConversation, setPendingAutomationConversation] =

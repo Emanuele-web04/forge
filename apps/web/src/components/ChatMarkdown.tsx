@@ -9,6 +9,8 @@ import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
+  createContext,
+  useContext,
   type CSSProperties,
   Suspense,
   isValidElement,
@@ -1251,6 +1253,235 @@ function UncachedShikiCodeBlock({
   return <FindAwareShikiHtml html={highlightedHtml} sourceOffset={sourceOffset} />;
 }
 
+interface MarkdownRenderContextValue {
+  cwd: ChatMarkdownProps["cwd"];
+  knownAbsoluteFilePaths: string[] | undefined;
+  diffThemeName: DiffThemeName;
+  isStreaming: boolean;
+  isUserVariant: boolean;
+  mentionReferences: ChatMarkdownProps["mentionReferences"];
+  onImageExpand: ChatMarkdownProps["onImageExpand"];
+  onTaskToggle: ChatMarkdownProps["onTaskToggle"];
+  resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
+  terminalContexts: ChatMarkdownProps["terminalContexts"];
+  sourceText: string;
+}
+
+const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(null);
+
+// Stable component types preserve code highlighting timers, copy state and image state.
+const MARKDOWN_COMPONENTS: Components = {
+  a: function MarkdownLink({ node: _node, href, children, ...props }) {
+    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme } =
+      useContext(MarkdownRenderContext)!;
+    const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
+    const isExternalHttp = isExternalHttpHref(restoredHref);
+    if (isUserVariant && isExternalHttp) {
+      // GFM autolinks a pasted URL before the chips plugin can see it; when the
+      // link text is just the URL itself, render the composer's link chip so a
+      // pasted link looks identical in the composer and in the sent bubble.
+      // Authored `[label](url)` links keep the regular anchor treatment below.
+      const plainText = nodeToPlainText(children);
+      if (
+        plainText === restoredHref ||
+        restoredHref === `http://${plainText}` ||
+        restoredHref === `https://${plainText}`
+      ) {
+        return <InlineLinkChip url={restoredHref} interactive />;
+      }
+    }
+    const targetPath = isExternalHttp
+      ? null
+      : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePaths);
+    if (!targetPath) {
+      return (
+        <a
+          {...props}
+          href={restoredHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
+        >
+          {isExternalHttp ? (
+            <LinkChipIcon url={restoredHref} className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME} />
+          ) : null}
+          {children}
+        </a>
+      );
+    }
+
+    return (
+      <OpenableFileChip
+        targetPath={targetPath}
+        theme={resolvedTheme}
+        label={nodeToPlainText(children)}
+        {...(restoredHref ? { href: restoredHref } : {})}
+      />
+    );
+  },
+  pre: function MarkdownPre({ node, children, ...props }) {
+    const { sourceText, diffThemeName, isStreaming } = useContext(MarkdownRenderContext)!;
+    const codeBlock = extractCodeBlock(children);
+    if (!codeBlock) {
+      return <pre {...props}>{children}</pre>;
+    }
+
+    const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
+    const code = dedentCode(codeBlock.code);
+    const blockStart = node?.position?.start?.offset ?? 0;
+    const codeOffsetInSource = sourceText.indexOf(code, blockStart);
+    const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
+    const highlightedFallback = (
+      <pre {...props}>
+        <FindAwareCodeFallback code={code} sourceOffset={sourceOffset}>
+          {children}
+        </FindAwareCodeFallback>
+      </pre>
+    );
+
+    return (
+      <MarkdownCodeBlock code={code} fence={fence}>
+        <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+          <Suspense fallback={highlightedFallback}>
+            <SuspenseShikiCodeBlock
+              language={fence.language}
+              code={code}
+              themeName={diffThemeName}
+              isStreaming={isStreaming}
+              sourceOffset={sourceOffset}
+            />
+          </Suspense>
+        </CodeHighlightErrorBoundary>
+      </MarkdownCodeBlock>
+    );
+  },
+  code: function MarkdownInlineCode({ node, className, children, ...props }) {
+    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
+      useContext(MarkdownRenderContext)!;
+    // Fenced blocks carry a `language-*` class and are rendered by `pre`;
+    // only inline code (no class) that names a file becomes an openable
+    // mention chip. Absolute local paths chip immediately. Relative names
+    // chip only when that file actually exists in the chat workspace.
+    if (!className) {
+      const filePath = inlineCodeFilePath(nodeToPlainText(children));
+      if (filePath) {
+        const nodeStart = node?.position?.start?.offset ?? 0;
+        const filePathOffset = sourceText.indexOf(filePath, nodeStart);
+        const sourceOffset = filePathOffset < 0 ? nodeStart : filePathOffset;
+        const findLabelProps = {
+          label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
+        };
+        const knownTarget = resolveChatFileChipTarget(filePath, undefined, knownAbsoluteFilePaths);
+        if (knownTarget) {
+          return (
+            <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} {...findLabelProps} />
+          );
+        }
+        if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
+          return (
+            <VerifiedWorkspaceFileChip
+              rawReference={filePath}
+              cwd={cwd}
+              theme={resolvedTheme}
+              {...findLabelProps}
+            />
+          );
+        }
+      }
+    }
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+  img: function MarkdownImage({ node: _node, src, alt: altProp, ...props }) {
+    const { cwd, onImageExpand } = useContext(MarkdownRenderContext)!;
+    const alt = altProp ?? "";
+    const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
+    if (isLocalImageMarkdownSrc(restoredSrc)) {
+      return (
+        <GeneratedMarkdownImage
+          src={restoredSrc}
+          alt={alt}
+          cwd={cwd}
+          onImageExpand={onImageExpand}
+        />
+      );
+    }
+    return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+  },
+  li: function MarkdownListItem({ node, children, ...props }) {
+    // Task items carry their source line down to the checkbox via context.
+    const isTaskItem =
+      typeof props.className === "string" && props.className.includes("task-list-item");
+    const sourceLine = node?.position?.start.line ?? null;
+    if (!isTaskItem || sourceLine === null) {
+      return <li {...props}>{children}</li>;
+    }
+    return (
+      <li {...props}>
+        <TaskItemSourceLineContext.Provider value={sourceLine}>
+          {children}
+        </TaskItemSourceLineContext.Provider>
+      </li>
+    );
+  },
+  input: function MarkdownInput({ node: _node, ...props }) {
+    const { onTaskToggle } = useContext(MarkdownRenderContext)!;
+    if (props.type === "checkbox") {
+      return <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />;
+    }
+    return <input {...props} />;
+  },
+  // Custom elements emitted by the composer-chips remark plugin (user
+  // variant only; they never appear in assistant markdown). `Components`
+  // only models intrinsic tags, so these entries are typed on their own
+  // and cast into the map.
+  ...({
+    [COMPOSER_CHIP_TAG_NAME]: function MarkdownComposerChip(props: {
+      className?: string | undefined;
+      [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
+    }) {
+      const { resolvedTheme, mentionReferences } = useContext(MarkdownRenderContext)!;
+      return (
+        <ComposerChipElement
+          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+          theme={resolvedTheme}
+          mentionReferences={mentionReferences ?? []}
+        />
+      );
+    },
+    [TERMINAL_CONTEXT_CHIP_TAG_NAME]: function MarkdownTerminalChip(props: {
+      [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
+    }) {
+      const { terminalContexts } = useContext(MarkdownRenderContext)!;
+      const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
+      const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
+      const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
+      if (!context) {
+        return null;
+      }
+      const tooltipText =
+        context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
+      return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+    },
+    [CHAT_FIND_TEXT_TAG_NAME]: function MarkdownFindText(props: {
+      children?: ReactNode;
+      [CHAT_FIND_TEXT_START_ATTRIBUTE]?: string | undefined;
+    }) {
+      const rawSourceOffset = props[CHAT_FIND_TEXT_START_ATTRIBUTE];
+      const sourceOffset =
+        rawSourceOffset === undefined ? Number.NaN : Number.parseInt(rawSourceOffset, 10);
+      const text = nodeToPlainText(props.children);
+      if (!Number.isFinite(sourceOffset) || text.length === 0) {
+        return <>{props.children}</>;
+      }
+      return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
+    },
+  } as unknown as Components),
+};
+
 function ChatMarkdown({
   text,
   cwd,
@@ -1318,9 +1549,12 @@ function ChatMarkdown({
   // repaired text — validate them against the same string. A marker recorded
   // after a repaired delimiter row fails its `selectedText` check and is
   // dropped instead of highlighting a shifted range.
+  const markerSourceText = markers?.length ? sourceText : "";
   const rangeDecorationRemarkPlugin = useMemo(() => {
-    return createTextRangeRemarkPlugin(threadMarkerDecorations({ text: sourceText, markers }));
-  }, [markers, sourceText]);
+    return createTextRangeRemarkPlugin(
+      threadMarkerDecorations({ text: markerSourceText, markers }),
+    );
+  }, [markers, markerSourceText]);
   const composerChipsRemarkPlugin = useMemo(
     () =>
       isUserVariant
@@ -1349,219 +1583,19 @@ function ChatMarkdown({
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
   }, [findActiveRange, findQuery, renderedText]);
-  const markdownComponents = useMemo<Components>(
+  const renderContext = useMemo<MarkdownRenderContextValue>(
     () => ({
-      a({ node: _node, href, children, ...props }) {
-        const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
-        const isExternalHttp = isExternalHttpHref(restoredHref);
-        if (isUserVariant && isExternalHttp) {
-          // GFM autolinks a pasted URL before the chips plugin can see it; when the
-          // link text is just the URL itself, render the composer's link chip so a
-          // pasted link looks identical in the composer and in the sent bubble.
-          // Authored `[label](url)` links keep the regular anchor treatment below.
-          const plainText = nodeToPlainText(children);
-          if (
-            plainText === restoredHref ||
-            restoredHref === `http://${plainText}` ||
-            restoredHref === `https://${plainText}`
-          ) {
-            return <InlineLinkChip url={restoredHref} interactive />;
-          }
-        }
-        const targetPath = isExternalHttp
-          ? null
-          : resolveChatFileChipTarget(restoredHref, cwd, knownAbsoluteFilePaths);
-        if (!targetPath) {
-          return (
-            <a
-              {...props}
-              href={restoredHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
-            >
-              {isExternalHttp ? (
-                <LinkChipIcon
-                  url={restoredHref}
-                  className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME}
-                />
-              ) : null}
-              {children}
-            </a>
-          );
-        }
-
-        return (
-          <OpenableFileChip
-            targetPath={targetPath}
-            theme={resolvedTheme}
-            label={nodeToPlainText(children)}
-            {...(restoredHref ? { href: restoredHref } : {})}
-          />
-        );
-      },
-      pre({ node, children, ...props }) {
-        const codeBlock = extractCodeBlock(children);
-        if (!codeBlock) {
-          return <pre {...props}>{children}</pre>;
-        }
-
-        const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
-        const code = dedentCode(codeBlock.code);
-        const blockStart = node?.position?.start?.offset ?? 0;
-        const codeOffsetInSource = sourceText.indexOf(code, blockStart);
-        const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
-        const highlightedFallback = (
-          <pre {...props}>
-            <FindAwareCodeFallback code={code} sourceOffset={sourceOffset}>
-              {children}
-            </FindAwareCodeFallback>
-          </pre>
-        );
-
-        return (
-          <MarkdownCodeBlock code={code} fence={fence}>
-            <CodeHighlightErrorBoundary fallback={highlightedFallback}>
-              <Suspense fallback={highlightedFallback}>
-                <SuspenseShikiCodeBlock
-                  language={fence.language}
-                  code={code}
-                  themeName={diffThemeName}
-                  isStreaming={isStreaming}
-                  sourceOffset={sourceOffset}
-                />
-              </Suspense>
-            </CodeHighlightErrorBoundary>
-          </MarkdownCodeBlock>
-        );
-      },
-      code({ node, className, children, ...props }) {
-        // Fenced blocks carry a `language-*` class and are rendered by `pre`;
-        // only inline code (no class) that names a file becomes an openable
-        // mention chip. Absolute local paths chip immediately. Relative names
-        // chip only when that file actually exists in the chat workspace.
-        if (!className) {
-          const filePath = inlineCodeFilePath(nodeToPlainText(children));
-          if (filePath) {
-            const nodeStart = node?.position?.start?.offset ?? 0;
-            const filePathOffset = sourceText.indexOf(filePath, nodeStart);
-            const sourceOffset = filePathOffset < 0 ? nodeStart : filePathOffset;
-            const findLabelProps = {
-              label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
-            };
-            const knownTarget = resolveChatFileChipTarget(
-              filePath,
-              undefined,
-              knownAbsoluteFilePaths,
-            );
-            if (knownTarget) {
-              return (
-                <OpenableFileChip
-                  targetPath={knownTarget}
-                  theme={resolvedTheme}
-                  {...findLabelProps}
-                />
-              );
-            }
-            if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
-              return (
-                <VerifiedWorkspaceFileChip
-                  rawReference={filePath}
-                  cwd={cwd}
-                  theme={resolvedTheme}
-                  {...findLabelProps}
-                />
-              );
-            }
-          }
-        }
-        return (
-          <code className={className} {...props}>
-            {children}
-          </code>
-        );
-      },
-      img({ node: _node, src, alt: altProp, ...props }) {
-        const alt = altProp ?? "";
-        const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
-        if (isLocalImageMarkdownSrc(restoredSrc)) {
-          return (
-            <GeneratedMarkdownImage
-              src={restoredSrc}
-              alt={alt}
-              cwd={cwd}
-              onImageExpand={onImageExpand}
-            />
-          );
-        }
-        return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
-      },
-      li({ node, children, ...props }) {
-        // Task items carry their source line down to the checkbox via context.
-        const isTaskItem =
-          typeof props.className === "string" && props.className.includes("task-list-item");
-        const sourceLine = node?.position?.start.line ?? null;
-        if (!isTaskItem || sourceLine === null) {
-          return <li {...props}>{children}</li>;
-        }
-        return (
-          <li {...props}>
-            <TaskItemSourceLineContext.Provider value={sourceLine}>
-              {children}
-            </TaskItemSourceLineContext.Provider>
-          </li>
-        );
-      },
-      input({ node: _node, ...props }) {
-        if (props.type === "checkbox") {
-          return (
-            <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />
-          );
-        }
-        return <input {...props} />;
-      },
-      // Custom elements emitted by the composer-chips remark plugin (user
-      // variant only; they never appear in assistant markdown). `Components`
-      // only models intrinsic tags, so these entries are typed on their own
-      // and cast into the map.
-      ...({
-        [COMPOSER_CHIP_TAG_NAME]: (props: {
-          className?: string | undefined;
-          [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
-        }) => (
-          <ComposerChipElement
-            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-            theme={resolvedTheme}
-            mentionReferences={mentionReferences ?? []}
-          />
-        ),
-        [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
-          [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
-        }) => {
-          const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
-          const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
-          const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
-          if (!context) {
-            return null;
-          }
-          const tooltipText =
-            context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-          return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
-        },
-        [CHAT_FIND_TEXT_TAG_NAME]: (props: {
-          children?: ReactNode;
-          [CHAT_FIND_TEXT_START_ATTRIBUTE]?: string | undefined;
-        }) => {
-          const rawSourceOffset = props[CHAT_FIND_TEXT_START_ATTRIBUTE];
-          const sourceOffset =
-            rawSourceOffset === undefined ? Number.NaN : Number.parseInt(rawSourceOffset, 10);
-          const text = nodeToPlainText(props.children);
-          if (!Number.isFinite(sourceOffset) || text.length === 0) {
-            return <>{props.children}</>;
-          }
-          return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
-        },
-      } as unknown as Components),
+      cwd,
+      knownAbsoluteFilePaths,
+      diffThemeName,
+      isStreaming,
+      isUserVariant,
+      mentionReferences,
+      onImageExpand,
+      onTaskToggle,
+      resolvedTheme,
+      terminalContexts,
+      sourceText,
     }),
     [
       cwd,
@@ -1574,7 +1608,6 @@ function ChatMarkdown({
       onTaskToggle,
       resolvedTheme,
       terminalContexts,
-      text,
       sourceText,
     ],
   );
@@ -1590,12 +1623,14 @@ function ChatMarkdown({
         sourceText={sourceText}
         activeRange={findActiveRange}
       >
-        <ParsedMarkdown
-          text={renderedText}
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={rehypePlugins}
-          components={markdownComponents}
-        />
+        <MarkdownRenderContext.Provider value={renderContext}>
+          <ParsedMarkdown
+            text={renderedText}
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={MARKDOWN_COMPONENTS}
+          />
+        </MarkdownRenderContext.Provider>
       </ChatFindRenderProvider>
     </div>
   );

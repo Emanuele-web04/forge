@@ -898,6 +898,66 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it("limits skipped projection reconciles to 72 seconds since the last snapshot", async () => {
+    const turnId = TurnId.makeUnsafe("turn-reconcile-deadline");
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: NOW_ISO,
+          startedAt: NOW_ISO,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      }),
+    };
+    const mounted = await mountApp();
+    // Advance only the scheduling clock; leave transport and browser timers real.
+    let now = Date.now() + 6_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    try {
+      await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(1), {
+        timeout: 4_000,
+      });
+      // Let the snapshot continuation record its successful reconciliation time.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      const lastSnapshotAt = now;
+
+      for (const elapsedMs of [9_000, 27_000, 63_000]) {
+        const previousReplayCount = replayRequestCursors.length;
+        now = lastSnapshotAt + elapsedMs;
+        await vi.waitFor(
+          () => expect(replayRequestCursors.length).toBeGreaterThan(previousReplayCount),
+          { timeout: 4_000 },
+        );
+        expect(getThreadDetailSnapshotRequestCount).toBe(1);
+      }
+
+      // Each replay was empty, but skipped reconciles must not move the real-fetch
+      // deadline to 135 seconds by adding their backoff delays together.
+      now = lastSnapshotAt + 72_000;
+      await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(2), {
+        timeout: 4_000,
+      });
+    } finally {
+      clock.mockRestore();
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  });
+
   it("does not poll a converged terminal thread projection", async () => {
     const mounted = await mountApp();
 
@@ -2065,4 +2125,100 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
+
+  // Perf probe (VITE_SYNARA_PERF=1): how many full thread-detail snapshot reconciles a
+  // running thread with a bursty stream triggers over a fixed window. Multiply by the
+  // number of subscribed running threads for the steady-state load.
+  it.skipIf(import.meta.env.VITE_SYNARA_PERF !== "1")(
+    "perf: bursty running thread projection reconcile count",
+    async () => {
+      const runningTurnId = TurnId.makeUnsafe("turn-perf-running");
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: runningTurnId,
+            state: "running",
+            requestedAt: "2026-03-04T12:00:04.000Z",
+            startedAt: "2026-03-04T12:00:04.500Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: runningTurnId,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:04.500Z",
+          },
+          updatedAt: "2026-03-04T12:00:04.500Z",
+        }),
+      };
+      const WINDOW_MS = 45_000;
+      const BURST_PERIOD_MS = 6_000;
+      const DELTAS_PER_BURST = 5;
+      const mounted = await mountApp();
+      try {
+        getThreadDetailSnapshotRequestCount = 0;
+        replayRequestCursors = [];
+        const startedAt = performance.now();
+        let sequence = 100;
+        const messageId = MessageId.makeUnsafe("msg-perf-stream");
+        while (performance.now() - startedAt < WINDOW_MS) {
+          for (let index = 0; index < DELTAS_PER_BURST; index += 1) {
+            const createdAt = new Date().toISOString();
+            sequence += 1;
+            const streamedEvent = {
+              sequence,
+              eventId: EventId.makeUnsafe(`event-perf-${sequence}`),
+              aggregateKind: "thread",
+              aggregateId: THREAD_ID,
+              occurredAt: createdAt,
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              type: "thread.message-sent",
+              payload: {
+                threadId: THREAD_ID,
+                messageId,
+                role: "assistant",
+                text: "streamed chunk ",
+                turnId: runningTurnId,
+                source: "native",
+                streaming: true,
+                createdAt,
+                updatedAt: createdAt,
+              },
+            } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+            // The journal holds every streamed event, so a replay poll returns exactly
+            // what the live stream has not yet delivered (nothing, in steady state).
+            replayEvents = [...replayEvents, streamedEvent];
+            // The projection cursor advances with the journal, so a reconcile snapshot
+            // taken after this event carries a fence at or past the client cursor.
+            fixture = { ...fixture, snapshot: { ...fixture.snapshot, snapshotSequence: sequence } };
+            sendThreadEventPush(streamedEvent);
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+          }
+          await new Promise<void>((resolve) =>
+            window.setTimeout(resolve, BURST_PERIOD_MS - DELTAS_PER_BURST * 100),
+          );
+        }
+        const report = {
+          windowMs: WINDOW_MS,
+          burstPeriodMs: BURST_PERIOD_MS,
+          threadDetailSnapshotRequests: getThreadDetailSnapshotRequestCount,
+          replayRequests: replayRequestCursors.length,
+        };
+        console.log(`[perf] ${JSON.stringify(report)}`);
+        document.title = `perf:${JSON.stringify(report)}`;
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    },
+    120_000,
+  );
 });
