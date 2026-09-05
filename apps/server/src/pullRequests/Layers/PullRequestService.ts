@@ -6,6 +6,8 @@ import {
   type PullRequestInvolvement,
   type PullRequestListEntry,
   type PullRequestsListResult,
+  type WorkItemAuthStatus,
+  type WorkItemSearchResult,
 } from "@synara/contracts";
 import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
 import { Effect, Layer, Scope, Semaphore } from "effect";
@@ -57,6 +59,7 @@ const PULL_REQUEST_LIST_CACHE_MAX_ENTRIES = 512;
 const PULL_REQUEST_PIN_ITEM_CACHE_MAX_ENTRIES = 128;
 const PULL_REQUEST_REVIEW_MATCH_CACHE_MAX_ENTRIES = 32;
 const PULL_REQUEST_MERGE_CAPABILITIES_CACHE_MAX_ENTRIES = 64;
+const WORK_ITEM_SEARCH_CACHE_MAX_ENTRIES = 128;
 
 type PullRequestListBatch = {
   readonly entries: ReadonlyArray<GitHubPullRequestListItem>;
@@ -153,6 +156,18 @@ export const makePullRequestService = (
       PullRequestDetail["mergeCapabilities"],
       GitHubCliError
     >({ maxEntries: PULL_REQUEST_MERGE_CAPABILITIES_CACHE_MAX_ENTRIES, ttlMs: 5 * 60_000 });
+    const workItemSearchCache = yield* makeKeyedSingleFlightCache<
+      WorkItemSearchResult,
+      GitHubCliError
+    >({
+      maxEntries: WORK_ITEM_SEARCH_CACHE_MAX_ENTRIES,
+      // Unavailable and degraded results must not pin the failure for the full
+      // TTL: a user who runs `gh auth login` mid-session would otherwise keep
+      // seeing the cached unavailable state. TTL 0 still lets concurrent
+      // identical searches join one gh round trip, but the next request
+      // immediately hits gh fresh.
+      ttlMs: (result) => (result.available && result.errorHint === null ? 30_000 : 0),
+    });
 
     const pullRequestMutationCacheFinalizer = (
       repository: string,
@@ -570,9 +585,54 @@ export const makePullRequestService = (
       finalizeMutationCaches: pullRequestMutationCacheFinalizer,
     });
 
+    const searchWorkItems: PullRequestServiceShape["searchWorkItems"] = (input) => {
+      const query = input.query ?? "";
+      const limit = input.limit ?? 20;
+      // One cache entry per repository+query+limit: repeat composer searches within
+      // the TTL reuse the same gh result, and concurrent identical searches join a
+      // single gh round trip instead of racing duplicate subprocesses.
+      const cacheKey = `${input.repository.trim().toLowerCase()}\u0000${query}\u0000${limit}`;
+      return workItemSearchCache.get(
+        cacheKey,
+        withGitHubRead(
+          dependencies.github.searchWorkItems({
+            ...input,
+            query,
+            limit,
+          }),
+        ),
+      );
+    };
+
+    const workItemsAuthStatus: PullRequestServiceShape["workItemsAuthStatus"] = (input) =>
+      viewerCache
+        .get("viewer", withGitHubRead(dependencies.github.getViewerLogin({ cwd: input.cwd })))
+        .pipe(
+          Effect.map(() => ({ status: "ready" as const, hint: null })),
+          Effect.catch((error: unknown) =>
+            Effect.succeed(
+              ((): WorkItemAuthStatus => {
+                if (error instanceof GitHubCliError) {
+                  if (error.reason === "not-installed") {
+                    return { status: "gh-not-installed", hint: error.detail };
+                  }
+                  if (error.reason === "not-authenticated") {
+                    return { status: "gh-not-authenticated", hint: error.detail };
+                  }
+                }
+                // Unclassifiable probe failures must not hide the menu item: the
+                // search dialog surfaces the real error with a retry when it runs.
+                return { status: "ready", hint: null };
+              })(),
+            ),
+          ),
+        );
+
     return {
       list,
       reviewRequestCount,
+      searchWorkItems,
+      workItemsAuthStatus,
       ...operations,
     } satisfies PullRequestServiceShape;
   });

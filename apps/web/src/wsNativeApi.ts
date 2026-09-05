@@ -630,6 +630,10 @@ export function createWsNativeApi(): NativeApi {
       comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
       setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
     },
+    workItems: {
+      search: (input) => transport.request(WS_METHODS.workItemsSearch, input),
+      availability: (input) => transport.request(WS_METHODS.workItemsAvailability, input),
+    },
     contextMenu: {
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],

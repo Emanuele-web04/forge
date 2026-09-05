@@ -29,6 +29,7 @@ import {
 } from "./terminalContext";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
+import { appendWorkItemsToPrompt, type WorkItemDraft } from "./composerWorkItems";
 import { appendFileCommentsToPrompt } from "./fileComments";
 import {
   appendBrowserAnnotationsToPrompt,
@@ -302,6 +303,7 @@ describe("terminalContext", () => {
       assistantSelections: [],
       fileComments: [],
       pastedTexts: [],
+      workItems: [],
       browserAnnotations: [],
     });
   });
@@ -326,6 +328,7 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [],
       pastedTexts: [],
+      workItems: [],
       browserAnnotations: [],
     });
   });
@@ -359,6 +362,7 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [],
       pastedTexts: [],
+      workItems: [],
       browserAnnotations: [],
     });
   });
@@ -394,6 +398,63 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
       pastedTexts: [],
+      workItems: [],
+      browserAnnotations: [],
+    });
+  });
+
+  it("separates work items from pasted texts in display state (work items outermost)", () => {
+    const workItem: WorkItemDraft = {
+      id: "work-item-1",
+      kind: "issue",
+      number: 712,
+      title: "Composer drops draft on reload",
+      state: "open",
+      url: "https://github.com/owner/repo/issues/712",
+      bodyExcerpt: "Steps: open a draft, reload the tab.",
+      createdAt: "2024-01-01T00:00:00Z",
+      updatedAt: "2024-01-02T00:00:00Z",
+    };
+    // Mirror the composer send path: pasted texts first, then work items
+    // (outermost of the two).
+    const prompt = appendWorkItemsToPrompt(
+      appendPastedTextsToPrompt("Check this", [
+        createPastedTextDraft({
+          id: "pasted-1",
+          createdAt: "2024-01-01T00:00:00Z",
+          text: "pasted log line",
+        }),
+      ]),
+      [workItem],
+    );
+
+    expect(
+      deriveDisplayedUserMessageState(prompt, {
+        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
+      }),
+    ).toEqual({
+      visibleText: "Check this",
+      copyText: "Check this",
+      contextCount: 0,
+      previewTitle: null,
+      contexts: [],
+      assistantSelections: [],
+      fileComments: [],
+      pastedTexts: [
+        { index: 1, text: "pasted log line", lineCount: 1, charCount: "pasted log line".length },
+      ],
+      workItems: [
+        {
+          kind: "issue",
+          number: 712,
+          title: "Composer drops draft on reload",
+          state: "open",
+          url: "https://github.com/owner/repo/issues/712",
+          bodyExcerpt: "Steps: open a draft, reload the tab.",
+          createdAt: "2024-01-01T00:00:00Z",
+          updatedAt: "2024-01-02T00:00:00Z",
+        },
+      ],
       browserAnnotations: [],
     });
   });
@@ -422,6 +483,7 @@ describe("terminalContext", () => {
       assistantSelections: [],
       fileComments: [],
       pastedTexts: [],
+      workItems: [],
       browserAnnotations: [],
     });
   });

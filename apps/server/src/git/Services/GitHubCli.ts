@@ -21,6 +21,7 @@ import type {
   PullRequestStack,
   PullRequestStackSummary,
   PullRequestState,
+  WorkItemSearchResult,
 } from "@synara/contracts";
 
 import type { ProcessRunResult } from "../../processRunner";
@@ -274,6 +275,17 @@ export interface GitHubCliShape {
     readonly repo: string;
     readonly number: number;
   }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
+
+  /**
+   * Search open issues and pull requests for a repository. Empty query lists the most
+   * recently updated open items. Returns availability metadata for unauthenticated gh.
+   */
+  readonly searchWorkItems: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly query?: string;
+    readonly limit?: number;
+  }) => Effect.Effect<WorkItemSearchResult, GitHubCliError>;
 
   /**
    * Resolve clone URLs for a GitHub repository.

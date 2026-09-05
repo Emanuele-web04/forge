@@ -1552,6 +1552,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -1581,6 +1582,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -1598,6 +1600,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1613,6 +1616,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 1,
       terminalContexts: [],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1628,6 +1632,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1643,6 +1648,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      workItemCount: 0,
     });
 
     expect(state.hasSendableContent).toBe(true);

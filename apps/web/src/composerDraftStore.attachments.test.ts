@@ -1219,3 +1219,66 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     ).not.toHaveProperty("appIconDataUrl");
   });
 });
+
+describe("composerDraftStore work items", () => {
+  const threadId = ThreadId.makeUnsafe("thread-work-items");
+
+  const makeWorkItem = (kind: "issue" | "pull-request", number: number) => ({
+    id: `${kind}-${number}`,
+    kind,
+    number,
+    title: `Work item ${kind} ${number}`,
+    state: "open" as const,
+    url: `https://github.com/owner/repo/${kind === "issue" ? "issues" : "pull"}/${number}`,
+    bodyExcerpt: "Body",
+    createdAt: "2024-01-01T00:00:00Z",
+    updatedAt: "2024-01-02T00:00:00Z",
+  });
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("deduplicates work items by kind and number and caps at the attachment limit", () => {
+    const store = useComposerDraftStore.getState();
+    expect(store.addWorkItem(threadId, makeWorkItem("issue", 1))).toBe(true);
+    expect(store.addWorkItem(threadId, makeWorkItem("issue", 1))).toBe(false);
+    expect(store.addWorkItem(threadId, makeWorkItem("pull-request", 1))).toBe(true);
+    for (const number of [2, 3, 4]) {
+      expect(store.addWorkItem(threadId, makeWorkItem("issue", number))).toBe(true);
+    }
+    expect(store.addWorkItem(threadId, makeWorkItem("issue", 5))).toBe(false);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.workItems).toHaveLength(5);
+    expect(draft?.workItems.map((item) => `${item.kind}:${item.number}`)).toEqual([
+      "issue:1",
+      "pull-request:1",
+      "issue:2",
+      "issue:3",
+      "issue:4",
+    ]);
+  });
+
+  it("removes a work item by its kind and number key", () => {
+    const store = useComposerDraftStore.getState();
+    store.addWorkItem(threadId, makeWorkItem("issue", 7));
+    store.addWorkItem(threadId, makeWorkItem("pull-request", 7));
+
+    store.removeWorkItem(threadId, "issue:7");
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.workItems).toHaveLength(1);
+    expect(draft?.workItems[0]?.kind).toBe("pull-request");
+  });
+
+  it("clears work items with composer content so sent attachments do not leak", () => {
+    const store = useComposerDraftStore.getState();
+    store.addWorkItem(threadId, makeWorkItem("issue", 9));
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.workItems).toHaveLength(1);
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});

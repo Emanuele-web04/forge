@@ -1716,4 +1716,286 @@ layer("GitHubCliLive", (it) => {
       expect(mockedRunProcess).not.toHaveBeenCalled();
     }),
   );
+
+  it.effect("lists open issues and PRs when the work item query is empty", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              number: 12,
+              title: "Issue twelve",
+              url: "https://github.com/owner/repo/issues/12",
+              state: "OPEN",
+              body: "body",
+              updatedAt: "2026-08-01T00:00:00Z",
+              createdAt: "2026-07-01T00:00:00Z",
+            },
+          ]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      assert.equal(result.available, true);
+      assert.equal(result.errorHint, null);
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0]?.kind, "issue");
+      const calls = mockedRunProcess.mock.calls.map((call) => call[1] as string[]);
+      assert.deepStrictEqual(
+        calls.find((args) => args[0] === "issue"),
+        [
+          "issue",
+          "list",
+          "--repo",
+          "owner/repo",
+          "--state",
+          "open",
+          "--search",
+          "sort:updated-desc",
+          "--limit",
+          "20",
+          "--json",
+          "number,title,url,state,body,updatedAt,createdAt",
+        ],
+      );
+      assert.deepStrictEqual(
+        calls.find((args) => args[0] === "pr"),
+        [
+          "pr",
+          "list",
+          "--repo",
+          "owner/repo",
+          "--state",
+          "open",
+          "--search",
+          "sort:updated-desc",
+          "--limit",
+          "20",
+          "--json",
+          "number,title,url,state,body,updatedAt,createdAt",
+        ],
+      );
+    }),
+  );
+
+  it.effect("passes the query after -- so leading dashes stay search terms", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "-label:bug",
+        limit: 5,
+      });
+
+      const calls = mockedRunProcess.mock.calls.map((call) => call[1] as string[]);
+      const searchIssues = calls.find((args) => args[1] === "issues");
+      assert.deepStrictEqual(searchIssues, [
+        "search",
+        "issues",
+        "--repo",
+        "owner/repo",
+        "--state",
+        "open",
+        "--limit",
+        "5",
+        "--json",
+        "number,title,url,state,body,updatedAt,createdAt",
+        "--",
+        "-label:bug",
+      ]);
+      const searchPrs = calls.find((args) => args[1] === "prs");
+      assert.equal(searchPrs?.[searchPrs.length - 1], "-label:bug");
+      assert.equal(searchPrs?.[searchPrs.length - 2], "--");
+    }),
+  );
+
+  it.effect("bounds work item gh calls with the explicit 10s timeout", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "[]",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      const optionss = mockedRunProcess.mock.calls.map((call) => call[2] as { timeoutMs: number });
+      assert.equal(optionss.length, 2);
+      for (const options of optionss) {
+        assert.equal(options.timeoutMs, 10_000);
+      }
+    }),
+  );
+
+  it.effect("merges kinds by recency, caps excerpts, and drops malformed rows", () =>
+    Effect.gen(function* () {
+      const longBody = "x".repeat(600);
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              number: 1,
+              title: "Old issue",
+              url: "https://github.com/owner/repo/issues/1",
+              state: "OPEN",
+              body: longBody,
+              updatedAt: "2026-01-01T00:00:00Z",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+            { number: 2, title: "", url: "https://github.com/owner/repo/issues/2", state: "OPEN" },
+            {
+              number: 3,
+              title: "Missing timestamps",
+              url: "https://github.com/owner/repo/issues/3",
+              state: "OPEN",
+            },
+            {
+              number: 4,
+              title: "Unknown state",
+              url: "https://github.com/owner/repo/issues/4",
+              state: "DRAFTED",
+              updatedAt: "2026-03-01T00:00:00Z",
+              createdAt: "2026-03-01T00:00:00Z",
+            },
+          ]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              number: 9,
+              title: "Recent PR",
+              url: "https://github.com/owner/repo/pull/9",
+              state: "OPEN",
+              body: "pr body",
+              updatedAt: "2026-09-01T00:00:00Z",
+              createdAt: "2026-09-01T00:00:00Z",
+            },
+          ]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      assert.equal(result.available, true);
+      assert.equal(result.items.length, 2);
+      assert.equal(result.items[0]?.kind, "pull-request");
+      assert.equal(result.items[0]?.number, 9);
+      assert.equal(result.items[1]?.number, 1);
+      assert.equal(result.items[1]?.bodyExcerpt, `${"x".repeat(497)}...`);
+      assert.equal(result.items[1]?.bodyExcerpt.length, 500);
+    }),
+  );
+
+  it.effect("reports unavailable work item search when gh is missing", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValue(new Error("Command not found: gh"));
+      const gh = yield* GitHubCli;
+      const result = yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      assert.equal(result.available, false);
+      assert.equal(result.items.length, 0);
+      assert.equal(typeof result.errorHint, "string");
+      assert.equal(result.errorHint !== null && result.errorHint.length > 0, true);
+    }),
+  );
+
+  it.effect("degrades with a hint when a work item search call fails transiently", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("network unreachable"))
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              number: 3,
+              title: "Surviving PR",
+              url: "https://github.com/owner/repo/pull/3",
+              state: "OPEN",
+              body: "",
+              updatedAt: "2026-08-15T00:00:00Z",
+              createdAt: "2026-08-15T00:00:00Z",
+            },
+          ]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.searchWorkItems({
+        cwd: "/repo",
+        repository: "owner/repo",
+        query: "",
+        limit: 20,
+      });
+
+      assert.equal(result.available, true);
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0]?.number, 3);
+      assert.equal(result.errorHint !== null, true);
+    }),
+  );
 });

@@ -105,6 +105,12 @@ import type {
   PullRequestsListResult,
 } from "./pullRequests";
 import type {
+  WorkItemAvailabilityInput,
+  WorkItemAvailabilityResult,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
+} from "./workItems";
+import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -778,6 +784,10 @@ export interface NativeApi {
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
     comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
     setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
+  };
+  workItems: {
+    search: (input: WorkItemSearchInput) => Promise<WorkItemSearchResult>;
+    availability: (input: WorkItemAvailabilityInput) => Promise<WorkItemAvailabilityResult>;
   };
   contextMenu: {
     show: <T extends string>(

@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  WorkItemAttachment,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -13,6 +14,7 @@ import {
   type PullRequestMergeCapabilities,
   type PullRequestStack,
   type PullRequestStackSummary,
+  type WorkItemSearchResult,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -1457,6 +1459,165 @@ const makeGitHubCli = Effect.sync(() => {
       );
     });
 
+  const WORK_ITEM_JSON_FIELDS = "number,title,url,state,body,updatedAt,createdAt";
+  // Interactive composer search: both per-kind gh calls share this explicit
+  // ceiling so a hung request degrades instead of blocking the dialog.
+  const WORK_ITEM_SEARCH_TIMEOUT_MS = 10_000;
+
+  function normalizeWorkItemState(state: string): "open" | "closed" | "merged" | null {
+    const upper = state.toUpperCase();
+    if (upper === "MERGED") return "merged";
+    if (upper === "CLOSED") return "closed";
+    if (upper === "OPEN") return "open";
+    return null;
+  }
+
+  function excerptWorkItemBody(body: string | null | undefined): string {
+    const text = (body ?? "").trim();
+    if (text.length <= 500) return text;
+    return `${text.slice(0, 497)}...`;
+  }
+
+  function parseWorkItem(raw: unknown, kind: "issue" | "pull-request"): WorkItemAttachment | null {
+    if (!raw || typeof raw !== "object") return null;
+    const item = raw as Record<string, unknown>;
+    const number = typeof item.number === "number" ? item.number : Number(item.number);
+    if (!Number.isFinite(number) || number <= 0) return null;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    if (title.length === 0) return null;
+    const url = typeof item.url === "string" ? item.url.trim() : "";
+    if (url.length === 0) return null;
+    const state = normalizeWorkItemState(typeof item.state === "string" ? item.state : "");
+    // Timestamps are required: fabricating one would float the row to the top of
+    // the recency sort, so malformed rows are dropped instead.
+    const createdAt = typeof item.createdAt === "string" ? item.createdAt : "";
+    const updatedAt = typeof item.updatedAt === "string" ? item.updatedAt : "";
+    if (createdAt.length === 0 || updatedAt.length === 0 || state === null) return null;
+    const attachment: WorkItemAttachment = {
+      kind,
+      number,
+      title,
+      state,
+      url,
+      bodyExcerpt: excerptWorkItemBody(typeof item.body === "string" ? item.body : ""),
+      createdAt,
+      updatedAt,
+    };
+    try {
+      return Schema.decodeUnknownSync(WorkItemAttachment)(attachment);
+    } catch {
+      return null;
+    }
+  }
+
+  function parseWorkItemList(raw: string, kind: "issue" | "pull-request"): WorkItemAttachment[] {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.flatMap((entry: unknown) => {
+        const item = parseWorkItem(entry, kind);
+        return item ? [item] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  function buildWorkItemSearchArgs(
+    kind: "issue" | "pull-request",
+    input: { repository: string; query?: string; limit?: number },
+  ): string[] {
+    const query = input.query ?? "";
+    const limit = input.limit ?? 20;
+    if (query.length === 0) {
+      return [
+        kind === "issue" ? "issue" : "pr",
+        "list",
+        "--repo",
+        input.repository,
+        "--state",
+        "open",
+        "--search",
+        "sort:updated-desc",
+        "--limit",
+        String(limit),
+        "--json",
+        WORK_ITEM_JSON_FIELDS,
+      ];
+    }
+    // Flags come first and the query is passed after `--` so a query that starts
+    // with "-" is treated as search terms, never as gh flags.
+    return [
+      "search",
+      kind === "issue" ? "issues" : "prs",
+      "--repo",
+      input.repository,
+      "--state",
+      "open",
+      "--limit",
+      String(limit),
+      "--json",
+      WORK_ITEM_JSON_FIELDS,
+      "--",
+      query,
+    ];
+  }
+
+  function runWorkItemSearch(
+    kind: "issue" | "pull-request",
+    input: { cwd: string; repository: string; query?: string; limit?: number },
+  ): Effect.Effect<{ items: WorkItemAttachment[]; degraded: boolean }, GitHubCliError> {
+    return execute({
+      cwd: input.cwd,
+      args: buildWorkItemSearchArgs(kind, input),
+      // Composer search is interactive: a hung gh call must fail fast into the
+      // degraded path instead of holding the dialog for the full default 30s.
+      timeoutMs: WORK_ITEM_SEARCH_TIMEOUT_MS,
+    }).pipe(
+      Effect.map((result) => ({ items: parseWorkItemList(result.stdout, kind), degraded: false })),
+      Effect.catch((error) => {
+        if (
+          error instanceof GitHubCliError &&
+          (error.reason === "not-installed" || error.reason === "not-authenticated")
+        ) {
+          return Effect.fail(error);
+        }
+        // Transient failures (network, rate limits, timeouts) degrade the result
+        // instead of failing the whole search.
+        return Effect.succeed({ items: [], degraded: true });
+      }),
+    );
+  }
+
+  const searchWorkItems: GitHubCliShape["searchWorkItems"] = (input) =>
+    Effect.gen(function* () {
+      const [issues, prs] = yield* Effect.all(
+        [runWorkItemSearch("issue", input), runWorkItemSearch("pull-request", input)],
+        { concurrency: 2 },
+      );
+      const combined = [...issues.items, ...prs.items].toSorted(
+        (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+      );
+      return {
+        available: true,
+        errorHint:
+          issues.degraded || prs.degraded
+            ? "Some GitHub results may be missing because a search request failed."
+            : null,
+        items: combined.slice(0, input.limit ?? 20),
+      };
+    }).pipe(
+      Effect.catch((error) => {
+        const hint =
+          error instanceof GitHubCliError ? error.detail : "GitHub CLI is not available.";
+        return Effect.succeed({
+          available: false,
+          errorHint: hint,
+          items: [],
+        });
+      }),
+    );
+
   const service = {
     execute,
     getViewerLogin: (input) =>
@@ -1952,6 +2113,7 @@ const makeGitHubCli = Effect.sync(() => {
 
         return { comments, truncated };
       }),
+    searchWorkItems,
     getRepositoryCloneUrls: (input) =>
       validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
         Effect.flatMap((repository) =>

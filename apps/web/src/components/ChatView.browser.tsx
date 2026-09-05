@@ -1985,7 +1985,12 @@ async function waitForMountedChatReady(options: {
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
-    { timeout: 20_000, interval: 16 },
+    // The first mount in a fresh browser context waits on the route graph's
+    // dynamic import; vite compiles it on demand and a cold or contended
+    // machine can exceed 20s (see the testTimeout note in
+    // vitest.browser.config.ts). Keep the assertions identical, just widen
+    // the budget so cold starts do not report false mount failures.
+    { timeout: 60_000, interval: 16 },
   );
   await waitForLayout();
 }
@@ -5244,6 +5249,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5270,6 +5276,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5363,6 +5370,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5447,6 +5455,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5528,6 +5537,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -8057,6 +8067,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],
+          workItems: [],
           skills: [],
           mentions: [],
           queuedTurns: [],

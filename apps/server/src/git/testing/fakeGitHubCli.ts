@@ -13,6 +13,7 @@ import type {
   GitPullRequestComment,
   PullRequestMergeCapabilities,
   PullRequestStack,
+  WorkItemAttachment,
 } from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
@@ -61,6 +62,7 @@ export interface FakeGhScenario {
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
   mergeOutcome?: "merged" | "enqueued";
+  workItems?: WorkItemAttachment[];
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -436,6 +438,14 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
               comments: scenario.pullRequestReviewComments ?? [],
               truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
             });
+      },
+      searchWorkItems: (input) => {
+        ghCalls.push(`workItem search ${input.query ?? ""} --repo ${input.repository}`);
+        return Effect.succeed({
+          available: true,
+          errorHint: null,
+          items: scenario.workItems ?? [],
+        });
       },
     },
     ghCalls,

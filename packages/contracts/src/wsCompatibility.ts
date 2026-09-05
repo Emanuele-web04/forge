@@ -34,6 +34,7 @@ export const WS_NEGOTIATE_QUERY = {
 } as const;
 
 export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
+export const WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY = "workItems.composer-attach";
 
 // Capabilities the current client refuses to run without. Kept separate from
 // the advertised server list so a newer client can still negotiate with an
@@ -47,6 +48,11 @@ export const WS_CLIENT_REQUIRED_CAPABILITIES = [
   // advance, so require the capability and fail negotiation with a clear
   // "update-server" instead.
   "git.worktree-setup-progress",
+  // workItems.search / workItems.availability back the composer attach
+  // affordance; an older server would reject them as unknown methods, so
+  // require the capability and fail negotiation with "update-server" instead
+  // of sending unsupported RPCs.
+  WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [

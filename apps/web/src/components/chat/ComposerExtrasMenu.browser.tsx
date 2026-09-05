@@ -10,14 +10,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import type { ProviderInteractionMode } from "@synara/contracts";
 
-import { ComposerExtrasMenu } from "./ComposerExtrasMenu";
+import { ComposerExtrasMenu, type ComposerWorkItemAttachStatus } from "./ComposerExtrasMenu";
 
 async function mountMenu(props?: {
   fastModeEnabled?: boolean;
   interactionMode?: ProviderInteractionMode;
   supportsFastMode?: boolean;
+  workItemAttach?: ComposerWorkItemAttachStatus;
 }) {
   const onAddAttachments = vi.fn();
+  const onAttachWorkItem = vi.fn();
   const onToggleFastMode = vi.fn();
   const onInteractionModeChange = vi.fn();
   const host = document.createElement("div");
@@ -28,6 +30,8 @@ async function mountMenu(props?: {
       supportsFastMode={props?.supportsFastMode ?? true}
       fastModeEnabled={props?.fastModeEnabled ?? false}
       onAddAttachments={onAddAttachments}
+      workItemAttach={props?.workItemAttach ?? { status: "enabled" }}
+      onAttachWorkItem={onAttachWorkItem}
       onToggleFastMode={onToggleFastMode}
       onInteractionModeChange={onInteractionModeChange}
     />,
@@ -43,6 +47,7 @@ async function mountMenu(props?: {
     [Symbol.asyncDispose]: cleanup,
     cleanup,
     onAddAttachments,
+    onAttachWorkItem,
     onToggleFastMode,
     onInteractionModeChange,
   };
@@ -87,6 +92,40 @@ describe("ComposerExtrasMenu", () => {
       expect(text).toContain("Mode");
       expect(text).toContain("Fast");
       expect(text).not.toContain("Plugins");
+    });
+  });
+
+  it("hides the attach action when the project has no GitHub remote", async () => {
+    await using _ = await mountMenu({ workItemAttach: { status: "hidden" } });
+
+    await page.getByLabelText("Composer extras").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Add files");
+      expect(text).not.toContain("Attach issue or PR");
+    });
+  });
+
+  it("disables the attach action with the exact gh hint as tooltip", async () => {
+    const tooltip = "GitHub CLI is not authenticated. Run `gh auth login` and retry.";
+    await using _ = await mountMenu({
+      workItemAttach: { status: "disabled", tooltip },
+    });
+
+    await page.getByLabelText("Composer extras").click();
+
+    const item = page.getByRole("menuitem", { name: "Attach issue or PR" });
+    await vi.waitFor(() => {
+      const element = document.querySelector<HTMLElement>(
+        "[data-slot='menu-item'][aria-disabled='true']",
+      );
+      expect(element).not.toBeNull();
+      expect(element?.textContent).toContain("Attach issue or PR");
+    });
+    await item.hover();
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain(tooltip);
     });
   });
 

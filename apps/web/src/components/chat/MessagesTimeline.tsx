@@ -86,6 +86,8 @@ import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip
 import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
+import { workItemKey } from "~/lib/composerWorkItems";
+import { WorkItemAttachmentChip } from "./WorkItemAttachmentChip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
   EditedFileRowContent,
@@ -1655,6 +1657,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             row.message.id === latestEditableUserMessageId &&
             (displayedUserMessage.copyText.trim().length > 0 ||
               renderedBrowserAnnotations.length > 0);
+          const renderedWorkItems = displayedUserMessage.workItems;
           const hasLeadingMedia = hasLeadingUserMedia({
             imageCount: userImages.length,
             fileCount: userFiles.length,
@@ -1662,6 +1665,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             browserAnnotationCount: renderedBrowserAnnotations.length,
             fileCommentCount: renderedFileComments.length,
             pastedTextCount: renderedPastedTexts.length,
+            workItemCount: renderedWorkItems.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
@@ -1717,6 +1721,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           text={pasted.text}
                           metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
                         />
+                      ))}
+                    </div>
+                  )}
+                  {renderedWorkItems.length > 0 && (
+                    <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                      {renderedWorkItems.map((item) => (
+                        <WorkItemAttachmentChip key={workItemKey(item)} item={item} />
                       ))}
                     </div>
                   )}
