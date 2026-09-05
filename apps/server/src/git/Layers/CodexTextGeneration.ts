@@ -576,6 +576,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       );
       const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
         message: input.message,
+        ...(input.context ? { context: input.context } : {}),
         ...(input.attachments ? { attachments: input.attachments } : {}),
       });
 

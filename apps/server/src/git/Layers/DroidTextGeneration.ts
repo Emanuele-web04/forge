@@ -237,6 +237,7 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         (input) =>
           buildThreadTitlePrompt({
             message: input.message,
+            ...(input.context ? { context: input.context } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
           }),
         (generated) => ({ title: sanitizeGeneratedThreadTitle(generated.title) }),

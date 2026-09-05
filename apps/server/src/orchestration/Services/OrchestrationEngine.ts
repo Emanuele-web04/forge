@@ -97,6 +97,11 @@ export interface OrchestrationEngineShape {
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 
+  /** Capture the latest durable event sequence that assigned one thread's title. */
+  readonly getThreadTitleHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
   /**
    * Register a domain-event subscriber before returning its stream. Transport
    * snapshot handshakes use this exact attachment boundary to close replay gaps.
