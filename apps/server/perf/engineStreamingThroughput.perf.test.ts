@@ -52,7 +52,7 @@ describe.skipIf(!ENABLED)("engine streaming throughput", () => {
   it("measures ms per delta for 1/5/10 concurrently streaming threads", async () => {
     const report: Record<string, unknown>[] = [];
     for (let repeat = -1; repeat < 3; repeat += 1) {
-      for (const threadCount of (repeat % 2 === 0 ? [...THREAD_COUNTS].reverse() : THREAD_COUNTS)) {
+      for (const threadCount of repeat % 2 === 0 ? [...THREAD_COUNTS].reverse() : THREAD_COUNTS) {
         const directory = mkdtempSync(join(tmpdir(), "synara-engine-measure-"));
         const dbPath = join(directory, "state.sqlite");
         const { engine, runtime } = await createSystem(dbPath);
@@ -125,20 +125,29 @@ describe.skipIf(!ENABLED)("engine streaming throughput", () => {
           const deltas = perThread * threadCount;
           const cpu = process.cpuUsage(cpuBefore);
           dispatchMs.sort((a, b) => a - b);
-          if (repeat >= 0) report.push({
-            repeat,
-            cpuMs: (cpu.user + cpu.system) / 1000,
-            rssBefore, peakRss, rssAfter: process.memoryUsage().rss,
-            dispatchP95Ms: dispatchMs[Math.floor(dispatchMs.length * 0.95)],
-            dispatchMaxMs: dispatchMs.at(-1),
-            walBytes: (() => { try { return statSync(dbPath + "-wal").size; } catch { return 0; } })(),
-            threads: threadCount,
-            deltas,
-            elapsedMs: +elapsedMs.toFixed(0),
-            msPerDelta: +(elapsedMs / deltas).toFixed(3),
-            deltasPerSecond: +((deltas / elapsedMs) * 1000).toFixed(0),
-            finalMessageChars: perThread * DELTA_TEXT.length,
-          });
+          if (repeat >= 0)
+            report.push({
+              repeat,
+              cpuMs: (cpu.user + cpu.system) / 1000,
+              rssBefore,
+              peakRss,
+              rssAfter: process.memoryUsage().rss,
+              dispatchP95Ms: dispatchMs[Math.floor(dispatchMs.length * 0.95)],
+              dispatchMaxMs: dispatchMs.at(-1),
+              walBytes: (() => {
+                try {
+                  return statSync(dbPath + "-wal").size;
+                } catch {
+                  return 0;
+                }
+              })(),
+              threads: threadCount,
+              deltas,
+              elapsedMs: +elapsedMs.toFixed(0),
+              msPerDelta: +(elapsedMs / deltas).toFixed(3),
+              deltasPerSecond: +((deltas / elapsedMs) * 1000).toFixed(0),
+              finalMessageChars: perThread * DELTA_TEXT.length,
+            });
           const readModel = await runtime.runPromise(engine.getReadModel());
           expect(readModel.threads).toHaveLength(threadCount);
           for (const thread of readModel.threads) {

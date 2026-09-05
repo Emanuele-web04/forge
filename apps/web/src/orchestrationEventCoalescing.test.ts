@@ -162,18 +162,35 @@ describe("coalesceOrchestrationUiEvents", () => {
 
   it("preserves final reducer state for same-turn message switches and activity barriers", () => {
     const cases = [
-      [delta(THREAD_A, MESSAGE_A, "a", 1), delta(THREAD_A, MESSAGE_B, "b", 2), delta(THREAD_A, MESSAGE_A, "a", 3)],
-      [delta(THREAD_A, MESSAGE_A, "a", 1), activity(THREAD_A, 2), delta(THREAD_A, MESSAGE_A, "b", 3)],
-      [delta(THREAD_A, MESSAGE_A, "a", 1), delta(THREAD_A, MESSAGE_A, "ab", 2, { streaming: false }), delta(THREAD_A, MESSAGE_A, "c", 3)],
-      [delta(THREAD_A, MESSAGE_A, "a", 1), activity(THREAD_B, 2), delta(THREAD_A, MESSAGE_A, "b", 3)],
+      [
+        delta(THREAD_A, MESSAGE_A, "a", 1),
+        delta(THREAD_A, MESSAGE_B, "b", 2),
+        delta(THREAD_A, MESSAGE_A, "a", 3),
+      ],
+      [
+        delta(THREAD_A, MESSAGE_A, "a", 1),
+        activity(THREAD_A, 2),
+        delta(THREAD_A, MESSAGE_A, "b", 3),
+      ],
+      [
+        delta(THREAD_A, MESSAGE_A, "a", 1),
+        delta(THREAD_A, MESSAGE_A, "ab", 2, { streaming: false }),
+        delta(THREAD_A, MESSAGE_A, "c", 3),
+      ],
+      [
+        delta(THREAD_A, MESSAGE_A, "a", 1),
+        activity(THREAD_B, 2),
+        delta(THREAD_A, MESSAGE_A, "b", 3),
+      ],
     ];
     for (const events of cases) {
       // Hydration creates the sidebar summary before stream deltas arrive.
       const state = applyOrchestrationEvents(makeState(makeThread({ id: THREAD_A })), [
         delta(THREAD_A, MESSAGE_A, "seed", 0),
       ]);
-      expect(applyOrchestrationEvents(state, coalesceOrchestrationUiEvents(events)))
-        .toEqual(applyOrchestrationEvents(state, events));
+      expect(applyOrchestrationEvents(state, coalesceOrchestrationUiEvents(events))).toEqual(
+        applyOrchestrationEvents(state, events),
+      );
     }
   });
 
@@ -181,13 +198,18 @@ describe("coalesceOrchestrationUiEvents", () => {
     const thread = makeThread({ id: THREAD_A });
     const events = [
       delta(THREAD_A, MESSAGE_A, "a", 1),
-      makeDomainEvent("project.deleted", { projectId: thread.projectId, deletedAt: "2026-01-01T00:00:02Z" }, { sequence: 2 }),
+      makeDomainEvent(
+        "project.deleted",
+        { projectId: thread.projectId, deletedAt: "2026-01-01T00:00:02Z" },
+        { sequence: 2 },
+      ),
       delta(THREAD_A, MESSAGE_A, "b", 3),
     ];
     expect(coalesceOrchestrationUiEvents(events)).toEqual(events);
     const state = makeState(thread);
-    expect(applyOrchestrationEvents(state, coalesceOrchestrationUiEvents(events)))
-      .toEqual(applyOrchestrationEvents(state, events));
+    expect(applyOrchestrationEvents(state, coalesceOrchestrationUiEvents(events))).toEqual(
+      applyOrchestrationEvents(state, events),
+    );
   });
 
   it("does not mutate the input events", () => {

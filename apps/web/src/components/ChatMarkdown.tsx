@@ -1303,10 +1303,7 @@ const MARKDOWN_COMPONENTS: Components = {
           className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
         >
           {isExternalHttp ? (
-            <LinkChipIcon
-              url={restoredHref}
-              className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME}
-            />
+            <LinkChipIcon url={restoredHref} className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME} />
           ) : null}
           {children}
         </a>
@@ -1359,7 +1356,8 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   code: function MarkdownInlineCode({ node, className, children, ...props }) {
-    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } = useContext(MarkdownRenderContext)!;
+    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
+      useContext(MarkdownRenderContext)!;
     // Fenced blocks carry a `language-*` class and are rendered by `pre`;
     // only inline code (no class) that names a file becomes an openable
     // mention chip. Absolute local paths chip immediately. Relative names
@@ -1373,18 +1371,10 @@ const MARKDOWN_COMPONENTS: Components = {
         const findLabelProps = {
           label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
         };
-        const knownTarget = resolveChatFileChipTarget(
-          filePath,
-          undefined,
-          knownAbsoluteFilePaths,
-        );
+        const knownTarget = resolveChatFileChipTarget(filePath, undefined, knownAbsoluteFilePaths);
         if (knownTarget) {
           return (
-            <OpenableFileChip
-              targetPath={knownTarget}
-              theme={resolvedTheme}
-              {...findLabelProps}
-            />
+            <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} {...findLabelProps} />
           );
         }
         if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
@@ -1440,9 +1430,7 @@ const MARKDOWN_COMPONENTS: Components = {
   input: function MarkdownInput({ node: _node, ...props }) {
     const { onTaskToggle } = useContext(MarkdownRenderContext)!;
     if (props.type === "checkbox") {
-      return (
-        <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />
-      );
+      return <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />;
     }
     return <input {...props} />;
   },
@@ -1563,7 +1551,9 @@ function ChatMarkdown({
   // dropped instead of highlighting a shifted range.
   const markerSourceText = markers?.length ? sourceText : "";
   const rangeDecorationRemarkPlugin = useMemo(() => {
-    return createTextRangeRemarkPlugin(threadMarkerDecorations({ text: markerSourceText, markers }));
+    return createTextRangeRemarkPlugin(
+      threadMarkerDecorations({ text: markerSourceText, markers }),
+    );
   }, [markers, markerSourceText]);
   const composerChipsRemarkPlugin = useMemo(
     () =>
