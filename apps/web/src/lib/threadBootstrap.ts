@@ -107,7 +107,6 @@ interface ResolveTerminalThreadCreationStateInput {
   defaultProvider?: ProviderKind | null | undefined;
   draftComposerState: ComposerThreadDraftState | null;
   draftThread: DraftThreadState | null;
-  fresh?: boolean;
   options: NewThreadOptions | undefined;
   projectDefaultModelSelection: ModelSelection | null;
   projectId: ProjectId;
@@ -311,7 +310,6 @@ export function resolveTerminalThreadCreationState(
           : null,
       projectModelSelection: input.projectDefaultModelSelection,
       defaultProvider: input.defaultProvider,
-      ...(input.fresh !== undefined ? { fresh: input.fresh } : {}),
     }),
     runtimeMode:
       input.draftThread?.runtimeMode ??
