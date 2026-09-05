@@ -1203,6 +1203,12 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.providerListModels) {
+    // Keep the full-app fixture contract-valid and neutral. Returning the
+    // generic `{}` fallback makes real discovery retry malformed responses,
+    // which leaks unrelated retry pressure across this file's many mounts.
+    return { models: [], source: "unsupported", cached: false };
+  }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
   }
