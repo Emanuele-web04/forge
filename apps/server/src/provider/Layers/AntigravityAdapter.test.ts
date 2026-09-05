@@ -447,8 +447,8 @@ describe("Antigravity CLI integration helpers", () => {
       prompt: "Ouvre YouTube dans le navigateur intégré.",
       hasGatewaySessionLease: true,
     });
-    expect(autonomousPrompt).toContain("Use the browser_* tools autonomously");
-    expect(autonomousPrompt).toContain("browser_open");
+    expect(autonomousPrompt).toContain("use browser_* autonomously");
+    expect(autonomousPrompt).toContain("Detailed rules live in each tool description");
     expect(autonomousPrompt).toContain("Ouvre YouTube dans le navigateur intégré.");
     expect(
       buildAntigravityTurnPrompt(withLease, {

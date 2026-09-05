@@ -243,6 +243,18 @@ export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: strin
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
+// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
+
+export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
+  if (typeof model !== "string") return null;
+  return CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN.exec(model)?.[1]?.toLowerCase() ?? null;
+}
+
+export function stripClaudeContextWindowSuffix(model: string): string {
+  return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
+}
+
 export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
@@ -467,7 +479,11 @@ export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
 ): ModelCapabilities {
-  const slug = normalizeModelSlug(model, provider);
+  const normalizedSlug = normalizeModelSlug(model, provider);
+  const slug =
+    provider === "claudeAgent" && normalizedSlug
+      ? stripClaudeContextWindowSuffix(normalizedSlug)
+      : normalizedSlug;
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
@@ -541,7 +557,7 @@ export function normalizeModelSlug(
 
   const providerScopedModel =
     provider === "claudeAgent"
-      ? trimmed.replace(/\[[^\]]+\]$/u, "")
+      ? stripClaudeContextWindowSuffix(trimmed)
       : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
         ? trimmed.slice(0, -"-medium".length)
         : trimmed;
@@ -550,7 +566,12 @@ export function normalizeModelSlug(
   const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
     ? aliases[aliasKey]
     : undefined;
-  return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
+  const normalized = typeof aliased === "string" ? aliased : providerScopedModel;
+  return (
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(trimmed) === "1m"
+      ? `${normalized}[1m]`
+      : normalized
+  ) as ModelSlug;
 }
 
 export function resolveSelectableModel(
@@ -590,7 +611,11 @@ export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
-  const normalized = normalizeModelSlug(model, provider);
+  const normalizedModel = normalizeModelSlug(model, provider);
+  const normalized =
+    provider === "claudeAgent" && normalizedModel
+      ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
+      : normalizedModel;
   if (provider === "devin" || provider === "pi") {
     return normalized;
   }
@@ -616,6 +641,11 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
   return trimmed || null;
 }
 
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
@@ -653,6 +683,14 @@ export function normalizeClaudeModelOptions(
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
+  if (
+    modelSelection.provider === "claudeAgent" &&
+    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
+    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    getClaudeContextWindowSuffix(modelSelection.model) === null
+  ) {
+    return `${modelSelection.model}[1m]`;
+  }
   return modelSelection.model;
 }
 

@@ -447,8 +447,6 @@ export function normalizeModelSelection(
     : hasLegacyAntigravityEffort
       ? antigravityLegacyMatch[1]!.trim()
       : rawModel;
-  const inferredClaudeAutoCompactWindow =
-    provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;
@@ -464,13 +462,7 @@ export function normalizeModelSelection(
     provider === "codex"
       ? modelOptions?.codex
       : provider === "claudeAgent"
-        ? inferredClaudeAutoCompactWindow !== undefined
-          ? {
-              ...modelOptions?.claudeAgent,
-              autoCompactWindow:
-                modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
-            }
-          : modelOptions?.claudeAgent
+        ? modelOptions?.claudeAgent
         : provider === "antigravity"
           ? modelOptions?.antigravity
           : provider === "grok"

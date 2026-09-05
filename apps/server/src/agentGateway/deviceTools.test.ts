@@ -113,6 +113,48 @@ describe("agent gateway device tools surface", () => {
     expect(byName.get("device_tap")?.definition.annotations?.readOnlyHint).toBe(false);
     expect(byName.get("device_open_url")?.definition.annotations?.openWorldHint).toBe(true);
   });
+
+  it("publishes the operational rules on the tools that need them", async () => {
+    const { byName } = await setup();
+    const description = (name: string) => byName.get(name)?.definition.description ?? "";
+
+    expect(description("device_list")).toContain("use an already-booted device");
+    expect(description("device_boot")).toContain("only when device_list finds nothing booted");
+    expect(description("device_boot")).toContain("boot-limit-reached");
+    expect(description("device_install")).toContain("Synara never builds");
+    expect(description("device_install")).toContain("xcodebuild");
+    expect(description("device_launch")).toContain("com.apple.Preferences");
+    expect(description("device_open_url")).toContain("exp://127.0.0.1:8081");
+    expect(description("device_open_url")).toContain("start it detached");
+    expect(description("device_open_url")).toContain("expo start --ios");
+    expect(description("device_tap")).toContain("Tap by label");
+    expect(description("device_tap")).toContain("activationPoint");
+    expect(description("device_tap")).toContain("screenshot pixels");
+    expect(description("device_tap")).toContain("HID events were not delivered");
+    expect(description("device_tap")).toContain("unchanged tree");
+    expect(description("device_swipe")).toContain("gesture itself is the goal");
+    expect(description("device_swipe")).toContain("Never write a swipe loop");
+    expect(description("device_screenshot")).toContain("showing the user a result");
+    expect(description("device_describe_ui")).toContain('value "1" means on and "0" means off');
+    expect(description("device_describe_ui")).toContain("rather than using a screenshot");
+    expect(description("device_describe_ui")).toContain("hardware-backed panes");
+    expect(description("device_scroll_to_element")).toContain("instead of a device_swipe loop");
+
+    for (const name of [
+      "device_boot",
+      "device_install",
+      "device_launch",
+      "device_open_url",
+      "device_tap",
+      "device_swipe",
+      "device_type",
+      "device_press_button",
+      "device_scroll_to_element",
+    ]) {
+      expect(description(name)).toContain("DeviceApprovalRequired");
+      expect(description(name)).toContain("do not retry");
+    }
+  });
 });
 
 describe("agent gateway device tool handlers", () => {

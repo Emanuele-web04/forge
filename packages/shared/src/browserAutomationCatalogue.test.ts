@@ -1,4 +1,5 @@
 import { BROWSER_TOOL_NAMES, utf8ByteLength } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +14,8 @@ import {
   READ_ONLY_LOCAL,
   READ_ONLY_OPEN_WORLD,
   stableJsonStringify,
+  projectBrowserToolDefinitions,
+  compactToolInputSchema,
 } from "./browserAutomationCatalogue";
 
 describe("browser automation catalogue projection", () => {
@@ -21,7 +24,40 @@ describe("browser automation catalogue projection", () => {
     for (const tool of BROWSER_TOOL_CATALOGUE) {
       expect(tool.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
       expect(tool.outputSchema).toBeTruthy();
+      expect(JSON.stringify(tool.inputSchema)).not.toMatch(/"(?:examples|title)":/u);
     }
+  });
+
+  it("preserves parameter names, referenced definitions, descriptions and required fields", () => {
+    const input = Schema.Struct({
+      title: Schema.String.annotate({ identifier: "title", description: "Visible title text" }),
+      examples: Schema.Array(Schema.String),
+    });
+    const definition = { ...BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_open, input, output: input };
+    const [projected] = projectBrowserToolDefinitions([definition]);
+    expect(projected?.inputSchema).toMatchObject({
+      properties: { title: { $ref: "#/$defs/title" }, examples: { type: "array" } },
+      required: ["title", "examples"],
+      $defs: { title: { type: "string", description: "Visible title text" } },
+      additionalProperties: false,
+    });
+  });
+
+  it("keeps const/enum payloads and object closure scoped to their original schemas", () => {
+    const literal = { title: "A", examples: ["B"] };
+    const schema = {
+      type: "object",
+      properties: {
+        choice: { enum: [literal], description: "Literal payload" },
+        fixed: { const: literal },
+        nested: {
+          additionalProperties: false,
+          allOf: [{ type: "object", properties: { value: { type: "string" } } }],
+        },
+      },
+      required: ["choice", "fixed"],
+    };
+    expect(compactToolInputSchema(schema)).toEqual(schema);
   });
 
   it("keeps operational annotations and agent guidance canonical", () => {
@@ -58,6 +94,35 @@ describe("browser automation catalogue projection", () => {
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_click.description).toContain(
       "humanActionRequired",
     );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_open.description).toContain(
+      "when no assigned tab exists",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_navigate.description).toContain(
+      "use browser_open first",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_snapshot.description).toContain(
+      "after navigation or human interaction",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain(
+      "concrete condition",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_logs.description).toContain(
+      "diagnose visible-page behavior",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_screenshot.description).toContain(
+      "only when pixels matter",
+    );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_upload.description).toContain(
+      "workspace-relative",
+    );
+    for (const tool of BROWSER_TOOL_DEFINITIONS.slice(2)) {
+      expect(tool.description).toContain("BrowserInterruptedByHuman");
+      expect(tool.description).toContain("turn stop/abort");
+      expect(tool.description).toContain("answer once the outcome is observed");
+      if (!tool.annotations.readOnlyHint) {
+        expect(tool.description).toContain("BrowserDownloadApprovalRequired");
+      }
+    }
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_navigate.description).toContain("annotationId");
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"kind":"text"');
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"timeMs":500');
@@ -76,6 +141,15 @@ describe("browser automation catalogue projection", () => {
     expect(JSON.parse(stableJsonStringify(BROWSER_TOOL_CATALOG_DIGEST_INPUT))).toEqual(
       BROWSER_TOOL_CATALOG_DIGEST_INPUT,
     );
+  });
+
+  it("keeps the provider-facing tool catalogue below its context budget", () => {
+    const providerCatalogue = BROWSER_TOOL_CATALOGUE.map(({ name, description, inputSchema }) => ({
+      name,
+      description,
+      inputSchema,
+    }));
+    expect(JSON.stringify(providerCatalogue).length).toBeLessThanOrEqual(65_000);
   });
 
   it("rejects undefined and non-finite JSON values", () => {
