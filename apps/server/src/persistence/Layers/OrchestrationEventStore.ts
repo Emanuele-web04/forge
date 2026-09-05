@@ -527,7 +527,7 @@ const makeEventStore = Effect.gen(function* () {
         WHERE aggregate_kind = 'thread'
           AND stream_id = ${threadId}
           AND (
-            event_type = 'thread.created'
+            event_type IN ('thread.created', 'thread.archived', 'thread.deleted')
             OR (
               event_type = 'thread.meta-updated'
               AND json_type(payload_json, '$.title') = 'text'

@@ -1071,6 +1071,86 @@ describe("ProviderCommandReactor", () => {
     expect(harness.steerTurn).not.toHaveBeenCalled();
   });
 
+  it("uses persisted provider configuration before any runtime session exists", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      serverSettings: {
+        providers: {
+          opencode: {
+            binaryPath: "/custom/opencode",
+            serverUrl: "http://127.0.0.1:4096",
+          },
+        },
+      },
+    });
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Recovered provider title" }),
+    );
+    await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+    expect(harness.generateThreadTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+        providerOptions: expect.objectContaining({
+          opencode: expect.objectContaining({
+            binaryPath: "/custom/opencode",
+            serverUrl: "http://127.0.0.1:4096",
+          }),
+        }),
+      }),
+    );
+    expect(harness.startSession).not.toHaveBeenCalled();
+  });
+
+  it("shares concurrent title regeneration and permits a later request", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.promise(() => waiting).pipe(Effect.as({ title: "Concurrent title" })),
+    );
+    const input = { threadId: ThreadId.makeUnsafe("thread-1") };
+    const first = Effect.runPromise(harness.reactor.regenerateThreadTitle(input));
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    const second = Effect.runPromise(harness.reactor.regenerateThreadTitle(input));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    release();
+    expect(await Promise.all([first, second])).toEqual([
+      { status: "renamed", title: "Concurrent title" },
+      { status: "renamed", title: "Concurrent title" },
+    ]);
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+    await Effect.runPromise(harness.reactor.regenerateThreadTitle(input));
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["thread.archive", "thread.delete"] as const)(
+    "discards title generation after %s",
+    async (type) => {
+      const harness = await createHarness();
+      await seedRenameConversation(harness);
+      harness.generateThreadTitle.mockImplementationOnce(() =>
+        harness.engine
+          .dispatch({
+            type,
+            commandId: CommandId.makeUnsafe(`cmd-rename-${type}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+          })
+          .pipe(Effect.orDie, Effect.as({ title: "Stale lifecycle title" })),
+      );
+      const result = await Effect.runPromise(
+        harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+      );
+      expect(result).toEqual({ status: "stale", title: null });
+    },
+  );
+
   it("does not invoke title generation without durable user context", async () => {
     const harness = await createHarness();
 
@@ -6003,6 +6083,60 @@ describe("ProviderCommandReactor", () => {
       runtimeMode: "approval-required",
     });
     expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("cwd");
+  });
+
+  it("keeps a manual rename made during automatic first-turn title generation", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    let finishTitleWrite!: () => void;
+    const titleWriteFinished = new Promise<void>((resolve) => {
+      finishTitleWrite = resolve;
+    });
+    const dispatch = harness.engine.dispatch;
+    harness.interceptEngineDispatch((command) => {
+      if (command.type === "thread.meta.update" && command.title === "Late automatic title") {
+        return dispatch(command).pipe(Effect.onExit(() => Effect.sync(finishTitleWrite)));
+      }
+      return undefined;
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-initial-placeholder"),
+        threadId,
+        title: "New thread",
+      }),
+    );
+    harness.generateThreadTitle.mockImplementationOnce(() =>
+      harness.engine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-manual-during-auto-title"),
+          threadId,
+          title: "Manual title wins",
+        })
+        .pipe(Effect.orDie, Effect.as({ title: "Late automatic title" })),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-auto-title-race"),
+        threadId,
+        message: {
+          messageId: asMessageId("auto-title-race-user"),
+          role: "user",
+          text: "Fix startup",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    await titleWriteFinished;
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+    expect((await readHarnessThread(harness))?.title).toBe("Manual title wins");
   });
 
   it("renames a generic first-turn thread title using text generation", async () => {

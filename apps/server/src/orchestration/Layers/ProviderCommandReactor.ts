@@ -10,6 +10,7 @@ import {
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationRegenerateThreadTitleResult,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -31,6 +32,7 @@ import {
   Cache,
   Cause,
   Duration,
+  Deferred,
   Effect,
   Equal,
   Exit,
@@ -2776,6 +2778,9 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
   }) {
+    const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+      input.threadId,
+    );
     const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
     if (!thread) return;
 
@@ -2795,12 +2800,15 @@ const make = Effect.gen(function* () {
     });
     if (!textGenerationInput) {
       if (fallbackTitle !== currentTitle) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.meta.update",
-          commandId: serverCommandId("thread-title-fallback-rename"),
-          threadId: input.threadId,
-          title: fallbackTitle,
-        });
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: serverCommandId("thread-title-fallback-rename"),
+            threadId: input.threadId,
+            title: fallbackTitle,
+            expectedTitleSequence,
+          })
+          .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
       }
       return;
     }
@@ -2843,12 +2851,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* orchestrationEngine.dispatch({
-      type: "thread.meta.update",
-      commandId: serverCommandId("thread-title-rename"),
-      threadId: input.threadId,
-      title: nextTitle,
-    });
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId("thread-title-rename"),
+        threadId: input.threadId,
+        title: nextTitle,
+        expectedTitleSequence,
+      })
+      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
   });
 
   const processTurnStartRequestedWithoutLease = Effect.fnUntraced(function* (
@@ -5397,13 +5408,13 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
-  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+  const generateConversationTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.gen(function* () {
       const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
         input.threadId,
       );
       const thread = yield* resolveThread(input.threadId);
-      if (!thread) {
+      if (!thread || thread.deletedAt != null || thread.archivedAt != null) {
         return yield* Effect.fail(new Error("Thread is unavailable."));
       }
       const context = buildThreadTitleConversationContext(thread.messages);
@@ -5416,8 +5427,10 @@ const make = Effect.gen(function* () {
           (candidate) => candidate.id === input.threadId,
         )?.title ?? thread.title;
       const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+      const settings = yield* serverSettings.getSettings;
       const textGenerationInput = yield* resolveThreadTextGenerationInput({
         threadId: input.threadId,
+        providerOptions: providerStartOptionsFromServerSettings(settings),
         useConfiguredFallback: true,
       });
       if (!textGenerationInput) {
@@ -5479,6 +5492,22 @@ const make = Effect.gen(function* () {
       return updated
         ? { status: "renamed", title: generated.title }
         : { status: "stale", title: null };
+    });
+
+  const pendingTitleGenerations = new Map<
+    ThreadId,
+    Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>
+  >();
+  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+    Effect.suspend(() => {
+      const pending = pendingTitleGenerations.get(input.threadId);
+      if (pending) return Deferred.await(pending);
+      const result = Deferred.makeUnsafe<OrchestrationRegenerateThreadTitleResult, unknown>();
+      pendingTitleGenerations.set(input.threadId, result);
+      return generateConversationTitle(input).pipe(
+        Effect.onExit((exit) => Deferred.done(result, exit)),
+        Effect.ensuring(Effect.sync(() => pendingTitleGenerations.delete(input.threadId))),
+      );
     });
 
   return {
