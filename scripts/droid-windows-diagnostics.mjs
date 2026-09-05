@@ -45,30 +45,47 @@ windowsEnv.PSModulePath = path.win32.join(
   "Modules",
 );
 for (const [label, commandArgs, env] of [
-  ["start-clean", [...args.slice(0, -1), "[Console]::Write('started')"], options.env],
-  ["compile-clean", [...args.slice(0, -1), script], options.env],
   [
-    "compile-encoded",
-    [...args.slice(0, -2), "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+    "simple-type",
+    [
+      ...args.slice(0, -1),
+      "[Console]::Error.WriteLine('before-type'); Add-Type 'public class Empty {}'; [Console]::Write('compiled')",
+    ],
     options.env,
   ],
-  ["compile-windows-env", [...args.slice(0, -1), script], windowsEnv],
+  ["compile-clean", [...args.slice(0, -1), script], options.env],
+  [
+    "compile-explicit-module",
+    [
+      ...args.slice(0, -1),
+      "$PSModuleAutoLoadingPreference = 'None'; Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'); [Console]::Error.WriteLine('module-imported');\n" +
+        script,
+    ],
+    windowsEnv,
+  ],
 ]) {
   const started = Date.now();
   await new Promise((resolve) => {
-    const child = execFile(file, commandArgs, { ...options, env }, (error, stdout, stderr) => {
-      console.log(
-        JSON.stringify({
-          label,
-          elapsedMs: Date.now() - started,
-          code: error?.code,
-          killed: error?.killed,
-          stdout,
-          stderr,
-        }),
-      );
-      resolve();
-    });
+    const child = execFile(
+      file,
+      commandArgs,
+      { ...options, env, timeout: 30_000 },
+      (error, stdout, stderr) => {
+        console.log(
+          JSON.stringify({
+            label,
+            elapsedMs: Date.now() - started,
+            code: error?.code,
+            killed: error?.killed,
+            stdout,
+            stderr,
+          }),
+        );
+        resolve();
+      },
+    );
     child.stdin.end();
   });
 }
+// Stop this diagnostic-only lane immediately so its logs are available for the real repair.
+process.exitCode = 1;
