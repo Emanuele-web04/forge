@@ -210,9 +210,12 @@ export function useProviderModelCatalog(input: {
 
   const selectedProviderModelsQueryKey = modelQueryOptionsByProvider[selectedProvider].queryKey;
 
+  const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
+
   useEffect(() => {
-    prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
-  }, [selectedProviderModelsQueryKey]);
+    if (!selectedProviderModelsEnabled) return;
+    return prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
+  }, [selectedProviderModelsQueryKey, selectedProviderModelsEnabled]);
 
   // Agent/mode discovery (opencode "Agent" picker, claude/codex subagents).
   const claudeDynamicAgentsQuery = useQuery(

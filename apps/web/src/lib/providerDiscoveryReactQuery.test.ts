@@ -169,8 +169,8 @@ describe("providerModelsQueryOptions", () => {
     ];
 
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
-    prioritizeProviderModelDiscovery(firstPaneOptions.queryKey);
-    prioritizeProviderModelDiscovery(secondPaneOptions.queryKey);
+    const releaseFirstPane = prioritizeProviderModelDiscovery(firstPaneOptions.queryKey);
+    const releaseSecondPane = prioritizeProviderModelDiscovery(secondPaneOptions.queryKey);
     prioritizeProviderModelDiscovery(hoverOptions.queryKey, "prefetch");
     releaseCurrent?.();
     await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(2));
@@ -183,7 +183,59 @@ describe("providerModelsQueryOptions", () => {
     expect(listModels.mock.calls[3]?.[0]).toMatchObject({ provider: "devin" });
     releaseCurrent?.();
     await Promise.all(requests);
+    releaseFirstPane?.();
+    releaseSecondPane?.();
   });
+
+  it.each([false, true])(
+    "releases obsolete selections (all shared owners released: %s)",
+    async (releaseAll) => {
+      let releaseActive: (() => void) | undefined;
+      const catalog = {
+        models: [{ slug: "auto", name: "Auto" }],
+        source: "runtime",
+        cached: false,
+      };
+      const listModels = mockListModels(
+        vi
+          .fn()
+          .mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                releaseActive = () => resolve(catalog);
+              }),
+          )
+          .mockResolvedValue(catalog),
+      );
+      const client = new QueryClient();
+      const active = client.fetchQuery(providerModelsQueryOptions({ provider: "codex" }));
+      await vi.waitFor(() => expect(releaseActive).toBeDefined());
+      const abandoned = providerModelsQueryOptions({ provider: "cursor", priority: "foreground" });
+      const shared = providerModelsQueryOptions({ provider: "pi" });
+      const hover = providerModelsQueryOptions({ provider: "devin", priority: "prefetch" });
+      const releaseAbandoned = prioritizeProviderModelDiscovery(abandoned.queryKey);
+      const releaseSharedA = prioritizeProviderModelDiscovery(shared.queryKey);
+      const releaseSharedB = prioritizeProviderModelDiscovery(shared.queryKey);
+      // Ownership predates enqueue: a prefetch for the shared key still belongs
+      // to the active pane even if its fetch options say background.
+      const requests = [
+        active,
+        client.fetchQuery(abandoned),
+        client.fetchQuery(shared),
+        client.fetchQuery(hover),
+      ];
+      releaseAbandoned?.();
+      releaseSharedA?.();
+      if (releaseAll) releaseSharedB?.();
+      releaseActive?.();
+      await Promise.all(requests);
+      expect(listModels.mock.calls.map(([input]) => input.provider)).toEqual(
+        releaseAll ? ["codex", "devin", "cursor", "pi"] : ["codex", "pi", "devin", "cursor"],
+      );
+      releaseSharedB?.();
+      client.clear();
+    },
+  );
 
   it("skips a queued catalog when its inactive prefetch is cancelled", async () => {
     let releaseFirst: (() => void) | undefined;
@@ -344,6 +396,19 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryState(options.queryKey)?.error).toEqual(
       new Error("Devin CLI temporarily failed"),
     );
+    const interval = options.refetchInterval;
+    if (typeof interval !== "function") throw new Error("Expected recovery polling");
+    const query = queryClient
+      .getQueryCache()
+      .find<ProviderListModelsResult>({ queryKey: options.queryKey, exact: true });
+    if (!query) throw new Error("Missing Devin query");
+    expect(interval(query)).toBe(30_000);
+    listModels.mockResolvedValue(catalog);
+    await queryClient.refetchQueries({ queryKey: options.queryKey });
+    expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+    expect(query.state.error).toBeNull();
+    expect(interval(query)).toBe(false);
+    queryClient.clear();
   });
 
   it("returns successful catalogs unchanged", async () => {

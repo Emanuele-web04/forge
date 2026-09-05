@@ -63,6 +63,8 @@ interface ProviderModelDiscoveryTask {
 }
 
 const providerModelDiscoveryQueue: ProviderModelDiscoveryTask[] = [];
+// Each selected pane owns a separate lease, released on selection change or unmount.
+const foregroundModelDiscoveryOwners = new Set<readonly unknown[]>();
 let providerModelDiscoveryRunning = false;
 let providerModelDiscoveryPriorityOrder = 0;
 
@@ -129,7 +131,9 @@ function drainProviderModelDiscoveryQueue(): void {
 export function prioritizeProviderModelDiscovery(
   queryKey: readonly unknown[],
   priority: Exclude<ProviderModelDiscoveryPriority, "background"> = "foreground",
-): void {
+): (() => void) | undefined {
+  const owner = priority === "foreground" ? [...queryKey] : undefined;
+  if (owner) foregroundModelDiscoveryOwners.add(owner);
   for (const task of providerModelDiscoveryQueue) {
     const matches = queryKeysMatch(task.queryKey, queryKey);
     if (!matches && priority === "prefetch" && task.priority === "prefetch") {
@@ -149,6 +153,17 @@ export function prioritizeProviderModelDiscovery(
       task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
     }
   }
+  if (!owner) return;
+  return () => {
+    foregroundModelDiscoveryOwners.delete(owner);
+    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, queryKey))) return;
+    for (const task of providerModelDiscoveryQueue) {
+      if (queryKeysMatch(task.queryKey, queryKey) && task.priority === "foreground") {
+        task.priority = "background";
+        task.priorityOrder = 0;
+      }
+    }
+  };
 }
 
 function serializeProviderModelDiscovery<T>(
@@ -164,10 +179,15 @@ function serializeProviderModelDiscovery<T>(
       providerModelDiscoveryQueue.splice(taskIndex, 1);
       reject(abortReason(signal));
     };
+    const effectivePriority = [...foregroundModelDiscoveryOwners].some((key) =>
+      queryKeysMatch(key, queryKey),
+    )
+      ? "foreground"
+      : priority;
     providerModelDiscoveryQueue.push({
       queryKey,
-      priority,
-      priorityOrder: priority === "background" ? 0 : ++providerModelDiscoveryPriorityOrder,
+      priority: effectivePriority,
+      priorityOrder: effectivePriority === "background" ? 0 : ++providerModelDiscoveryPriorityOrder,
       signal,
       discover,
       resolve: (value) => resolve(value as T),
@@ -420,9 +440,13 @@ export function providerModelsQueryOptions(input: {
           : 30_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
     // fails. Keep it visible, but retry while observed instead of treating the
-    // degraded result as a successful 30-minute cache entry.
+    // degraded result as a successful 30-minute cache entry. A failed refresh
+    // retains healthy data, so the query error must also keep recovery polling alive.
     ...(input.provider === "devin"
-      ? { refetchInterval: (query) => (query.state.data?.error ? 30_000 : false) }
+      ? {
+          refetchInterval: (query) =>
+            query.state.data?.error || query.state.error ? 30_000 : false,
+        }
       : {}),
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
