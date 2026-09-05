@@ -83,7 +83,7 @@ function readyProviderSession(): ProviderSession {
 }
 
 describe("ProviderRuntimeReconcilerLive", () => {
-  it("retries a terminal-session turn repair without reopening the session", async () => {
+  it("keeps one activity identity while a stale-turn repair is retried and refined", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();
     let bindingStatus: "stopped" | "error" = "stopped";
@@ -217,8 +217,11 @@ describe("ProviderRuntimeReconcilerLive", () => {
         command.type === "thread.session.set",
     );
     expect(activityCommands[0]?.activity.id).toBe(activityCommands[1]?.activity.id);
+    expect(activityCommands[0]?.activity.id).toBe(activityCommands[2]?.activity.id);
     expect(activityCommands[0]?.commandId).not.toBe(activityCommands[1]?.commandId);
+    expect(activityCommands[1]?.commandId).not.toBe(activityCommands[2]?.commandId);
     expect(sessionCommands[0]?.commandId).not.toBe(sessionCommands[1]?.commandId);
+    expect(sessionCommands[1]?.commandId).not.toBe(sessionCommands[2]?.commandId);
     expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(3);
   });
 });

@@ -138,7 +138,9 @@ export function parseWindowsProcessSnapshotLine(
   if (!encodedCommand) return null;
   const pid = Number(pidRaw);
   const ppid = Number(ppidRaw);
-  if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(ppid) || ppid < 0) return null;
+  // Win32_Process includes the System Idle Process as PID 0. Root process-tree
+  // APIs still require a positive PID, but rejecting this row invalidates every snapshot.
+  if (!Number.isInteger(pid) || pid < 0 || !Number.isInteger(ppid) || ppid < 0) return null;
   const command = decodeSnapshotCommand(encodedCommand);
   if (command === null) return null;
   const startedAt = startedAtRaw?.trim();

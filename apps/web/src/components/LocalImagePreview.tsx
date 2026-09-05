@@ -37,11 +37,17 @@ export function useLocalImagePreview(input: {
   src: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
   onPreviewReady?: (() => void) | undefined;
   onPreviewError?: (() => void) | undefined;
 }): LocalImagePreviewState {
   const { src, cwd, previewGrant } = input;
-  const previewUrl = buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant });
+  const previewUrl = buildLocalImageUrl({
+    src,
+    cwd: cwd ?? undefined,
+    grant: previewGrant,
+    cacheKey: input.cacheKey,
+  });
   const downloadUrl = buildLocalImageUrl({
     src,
     cwd: cwd ?? undefined,
@@ -160,6 +166,7 @@ export function LocalImagePreview(props: {
   src: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
   alt: string;
   className?: string;
   imageClassName?: string;
@@ -170,6 +177,7 @@ export function LocalImagePreview(props: {
     src: props.src,
     cwd: props.cwd,
     previewGrant: props.previewGrant,
+    cacheKey: props.cacheKey,
     onPreviewReady: props.onPreviewReady,
     onPreviewError: props.onPreviewError,
   });

@@ -3,6 +3,9 @@
 // Layer: Sidebar UI primitive
 // Exports: ThreadRunningSpinner
 
+import { useRef } from "react";
+
+import { useTimelineSynchronizedAnimations } from "~/lib/animationTimelineSync";
 import { cn } from "~/lib/utils";
 
 // Geometry mirrors Remodex's RunningThreadSpinner (with a thinner stroke and
@@ -11,6 +14,8 @@ import { cn } from "~/lib/utils";
 // token (index.css) rather than `animate-spin`: this glyph is always on while a
 // thread runs, and a continuous 60 fps spin inside the translucent sidebar forced
 // the whole backdrop-filtered surface + window vibrancy to re-render every frame.
+// Every instance is also pinned to the document timeline origin: N running threads
+// then step in the same frame (one sidebar repaint per step) instead of N frames.
 const CANVAS = 15;
 const LINE_WIDTH = 2;
 const RADIUS = (CANVAS - LINE_WIDTH) / 2;
@@ -18,8 +23,11 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const ARC_LENGTH = (0.72 - 0.16) * CIRCUMFERENCE;
 
 export function ThreadRunningSpinner({ className }: { className?: string }) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  useTimelineSynchronizedAnimations(svgRef);
   return (
     <svg
+      ref={svgRef}
       aria-hidden="true"
       viewBox={`0 0 ${CANVAS} ${CANVAS}`}
       fill="none"

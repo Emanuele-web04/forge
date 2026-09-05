@@ -166,6 +166,8 @@ import {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectFileChangeEvent,
+  ProjectWatchFileInput,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
   ProjectResolveWorkspaceFileReferencesInput,
@@ -434,6 +436,13 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: WsRpcError,
+});
+
+export const WsProjectsSubscribeFileChangeRpc = Rpc.make(WS_METHODS.projectsSubscribeFileChange, {
+  payload: ProjectWatchFileInput,
+  success: ProjectFileChangeEvent,
+  error: WsRpcError,
+  stream: true,
 });
 
 export const WsProjectsResolveWorkspaceFileReferencesRpc = Rpc.make(
@@ -1254,6 +1263,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchContentRpc,
   WsProjectsPrewarmSearchIndexRpc,
   WsProjectsReadFileRpc,
+  WsProjectsSubscribeFileChangeRpc,
   WsProjectsResolveWorkspaceFileReferencesRpc,
   WsProjectsResolveOutOfRootFileReferenceRpc,
   WsProjectsCreateLocalFilePreviewGrantRpc,

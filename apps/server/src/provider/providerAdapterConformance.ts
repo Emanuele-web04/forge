@@ -20,10 +20,42 @@ type OptionalAdapterMethod =
   | "readPlugin"
   | "listModels";
 
+type RequiredAdapterMethod =
+  | "startSession"
+  | "sendTurn"
+  | "interruptTurn"
+  | "respondToRequest"
+  | "respondToUserInput"
+  | "stopSession"
+  | "listSessions"
+  | "hasSession"
+  | "readThread"
+  | "rollbackThread"
+  | "stopAll";
+
 export interface ProviderAdapterConformanceIssue {
-  readonly capability: CapabilityFlag;
-  readonly missingMethod: OptionalAdapterMethod;
+  readonly capability?: CapabilityFlag;
+  readonly missingMethod: OptionalAdapterMethod | RequiredAdapterMethod;
 }
+
+export interface ProviderAdapterRegistrationIssue {
+  readonly provider: ProviderAdapterShape<unknown>["provider"];
+  readonly duplicateIndex: number;
+}
+
+const REQUIRED_ADAPTER_METHODS: ReadonlyArray<RequiredAdapterMethod> = [
+  "startSession",
+  "sendTurn",
+  "interruptTurn",
+  "respondToRequest",
+  "respondToUserInput",
+  "stopSession",
+  "listSessions",
+  "hasSession",
+  "readThread",
+  "rollbackThread",
+  "stopAll",
+];
 
 const CAPABILITY_METHOD_REQUIREMENTS: ReadonlyArray<{
   readonly capability: CapabilityFlag;
@@ -40,6 +72,11 @@ export function providerAdapterConformanceIssues(
   adapter: ProviderAdapterShape<unknown>,
 ): ProviderAdapterConformanceIssue[] {
   const issues: ProviderAdapterConformanceIssue[] = [];
+  for (const method of REQUIRED_ADAPTER_METHODS) {
+    if (typeof adapter[method] !== "function") {
+      issues.push({ missingMethod: method });
+    }
+  }
   for (const requirement of CAPABILITY_METHOD_REQUIREMENTS) {
     if (adapter.capabilities[requirement.capability] !== true) {
       continue;
@@ -56,6 +93,20 @@ export function providerAdapterConformanceIssues(
   return issues;
 }
 
+export function providerAdapterRegistrationIssues(
+  adapters: ReadonlyArray<ProviderAdapterShape<unknown>>,
+): ProviderAdapterRegistrationIssue[] {
+  const seen = new Set<ProviderAdapterShape<unknown>["provider"]>();
+  const issues: ProviderAdapterRegistrationIssue[] = [];
+  adapters.forEach((adapter, index) => {
+    if (seen.has(adapter.provider)) {
+      issues.push({ provider: adapter.provider, duplicateIndex: index });
+    }
+    seen.add(adapter.provider);
+  });
+  return issues;
+}
+
 export function assertProviderAdapterConformance(adapter: ProviderAdapterShape<unknown>): void {
   const issues = providerAdapterConformanceIssues(adapter);
   if (issues.length === 0) {
@@ -63,7 +114,11 @@ export function assertProviderAdapterConformance(adapter: ProviderAdapterShape<u
   }
 
   const detail = issues
-    .map((issue) => `${issue.capability} requires ${issue.missingMethod}()`)
+    .map((issue) =>
+      issue.capability
+        ? `${issue.capability} requires ${issue.missingMethod}()`
+        : `required method ${issue.missingMethod}() is missing`,
+    )
     .join(", ");
   throw new Error(`Provider adapter "${adapter.provider}" has invalid capabilities: ${detail}.`);
 }

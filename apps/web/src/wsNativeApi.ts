@@ -531,6 +531,7 @@ export function createWsNativeApi(): NativeApi {
         options?.signal
           ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
           : transport.request(WS_METHODS.projectsReadFile, input),
+      onFileChange: (input, callback) => transport.subscribeProjectFileChange(input, callback),
       resolveWorkspaceFileReferences: (input) =>
         transport.request(WS_METHODS.projectsResolveWorkspaceFileReferences, input),
       resolveOutOfRootFileReference: (input) =>

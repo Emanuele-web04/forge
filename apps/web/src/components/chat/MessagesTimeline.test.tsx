@@ -1214,6 +1214,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Context compacted manually",
               tone: "info",
+              activityKind: "context-compaction",
             },
           },
         ]}
@@ -1234,6 +1235,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted manually");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).not.toContain("Work log");
   });
 
@@ -1255,6 +1257,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Compacting conversation...",
               tone: "info",
+              activityKind: "context-compaction",
             },
           },
         ]}
@@ -1275,6 +1278,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting conversation...");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain("Working for");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });

@@ -7,7 +7,6 @@ import {
   type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
-  type CodexModelOptions,
   type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
@@ -23,7 +22,6 @@ import {
   type PiThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
-  CodexReasoningEffort,
 } from "@synara/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
@@ -331,13 +329,6 @@ export function getProviderOptionBooleanSelectionValue(
   return typeof value === "boolean" ? value : undefined;
 }
 
-export function getModelSelectionOptionValue(
-  modelSelection: ModelSelection | null | undefined,
-  id: string,
-): string | boolean | undefined {
-  return providerOptionSelectionValue(modelSelection?.options as ProviderOptionSelectionsInput, id);
-}
-
 export function getModelSelectionStringOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,
@@ -516,36 +507,6 @@ export function getProviderOptionCurrentValue(
   return descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-export function getProviderOptionCurrentLabel(
-  descriptor: ProviderOptionDescriptor | null | undefined,
-): string | undefined {
-  const value = getProviderOptionCurrentValue(descriptor);
-  if (!descriptor) {
-    return undefined;
-  }
-  if (descriptor.type === "boolean") {
-    return typeof value === "boolean" ? (value ? "On" : "Off") : undefined;
-  }
-  return typeof value === "string"
-    ? descriptor.options.find((option) => option.id === value)?.label
-    : undefined;
-}
-
-export function buildProviderOptionSelectionsFromDescriptors(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
-): ProviderOptionSelection[] | undefined {
-  if (!descriptors || descriptors.length === 0) {
-    return undefined;
-  }
-  const selections = descriptors.flatMap((descriptor) => {
-    const value = getProviderOptionCurrentValue(descriptor);
-    return typeof value === "string" || typeof value === "boolean"
-      ? [{ id: descriptor.id, value }]
-      : [];
-  });
-  return selections.length > 0 ? selections : undefined;
-}
-
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
@@ -701,26 +662,12 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
   return trimmed || null;
 }
 
-export function normalizeCodexModelOptions(
-  model: string | null | undefined,
-  modelOptions: CodexModelOptions | null | undefined,
-): CodexModelOptions | undefined {
-  const caps = getModelCapabilities("codex", model);
-  const defaultReasoningEffort = getDefaultEffort(caps) as CodexReasoningEffort;
-  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort) ?? defaultReasoningEffort;
-  const fastModeEnabled = modelOptions?.fastMode === true;
-  const nextOptions: CodexModelOptions = {
-    ...(reasoningEffort !== defaultReasoningEffort ? { reasoningEffort } : {}),
-    ...(fastModeEnabled ? { fastMode: true } : {}),
-  };
-  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
-}
-
 /**
  * Keeps only explicit Claude option overrides. The model-native auto-compact
  * window stays unset so Claude Code can apply server tuning, settings.json,
  * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
  */
+
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,

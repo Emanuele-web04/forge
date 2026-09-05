@@ -85,6 +85,10 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   { relativePath: "chat/ProjectPicker.tsx", allowedBailoutReasons: [] },
   // Not chat-specific, but rendered inside every message row and sidebar row.
   { relativePath: "ui/button.tsx", allowedBailoutReasons: [] },
+  // One per running thread in the sidebar; its ref + layout-effect timeline sync must
+  // not cost it memoization.
+  { relativePath: "ThreadRunningSpinner.tsx", allowedBailoutReasons: [] },
+  { relativePath: "../lib/animationTimelineSync.ts", allowedBailoutReasons: [] },
   // Hooks called from the chat and sidebar render paths. A bailing hook does not
   // stop its caller from compiling, but it does lose its own memoization, and
   // these run on every composer keystroke and every sidebar action.
