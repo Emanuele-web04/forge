@@ -867,6 +867,16 @@ export function resolveSidebarThreadListPaging(input: {
   };
 }
 
+// The sidebar can render beside a split chat, where the focused pane differs from
+// the route owner. Preview folding must retain the thread the user is actually viewing.
+export function resolveActiveSidebarThreadId(input: {
+  focusedThreadId: ThreadId | null;
+  optimisticThreadId: ThreadId | null;
+  routeThreadId: ThreadId | null;
+}): ThreadId | null {
+  return input.optimisticThreadId ?? input.focusedThreadId ?? input.routeThreadId;
+}
+
 export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {
   threads: readonly T[];
   activeThreadId: Thread["id"] | undefined;
