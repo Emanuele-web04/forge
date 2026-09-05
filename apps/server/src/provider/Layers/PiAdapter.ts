@@ -1,3 +1,4 @@
+import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -685,6 +686,13 @@ function createProviderModelFallback(
   if (!providerDefault) {
     return undefined;
   }
+  // Zen mixes four protocols. A missing model must not inherit an arbitrary API.
+  if (
+    parsed.provider === "opencode" &&
+    /^https:\/\/opencode\.ai\/zen(?:\/|$)/u.test(providerDefault.baseUrl)
+  ) {
+    return undefined;
+  }
   if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
     const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
     return {
@@ -712,7 +720,7 @@ function createProviderModelFallback(
   };
 }
 
-function findModelInRegistry(
+export function findModelInRegistry(
   registry: PiModelRegistry,
   modelId: string | null | undefined,
 ): Model<Api> | undefined {
@@ -1231,11 +1239,14 @@ function makeAgentDir(
 export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
+  signal?: AbortSignal,
 ): Promise<ModelRuntime> {
-  return piSdk.ModelRuntime.create({
+  const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
+  await refreshPiOpenCodeCatalog(runtime, { signal });
+  return runtime;
 }
 
 function modelRegistryFacade(
@@ -2097,8 +2108,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
+      signal?: AbortSignal;
     }) => {
-      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
+      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk, input.signal);
+      input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2232,8 +2245,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
           agentGatewaySessionLease,
           Effect.tryPromise({
-            try: () =>
+            try: (signal) =>
               createSdkRuntime({
+                signal,
                 sdk: piSdk,
                 cwd,
                 agentDir,
@@ -2745,11 +2759,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
+        try: async (signal) => {
           const piSdk = await loadPiCodingAgentModule();
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
+          const modelRuntime = await createPiModelRuntime(agentDir, piSdk, signal);
           const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,

@@ -260,8 +260,16 @@ describe("getPiDiscoverableModels", () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
     try {
-      const firstRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
-      const secondRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const firstRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+      );
+      const secondRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+      );
       const firstRegistry = new ModelRegistry(firstRuntime);
       const secondRegistry = new ModelRegistry(secondRuntime);
 
