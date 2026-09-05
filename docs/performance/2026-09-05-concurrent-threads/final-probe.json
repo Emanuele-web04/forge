@@ -1,0 +1,88 @@
+[
+  {
+    "repeat": 0,
+    "variant": "final",
+    "count": 10,
+    "mode": "hidden",
+    "panels": 1,
+    "batches": 60,
+    "elapsedMs": 6302.800000000745,
+    "commits": 0,
+    "renderMs": 0,
+    "hookRenders": 0,
+    "removedCodeBlocks": 0,
+    "flushMs": 76.29999998398125,
+    "frames": {
+      "count": 755,
+      "droppedFrames": 0,
+      "meanMs": 8.333509933774833,
+      "p95Ms": 9.900000000000546,
+      "maxMs": 10.300000000000182
+    },
+    "correct": true,
+    "errors": [],
+    "cpuSeconds": {
+      "browser": 0.03862899999999997,
+      "renderer": 0.304316,
+      "GPU": 0.138122,
+      "network.mojom.NetworkService": 0.008290000000000006,
+      "storage.mojom.StorageService": 0.0004410000000000004
+    },
+    "rssKB": {
+      "browser": 205568,
+      "renderer": 313648,
+      "GPU": 128944,
+      "network.mojom.NetworkService": 103968,
+      "storage.mojom.StorageService": 80736
+    },
+    "taskMs": 169.223,
+    "scriptMs": 10.096,
+    "layoutMs": 0,
+    "heapBefore": 14888652,
+    "heapAfter": 16755684,
+    "heapRetained": 15153852
+  },
+  {
+    "repeat": 0,
+    "variant": "final",
+    "count": 10,
+    "mode": "visible",
+    "panels": 1,
+    "batches": 60,
+    "elapsedMs": 6302.5999999996275,
+    "commits": 410,
+    "renderMs": 1053.0000000130385,
+    "hookRenders": 120,
+    "removedCodeBlocks": 0,
+    "flushMs": 49,
+    "frames": {
+      "count": 756,
+      "droppedFrames": 0,
+      "meanMs": 8.33148148148148,
+      "p95Ms": 10,
+      "maxMs": 10.399999999999636
+    },
+    "correct": true,
+    "errors": [],
+    "cpuSeconds": {
+      "browser": 0.590766,
+      "renderer": 2.349805,
+      "GPU": 0.11746999999999996,
+      "network.mojom.NetworkService": 0.005063999999999999,
+      "storage.mojom.StorageService": 0.000060000000000001025
+    },
+    "rssKB": {
+      "browser": 210608,
+      "renderer": 358176,
+      "GPU": 132576,
+      "network.mojom.NetworkService": 105280,
+      "storage.mojom.StorageService": 81520
+    },
+    "taskMs": 1545.763,
+    "scriptMs": 1306.747,
+    "layoutMs": 30.661,
+    "heapBefore": 16184932,
+    "heapAfter": 28624400,
+    "heapRetained": 18102428
+  }
+]
