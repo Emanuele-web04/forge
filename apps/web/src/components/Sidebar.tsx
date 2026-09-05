@@ -362,6 +362,7 @@ import {
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
   resolveThreadRowClassName,
+  resolveJumpHintReserveClass,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
@@ -5393,7 +5394,9 @@ export default function Sidebar() {
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   isSubagentThread
-                    ? "pr-7.5"
+                    ? threadJumpLabelParts.length > 0
+                      ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
+                      : "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
                         metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
                         hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),

@@ -44,6 +44,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
+  resolveJumpHintReserveClass,
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
@@ -201,7 +202,8 @@ function ActivityThreadRow({
           <span
             className={cn(
               "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
-              threadJumpLabel && "pr-12",
+              threadJumpLabelParts.length > 0 &&
+                resolveJumpHintReserveClass(0, threadJumpLabelParts.length),
               // Yield the title row to the hover action cluster (pin + archive + done).
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
