@@ -3550,6 +3550,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     "wheel down",
     "wheel without movement",
     "nested wheel",
+    "nested key",
     "layout leave",
     "keyboard PageUp",
     "keyboard Home",
@@ -3691,7 +3692,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         grow();
         container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
         await waitForLayout();
-      } else if (action === "nested wheel") {
+      } else if (action === "nested wheel" || action === "nested key") {
         const nested = document.createElement("div");
         const bounds = container.getBoundingClientRect();
         nested.style.cssText = `position: fixed; left: ${bounds.left + 20}px; top: ${bounds.top + 20}px; width: 180px; height: 96px; overflow: auto; overscroll-behavior: contain; z-index: 100;`;
@@ -3699,10 +3700,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
         container.append(nested);
         try {
           nested.scrollTop = 100;
-          await userEvent.wheel(nested, { delta: { y: -30 } });
+          if (action === "nested key") {
+            nested.tabIndex = 0;
+            nested.focus();
+            await userEvent.keyboard("{ArrowUp}");
+          } else {
+            await userEvent.wheel(nested, { delta: { y: -30 } });
+          }
           await vi.waitFor(() => expect(nested.scrollTop).toBeLessThan(100));
           await waitForLayout();
-          expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+          await vi.waitFor(() =>
+            expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+          );
         } finally {
           nested.remove();
         }

@@ -5511,25 +5511,67 @@ export default function ChatView({
         (event.key === " " && event.shiftKey);
       if (upward) {
         if (container.scrollTop <= 0) return;
-        const scrollTop = container.scrollTop;
+        const pending = pendingScrollGestureRef.current;
+        const origin =
+          pending?.keyboard && pending.container === container
+            ? pending
+            : {
+                container,
+                scrollTop: container.scrollTop,
+                wasFollowing: isAtEndRef.current && !isUserScrollDetachedRef.current,
+                keyboard: true,
+              };
         clearTranscriptAutoFollow(true);
-        const scrollTarget = legendListRef.current;
-        if (scrollTarget) void stopTranscriptScrollAtCurrentOffset(scrollTarget);
-        pendingScrollGestureRef.current = {
-          container,
-          scrollTop,
-          wasFollowing: false,
-          keyboard: true,
-        };
+        pendingScrollGestureRef.current = origin;
         isAtEndRef.current = false;
         showScrollDebouncer.current.maybeExecute();
       } else {
         onMessagesScrollGesture(false);
       }
     };
+    const releaseKeyboardGesture = () => {
+      const origin = pendingScrollGestureRef.current;
+      if (!origin?.keyboard) return;
+      const previousFrame = pendingScrollGestureFrameRef.current;
+      if (previousFrame !== null) window.cancelAnimationFrame(previousFrame);
+      // Native key scrolling may begin after keyup. Give it rendering time to
+      // move, then recover a no-op/nested gesture instead of holding indefinitely.
+      const deadline = performance.now() + 150;
+      const check = () => {
+        pendingScrollGestureFrameRef.current = null;
+        if (pendingScrollGestureRef.current !== origin) return;
+        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
+        if (!movedUp && performance.now() < deadline) {
+          pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+          return;
+        }
+        pendingScrollGestureRef.current = null;
+        if (origin.wasFollowing && !movedUp) {
+          setTranscriptScrollDetached(false);
+          onIsAtEndChange(true);
+          scrollToEnd();
+        } else {
+          releaseTranscriptScrollGesture();
+        }
+      };
+      pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearTranscriptAutoFollow, onMessagesScrollGesture]);
+    window.addEventListener("keyup", releaseKeyboardGesture);
+    window.addEventListener("blur", releaseKeyboardGesture);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", releaseKeyboardGesture);
+      window.removeEventListener("blur", releaseKeyboardGesture);
+    };
+  }, [
+    clearTranscriptAutoFollow,
+    onIsAtEndChange,
+    onMessagesScrollGesture,
+    releaseTranscriptScrollGesture,
+    scrollToEnd,
+    setTranscriptScrollDetached,
+  ]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
