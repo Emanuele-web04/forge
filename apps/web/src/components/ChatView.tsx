@@ -5224,6 +5224,19 @@ export default function ChatView({
     isUserScrollDetachedRef.current = detached;
     setIsUserScrollDetached(detached);
   }, []);
+  const pendingWheelReleaseRef = useRef<{
+    container: HTMLElement;
+    scrollTop: number;
+    wasFollowing: boolean;
+  } | null>(null);
+  const pendingWheelReleaseFrameRef = useRef<number | null>(null);
+  const cancelPendingWheelRelease = useCallback(() => {
+    const frameId = pendingWheelReleaseFrameRef.current;
+    if (frameId !== null) window.cancelAnimationFrame(frameId);
+    pendingWheelReleaseFrameRef.current = null;
+    pendingWheelReleaseRef.current = null;
+  }, []);
+  useEffect(() => cancelPendingWheelRelease, [activeThread?.id, cancelPendingWheelRelease]);
   // The arrow's smooth jump is followed by one exact settle after LegendList
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
@@ -5246,6 +5259,7 @@ export default function ChatView({
     [setTranscriptScrollDetached],
   );
   const clearTranscriptAutoFollow = useCallback(() => {
+    cancelPendingWheelRelease();
     const settledScrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
@@ -5261,7 +5275,7 @@ export default function ChatView({
     if (settledScrollTarget) {
       void stopTranscriptScrollAtCurrentOffset(settledScrollTarget);
     }
-  }, [setTranscriptScrollDetached]);
+  }, [cancelPendingWheelRelease, setTranscriptScrollDetached]);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -5298,16 +5312,15 @@ export default function ChatView({
         (!isUserScrollDetachedRef.current ||
           !(container instanceof HTMLElement) ||
           isScrollContainerNearBottom(container, 1));
-      if (atEnd === isAtEndRef.current && isUserScrollDetachedRef.current === !atEnd) return;
+      if (atEnd === isAtEndRef.current && (!atEnd || !isUserScrollDetachedRef.current)) return;
       // A gesture can detach without changing the previous edge notification.
       if (atEnd) {
         setTranscriptScrollDetached(false);
         showScrollDebouncer.current.cancel();
         setShowScrollToBottom(false);
       } else {
-        autoFollowThreadIdRef.current = null;
-        animateNextAutoFollowScrollRef.current = false;
-        setTranscriptScrollDetached(true);
+        // A changing layout can temporarily leave the end during output. Only
+        // user gestures detach live follow; a geometry notification must not.
         showScrollDebouncer.current.maybeExecute();
       }
       isAtEndRef.current = atEnd;
@@ -5375,9 +5388,47 @@ export default function ChatView({
     (event: WheelEvent<HTMLDivElement>) => {
       // Horizontal scroll, zoom, and scrolling down at the end do not leave it.
       if (event.ctrlKey || event.deltaY === 0 || (event.deltaY > 0 && isAtEndRef.current)) return;
+      const container = legendListRef.current?.getScrollableNode();
+      if (!(container instanceof HTMLElement)) return;
+      const pending = pendingWheelReleaseRef.current;
+      const origin =
+        pending?.container === container
+          ? pending
+          : {
+              container,
+              scrollTop: container.scrollTop,
+              wasFollowing:
+                isAtEndRef.current &&
+                !isUserScrollDetachedRef.current &&
+                isScrollContainerNearBottom(container, 1),
+            };
       clearTranscriptAutoFollow();
+      pendingWheelReleaseRef.current = origin;
+      // Passive wheel scrolling can settle on the next rendering pass. Keep one
+      // pending check per gesture burst, preserving ownership from its first event.
+      pendingWheelReleaseFrameRef.current = window.requestAnimationFrame(() => {
+        pendingWheelReleaseFrameRef.current = window.requestAnimationFrame(() => {
+          pendingWheelReleaseFrameRef.current = null;
+          pendingWheelReleaseRef.current = null;
+          if (origin.wasFollowing && container.scrollTop >= origin.scrollTop) {
+            // A nested or no-op wheel must not strand follow, even if new text
+            // increased the distance from the bottom while the gesture settled.
+            setTranscriptScrollDetached(false);
+            onIsAtEndChange(true);
+            scrollToEnd();
+          } else {
+            releaseTranscriptScrollGesture();
+          }
+        });
+      });
     },
-    [clearTranscriptAutoFollow],
+    [
+      clearTranscriptAutoFollow,
+      onIsAtEndChange,
+      releaseTranscriptScrollGesture,
+      scrollToEnd,
+      setTranscriptScrollDetached,
+    ],
   );
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =

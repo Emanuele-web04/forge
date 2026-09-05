@@ -3548,6 +3548,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     "arrow",
     "send",
     "wheel down",
+    "wheel without movement",
+    "nested wheel",
     "pointer click",
     "thread switch",
     "short transcript",
@@ -3672,6 +3674,26 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       if (action === "wheel down") {
         await userEvent.wheel(container, { delta: { y: 100 } });
+      } else if (action === "wheel without movement") {
+        container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
+        grow();
+        container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
+        await waitForLayout();
+      } else if (action === "nested wheel") {
+        const nested = document.createElement("div");
+        const bounds = container.getBoundingClientRect();
+        nested.style.cssText = `position: fixed; left: ${bounds.left + 20}px; top: ${bounds.top + 20}px; width: 180px; height: 96px; overflow: auto; overscroll-behavior: contain; z-index: 100;`;
+        nested.textContent = "Nested scrollable content. ".repeat(100);
+        container.append(nested);
+        try {
+          nested.scrollTop = 100;
+          await userEvent.wheel(nested, { delta: { y: -30 } });
+          await vi.waitFor(() => expect(nested.scrollTop).toBeLessThan(100));
+          await waitForLayout();
+          expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+        } finally {
+          nested.remove();
+        }
       } else if (action === "pointer click") {
         container.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
         container.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
