@@ -106,6 +106,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     // "fork" text command cannot do.
     command === "fork" ||
     command === "goal" ||
+    command === "rename" ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
   );
 }
@@ -125,6 +126,7 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
     (normalizedCommand === "fork" && appCommandIsAvailable) ||
     (normalizedCommand === "goal" && appCommandIsAvailable) ||
+    (normalizedCommand === "rename" && appCommandIsAvailable) ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
   );
 }
@@ -240,6 +242,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "goal",
     label: "/goal",
     description: "Set, edit, pause, resume, or clear this thread's persistent goal",
+    source: "app",
+  },
+  rename: {
+    command: "rename",
+    label: "/rename",
+    description: "Regenerate this thread title, or set an exact title",
     source: "app",
   },
   feedback: {
@@ -468,6 +476,7 @@ export function getAvailableComposerSlashCommands(input: {
           "subagents",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "goal",
+          "rename",
           "feedback",
           "automation",
         ]
@@ -482,6 +491,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "goal",
+          "rename",
           "debug",
           "default",
           "feedback",

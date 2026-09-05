@@ -260,6 +260,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
 
     const { prompt, outputSchemaJson, rawTextFallback } = buildThreadTitlePrompt({
       message: input.message,
+      ...(input.context ? { context: input.context } : {}),
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
     const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
