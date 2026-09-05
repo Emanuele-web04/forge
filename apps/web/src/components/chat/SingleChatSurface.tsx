@@ -654,13 +654,6 @@ export function SingleChatSurface(props: {
             requestedThreadId: event.threadId,
             requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
             openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
-            navigateToThread: (threadId) => {
-              void navigate({
-                to: "/$threadId",
-                params: { threadId },
-                replace: true,
-              });
-            },
           });
         }
       : null,
