@@ -496,6 +496,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
+  onNavigate?: () => void;
   /** Emits current + visible sent-message anchors as the viewport scrolls (drives the trail). */
   onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
@@ -576,6 +577,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
+  onNavigate,
   onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
@@ -1020,6 +1022,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       if (!target) {
         return null;
       }
+      onNavigate?.();
       if (target.expandCollapsedWorkMessageId) {
         setCollapsedWorkExpanded(target.expandCollapsedWorkMessageId, true);
       }
@@ -1174,6 +1177,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     applyActiveMarkerDecoration,
     clearActiveMarkerDecoration,
     controllerRef,
+    onNavigate,
     resolvedListRef,
     setCollapsedWorkExpanded,
   ]);

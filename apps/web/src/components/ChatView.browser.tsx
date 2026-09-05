@@ -3550,10 +3550,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
     "wheel down",
     "wheel without movement",
     "nested wheel",
+    "layout leave",
+    "keyboard PageUp",
+    "keyboard Home",
+    "keyboard ArrowUp",
+    "find",
     "pointer click",
     "thread switch",
     "short transcript",
   ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
+    const keyboardKey = action.startsWith("keyboard ") ? action.slice("keyboard ".length) : null;
     const restoreNativeApi = installDeterministicSendNativeApi();
     let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
     if (action === "short transcript") {
@@ -3674,6 +3680,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       if (action === "wheel down") {
         await userEvent.wheel(container, { delta: { y: 100 } });
+      } else if (action === "layout leave") {
+        const height = container.clientHeight;
+        container.style.maxHeight = `${height - 180}px`;
+        await vi.waitFor(() => expect(container.clientHeight).toBeLessThan(height));
+        await waitForLayout();
+        await userEvent.wheel(container, { delta: { y: 100 } });
       } else if (action === "wheel without movement") {
         container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
         grow();
@@ -3698,19 +3710,93 @@ describe("ChatView timeline estimator parity (full app)", () => {
         container.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
         container.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
       } else if (action !== "send" && action !== "short transcript") {
-        await userEvent.wheel(container, {
-          delta: { y: action === "wheel near end" ? -12 : -350 },
-        });
+        if (keyboardKey !== null) {
+          container.tabIndex = 0;
+          container.focus();
+          expect(document.activeElement).toBe(container);
+          const initialTop = container.scrollTop;
+          await userEvent.keyboard(`{${keyboardKey}}`);
+          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop - 1));
+          // A cancelled list jump can emit scrollend before native key scrolling
+          // finishes. Wait for an actual quiet viewport before recording its text.
+          let lastTop = container.scrollTop;
+          let stableSince = performance.now();
+          await vi.waitFor(
+            () => {
+              if (container.scrollTop !== lastTop) {
+                lastTop = container.scrollTop;
+                stableSince = performance.now();
+              }
+              expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+            },
+            { timeout: 3_000, interval: 20 },
+          );
+        } else if (action === "find") {
+          await dispatchConfiguredShortcutWhenReady(window, { key: "f" });
+          await page.getByLabelText("Find in thread").fill("assistant filler 0");
+          await vi.waitFor(() => {
+            const match = document.querySelector<HTMLElement>('[data-chat-find-match="active"]');
+            expect(match).not.toBeNull();
+            const bounds = match!.getBoundingClientRect();
+            const viewport = container.getBoundingClientRect();
+            expect(bounds.top).toBeGreaterThanOrEqual(viewport.top);
+            expect(bounds.bottom).toBeLessThanOrEqual(viewport.bottom);
+          });
+          await new Promise<void>((resolve) => setTimeout(resolve, 350));
+        } else {
+          await userEvent.wheel(container, {
+            delta: { y: action === "wheel near end" ? -12 : -350 },
+          });
+        }
         await vi.waitFor(() =>
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
-        const detached = container.scrollTop;
+        const viewport = container.getBoundingClientRect();
+        const readingAnchor = Array.from(
+          container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
+        ).find((paragraph) => {
+          const bounds = paragraph.getBoundingClientRect();
+          return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+        });
+        expect(readingAnchor, "Visible text must anchor the reader position").toBeDefined();
+        const anchorMessage = readingAnchor!.closest<HTMLElement>("[data-message-id]")!;
+        const anchorIndex = Array.from(anchorMessage.querySelectorAll("p, li")).indexOf(
+          readingAnchor!,
+        );
+        const anchorSelector = `[data-message-id='${CSS.escape(anchorMessage.dataset.messageId!)}']`;
+        const readAnchorTop = () =>
+          container
+            .querySelector(anchorSelector)!
+            .querySelectorAll("p, li")
+            [anchorIndex]!.getBoundingClientRect().top;
+        const detachedTop = readAnchorTop();
         for (let index = 0; index < 3; index += 1) {
           grow();
           await waitForLayout();
         }
-        expect(container.scrollTop).toBeCloseTo(detached, 0);
+        if (keyboardKey !== null || action === "find") {
+          syncThread((thread) => ({
+            ...thread,
+            messages: [
+              ...thread.messages,
+              {
+                id: MessageId.makeUnsafe("remote-follow-message"),
+                role: "user",
+                source: "native",
+                turnId: null,
+                text: "Another message arrived while reading earlier output.",
+                streaming: false,
+                createdAt: isoAt(1_203),
+                updatedAt: isoAt(1_203),
+              },
+            ],
+          }));
+          await waitForLayout();
+        }
+        // The list may compensate scrollTop as estimated rows settle. The text
+        // the reader is looking at must remain at the same viewport position.
+        expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
           await mounted.router.navigate({
             to: "/$threadId",
@@ -3723,7 +3809,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             "Transcript did not remount.",
           );
           await waitForLayout();
-        } else if (action === "arrow") {
+        } else if (action === "arrow" || keyboardKey !== null || action === "find") {
           const arrow = await waitForElement(
             () =>
               document.querySelector<HTMLButtonElement>(
@@ -3736,10 +3822,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
           container.scrollTop = container.scrollHeight;
           container.dispatchEvent(new Event("scroll"));
         }
-        await vi.waitFor(() =>
-          expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
-            action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
-          ),
+        await vi.waitFor(
+          () =>
+            expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
+              action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
+            ),
+          { timeout: 3_000 },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
       }
