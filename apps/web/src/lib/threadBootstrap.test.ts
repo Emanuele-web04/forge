@@ -373,7 +373,7 @@ describe("threadBootstrap", () => {
     });
   });
 
-  it("prefers the persisted default provider over a stale sticky draft on a fresh bootstrap", () => {
+  it("preserves the chosen draft model when promoting a fresh terminal thread", () => {
     expect(
       resolveTerminalThreadCreationState({
         activeDraftThread: null,
@@ -387,10 +387,9 @@ describe("threadBootstrap", () => {
         }),
         draftThread: makeDraftThread(),
         options: undefined,
-        fresh: true,
         projectDefaultModelSelection: null,
         projectId: PROJECT_ID,
       }).modelSelection,
-    ).toEqual(modelSelection("devin", "adaptive"));
+    ).toEqual(modelSelection("pi", "pi-auto"));
   });
 });
