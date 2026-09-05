@@ -1172,7 +1172,15 @@ describe("ProviderCommandReactor", () => {
             });
           } else {
             // Missing records are defensive coverage; no normal deletion path is assumed.
-            yield* harness.sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${key.consumerName} AND event_sequence = ${key.eventSequence}`;
+            yield* harness.sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${key.consumerName} AND event_sequence = ${key.eventSequence}`.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new PersistenceSqlError({
+                    operation: "test.deleteDelivery",
+                    detail: String(cause),
+                  }),
+              ),
+            );
           }
         }
         if (reads === 4 && changedOwner) {
