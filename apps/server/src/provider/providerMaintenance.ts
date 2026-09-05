@@ -8,19 +8,19 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import { executableCandidates, hasPathSeparator } from "../executableLookup.ts";
+import {
+  CLI_VERSION_PATTERN,
+  compareParsedCliVersions,
+  normalizeCliVersion,
+  splitPrerelease,
+  type ParsedCliVersion,
+} from "./cliVersion.ts";
 
 const LATEST_VERSION_CACHE_TTL_MS = 60 * 60 * 1_000;
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const PROVIDER_UPDATE_ACTION_MESSAGE = "Install the update now or review provider settings.";
 
 type ProviderInstallSource = "npm" | "bun" | "pnpm" | "homebrew" | "native" | "unknown";
-
-interface ParsedSemver {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: ReadonlyArray<string>;
-}
 
 export interface ProviderLatestVersionSource {
   readonly kind: "npm" | "homebrew";
@@ -90,32 +90,11 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function splitPrerelease(version: string): { main: string; prerelease: string | undefined } {
-  const separatorIndex = version.indexOf("-");
-  if (separatorIndex === -1) {
-    return { main: version, prerelease: undefined };
-  }
-  return {
-    main: version.slice(0, separatorIndex),
-    prerelease: version.slice(separatorIndex + 1),
-  };
-}
-
 function normalizeSemverVersion(version: string): string {
-  const { main, prerelease } = splitPrerelease(version.trim().replace(/^v/, ""));
-  const segments = main
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-
-  if (segments.length === 2) {
-    segments.push("0");
-  }
-
-  return prerelease ? `${segments.join(".")}-${prerelease}` : segments.join(".");
+  return normalizeCliVersion(version.trim().replace(/^v/, ""));
 }
 
-function parseSemver(value: string): ParsedSemver | null {
+function parseSemver(value: string): ParsedCliVersion | null {
   const { main, prerelease } = splitPrerelease(normalizeSemverVersion(value));
   const segments = main.split(".");
   if (segments.length !== 3) {
@@ -146,22 +125,6 @@ function parseSemver(value: string): ParsedSemver | null {
   };
 }
 
-function comparePrereleaseIdentifier(left: string, right: string): number {
-  const leftNumeric = SEMVER_NUMBER_SEGMENT.test(left);
-  const rightNumeric = SEMVER_NUMBER_SEGMENT.test(right);
-
-  if (leftNumeric && rightNumeric) {
-    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
-  }
-  if (leftNumeric) {
-    return -1;
-  }
-  if (rightNumeric) {
-    return 1;
-  }
-  return left.localeCompare(right);
-}
-
 export function compareSemverVersions(left: string, right: string): number {
   const parsedLeft = parseSemver(left);
   const parsedRight = parseSemver(right);
@@ -169,45 +132,11 @@ export function compareSemverVersions(left: string, right: string): number {
     return left.localeCompare(right);
   }
 
-  if (parsedLeft.major !== parsedRight.major) {
-    return parsedLeft.major - parsedRight.major;
-  }
-  if (parsedLeft.minor !== parsedRight.minor) {
-    return parsedLeft.minor - parsedRight.minor;
-  }
-  if (parsedLeft.patch !== parsedRight.patch) {
-    return parsedLeft.patch - parsedRight.patch;
-  }
-  if (parsedLeft.prerelease.length === 0 && parsedRight.prerelease.length === 0) {
-    return 0;
-  }
-  if (parsedLeft.prerelease.length === 0) {
-    return 1;
-  }
-  if (parsedRight.prerelease.length === 0) {
-    return -1;
-  }
-
-  const length = Math.max(parsedLeft.prerelease.length, parsedRight.prerelease.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftIdentifier = parsedLeft.prerelease[index];
-    const rightIdentifier = parsedRight.prerelease[index];
-    if (leftIdentifier === undefined) {
-      return -1;
-    }
-    if (rightIdentifier === undefined) {
-      return 1;
-    }
-    const comparison = comparePrereleaseIdentifier(leftIdentifier, rightIdentifier);
-    if (comparison !== 0) {
-      return comparison;
-    }
-  }
-  return 0;
+  return compareParsedCliVersions(parsedLeft, parsedRight);
 }
 
 export function parseGenericCliVersion(output: string): string | null {
-  const match = output.match(/\bv?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\b/);
+  const match = CLI_VERSION_PATTERN.exec(output);
   return match?.[1] ? normalizeSemverVersion(match[1]) : null;
 }
 

@@ -25,7 +25,7 @@ import {
 } from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
-  createAllThreadsSelector,
+  createAccountRateLimitThreadsSelector,
   createProjectSelector,
   createThreadSelector,
 } from "../storeSelectors";
@@ -306,8 +306,8 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const [allThreadsSelector] = useState(() => createAllThreadsSelector());
-  const threads = useStore(allThreadsSelector);
+  const [rateLimitThreadsSelector] = useState(() => createAccountRateLimitThreadsSelector());
+  const threads = useStore(rateLimitThreadsSelector);
   const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));

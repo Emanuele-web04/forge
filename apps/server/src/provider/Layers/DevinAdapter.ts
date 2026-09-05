@@ -26,6 +26,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   TurnId,
+  type ProviderSessionStartInput,
   type RuntimeMode,
 } from "@synara/contracts";
 import {
@@ -80,6 +81,7 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { AcpRequestError } from "../acp/AcpErrors.ts";
 import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
@@ -159,10 +161,119 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
   defaultMs: 30 * 60 * 1000,
 });
-const DEVIN_TOOL_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
-  envVar: "SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS",
-  defaultMs: 60 * 60 * 1000,
-});
+
+// Wedge recovery: the devin child can deadlock while staying alive (observed
+// twice in its exec session_manager: a hung sandbox_manager lock acquisition,
+// and a PTY spawn that never reached "waiting for shell ready"). A wedged
+// child emits no ACP events, so the idle budgets alone leave the turn hanging
+// for up to an hour; the child announces both shapes on its mirrored stderr.
+const DEVIN_STALL_WATCH_LOG_PATTERN = "affogato::stall_watch";
+const DEVIN_SPAWN_START_LOG_PATTERN = /session_id=([0-9a-f]+) \[create_session\] starting/;
+const DEVIN_SPAWN_READY_LOG_PATTERN =
+  /session_id=([0-9a-f]+) \[create_session\] waiting for shell ready/;
+const DEVIN_WEDGE_RECOVERY_CONTINUATION_PROMPT = "continue";
+const DEVIN_WEDGE_RECOVERY_WARNING =
+  "Devin stopped responding; restarting this session automatically and continuing the task.";
+const DEVIN_WEDGE_RECOVERY_MAX_PER_THREAD = 3;
+const DEVIN_WEDGE_RECOVERY_WINDOW_MS = 30 * 60 * 1000;
+const DEVIN_WEDGE_SUPERVISOR_INTERVAL_MS = 5_000;
+
+export interface DevinWedgeRecoveryOptions {
+  /** Silence required after a child stall warning before recovering. */
+  readonly stallFuseMs: number;
+  /** How long a command spawn may stay un-ready before recovering. */
+  readonly spawnStallTimeoutMs: number;
+  /** How often the wedge supervisor re-evaluates. */
+  readonly checkIntervalMs: number;
+  /** Automatic recoveries allowed per thread inside the window. */
+  readonly maxPerThread: number;
+  /** Rolling window for the per-thread recovery budget. */
+  readonly windowMs: number;
+}
+
+/**
+ * Like {@link resolveAcpTurnIdleTimeoutMs} but `0` is meaningful: it disables
+ * the wedge detector instead of falling back to the default.
+ */
+export function resolveDevinOptionalTimeoutMs(input: {
+  readonly envVar: string;
+  readonly defaultMs: number;
+  readonly env?: NodeJS.ProcessEnv;
+}): number {
+  const raw = (input.env ?? process.env)[input.envVar]?.trim();
+  if (raw === undefined || raw === "") return input.defaultMs;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return input.defaultMs;
+  return parsed;
+}
+
+export function resolveDevinWedgeRecoveryOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): DevinWedgeRecoveryOptions {
+  return {
+    stallFuseMs: resolveDevinOptionalTimeoutMs({
+      envVar: "SYNARA_DEVIN_STALL_FUSE_MS",
+      defaultMs: 90_000,
+      env,
+    }),
+    spawnStallTimeoutMs: resolveDevinOptionalTimeoutMs({
+      envVar: "SYNARA_DEVIN_SPAWN_STALL_TIMEOUT_MS",
+      defaultMs: 30_000,
+      env,
+    }),
+    checkIntervalMs: DEVIN_WEDGE_SUPERVISOR_INTERVAL_MS,
+    maxPerThread: DEVIN_WEDGE_RECOVERY_MAX_PER_THREAD,
+    windowMs: DEVIN_WEDGE_RECOVERY_WINDOW_MS,
+  };
+}
+
+export type DevinWedgeSignal =
+  | { readonly kind: "stall-watch"; readonly silentMs: number }
+  | { readonly kind: "spawn-stall"; readonly spawnSessionId: string; readonly stalledMs: number };
+
+/**
+ * Pure wedge decision for one supervisor tick. A signal exists only while a
+ * turn is active, no human input is pending, and the child has announced a
+ * failure shape that has persisted past its fuse.
+ */
+export function evaluateDevinWedgeSignal(input: {
+  readonly activeTurnId: string | undefined;
+  readonly awaitingHuman: boolean;
+  readonly stallWatchDetectedAt: number | undefined;
+  readonly spawnStalls: ReadonlyMap<string, number>;
+  readonly now: number;
+  readonly stallFuseMs: number;
+  readonly spawnStallTimeoutMs: number;
+}): DevinWedgeSignal | undefined {
+  if (input.activeTurnId === undefined || input.awaitingHuman) return undefined;
+  if (input.stallWatchDetectedAt !== undefined && input.stallFuseMs > 0) {
+    const silentMs = input.now - input.stallWatchDetectedAt;
+    if (silentMs >= input.stallFuseMs) {
+      return { kind: "stall-watch", silentMs };
+    }
+  }
+  if (input.spawnStallTimeoutMs > 0) {
+    for (const [spawnSessionId, startedAt] of input.spawnStalls) {
+      const stalledMs = input.now - startedAt;
+      if (stalledMs >= input.spawnStallTimeoutMs) {
+        return { kind: "spawn-stall", spawnSessionId, stalledMs };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Rolling per-thread budget for automatic wedge recoveries. */
+export function canRecoverDevinWedge(input: {
+  readonly recoveryAt: ReadonlyArray<number>;
+  readonly now: number;
+  readonly maxPerWindow: number;
+  readonly windowMs: number;
+}): boolean {
+  return (
+    input.recoveryAt.filter((at) => input.now - at < input.windowMs).length < input.maxPerWindow
+  );
+}
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const DEVIN_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DEVIN_COMMAND_DISCOVERY_TIMEOUT_MS = 15_000;
@@ -242,6 +353,7 @@ interface DevinAdapterLiveOptions {
   readonly makeAcpRuntime?: typeof makeDevinAcpRuntime;
   readonly onSessionUpdateProcessed?: () => void;
   readonly timeouts?: DevinAdapterTimeouts;
+  readonly wedgeRecovery?: DevinWedgeRecoveryOptions;
 }
 
 interface PendingApproval {
@@ -294,6 +406,25 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   // lag by at most one turn on the FIFO session/update stream).
   readonly turnToolCallIds: Map<string, TurnId>;
   readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
+  // Wedge detection state, fed by the child's mirrored stderr log stream and
+  // consumed by the per-session wedge supervisor. stallWatchDetectedAt records
+  // the child's own stall confession (first warning wins; any turn progress
+  // clears it). spawnStalls tracks exec create_session starts that have not
+  // reached "waiting for shell ready", keyed by the child's session id.
+  devinStallWatchDetectedAt: number | undefined;
+  readonly devinSpawnStalls: Map<string, number>;
+  // Turn id the wedge supervisor already auto-recovered, so a recovered turn
+  // cannot trigger a second recovery if its replacement also stalls.
+  devinWedgeRecoveryAttemptedFor: string | undefined;
+  // True while a forked wedge recovery for this session is still running; the
+  // supervisor skips forking duplicates and retries after it settles (a bail —
+  // e.g. a pending approval landed — is retried on a later tick).
+  devinWedgeRecoveryInFlight: boolean;
+  // Original start inputs, replayed verbatim when a wedge recovery restarts the
+  // session so the replacement child keeps the thread's model selection
+  // (including variant/effort options) and per-thread provider options.
+  readonly devinStartModelSelection: ProviderSessionStartInput["modelSelection"];
+  readonly devinStartProviderOptions: ProviderSessionStartInput["providerOptions"];
   // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
   // session updates have been fully handled by the notification consumer.
   sessionUpdatesProcessed: number;
@@ -1209,6 +1340,7 @@ export function makeDevinAdapter(
 ) {
   const timeouts = options?.timeouts ?? resolveDevinAdapterTimeouts();
   const watchdogIntervalMs = Math.min(5_000, timeouts.turnIdleMs, timeouts.toolIdleMs);
+  const wedge = options?.wedgeRecovery ?? resolveDevinWedgeRecoveryOptions();
 
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -1229,6 +1361,27 @@ export function makeDevinAdapter(
     }
 
     const sessions = new Map<ThreadId, DevinSessionContext>();
+    // Rolling per-thread budget for automatic wedge recoveries. Lives at the
+    // adapter level so the budget survives session restarts (each recovery
+    // replaces the session context).
+    const wedgeRecoveryAtByThread = new Map<ThreadId, number[]>();
+    // Ownership survives the gap where restart has removed the old session.
+    const wedgeRecoveries = new Map<
+      ThreadId,
+      { turnId: TurnId; cancelled: Deferred.Deferred<void> }
+    >();
+    const cancelWedgeRecovery = (threadId: ThreadId, turnId?: TurnId) =>
+      Effect.gen(function* () {
+        const recovery = wedgeRecoveries.get(threadId);
+        if (!recovery || (turnId !== undefined && recovery.turnId !== turnId)) return false;
+        wedgeRecoveries.delete(threadId);
+        yield* Deferred.succeed(recovery.cancelled, undefined);
+        return true;
+      });
+    // Recoveries fork here instead of the session scope: a recovery stops the
+    // wedged session, and a fiber running inside that session's scope would be
+    // interrupted mid-recovery when the scope closes.
+    const wedgeRecoveryScope = yield* Scope.make("sequential");
     const commandDiscoveryCache = new Map<
       string,
       { readonly expiresAt: number; readonly result: ProviderListCommandsResult }
@@ -1402,6 +1555,8 @@ export function makeDevinAdapter(
         if (ctx.stopped) return;
         ctx.stopped = true;
         clearDevinActiveToolCallIdleState(ctx);
+        ctx.devinStallWatchDetectedAt = undefined;
+        ctx.devinSpawnStalls.clear();
         yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
         ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
@@ -1603,6 +1758,12 @@ export function makeDevinAdapter(
       });
 
     const startSession: DevinAdapterShape["startSession"] = (input) =>
+      cancelWedgeRecovery(input.threadId).pipe(Effect.andThen(startDevinSession(input)));
+
+    const startDevinSession = (
+      input: Parameters<DevinAdapterShape["startSession"]>[0],
+      recoverySession?: DevinSessionContext,
+    ): ReturnType<DevinAdapterShape["startSession"]> =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -1631,6 +1792,16 @@ export function makeDevinAdapter(
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
 
           const existing = sessions.get(input.threadId);
+          // Recheck under the lock: a user turn may start while recovery waits.
+          if (
+            recoverySession !== undefined &&
+            (existing !== recoverySession ||
+              existing.stopped ||
+              existing.activeTurnId !== undefined ||
+              existing.turnStarting)
+          ) {
+            return yield* Effect.interrupt;
+          }
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
           }
@@ -1730,6 +1901,28 @@ export function makeDevinAdapter(
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
 
+          // Wedge detection tap on the child's mirrored stderr log stream.
+          // Runs before ctx is assigned (startup logs arrive early), so every
+          // access guards on the binding. Startup-time lines carry no active
+          // turn and are recorded nowhere.
+          const onChildStderrLine = (line: string) => {
+            if (line.includes(DEVIN_STALL_WATCH_LOG_PATTERN)) {
+              if (ctx?.activeTurnId !== undefined && ctx.devinStallWatchDetectedAt === undefined) {
+                ctx.devinStallWatchDetectedAt = Date.now();
+              }
+              return;
+            }
+            const spawnStart = DEVIN_SPAWN_START_LOG_PATTERN.exec(line);
+            if (spawnStart) {
+              ctx?.devinSpawnStalls.set(spawnStart[1]!, Date.now());
+              return;
+            }
+            const spawnReady = DEVIN_SPAWN_READY_LOG_PATTERN.exec(line);
+            if (spawnReady) {
+              ctx?.devinSpawnStalls.delete(spawnReady[1]!);
+            }
+          };
+
           const acp = yield* createAcpRuntime({
             devinSettings: effectiveDevinSettings,
             childProcessSpawner,
@@ -1739,6 +1932,7 @@ export function makeDevinAdapter(
             clientCapabilities: { elicitation: { form: {} } },
             ...(resumeSessionId ? { resumeSessionId } : {}),
             ...(devinSessionConfig ? { sessionConfig: devinSessionConfig } : {}),
+            onChildStderrLine,
             ...acpRuntimeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
@@ -1878,7 +2072,21 @@ export function makeDevinAdapter(
               ),
             );
 
-            return yield* acp.start().pipe(Effect.mapError(acpToAdapterError(input.threadId)));
+            return yield* acp.start().pipe(
+              Effect.mapError((cause) =>
+                resumeSessionId !== undefined &&
+                cause instanceof AcpRequestError &&
+                cause.errorMessage.trim().toLowerCase() === "failed to load session data"
+                  ? new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: cause.message,
+                      reason: "resume-state-unavailable",
+                      cause,
+                    })
+                  : acpToAdapterError(input.threadId)(cause),
+              ),
+            );
           });
 
           const resumeReplayReady =
@@ -1926,6 +2134,12 @@ export function makeDevinAdapter(
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
             devinToolCallLifecycleById: new Map(),
+            devinStallWatchDetectedAt: undefined,
+            devinSpawnStalls: new Map(),
+            devinWedgeRecoveryAttemptedFor: undefined,
+            devinWedgeRecoveryInFlight: false,
+            devinStartModelSelection: input.modelSelection,
+            devinStartProviderOptions: input.providerOptions,
             sessionUpdatesProcessed: 0,
             sessionConfigReady,
             resumeReplayReady,
@@ -1942,6 +2156,8 @@ export function makeDevinAdapter(
             devinSessionConfig,
           };
 
+          yield* forkDevinWedgeSupervisor(ctx);
+
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
@@ -1949,6 +2165,11 @@ export function makeDevinAdapter(
                 // bay; mode/config/usage heartbeats must not mask a hung turn.
                 if (event._tag !== "ToolCallUpdated" && isAcpTurnProgressEventTag(event._tag)) {
                   ctx.lastTurnActivityAt = Date.now();
+                  ctx.devinStallWatchDetectedAt = undefined;
+                  // A wedged create_session emits no ACP events, so progress
+                  // proves any recorded spawn stall is a failed (not hung)
+                  // spawn; drop it before its timeout can misfire later.
+                  ctx.devinSpawnStalls.clear();
                 }
                 switch (event._tag) {
                   case "ModeChanged":
@@ -2054,6 +2275,8 @@ export function makeDevinAdapter(
                         return;
                       }
                       ctx.lastTurnActivityAt = Date.now();
+                      ctx.devinStallWatchDetectedAt = undefined;
+                      ctx.devinSpawnStalls.clear();
                       updateDevinToolCallIdleState(ctx, event.toolCall);
                       ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
@@ -2266,7 +2489,190 @@ export function makeDevinAdapter(
         }
       });
 
-    const sendTurn: DevinAdapterShape["sendTurn"] = (input) =>
+    // Auto-recovery for a wedged (alive-but-silent) child: settle the stuck
+    // turn as cancelled, restart the session from its resume cursor, and
+    // dispatch a continuation prompt — the interrupt -> resend flow that was
+    // previously manual. Bounded per turn and per thread; once the budget is
+    // exhausted the supervisor fails the turn instead. Every destructive step
+    // re-validates against live adapter state first: a user stop, interrupt,
+    // or fresh turn that lands mid-recovery always wins.
+    const recoverDevinWedgedTurn = (ctx: DevinSessionContext, signal: DevinWedgeSignal) =>
+      Effect.gen(function* () {
+        const turnId = ctx.activeTurnId;
+        // The wedged turn must still be the active one on the registered
+        // session; a settled or replaced turn means the child recovered (or the
+        // user acted) and this recovery is obsolete.
+        const stillOwnsTurn = () =>
+          !ctx.stopped && sessions.get(ctx.threadId) === ctx && ctx.activeTurnId === turnId;
+        if (turnId === undefined || ctx.stopped) return;
+        if (ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0) return;
+        if (ctx.devinWedgeRecoveryAttemptedFor === turnId) return;
+        const threadRecoveries = wedgeRecoveryAtByThread.get(ctx.threadId) ?? [];
+        if (
+          !canRecoverDevinWedge({
+            recoveryAt: threadRecoveries,
+            now: Date.now(),
+            maxPerWindow: wedge.maxPerThread,
+            windowMs: wedge.windowMs,
+          })
+        ) {
+          yield* Effect.logWarning("devin.acp.wedge_recovery_budget_exhausted", {
+            threadId: ctx.threadId,
+            turnId,
+            reason: signal.kind,
+          });
+          yield* failDevinTurnAsTimedOut(
+            ctx,
+            turnId,
+            signal.kind === "stall-watch" ? signal.silentMs : signal.stalledMs,
+          );
+          return;
+        }
+        if (!stillOwnsTurn()) return;
+        const recovery = { turnId, cancelled: yield* Deferred.make<void>() };
+        wedgeRecoveries.set(ctx.threadId, recovery);
+        yield* Effect.gen(function* () {
+          ctx.devinWedgeRecoveryAttemptedFor = turnId;
+          wedgeRecoveryAtByThread.set(ctx.threadId, [...threadRecoveries, Date.now()].slice(-16));
+          yield* Effect.logWarning("devin.acp.wedge_recovery_started", {
+            threadId: ctx.threadId,
+            turnId,
+            reason: signal.kind,
+          });
+          yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+            type: "runtime.warning",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: { message: DEVIN_WEDGE_RECOVERY_WARNING },
+          });
+          // Capture restart inputs before the session context is torn down.
+          const resumeCursor = ctx.session.resumeCursor;
+          const cwd = ctx.session.cwd;
+          const runtimeMode = ctx.session.runtimeMode;
+          const interactionMode = ctx.activeInteractionMode;
+          if (!stillOwnsTurn() || wedgeRecoveries.get(ctx.threadId) !== recovery) return;
+          yield* interruptDevinTurn(ctx.threadId, turnId);
+          // The interrupt settled the wedged turn. Bail if the user stopped the
+          // session, replaced it with their own restart, or already dispatched a
+          // new turn — none of those may be overridden by an automatic continue.
+          if (
+            wedgeRecoveries.get(ctx.threadId) !== recovery ||
+            ctx.stopped ||
+            sessions.get(ctx.threadId) !== ctx ||
+            ctx.activeTurnId !== undefined ||
+            ctx.turnStarting
+          ) {
+            return;
+          }
+          const started = yield* startDevinSession(
+            {
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              lifecycleGeneration: ctx.lifecycleGeneration,
+              cwd,
+              runtimeMode,
+              ...(ctx.devinStartModelSelection
+                ? { modelSelection: ctx.devinStartModelSelection }
+                : {}),
+              ...(ctx.devinStartProviderOptions
+                ? { providerOptions: ctx.devinStartProviderOptions }
+                : {}),
+              resumeCursor,
+            },
+            ctx,
+          );
+          const restarted = sessions.get(ctx.threadId);
+          if (
+            wedgeRecoveries.get(ctx.threadId) !== recovery ||
+            restarted === undefined ||
+            restarted.stopped ||
+            restarted.session !== started ||
+            restarted.activeTurnId !== undefined ||
+            restarted.turnStarting
+          ) {
+            return;
+          }
+          yield* sendDevinTurn({
+            threadId: ctx.threadId,
+            input: DEVIN_WEDGE_RECOVERY_CONTINUATION_PROMPT,
+            attachments: [],
+            ...(interactionMode ? { interactionMode } : {}),
+          });
+        }).pipe(
+          Effect.raceFirst(
+            Deferred.await(recovery.cancelled).pipe(Effect.andThen(Effect.interrupt)),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              if (Cause.hasInterruptsOnly(cause) || wedgeRecoveries.get(ctx.threadId) !== recovery)
+                return;
+              const detail = `Devin automatic recovery failed: ${Cause.pretty(cause)}`;
+              yield* Effect.logError("devin.acp.wedge_recovery_failed", {
+                threadId: ctx.threadId,
+                reason: signal.kind,
+                cause: Cause.pretty(cause),
+              });
+              yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+                type: "runtime.error",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId,
+                payload: {
+                  message: detail,
+                  class: "transport_error",
+                  detail: { reason: "synara.devin.wedge-recovery" },
+                },
+              });
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (wedgeRecoveries.get(ctx.threadId) === recovery)
+                wedgeRecoveries.delete(ctx.threadId);
+            }),
+          ),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            ctx.devinWedgeRecoveryInFlight = false;
+          }),
+        ),
+      );
+
+    const forkDevinWedgeSupervisor = (ctx: DevinSessionContext) =>
+      Effect.gen(function* () {
+        const loop = Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep(wedge.checkIntervalMs);
+            if (ctx.stopped) return;
+            if (ctx.devinWedgeRecoveryInFlight) continue;
+            const signal = evaluateDevinWedgeSignal({
+              activeTurnId: ctx.activeTurnId,
+              awaitingHuman: ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
+              stallWatchDetectedAt: ctx.devinStallWatchDetectedAt,
+              spawnStalls: ctx.devinSpawnStalls,
+              now: Date.now(),
+              stallFuseMs: wedge.stallFuseMs,
+              spawnStallTimeoutMs: wedge.spawnStallTimeoutMs,
+            });
+            if (signal === undefined) continue;
+            ctx.devinWedgeRecoveryInFlight = true;
+            yield* recoverDevinWedgedTurn(ctx, signal).pipe(Effect.forkIn(wedgeRecoveryScope));
+          }
+        });
+        return yield* loop.pipe(Effect.forkIn(ctx.scope));
+      });
+
+    const sendTurn: DevinAdapterShape["sendTurn"] = (input) => sendDevinTurn(input, true);
+
+    const sendDevinTurn = (
+      input: Parameters<DevinAdapterShape["sendTurn"]>[0],
+      userInitiated = false,
+    ) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         // compactThread holds the thread lock but sendTurn intentionally does not
@@ -2300,6 +2706,9 @@ export function makeDevinAdapter(
             issue: "Another Devin turn is already active for this thread.",
           });
         }
+        // An accepted user turn owns this session. Let ongoing startup finish
+        // for it, but prevent recovery from dispatching an automatic continuation.
+        if (userInitiated) wedgeRecoveries.delete(input.threadId);
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
         return yield* startDevinTurn(ctx, input).pipe(
@@ -2404,6 +2813,8 @@ export function makeDevinAdapter(
         ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
+        ctx.devinStallWatchDetectedAt = undefined;
+        ctx.devinSpawnStalls.clear();
 
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
         ctx.session = {
@@ -2517,7 +2928,11 @@ export function makeDevinAdapter(
                   turnId,
                   payload: {
                     state: completion.state,
-                    stopReason: result.stopReason ?? null,
+                    stopReason:
+                      completion.state === "cancelled" &&
+                      wedgeRecoveries.get(input.threadId)?.turnId === turnId
+                        ? "synara.devin.wedge-recovery"
+                        : (result.stopReason ?? null),
                     ...(completion.errorMessage !== undefined
                       ? { errorMessage: completion.errorMessage }
                       : {}),
@@ -2554,7 +2969,12 @@ export function makeDevinAdapter(
                 turnId,
                 payload: {
                   state: "cancelled",
-                  stopReason: "cancelled",
+                  // Public stop/interrupt revokes ownership before cancelling.
+                  // Keep technical recovery distinct from a user's goal pause.
+                  stopReason:
+                    wedgeRecoveries.get(input.threadId)?.turnId === turnId
+                      ? "synara.devin.wedge-recovery"
+                      : "cancelled",
                   ...completedCost,
                 },
               });
@@ -2586,6 +3006,16 @@ export function makeDevinAdapter(
       });
 
     const interruptTurn: DevinAdapterShape["interruptTurn"] = (threadId, turnId) =>
+      Effect.gen(function* () {
+        const cancelledRecovery = yield* cancelWedgeRecovery(threadId, turnId);
+        const ctx = sessions.get(threadId);
+        // The caller may still know only the original turn during restart.
+        if (cancelledRecovery && (!ctx || (turnId !== undefined && ctx.activeTurnId !== turnId)))
+          return;
+        yield* interruptDevinTurn(threadId, turnId);
+      });
+
+    const interruptDevinTurn: DevinAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (turnId !== undefined && turnId !== ctx.activeTurnId) {
@@ -2683,13 +3113,17 @@ export function makeDevinAdapter(
       });
 
     const stopSession: DevinAdapterShape["stopSession"] = (threadId) =>
-      withThreadLock(
-        threadId,
-        Effect.gen(function* () {
-          const ctx = sessions.get(threadId);
-          if (!ctx) return;
-          yield* stopSessionInternal(ctx);
-        }),
+      cancelWedgeRecovery(threadId).pipe(
+        Effect.andThen(
+          withThreadLock(
+            threadId,
+            Effect.gen(function* () {
+              const ctx = sessions.get(threadId);
+              if (!ctx) return;
+              yield* stopSessionInternal(ctx);
+            }),
+          ),
+        ),
       );
 
     const listSessions: DevinAdapterShape["listSessions"] = () =>
@@ -3001,7 +3435,11 @@ export function makeDevinAdapter(
       );
 
     const stopAll: DevinAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
+      Effect.suspend(() =>
+        Effect.forEach(new Set([...sessions.keys(), ...wedgeRecoveries.keys()]), stopSession, {
+          discard: true,
+        }),
+      );
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
@@ -3011,6 +3449,10 @@ export function makeDevinAdapter(
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),
     );
+    // Registered after the stopAll finalizer so LIFO teardown closes the
+    // recovery scope first: an in-flight recovery must not restart a session
+    // after stopAll has already torn every session down.
+    yield* Effect.addFinalizer(() => Scope.close(wedgeRecoveryScope, Exit.void));
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 

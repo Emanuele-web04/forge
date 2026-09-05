@@ -1,19 +1,61 @@
 {
   "name": "@synara/marketing",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "typecheck": "astro check"
+    "dev": "next dev --port 4322",
+    "build": "next build",
+    "start": "next start",
+    "downloads:update": "node scripts/update-installer-downloads.mjs",
+    "lint": "eslint",
+    "test:docs": "node --test scripts/*.test.mjs && node scripts/check-docs.mjs",
+    "test:links": "node scripts/check-external-links.mjs",
+    "test:seo-smoke": "node scripts/seo-smoke.mjs",
+    "test:e2e": "playwright test tests/e2e",
+    "test:visual": "playwright test tests/visual --grep @visual",
+    "test:visual:update": "playwright test tests/visual --grep @visual --update-snapshots",
+    "test:a11y": "playwright test tests/a11y",
+    "test:performance": "node scripts/performance-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "postinstall": "fumadocs-mdx"
   },
   "dependencies": {
-    "astro": "^6.4.6"
+    "@base-ui/react": "^1.6.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "fumadocs-core": "16.11.5",
+    "fumadocs-mdx": "15.2.0",
+    "fumadocs-ui": "16.11.5",
+    "lucide-react": "^1.25.0",
+    "next": "16.3.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-icons": "^5.6.0",
+    "react-tweet": "^3.3.1",
+    "resend": "^6.17.2",
+    "shadcn": "^4.16.1",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.7",
-    "typescript": "catalog:"
+    "@axe-core/playwright": "^4.12.1",
+    "@opennextjs/cloudflare": "^1.20.2",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "4.2.2",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "catalog:",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.0",
+    "tailwindcss": "4.2.2",
+    "typescript": "catalog:",
+    "wrangler": "^4.122.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "unrs-resolver@1.11.1": true
   }
 }

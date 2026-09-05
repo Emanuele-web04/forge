@@ -11,15 +11,16 @@ import {
   ifNoneMatchSatisfies,
   isSidecarRequestPath,
   negotiateStaticEncodingPreference,
-  negotiateStaticEncodings,
   staticCacheControl,
   staticEtag,
 } from "./staticAssets";
 
 const encodings = (header: string | undefined) =>
-  negotiateStaticEncodings(header).map((candidate) => candidate.encoding);
+  negotiateStaticEncodingPreference(header).candidates.flatMap((candidate) =>
+    candidate === null ? [] : [candidate.encoding],
+  );
 
-describe("negotiateStaticEncodings", () => {
+describe("negotiateStaticEncodingPreference sidecar ordering", () => {
   it("treats a missing or empty header as identity-only (RFC 9110 §12.5.3)", () => {
     expect(encodings(undefined)).toEqual([]);
     expect(encodings("")).toEqual([]);

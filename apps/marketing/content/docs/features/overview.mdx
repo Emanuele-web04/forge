@@ -1,0 +1,73 @@
+---
+title: All features
+description: The complete map of what Synara puts in your hands — every capability, one page, with links to the guide for each.
+---
+
+Synara is built to make agentic development deliberate, parallel, and reviewable. This is the complete feature map; every entry links to the page that covers it in depth.
+
+## Agent runtimes and models
+
+- **Multi-provider workspace** — use Claude Code, Codex, Cursor, OpenCode, Antigravity, Grok, Devin CLI, Pi, and Factory Droid from one app, with the subscriptions you already pay for. → [Providers](/docs/getting-started/providers)
+- **Provider handoff** — hand a thread to a different provider mid-task; the new model continues with the same context, environment, and Git state. → [Handoffs](/docs/workflows/handoffs)
+- **Model quick-switching** — cycle models with `alt+]` / `alt+[`, favorite the ones you use, and drag providers into your own order. → [Customization](/docs/features/customization)
+- **Reasoning & effort control** — per-provider effort ladders up to maximum reasoning, a dedicated picker (`mod+shift+e`), and `/fast` for quick turns. → [Composer](/docs/features/composer)
+- **Context management** — live context-usage reporting, warnings before compaction, million-token context tracking, and in-session model switches without a restart. → [Slash commands](/docs/reference/slash-commands)
+- **Usage panels** — provider limits and pace surfaced in the Environment panel and settings, so you see rate limits coming. → [Customization](/docs/features/customization)
+
+## Parallel work
+
+- **Git worktree isolation** — every task can run in its own worktree with its own branch, so parallel agents never collide. → [Worktrees](/docs/workflows/worktrees)
+- **Native subagents & workflows** — agents delegate to parallel child agents, shown live with phases, usage meters, and pause/stop controls. → [Parallel agents](/docs/workflows/parallel-agents)
+- **Thread forks** — `/fork` or **Fork from here** creates a source-linked task from the full conversation or one exact turn, using native provider forks where supported. → [Thread forks](/docs/workflows/forks)
+- **Side threads** — `/side` opens a guarded side-conversation for a narrower question without branching the main task into another full workflow. → [Slash commands](/docs/reference/slash-commands)
+- **Automations** — schedule recurring agent runs in plain language, with run history, evaluated stop conditions, and configurable consecutive-failure limits. → [Automations](/docs/workflows/automations)
+- **Studio** — a dedicated workspace for long-running, agent-led work, with outputs collected in one place instead of scattered across a transcript. → [Automations & Studio](/docs/features/automations)
+- **Project spaces** — organize threads into named spaces per project, with a switcher tab bar and `mod+alt+←/→` navigation. → [Preview features](/docs/reference/main-preview)
+
+## Agent control and integrations
+
+- **Agent Gateway** — an app-owned MCP tool surface that lets capable agents create and steer Synara tasks under the app's project and worktree rules. → [Parallel agents](/docs/workflows/parallel-agents)
+- **External MCP integrations** — pair Codex, Claude Code, Claude Desktop, or any MCP app with a guided flow and give it a scoped, revocable Synara tool surface. → [Preview features](/docs/reference/main-preview)
+- **Plan mode** — the agent proposes before executing, and can pause to ask you multi-select questions before writing any code. → [Composer](/docs/features/composer)
+- **Debug mode** — put any supported provider into the same evidence-first observe, reproduce, investigate, fix, and verify loop without changing runtime permissions. → [Debug mode](/docs/workflows/debugging)
+- **Persistent thread goals** — attach an explicit multi-turn objective with elapsed time, pause/resume controls, achievement history, and bounded autonomous continuation. → [Thread goals](/docs/features/thread-goals)
+- **Checkpoints & revert** — roll a thread back to an earlier state, with guardrails that refuse the revert while a turn is still running. → [Composer](/docs/features/composer)
+
+## Review and delivery
+
+- **Pull Requests workspace** — browse, search, review, comment, merge, and pin GitHub PRs across all your projects without leaving the app. → [Pull requests](/docs/workflows/pull-requests)
+- **Stacked pull requests** — see stack position and readiness, navigate the ordered stack, and merge the safe prefix through the selected PR with an explicit confirmation. → [Pull requests](/docs/workflows/pull-requests#work-with-stacked-pull-requests)
+- **Fix button** — groups every unresolved review comment into one numbered prompt, so the agent gets the whole review in a single message. → [Pull requests](/docs/workflows/pull-requests)
+- **Diff review** — a collapsible file tree, jump menu, and one-key toggle (`mod+d`) for reading exactly what changed. → [Organize & navigate](/docs/features/organize)
+- **Git actions** — commit, push, create branches, and switch safely with stash recovery and conflict checks, all from the workspace. → [Your first task](/docs/getting-started/first-task)
+- **Code review on demand** — `/review` starts a structured review of the current changes. → [Slash commands](/docs/reference/slash-commands)
+
+## Context and input
+
+- **Inline file comments** — comment on specific lines from a file preview and send them with your next prompt. → [Composer](/docs/features/composer)
+- **AppSnap** — press both Option keys to capture any Mac app window and attach it straight to the current task. → [Composer](/docs/features/composer)
+- **Attachments that behave** — files, images, folder mentions with a real directory picker, and pasted-text cards that survive edits. → [Composer](/docs/features/composer)
+- **Replies as context** — select part of an assistant response and send it back as structured context in the next prompt. → [Composer](/docs/features/composer)
+- **Media in the transcript** — generated images render inline with expand and download, and PDFs open in an in-app viewer. → [Composer](/docs/features/composer)
+
+## Workspace
+
+- **Integrated terminals** — real terminals in the task's working directory: drawer, splits, tabs, and a full-width terminal workspace. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
+- **Browser preview & dev servers** — live browser preview with browser control beside the conversation, and project dev servers managed from the same panel. → [Organize & navigate](/docs/features/organize)
+- **Editor workspace** — a file tree and syntax-highlighted editor next to the chat, plus open-in launchers for VS Code, Cursor, Zed, JetBrains, Xcode, and more. → [Organize & navigate](/docs/features/organize)
+- **Workspace file and source search** — open files by name with `mod+p` or search matching source lines with `mod+shift+f`, then inspect the result in the task's file pane. → [Organize & navigate](/docs/features/organize#search-files-and-source)
+- **iOS Simulator** — on macOS, share a live simulator with the agent, inject input, inspect accessibility, and capture screenshots or recordings beside the task. → [iOS Simulator](/docs/features/ios-simulator)
+- **Split views** — keep two tasks visible side by side (`mod+\`), even across projects. → [Organize & navigate](/docs/features/organize)
+- **Thread recap** — auto-generated, cached summaries of long conversations, ready before a handoff or when you return days later. → [Organize & navigate](/docs/features/organize)
+- **Pins, markers & notes** — pin projects, threads, and messages; mark transcript moments; keep autosaving notes attached to each task. → [Organize & navigate](/docs/features/organize)
+- **Keyboard-first navigation** — jump to any thread with `mod+1…9`, cycle recent views with `ctrl+tab`, and search everything with `mod+k`. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
+- **Thread export** — `/export` downloads any thread as a ZIP with a readable markdown transcript. → [Slash commands](/docs/reference/slash-commands)
+
+## Personalization and app
+
+- **Slash commands** — `/plan`, `/debug`, `/goal`, `/fork`, `/subagents`, `/export`, `/automation` and friends: thread control without leaving the keyboard. → [Slash commands](/docs/reference/slash-commands)
+- **Custom keybindings** — remap anything from a settings panel or an ordered JSON keymap with context-aware rules. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
+- **Theme editor & density controls** — tune the UI colors and information density directly in settings, terminals included. → [Customization](/docs/features/customization)
+- **Profile & activity stats** — a local profile of your patterns: provider and model mix, active hours, and a token heatmap. → [Customization](/docs/features/customization)
+- **Releases, in the app** — a "What's new" dialog after each update, full release history in settings, and installs that verify themselves. → [Customization](/docs/features/customization)
+- **Local-first by design** — chats, projects, and history stay on your machine; traffic goes only to the provider you picked. → [Synara documentation](/docs)

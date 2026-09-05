@@ -743,7 +743,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["recovery-first", "unrelated-progress"]);
   });
 
-  it("keeps recovery rows for different turns, actions, or runtime turns", () => {
+  it("folds stale-turn settlement refinements without hiding distinct recoveries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "settle-turn-a",
@@ -765,6 +765,18 @@ describe("deriveWorkLogEntries", () => {
         payload: {
           provider: "codex",
           action: "settle-interrupted",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "terminal-turn-b",
+        createdAt: "2026-02-23T00:00:02.250Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Terminal turn B",
+        payload: {
+          provider: "codex",
+          action: "settle-terminal-projection",
           projectedTurnId: "turn-b",
           runtimeTurnId: null,
         },
@@ -812,7 +824,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual([
       "settle-turn-a",
       "settle-turn-b",
-      "error-turn-b",
       "align-turn-b",
       "align-turn-b-new-runtime",
     ]);

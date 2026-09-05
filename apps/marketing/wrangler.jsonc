@@ -1,0 +1,61 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "synara-marketing",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // Preview only. No routes/custom domains here on purpose: trysynara.com
+  // stays on Vercel until the preview is verified, so this deploys to
+  // workers.dev and production DNS is untouched.
+  "workers_dev": true,
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".open-next/assets",
+  },
+  "r2_buckets": [
+    {
+      // Backs the ISR/data cache (docs, changelog, /install, llms.txt…).
+      // Create once: wrangler r2 bucket create synara-marketing-cache
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "synara-marketing-cache",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        // Drives the time-based revalidations.
+        "name": "NEXT_CACHE_DO_QUEUE",
+        "class_name": "DOQueueHandler",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DOQueueHandler"],
+    },
+  ],
+  "services": [
+    {
+      // Lets the worker call itself for revalidation without a public hop.
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "synara-marketing",
+    },
+  ],
+  "ratelimits": [
+    {
+      // Durable burst cap for /api/feedback. The route also keeps a per-hour
+      // in-process budget, but that is per-isolate on Workers and so cannot
+      // stop a flood on its own; this is account-level state. `period` accepts
+      // only 10 or 60, hence a per-minute cap rather than the hourly one.
+      "name": "FEEDBACK_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 5,
+        "period": 60,
+      },
+    },
+  ],
+  // Secrets (wrangler secret put): RESEND_API_KEY, RESEND_INBOUND_API_KEY,
+  // RESEND_WEBHOOK_SECRET, SYNARA_FEEDBACK_* addresses, GITHUB_TOKEN.
+}

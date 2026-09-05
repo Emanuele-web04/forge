@@ -49,6 +49,7 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
+import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -113,6 +114,7 @@ interface WsRequestEnvelope {
 interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
+  providerStatusesSnapshot: ServerConfig["providers"] | null;
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
 }
@@ -495,6 +497,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    providerStatusesSnapshot: null,
     gitBranchByCwd: {},
     welcome: {
       cwd: "/repo/project",
@@ -1422,8 +1425,15 @@ const worker = setupWorker(
         });
         return;
       }
+      if (method === WS_METHODS.subscribeServerProviderStatuses) {
+        if (fixture.providerStatusesSnapshot) {
+          sendEffectRpcChunk(client, parsed.request.id, {
+            providers: fixture.providerStatusesSnapshot,
+          });
+        }
+        return;
+      }
       if (
-        method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
@@ -6788,7 +6798,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("applies the project model over sticky codex settings on a new thread", async () => {
+  it("restores the sticky codex model on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
@@ -6828,7 +6838,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
           },
         },
         activeProvider: "codex",
@@ -6838,7 +6848,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("does not inherit sticky codex options onto a fresh project default", async () => {
+  it("restores sticky codex options on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
@@ -6878,17 +6888,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
+            options: {
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
           },
         },
         activeProvider: "codex",
       });
-      // The fresh project default must not inherit the sticky codex fastMode or
-      // reasoningEffort options through same-provider option preservation.
-      expect(
-        useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.modelSelectionByProvider
-          .codex,
-      ).not.toHaveProperty("options");
     } finally {
       await mounted.cleanup();
     }
@@ -7322,7 +7330,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("prefers the project model over a sticky claude model on fresh chat", async () => {
+  it("restores a usable sticky claude model on fresh chat", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         claudeAgent: {
@@ -7343,9 +7351,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetMessageId: "msg-user-sticky-claude-model-test" as MessageId,
         targetText: "sticky claude model test",
       }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers,
+        };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
     });
 
     try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
       const newThreadButton = page.getByTestId("new-thread-button");
       await expect.element(newThreadButton).toBeInTheDocument();
 
@@ -7355,6 +7385,82 @@ describe("ChatView timeline estimator parity (full app)", () => {
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new sticky claude draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
+        modelSelectionByProvider: {
+          claudeAgent: {
+            provider: "claudeAgent",
+            model: "claude-opus-4-6",
+            options: {
+              effort: "max",
+              fastMode: true,
+            },
+          },
+        },
+        activeProvider: "claudeAgent",
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("falls back from an unauthenticated sticky provider on fresh chat", async () => {
+    useComposerDraftStore.setState({
+      stickyModelSelectionByProvider: {
+        claudeAgent: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: {
+            effort: "max",
+            fastMode: true,
+          },
+        },
+      },
+      stickyActiveProvider: "claudeAgent",
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-unavailable-sticky-claude-test" as MessageId,
+        targetText: "unavailable sticky claude test",
+      }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unauthenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers,
+        };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a healthy fallback draft thread UUID.",
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
@@ -7372,7 +7478,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("materializes the project default when no sticky composer settings exist", async () => {
+  it("leaves the project default implicit when no sticky composer settings exist", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -7394,15 +7500,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
-        modelSelectionByProvider: {
-          codex: {
-            provider: "codex",
-            model: "gpt-5",
-          },
-        },
-        activeProvider: "codex",
-      });
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toBeUndefined();
     } finally {
       await mounted.cleanup();
     }
@@ -7448,7 +7546,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
+            options: {
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
           },
         },
         activeProvider: "codex",

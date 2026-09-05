@@ -1,0 +1,20 @@
+{
+  "title": "Workflows",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "best-practices",
+    "parallel-agents",
+    "worktrees",
+    "forks",
+    "handoffs",
+    "debugging",
+    "browser-verification",
+    "headless-server",
+    "pull-requests",
+    "automations",
+    "studio",
+    "agent-gateway",
+    "external-mcp"
+  ]
+}

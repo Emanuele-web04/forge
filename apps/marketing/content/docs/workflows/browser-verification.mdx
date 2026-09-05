@@ -1,0 +1,246 @@
+---
+title: Browser verification
+description: Verify visible web behavior with Synara’s shared in-app browser, semantic snapshots, screenshots, logs, and deliberate retries.
+---
+
+Synara’s browser is a shared Chromium page surface attached to the task. Supported agents can inspect and operate the same page, cookies, and session that you can reveal in the app. Use it to verify behavior—not as a substitute for understanding the implementation or reviewing the diff.
+
+The WebMCP tool surface is provider-neutral. A compatible provider receives the same task-owned browser tools, bounded results, timeout policy, and lifecycle cleanup rather than a provider-specific copy of the browser integration. Availability still depends on the selected runtime and the task's granted capabilities.
+
+## Choose the browser surface
+
+The same task browser can appear in two places:
+
+- **Floating over the conversation:** keeps the page visible while you read the transcript. Drag the handle to move it, resize from an edge or corner, and use the panel menu to return it to the sidebar.
+- **In the right sidebar:** gives the browser a dedicated docked column beside the conversation.
+
+These are two presentations of one task-scoped browser session, not separate browsers. Tabs, cookies, navigation, and the page an agent operates remain attached to the task when you move between them. When the floating panel owns the live native page, the hidden sidebar stays preview-only so two surfaces cannot send input to the same guest.
+
+Closing the floating panel hides that presentation; it does not prove that the task’s browser runtime or tabs were destroyed. Use the task controls or browser tools when you intend to close a tab or end the browser session.
+
+## What browser verification is for
+
+Use the browser when correctness depends on visible or runtime behavior, including:
+
+- Layout and responsive states
+- Navigation and routing
+- Forms, validation, and focus behavior
+- Loading, empty, error, and success states
+- Console exceptions and failed requests
+- Authentication flows that require human completion
+- Interaction sequences that unit tests do not fully represent
+
+Keep unit, integration, and server tests. Browser verification adds evidence at the user-facing layer.
+
+## Start the correct application
+
+Before opening the page:
+
+1. Confirm the task’s working directory.
+2. Start the intended development server from that environment.
+3. Record the command and local URL.
+4. Check for port conflicts or another checkout already serving the same port.
+5. Confirm the browser is viewing the task’s build rather than a stale process.
+
+A correct page served from the wrong checkout does not verify the branch you are reviewing.
+
+## The reliable interaction loop
+
+<Steps>
+<Step>
+
+### Open or select the task-scoped tab
+
+Use the task’s assigned browser tab. Browser tabs are scoped to the Synara thread; do not reuse a tab identifier from another task.
+
+</Step>
+<Step>
+
+### Navigate and wait for a real condition
+
+Navigate to the target URL, then wait for a load state, text, element state, or bounded delay. Prefer an observable condition over an arbitrary long sleep.
+
+</Step>
+<Step>
+
+### Take a semantic snapshot
+
+Use `browser_snapshot` before element actions. It returns bounded accessibility semantics, visible text, actionable references, and a `snapshotId`.
+
+</Step>
+<Step>
+
+### Act on the current snapshot
+
+Prefer a target containing both the element reference and the snapshot identifier:
+
+```json
+{
+  "target": {
+    "ref": "e3",
+    "snapshotId": "snapshot-current"
+  }
+}
+```
+
+A bare reference is not a durable selector. Snapshot-bound targets prevent an old `e3` from silently resolving to a different element after the page changes.
+
+</Step>
+<Step>
+
+### Observe again
+
+After navigation, typing, selection, hover, scrolling, resizing, or any other state-changing action, take a fresh snapshot before the next dependent action.
+
+</Step>
+<Step>
+
+### Verify the intended result
+
+Check the visible state, console and network metadata, relevant persisted data, and the underlying diff. Record what was tested and what was not.
+
+</Step>
+</Steps>
+
+## Snapshots versus screenshots
+
+| Tool                 | Use it for                                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| `browser_snapshot`   | Semantic structure, visible text, roles, states, values, and reliable action targets                |
+| `browser_screenshot` | Pixel-level appearance, spacing, clipping, visual regressions, and states semantics cannot describe |
+
+Prefer snapshots for interaction and assertions. Use screenshots when pixels matter.
+
+A screenshot alone does not prove accessibility, event behavior, form state, or network success. A semantic snapshot alone may not reveal visual overlap, color contrast, or clipping.
+
+## Viewport coverage
+
+For responsive changes, verify at the viewport sizes relevant to the product. At minimum, consider:
+
+- A narrow mobile width
+- A typical laptop width
+- A wide desktop width when the layout uses additional columns
+
+After `browser_resize`, take a new snapshot because layout and element geometry may have changed.
+
+Do not declare “responsive” after checking one width.
+
+## Forms and text entry
+
+When testing forms:
+
+- Snapshot the field and its current value.
+- Use replace behavior unless append is intentional.
+- Verify validation messages and disabled states.
+- Confirm submission effects outside the input itself.
+- Avoid entering real credentials or private data into logs or task transcripts.
+- Test keyboard behavior when focus and accessibility matter.
+
+For select elements, use exact option values. For uploads, use workspace-relative regular files and never upload secrets without explicit user intent.
+
+## Console and network diagnostics
+
+`browser_logs` returns bounded console, exception, and network request/response/failure metadata for the exact tab.
+
+Use it to investigate:
+
+- JavaScript exceptions
+- Failed fetches
+- Unexpected status codes
+- Requests sent to the wrong origin
+- Repeated requests or reload loops
+
+Request bodies, response bodies, and headers are not exposed through this diagnostic surface. Use application logs or safe test instrumentation when deeper payload inspection is necessary.
+
+## Ambiguous failures and safe retries
+
+A browser tool timeout or transport failure does not always mean nothing happened. A click, type, submit, navigation, or upload may have committed before the response was lost.
+
+When an error is ambiguous:
+
+1. Do not immediately repeat the mutation.
+2. Take a fresh snapshot or inspect the current URL and page state.
+3. Check console/network metadata when useful.
+4. Determine whether the intended effect already occurred.
+5. Retry only after the state is understood.
+
+This is especially important for submissions, purchases, external messages, account changes, and any action that can create duplicate effects.
+
+## OAuth and human-required actions
+
+An agent may open an OAuth popup or reach a login step that requires human interaction. When the browser result indicates human action is required:
+
+- Stop agent browser actions.
+- Reveal the relevant surface.
+- Complete authentication yourself.
+- Confirm the popup or redirect has settled.
+- Take a fresh snapshot before the agent continues.
+
+Do not ask the agent to extract passwords, one-time codes, recovery keys, or private tokens from another surface.
+
+## Use evaluation sparingly
+
+`browser_evaluate` runs a bounded expression in the page’s main world. It is useful for data that cannot be observed through semantics or logs, but it is a high-impact open-world capability.
+
+Prefer snapshots and real interactions. Do not use evaluation to bypass normal navigation, access hidden secrets, forge application state, or replace a user-visible workflow with direct internal mutation.
+
+## Manual review still matters
+
+Reveal the browser and inspect important visual behavior yourself when:
+
+- The change is primarily visual
+- Animation, drag, hover, or focus behavior matters
+- The page contains sensitive external effects
+- The agent reports an ambiguous interaction
+- The screenshot or semantic output does not match your expectation
+
+The agent and human should observe the same page state, not separate browser sessions with different cookies or data.
+
+## Browser verification record
+
+A useful completion report includes:
+
+```text
+Server:
+npm run dev
+http://localhost:3000
+
+Pages checked:
+/settings/integrations
+/docs/providers/codex
+
+Viewports:
+390×844
+1440×900
+
+Scenarios:
+- Empty integration list
+- Create integration validation
+- Successful paired state
+- Narrow sidebar navigation
+
+Diagnostics:
+- No console exceptions
+- No failed application requests
+
+Not checked:
+- Real third-party OAuth completion
+```
+
+## Completion checklist
+
+- [ ] The page is served from the task’s environment
+- [ ] The correct route and account state were used
+- [ ] Actions used fresh snapshot-bound targets
+- [ ] State-changing actions were observed before retrying
+- [ ] Relevant mobile and desktop widths were checked
+- [ ] Console and network failures were reviewed
+- [ ] Pixel-level behavior was inspected when necessary
+- [ ] Human-only authentication stayed human-controlled
+- [ ] The diff and automated tests were also reviewed
+- [ ] The final report states what was and was not verified
+
+<Callout type="warn" title="Observe before retrying">
+  A timed-out browser mutation may already have changed the page or external system. Inspect the
+  current state before repeating it.
+</Callout>
