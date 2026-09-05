@@ -1,3 +1,4 @@
+import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -21,7 +22,6 @@ import {
   EventId,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
-  type ProviderListModelsInput,
   type ProviderListModelsResult,
   type ProviderListSkillsResult,
   ProviderItemId,
@@ -39,7 +39,7 @@ import {
   spawnProcess as spawnPlatformProcess,
   type RuntimeSpawnOptions,
 } from "@synara/shared/processRuntime";
-import { Deferred, Effect, Exit, FileSystem, Layer, Option, Queue, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
 import {
@@ -59,12 +59,6 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
-import {
-  OPENCODE_CLI_SPEC,
-  OpenCodeRuntime,
-  openCodeRuntimeErrorDetail,
-  type OpenCodeCliModelDescriptor,
-} from "../opencodeRuntime.ts";
 import { ServerConfig } from "../../config.ts";
 import { lazyModule } from "../../lazyModule.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -619,143 +613,6 @@ export function getPiDiscoverableModels(
   return ensurePiAnthropicCatalogModels(registry.getAvailable(), registry.getAll());
 }
 
-const PI_MODEL_CATALOG_TTL_MS = 60_000;
-const PI_MODEL_CATALOG_RELOAD_TIMEOUT_MS = 15_000;
-const PI_MODEL_CATALOG_CACHE_MAX_KEYS = 50;
-const PI_OPENCODE_LIVE_BINARY_PATH = "opencode";
-
-interface PiModelCatalogCacheEntry {
-  readonly at: number;
-  readonly models: ProviderListModelsResult["models"];
-  readonly source?: string;
-}
-
-const piModelCatalogCache = new Map<string, PiModelCatalogCacheEntry>();
-const piModelCatalogInflight = new Map<
-  string,
-  Deferred.Deferred<ProviderListModelsResult, ProviderAdapterRequestError>
->();
-
-function readPiModelCatalogCache(key: string): PiModelCatalogCacheEntry | undefined {
-  const entry = piModelCatalogCache.get(key);
-  if (!entry) {
-    return undefined;
-  }
-  if (Date.now() - entry.at >= PI_MODEL_CATALOG_TTL_MS) {
-    piModelCatalogCache.delete(key);
-    return undefined;
-  }
-  return entry;
-}
-
-function writePiModelCatalogCache(key: string, result: ProviderListModelsResult): void {
-  if (piModelCatalogCache.size >= PI_MODEL_CATALOG_CACHE_MAX_KEYS) {
-    piModelCatalogCache.clear();
-  }
-  piModelCatalogCache.set(key, {
-    at: Date.now(),
-    models: result.models,
-    ...(result.source ? { source: result.source } : {}),
-  });
-}
-
-function withDiscoveryTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`Pi discovery step timed out after ${timeoutMs}ms.`)),
-      timeoutMs,
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-  });
-}
-
-function isPiOpenCodeFamilyProviderId(providerId: string): boolean {
-  const normalized = providerId.trim().toLowerCase();
-  return normalized === "opencode" || normalized.startsWith("opencode-");
-}
-
-/**
- * Pi's `opencode` catalog is a pi-ai compile-time snapshot, while OpenCode
- * discovery queries the live CLI + serve inventory on every call. New Zen
- * free models therefore appear in OpenCode immediately and in Pi only after
- * a pi-ai release. Fill Pi's `opencode/*` gaps from the live CLI catalog so
- * both pickers converge on the same model set.
- *
- * Only fills gaps: Pi-owned slugs win, and nothing is injected when Pi has no
- * `opencode` provider at all (those models could not be dispatched through a
- * Pi session anyway — see `createProviderModelFallback`).
- */
-export function mergePiDescriptorsWithOpenCodeLive(input: {
-  readonly piModels: ReadonlyArray<ProviderListModelsResult["models"][number]>;
-  readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
-}): ProviderListModelsResult["models"] {
-  const merged = [...input.piModels];
-  const knownSlugs = new Set(merged.map((model) => model.slug));
-  const piOpenCode = merged.find(
-    (model) =>
-      model.upstreamProviderId?.trim().toLowerCase() === "opencode" ||
-      model.slug === "opencode" ||
-      model.slug.startsWith("opencode/"),
-  );
-  if (!piOpenCode) {
-    return merged;
-  }
-  const upstreamProviderName = piOpenCode.upstreamProviderName?.trim() || "OpenCode";
-  const additions: Array<ProviderListModelsResult["models"][number]> = [];
-  for (const cliModel of input.cliModels) {
-    if (!isPiOpenCodeFamilyProviderId(cliModel.providerID)) {
-      continue;
-    }
-    const modelId = cliModel.modelID.trim();
-    if (modelId.length === 0) {
-      continue;
-    }
-    const slug = `opencode/${modelId}`;
-    if (knownSlugs.has(slug)) {
-      continue;
-    }
-    knownSlugs.add(slug);
-    additions.push({
-      slug,
-      name: cliModel.name.trim().length > 0 ? cliModel.name.trim() : modelId,
-      upstreamProviderId: "opencode",
-      upstreamProviderName,
-      ...(cliModel.supportedReasoningEfforts.length > 0
-        ? {
-            supportedReasoningEfforts: cliModel.supportedReasoningEfforts.map((effort) => ({
-              value: effort.value,
-              ...(effort.label ? { label: effort.label } : {}),
-              ...(effort.description ? { description: effort.description } : {}),
-            })),
-            ...(cliModel.defaultReasoningEffort?.trim()
-              ? { defaultReasoningEffort: cliModel.defaultReasoningEffort.trim() }
-              : {}),
-          }
-        : {}),
-      ...(cliModel.contextWindowOptions && cliModel.contextWindowOptions.length > 0
-        ? {
-            contextWindowOptions: cliModel.contextWindowOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-              ...(option.isDefault ? { isDefault: true as const } : {}),
-            })),
-            ...(cliModel.defaultContextWindow?.trim()
-              ? { defaultContextWindow: cliModel.defaultContextWindow.trim() }
-              : {}),
-          }
-        : {}),
-    });
-  }
-  additions.sort((left, right) => left.slug.localeCompare(right.slug));
-  merged.push(...additions);
-  return merged;
-}
-
 /**
  * Pi extensions own their provider catalogs, so normalize their display metadata
  * before it crosses Synara's trimmed-string RPC contract. A single malformed
@@ -829,6 +686,13 @@ function createProviderModelFallback(
   if (!providerDefault) {
     return undefined;
   }
+  // Zen mixes four protocols. A missing model must not inherit an arbitrary API.
+  if (
+    parsed.provider === "opencode" &&
+    /^https:\/\/opencode\.ai\/zen(?:\/|$)/u.test(providerDefault.baseUrl)
+  ) {
+    return undefined;
+  }
   if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
     const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
     return {
@@ -856,7 +720,7 @@ function createProviderModelFallback(
   };
 }
 
-function findModelInRegistry(
+export function findModelInRegistry(
   registry: PiModelRegistry,
   modelId: string | null | undefined,
 ): Model<Api> | undefined {
@@ -1375,11 +1239,14 @@ function makeAgentDir(
 export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
+  signal?: AbortSignal,
 ): Promise<ModelRuntime> {
-  return piSdk.ModelRuntime.create({
+  const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
+  await refreshPiOpenCodeCatalog(runtime, { signal });
+  return runtime;
 }
 
 function modelRegistryFacade(
@@ -1480,10 +1347,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
-    // Optional: present when the host layer merges OpenCodeRuntimeLive (see
-    // runtimeLayer). Lets Pi model discovery live-augment its frozen `opencode`
-    // catalog from the OpenCode CLI; unit-test layers omit it and skip the augment.
-    const openCodeRuntime = Option.getOrUndefined(yield* Effect.serviceOption(OpenCodeRuntime));
     const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
@@ -2245,8 +2108,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
+      signal?: AbortSignal;
     }) => {
-      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
+      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk, input.signal);
+      input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2380,8 +2245,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
           agentGatewaySessionLease,
           Effect.tryPromise({
-            try: () =>
+            try: (signal) =>
               createSdkRuntime({
+                signal,
                 sdk: piSdk,
                 cwd,
                 agentDir,
@@ -2891,142 +2757,40 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const stopAll: PiAdapterShape["stopAll"] = () =>
       settleConcurrentTeardowns(sessions.keys(), stopSession);
 
-    const computePiModelCatalog = (
-      catalogInput: ProviderListModelsInput,
-    ): Effect.Effect<
-      { readonly result: ProviderListModelsResult; readonly cacheable: boolean },
-      ProviderAdapterRequestError
-    > =>
-      Effect.gen(function* () {
-        const base = yield* Effect.tryPromise({
-          try: async () => {
-            const piSdk = await loadPiCodingAgentModule();
-            const agentDir = makeAgentDir(catalogInput.agentDir, piSdk);
-            const cwd = trimToUndefined(catalogInput.cwd) ?? serverConfig.cwd;
-            const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
-            const services = await piSdk.createAgentSessionServices({
-              cwd,
-              agentDir,
-              modelRuntime,
-            });
-            // Extension providers register during resource loading. Reading the
-            // registry before they settle yields a partial catalog on cold start
-            // (the picker showed a single model until the next discovery), so wait
-            // for the reload the same way command discovery does — but bounded, so
-            // a wedged extension degrades to uncached instead of hanging the picker.
-            let extensionsSettled = true;
-            try {
-              await withDiscoveryTimeout(
-                services.resourceLoader.reload(),
-                PI_MODEL_CATALOG_RELOAD_TIMEOUT_MS,
-              );
-            } catch {
-              extensionsSettled = false;
-            }
-            const registry = modelRegistryFacade(services.modelRuntime, piSdk);
-            try {
-              registry.refresh();
-            } catch {
-              extensionsSettled = false;
-            }
-            const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-            const models = getPiDiscoverableModels(registry).flatMap((model) => {
-              const descriptor = toPiProviderModelDescriptor(
-                model,
-                registry.getProviderDisplayName.bind(registry),
-              );
-              return descriptor ? [descriptor] : [];
-            });
-            return { models, extensionCount, extensionsSettled };
-          },
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "model/list",
-              detail: toMessage(cause, "Failed to list Pi models."),
-              cause,
-            }),
-        });
-        let models: ProviderListModelsResult["models"] = base.models;
-        let source = base.extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk";
-        if (openCodeRuntime) {
-          const discoveryCwd = trimToUndefined(catalogInput.cwd);
-          const liveModels = yield* openCodeRuntime
-            .listOpenCodeCliModels({
-              binaryPath: PI_OPENCODE_LIVE_BINARY_PATH,
-              cliSpec: OPENCODE_CLI_SPEC,
-              ...(discoveryCwd ? { cwd: discoveryCwd } : {}),
-            })
-            .pipe(
-              Effect.catch((cause) =>
-                Effect.logDebug("Pi model discovery: OpenCode live augment skipped", {
-                  detail: openCodeRuntimeErrorDetail(cause),
-                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
-              ),
-            );
-          if (liveModels.length > 0) {
-            const augmented = mergePiDescriptorsWithOpenCodeLive({
-              piModels: models,
-              cliModels: liveModels,
-            });
-            if (augmented.length > models.length) {
-              source = `${source}+opencode-live`;
-            }
-            models = augmented;
-          }
-        }
-        yield* Effect.logDebug("Pi model discovery resolved", {
-          extensionCount: base.extensionCount,
-          extensionsSettled: base.extensionsSettled,
-          modelCount: models.length,
-          source,
-        }).pipe(Effect.ignore);
-        return {
-          result: { models, source, cached: false } satisfies ProviderListModelsResult,
-          // Never lock in an empty or partially-settled catalog: the next picker
-          // open recomputes instead of serving it from cache.
-          cacheable: base.extensionsSettled && models.length > 0,
-        };
-      });
-
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
-      Effect.gen(function* () {
-        const cacheAgentDir = trimToUndefined(input.agentDir) ?? "";
-        const cacheCwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const cacheKey = `${cacheAgentDir}::${cacheCwd}`;
-        const cachedEntry = readPiModelCatalogCache(cacheKey);
-        if (cachedEntry) {
+      Effect.tryPromise({
+        try: async (signal) => {
+          const piSdk = await loadPiCodingAgentModule();
+          const agentDir = makeAgentDir(input.agentDir, piSdk);
+          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+          const modelRuntime = await createPiModelRuntime(agentDir, piSdk, signal);
+          const services = await piSdk.createAgentSessionServices({
+            cwd,
+            agentDir,
+            modelRuntime,
+          });
+          const registry = modelRegistryFacade(services.modelRuntime, piSdk);
+          const extensionCount = services.resourceLoader.getExtensions().extensions.length;
+          const models = getPiDiscoverableModels(registry).flatMap((model) => {
+            const descriptor = toPiProviderModelDescriptor(
+              model,
+              registry.getProviderDisplayName.bind(registry),
+            );
+            return descriptor ? [descriptor] : [];
+          });
           return {
-            models: cachedEntry.models,
-            ...(cachedEntry.source ? { source: cachedEntry.source } : {}),
-            cached: true,
+            models,
+            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+            cached: false,
           } satisfies ProviderListModelsResult;
-        }
-        const ongoing = piModelCatalogInflight.get(cacheKey);
-        if (ongoing) {
-          const joined = yield* Deferred.await(ongoing);
-          return {
-            ...joined,
-            cached: true,
-          } satisfies ProviderListModelsResult;
-        }
-        const gate = yield* Deferred.make<ProviderListModelsResult, ProviderAdapterRequestError>();
-        piModelCatalogInflight.set(cacheKey, gate);
-        const exit = yield* Effect.exit(computePiModelCatalog(input));
-        piModelCatalogInflight.delete(cacheKey);
-        if (Exit.isFailure(exit)) {
-          yield* Deferred.failCause(gate, exit.cause);
-          return yield* Effect.failCause(exit.cause);
-        }
-        const completed = exit.value;
-        if (completed.cacheable) {
-          writePiModelCatalogCache(cacheKey, completed.result);
-        }
-        yield* Deferred.succeed(gate, completed.result);
-        return {
-          ...completed.result,
-          cached: false,
-        } satisfies ProviderListModelsResult;
+        },
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: toMessage(cause, "Failed to list Pi models."),
+            cause,
+          }),
       });
 
     const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>

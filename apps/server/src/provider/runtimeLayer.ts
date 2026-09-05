@@ -19,7 +19,6 @@ import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
-import { OpenCodeRuntimeLive } from "./opencodeRuntime";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
@@ -86,12 +85,7 @@ export function makeServerProviderLayer(
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const piAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    ).pipe(
-      Layer.provide(agentGatewayCredentialsLayer),
-      // Lets Pi model discovery live-augment its frozen `opencode` catalog from
-      // the OpenCode CLI (new Zen free models) without coupling the adapters.
-      Layer.provideMerge(OpenCodeRuntimeLive),
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
