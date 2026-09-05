@@ -1271,6 +1271,7 @@ export function syncServerShellSnapshot(
   );
   const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
+  rememberProjectState(projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
   // The retains below prune detail slices down to the snapshot's threads; any
   // resume cursor for a pruned thread must fall with its detail.
@@ -1433,6 +1434,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     new Set(liveProjects.map((project) => projectCwdKey(project.workspaceRoot))),
   );
   const projects = mapProjects(liveProjects, state.projects);
+  rememberProjectState(projects);
   const nextThreads = readModel.threads
     .filter(
       (thread) =>

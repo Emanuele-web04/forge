@@ -949,4 +949,177 @@ describe("store facade", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["read-model", "shell"] as const)(
+    "%s snapshots forget removed project preferences before the cwd returns",
+    async (kind) => {
+      vi.stubGlobal("window", makeFakeWindow(new Map()));
+      try {
+        vi.resetModules();
+        const fresh = await import("./store");
+        const { getRememberedProjectUiState } = await import("./storePersistence");
+        const first = makeReadModelProject({ workspaceRoot: "/tmp/removed" });
+        const kept = makeReadModelProject({
+          id: ProjectId.makeUnsafe("kept"),
+          workspaceRoot: "/tmp/kept",
+        });
+        const sync = (projects: OrchestrationReadModel["projects"], sequence: number) => {
+          const snapshot = { ...makeProjectsReadModel(projects), snapshotSequence: sequence };
+          if (kind === "shell") fresh.useStore.getState().syncServerShellSnapshot(snapshot);
+          else fresh.useStore.getState().syncServerReadModel(snapshot);
+        };
+        sync([first, kept], 1);
+        fresh.useStore.getState().renameProjectLocally(first.id, "Old alias");
+        fresh.useStore.getState().setProjectExpanded(first.id, false);
+        sync([kept], 2);
+        const remembered = getRememberedProjectUiState();
+        expect(remembered.projectOrderIndexForCwd("/tmp/removed")).toBeUndefined();
+        expect(remembered.projectNameForCwd("/tmp/removed")).toBeUndefined();
+        sync([first, kept], 3);
+        expect(fresh.useStore.getState().projects.map((project) => project.id)).toEqual([
+          kept.id,
+          first.id,
+        ]);
+        expect(fresh.useStore.getState().projects[1]).toMatchObject({
+          expanded: true,
+          localName: null,
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each(["read-model", "shell"] as const)(
+    "%s expires legacy expansion for an empty or known-disjoint project set",
+    async (kind) => {
+      for (const emptyFirst of [false, true]) {
+        const storage = new Map<string, string>([
+          [
+            PERSISTED_STATE_KEY,
+            JSON.stringify({
+              expandedProjectCwds: emptyFirst ? [] : ["/tmp/old"],
+            }),
+          ],
+        ]);
+        vi.stubGlobal("window", makeFakeWindow(storage));
+        try {
+          vi.resetModules();
+          const fresh = await import("./store");
+          const sync = (projects: OrchestrationReadModel["projects"], sequence: number) => {
+            const snapshot = { ...makeProjectsReadModel(projects), snapshotSequence: sequence };
+            if (kind === "shell") fresh.useStore.getState().syncServerShellSnapshot(snapshot);
+            else fresh.useStore.getState().syncServerReadModel(snapshot);
+          };
+          if (emptyFirst) sync([], 1);
+          sync([makeReadModelProject({ workspaceRoot: "/tmp/unrelated" })], 2);
+          expect(fresh.useStore.getState().projects[0]?.expanded).toBe(true);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+      }
+    },
+  );
+
+  it("normalizes trailing slashes across reload and remembers toggles before writing storage", async () => {
+    const storage = new Map<string, string>([
+      [
+        PERSISTED_STATE_KEY,
+        JSON.stringify({
+          projectOrderCwds: ["/tmp/second/", "/tmp/first/"],
+          expandedProjectCwds: ["/tmp/second/"],
+          projectNamesByCwd: { "/tmp/first/": "Alias" },
+        }),
+      ],
+    ]);
+    const fakeWindow = makeFakeWindow(storage);
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      const { getRememberedProjectUiState } = await import("./storePersistence");
+      const first = makeReadModelProject({ workspaceRoot: "/tmp/first" });
+      const second = makeReadModelProject({
+        id: ProjectId.makeUnsafe("second"),
+        workspaceRoot: "/tmp/second",
+      });
+      fresh.useStore.getState().syncServerReadModel(makeProjectsReadModel([first, second]));
+      expect(fresh.useStore.getState().projects.map(({ id }) => id)).toEqual([second.id, first.id]);
+      expect(fresh.useStore.getState().projects[1]).toMatchObject({
+        expanded: false,
+        localName: "Alias",
+      });
+      fakeWindow.localStorage.setItem.mockImplementation((key, value) => {
+        expect(getRememberedProjectUiState().isProjectExpanded("/tmp/first")).toBe(true);
+        storage.set(key, value);
+      });
+      fresh.useStore.getState().toggleProject(first.id);
+      expect(getRememberedProjectUiState().isProjectExpanded("/tmp/first")).toBe(true);
+      fresh.persistAppStateNow();
+      expect(JSON.parse(storage.get(PERSISTED_STATE_KEY)!)).toMatchObject({
+        projectOrderCwds: ["/tmp/second", "/tmp/first"],
+        expandedProjectCwds: ["/tmp/second", "/tmp/first"],
+        projectNamesByCwd: { "/tmp/first": "Alias" },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps surviving persisted order ahead of unknown projects after reload pruning", async () => {
+    const storage = new Map<string, string>([
+      [
+        PERSISTED_STATE_KEY,
+        JSON.stringify({
+          projectOrderCwds: ["/tmp/removed", "/tmp/kept"],
+          expandedProjectCwds: [],
+        }),
+      ],
+    ]);
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+      const fresh = await import("./store");
+      fresh.useStore
+        .getState()
+        .syncServerReadModel(
+          makeProjectsReadModel([
+            makeReadModelProject({ workspaceRoot: "/tmp/new" }),
+            makeReadModelProject({ id: ProjectId.makeUnsafe("kept"), workspaceRoot: "/tmp/kept" }),
+          ]),
+        );
+      expect(
+        fresh.useStore.getState().projects.map(({ cwd, expanded }) => ({ cwd, expanded })),
+      ).toEqual([
+        { cwd: "/tmp/kept", expanded: false },
+        { cwd: "/tmp/new", expanded: true },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["read-model", "shell"] as const)(
+    "%s pure projection consumes legacy state on the first sync without a subscriber",
+    async (kind) => {
+      const storage = new Map<string, string>([
+        [PERSISTED_STATE_KEY, JSON.stringify({ expandedProjectCwds: [] })],
+      ]);
+      vi.stubGlobal("window", makeFakeWindow(storage));
+      try {
+        vi.resetModules();
+        const fresh = await import("./store");
+        const { initialState } = await import("./storeState");
+        const { getRememberedProjectUiState } = await import("./storePersistence");
+        const snapshot = makeProjectsReadModel([makeReadModelProject({})]);
+        const sync = kind === "shell" ? fresh.syncServerShellSnapshot : fresh.syncServerReadModel;
+        const next = sync(initialState, snapshot);
+        expect(next.projects[0]?.expanded).toBe(false);
+        expect(getRememberedProjectUiState().isLegacyExpansionPayload).toBe(false);
+        expect(getRememberedProjectUiState().projectOrderCount).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

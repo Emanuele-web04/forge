@@ -53,36 +53,42 @@ function resetRememberedProjectState(): void {
 }
 
 /**
- * Drops remembered project UI state that cannot match the incoming project set.
- *
- * A server snapshot is the authoritative project list. When it reports no projects
- * at all, or a set sharing no workspace root with anything remembered (e.g. the
- * server switched data directories), every remembered alias/order/expansion entry
- * is stale and would otherwise leak into the incoming projects. Overlapping sets
- * keep their shared history. Callers pass already-keyed cwds (`projectCwdKey`).
+ * Retains preferences only for the authoritative snapshot's workspace roots.
+ * Callers pass normalized keys (`projectCwdKey`).
  */
 export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<string>): void {
-  // A legacy expansion-only payload carries no order keys, so an all-collapsed
-  // legacy load can never overlap the incoming set. Keep the legacy signal until
-  // modern order state is remembered; otherwise the first sync wipes it and every
-  // project hydrates expanded, destroying the user's collapse-all state.
-  if (persistedExpandedProjectCwdsDefined) {
-    return;
-  }
   if (incomingCwdKeys.size === 0) {
     resetRememberedProjectState();
     return;
   }
-  for (const cwdKey of incomingCwdKeys) {
-    if (
-      persistedProjectOrderByCwd.has(cwdKey) ||
-      persistedExpandedProjectCwds.has(cwdKey) ||
-      persistedProjectNamesByCwd.has(cwdKey)
-    ) {
-      return;
+  const rememberedCwdKeys = new Set([
+    ...persistedProjectOrderByCwd.keys(),
+    ...persistedExpandedProjectCwds,
+    ...persistedProjectNamesByCwd.keys(),
+  ]);
+  // An all-collapsed legacy payload has no identities to compare. Preserve it
+  // for the first non-empty snapshot; remembering that snapshot upgrades it to
+  // modern per-project state. An authoritative empty snapshot expires it above.
+  if (persistedExpandedProjectCwdsDefined && rememberedCwdKeys.size === 0) {
+    return;
+  }
+  let hasIncoming = false;
+  for (const cwdKey of rememberedCwdKeys) {
+    if (incomingCwdKeys.has(cwdKey)) {
+      hasIncoming = true;
+    } else {
+      forgetProjectState(cwdKey);
     }
   }
-  resetRememberedProjectState();
+  if (!hasIncoming) {
+    resetRememberedProjectState();
+    return;
+  }
+  // Close gaps left by removals so unknown projects sort after retained ones.
+  const orderedCwds = [...persistedProjectOrderByCwd].toSorted((a, b) => a[1] - b[1]);
+  for (const [index, [cwdKey]] of orderedCwds.entries()) {
+    persistedProjectOrderByCwd.set(cwdKey, index);
+  }
 }
 
 export function rememberProjectState(

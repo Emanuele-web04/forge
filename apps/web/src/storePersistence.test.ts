@@ -325,7 +325,7 @@ describe("storePersistence", () => {
     expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
   });
 
-  it("keeps remembered state when the incoming project set overlaps remembered cwds", async () => {
+  it("keeps only overlapping project preferences from an authoritative snapshot", async () => {
     const storage = new Map<string, string>();
     const { rememberProjectState, resetStaleRememberedProjectState, getRememberedProjectUiState } =
       await importStorePersistence(storage);
@@ -346,9 +346,10 @@ describe("storePersistence", () => {
     resetStaleRememberedProjectState(new Set(["/tmp/project-2", "/tmp/project-3"]));
 
     const remembered = getRememberedProjectUiState();
-    expect(remembered.projectOrderCount).toBe(2);
-    expect(remembered.projectNameForCwd("/tmp/project-1")).toBe("alpha");
-    expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(true);
+    expect(remembered.projectOrderCount).toBe(1);
+    expect(remembered.projectOrderIndexForCwd("/tmp/project-2")).toBe(0);
+    expect(remembered.projectNameForCwd("/tmp/project-1")).toBeUndefined();
+    expect(remembered.isProjectExpanded("/tmp/project-1")).toBe(false);
   });
 
   it("resets remembered state when the incoming project set is empty", async () => {
