@@ -3723,7 +3723,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
     expect(harness.interruptTurn).toHaveBeenCalledWith({
       threadId,
       turnId: asTurnId("turn-interrupt-escalation"),
@@ -3731,16 +3731,23 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
 
-    const resumed = await Effect.runPromise(
-      harness.startSessionWithOutcome(threadId, {
-        threadId,
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        runtimeMode: "approval-required",
-      }),
-    );
-    expect(resumed.nativeResumeAttempted).toBe(true);
-    expect(resumed.nativeResumeSucceeded).toBe(true);
-    expect(resumed.session.resumeCursor).toEqual({ opaque: "resume-1" });
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "interrupt-escalation-follow-up",
+      text: "Continue after interrupt escalation",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.startSessionWithOutcome).toHaveBeenCalledTimes(2);
+    const sessions = await Effect.runPromise(harness.listSessions());
+    expect(sessions).toEqual([
+      expect.objectContaining({ threadId, resumeCursor: { opaque: "resume-1" } }),
+    ]);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+    const followUpInput = harness.sendTurn.mock.calls[1]?.[0];
+    expect(followUpInput?.input).toBe("Continue after interrupt escalation");
   });
 
   it("rolls back provider conversation state for message edits", async () => {
