@@ -1364,6 +1364,19 @@ export function makeDevinAdapter(
     // adapter level so the budget survives session restarts (each recovery
     // replaces the session context).
     const wedgeRecoveryAtByThread = new Map<ThreadId, number[]>();
+    // Ownership survives the gap where restart has removed the old session.
+    const wedgeRecoveries = new Map<
+      ThreadId,
+      { turnId: TurnId; cancelled: Deferred.Deferred<void> }
+    >();
+    const cancelWedgeRecovery = (threadId: ThreadId, turnId?: TurnId) =>
+      Effect.gen(function* () {
+        const recovery = wedgeRecoveries.get(threadId);
+        if (!recovery || (turnId !== undefined && recovery.turnId !== turnId)) return false;
+        wedgeRecoveries.delete(threadId);
+        yield* Deferred.succeed(recovery.cancelled, undefined);
+        return true;
+      });
     // Recoveries fork here instead of the session scope: a recovery stops the
     // wedged session, and a fiber running inside that session's scope would be
     // interrupted mid-recovery when the scope closes.
@@ -1744,6 +1757,12 @@ export function makeDevinAdapter(
       });
 
     const startSession: DevinAdapterShape["startSession"] = (input) =>
+      cancelWedgeRecovery(input.threadId).pipe(Effect.andThen(startDevinSession(input)));
+
+    const startDevinSession = (
+      input: Parameters<DevinAdapterShape["startSession"]>[0],
+      recoverySession?: DevinSessionContext,
+    ) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -1772,6 +1791,16 @@ export function makeDevinAdapter(
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
 
           const existing = sessions.get(input.threadId);
+          // Recheck under the lock: a user turn may start while recovery waits.
+          if (
+            recoverySession !== undefined &&
+            (existing !== recoverySession ||
+              existing.stopped ||
+              existing.activeTurnId !== undefined ||
+              existing.turnStarting)
+          ) {
+            return yield* Effect.interrupt;
+          }
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
           }
@@ -2485,66 +2514,112 @@ export function makeDevinAdapter(
           return;
         }
         if (!stillOwnsTurn()) return;
-        ctx.devinWedgeRecoveryAttemptedFor = turnId;
-        wedgeRecoveryAtByThread.set(ctx.threadId, [...threadRecoveries, Date.now()].slice(-16));
-        yield* Effect.logWarning("devin.acp.wedge_recovery_started", {
-          threadId: ctx.threadId,
-          turnId,
-          reason: signal.kind,
-        });
-        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-          type: "runtime.warning",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: { message: DEVIN_WEDGE_RECOVERY_WARNING },
-        });
-        // Capture restart inputs before the session context is torn down.
-        const resumeCursor = ctx.session.resumeCursor;
-        const cwd = ctx.session.cwd;
-        const runtimeMode = ctx.session.runtimeMode;
-        const interactionMode = ctx.activeInteractionMode;
-        yield* interruptTurn(ctx.threadId, turnId);
-        // The interrupt settled the wedged turn. Bail if the user stopped the
-        // session, replaced it with their own restart, or already dispatched a
-        // new turn — none of those may be overridden by an automatic continue.
-        if (ctx.stopped || sessions.get(ctx.threadId) !== ctx || ctx.activeTurnId !== undefined) {
-          return;
-        }
-        const started = yield* startSession({
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          lifecycleGeneration: ctx.lifecycleGeneration,
-          cwd,
-          runtimeMode,
-          ...(ctx.devinStartModelSelection ? { modelSelection: ctx.devinStartModelSelection } : {}),
-          ...(ctx.devinStartProviderOptions
-            ? { providerOptions: ctx.devinStartProviderOptions }
-            : {}),
-          resumeCursor,
-        });
-        const restarted = sessions.get(ctx.threadId);
-        if (restarted === undefined || restarted.stopped || restarted.session !== started) {
-          return;
-        }
-        yield* sendTurn({
-          threadId: ctx.threadId,
-          input: DEVIN_WEDGE_RECOVERY_CONTINUATION_PROMPT,
-          attachments: [],
-          ...(interactionMode ? { interactionMode } : {}),
-        });
+        const recovery = { turnId, cancelled: yield* Deferred.make<void>() };
+        wedgeRecoveries.set(ctx.threadId, recovery);
+        yield* Effect.gen(function* () {
+          ctx.devinWedgeRecoveryAttemptedFor = turnId;
+          wedgeRecoveryAtByThread.set(ctx.threadId, [...threadRecoveries, Date.now()].slice(-16));
+          yield* Effect.logWarning("devin.acp.wedge_recovery_started", {
+            threadId: ctx.threadId,
+            turnId,
+            reason: signal.kind,
+          });
+          yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+            type: "runtime.warning",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: { message: DEVIN_WEDGE_RECOVERY_WARNING },
+          });
+          // Capture restart inputs before the session context is torn down.
+          const resumeCursor = ctx.session.resumeCursor;
+          const cwd = ctx.session.cwd;
+          const runtimeMode = ctx.session.runtimeMode;
+          const interactionMode = ctx.activeInteractionMode;
+          if (!stillOwnsTurn() || wedgeRecoveries.get(ctx.threadId) !== recovery) return;
+          yield* interruptDevinTurn(ctx.threadId, turnId);
+          // The interrupt settled the wedged turn. Bail if the user stopped the
+          // session, replaced it with their own restart, or already dispatched a
+          // new turn — none of those may be overridden by an automatic continue.
+          if (
+            wedgeRecoveries.get(ctx.threadId) !== recovery ||
+            ctx.stopped ||
+            sessions.get(ctx.threadId) !== ctx ||
+            ctx.activeTurnId !== undefined ||
+            ctx.turnStarting
+          ) {
+            return;
+          }
+          const started = yield* startDevinSession(
+            {
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              lifecycleGeneration: ctx.lifecycleGeneration,
+              cwd,
+              runtimeMode,
+              ...(ctx.devinStartModelSelection
+                ? { modelSelection: ctx.devinStartModelSelection }
+                : {}),
+              ...(ctx.devinStartProviderOptions
+                ? { providerOptions: ctx.devinStartProviderOptions }
+                : {}),
+              resumeCursor,
+            },
+            ctx,
+          );
+          const restarted = sessions.get(ctx.threadId);
+          if (
+            wedgeRecoveries.get(ctx.threadId) !== recovery ||
+            restarted === undefined ||
+            restarted.stopped ||
+            restarted.session !== started ||
+            restarted.activeTurnId !== undefined ||
+            restarted.turnStarting
+          ) {
+            return;
+          }
+          yield* sendDevinTurn({
+            threadId: ctx.threadId,
+            input: DEVIN_WEDGE_RECOVERY_CONTINUATION_PROMPT,
+            attachments: [],
+            ...(interactionMode ? { interactionMode } : {}),
+          });
+        }).pipe(
+          Effect.raceFirst(
+            Deferred.await(recovery.cancelled).pipe(Effect.andThen(Effect.interrupt)),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              if (Cause.hasInterruptsOnly(cause) || wedgeRecoveries.get(ctx.threadId) !== recovery)
+                return;
+              const detail = `Devin automatic recovery failed: ${Cause.pretty(cause)}`;
+              yield* Effect.logError("devin.acp.wedge_recovery_failed", {
+                threadId: ctx.threadId,
+                reason: signal.kind,
+                cause: Cause.pretty(cause),
+              });
+              yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+                type: "runtime.error",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId,
+                payload: { message: detail, class: "transport_error" },
+              });
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (wedgeRecoveries.get(ctx.threadId) === recovery)
+                wedgeRecoveries.delete(ctx.threadId);
+            }),
+          ),
+        );
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             ctx.devinWedgeRecoveryInFlight = false;
-          }),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logError("devin.acp.wedge_recovery_failed", {
-            threadId: ctx.threadId,
-            reason: signal.kind,
-            cause: Cause.pretty(cause),
           }),
         ),
       );
@@ -2573,7 +2648,12 @@ export function makeDevinAdapter(
         return yield* loop.pipe(Effect.forkIn(ctx.scope));
       });
 
-    const sendTurn: DevinAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: DevinAdapterShape["sendTurn"] = (input) => sendDevinTurn(input, true);
+
+    const sendDevinTurn = (
+      input: Parameters<DevinAdapterShape["sendTurn"]>[0],
+      userInitiated = false,
+    ) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         // compactThread holds the thread lock but sendTurn intentionally does not
@@ -2607,6 +2687,9 @@ export function makeDevinAdapter(
             issue: "Another Devin turn is already active for this thread.",
           });
         }
+        // An accepted user turn owns this session. Let ongoing startup finish
+        // for it, but prevent recovery from dispatching an automatic continuation.
+        if (userInitiated) wedgeRecoveries.delete(input.threadId);
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
         return yield* startDevinTurn(ctx, input).pipe(
@@ -2896,6 +2979,16 @@ export function makeDevinAdapter(
 
     const interruptTurn: DevinAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
+        const cancelledRecovery = yield* cancelWedgeRecovery(threadId, turnId);
+        const ctx = sessions.get(threadId);
+        // The caller may still know only the original turn during restart.
+        if (cancelledRecovery && (!ctx || (turnId !== undefined && ctx.activeTurnId !== turnId)))
+          return;
+        yield* interruptDevinTurn(threadId, turnId);
+      });
+
+    const interruptDevinTurn: DevinAdapterShape["interruptTurn"] = (threadId, turnId) =>
+      Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (turnId !== undefined && turnId !== ctx.activeTurnId) {
           yield* Effect.logWarning("devin.acp.stale_interrupt_ignored", {
@@ -2992,13 +3085,17 @@ export function makeDevinAdapter(
       });
 
     const stopSession: DevinAdapterShape["stopSession"] = (threadId) =>
-      withThreadLock(
-        threadId,
-        Effect.gen(function* () {
-          const ctx = sessions.get(threadId);
-          if (!ctx) return;
-          yield* stopSessionInternal(ctx);
-        }),
+      cancelWedgeRecovery(threadId).pipe(
+        Effect.andThen(
+          withThreadLock(
+            threadId,
+            Effect.gen(function* () {
+              const ctx = sessions.get(threadId);
+              if (!ctx) return;
+              yield* stopSessionInternal(ctx);
+            }),
+          ),
+        ),
       );
 
     const listSessions: DevinAdapterShape["listSessions"] = () =>
@@ -3310,7 +3407,11 @@ export function makeDevinAdapter(
       );
 
     const stopAll: DevinAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
+      Effect.suspend(() =>
+        Effect.forEach(new Set([...sessions.keys(), ...wedgeRecoveries.keys()]), stopSession, {
+          discard: true,
+        }),
+      );
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {

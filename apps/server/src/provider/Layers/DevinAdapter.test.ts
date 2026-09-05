@@ -6,7 +6,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ThreadId, TurnId } from "@synara/contracts";
-import { Deferred, Effect, Exit, Layer, Queue, Scope, Semaphore, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Semaphore, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
@@ -207,6 +207,8 @@ interface WedgeRuntimePlan {
   readonly prompts: ReadonlyArray<AcpSessionRuntimeShape["prompt"]>;
   /** When present, the makeAcpRuntime call at this index fails instead. */
   readonly failStartAtIndex?: number;
+  readonly beforeCreate?: (index: number) => Effect.Effect<void>;
+  readonly cancel?: (index: number) => Effect.Effect<void>;
 }
 
 function makeWedgeRuntimeFactory(plan: WedgeRuntimePlan) {
@@ -234,7 +236,9 @@ function makeWedgeRuntimeFactory(plan: WedgeRuntimePlan) {
     });
     if (input.onChildStderrLine) stderrTaps.push(input.onChildStderrLine);
     current = handles;
-    return Effect.succeed(handles.runtime);
+    return (plan.beforeCreate?.(index) ?? Effect.void).pipe(
+      Effect.as({ ...handles.runtime, cancel: plan.cancel?.(index) ?? handles.runtime.cancel }),
+    );
   };
   return {
     makeAcpRuntime,
@@ -574,6 +578,156 @@ describe("Devin wedge auto-recovery", () => {
     );
   });
 
+  it.each(["interrupt", "interrupt-current", "stop", "stop-all", "restart"] as const)(
+    "honors %s while recovery is waiting to create the replacement session",
+    async (action) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const entered = Effect.runSync(Deferred.make<void>());
+      const release = Effect.runSync(Deferred.make<void>());
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [() => Effect.never],
+        beforeCreate: (index) =>
+          index === 1
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe(`thread-wedge-cancel-${action}`);
+          const input = {
+            provider: "devin" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: process.cwd(),
+          };
+          const events: Array<{ type: string }> = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession(input);
+          const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+          yield* flushTimers();
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceTimers(100);
+          yield* Deferred.await(entered);
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+          const actionFiber = yield* (
+            action === "stop-all"
+              ? adapter.stopAll()
+              : action === "stop"
+                ? adapter.stopSession(threadId)
+                : action === "restart"
+                  ? adapter.startSession(input).pipe(Effect.asVoid)
+                  : adapter.interruptTurn(
+                      threadId,
+                      action === "interrupt" ? turn.turnId : undefined,
+                    )
+          ).pipe(Effect.forkScoped);
+          yield* flushTimers();
+          yield* Deferred.succeed(release, undefined);
+          yield* advanceThroughRecovery();
+          yield* Fiber.join(actionFiber);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+          expect(yield* adapter.hasSession(threadId)).toBe(action === "restart");
+          expect(events.filter((event) => event.type === "runtime.error")).toEqual([]);
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
+
+  it.each(["user-turn", "stale-interrupt", "interrupt"] as const)(
+    "preserves %s ownership while the replacement is draining resume replay",
+    async (action) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [
+          () => Effect.never,
+          () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+        ],
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe(`thread-wedge-replay-${action}`);
+          yield* adapter.startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+          });
+          const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+          yield* flushTimers();
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceTimers(100);
+          expect(factory.stderrTaps).toHaveLength(2);
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+          const userAction = yield* (
+            action === "user-turn"
+              ? adapter
+                  .sendTurn({ threadId, input: "new user task", attachments: [] })
+                  .pipe(Effect.asVoid)
+              : adapter.interruptTurn(
+                  threadId,
+                  action === "interrupt" ? turn.turnId : asTurnId("unrelated-turn"),
+                )
+          ).pipe(Effect.forkScoped);
+          yield* advanceThroughRecovery();
+          yield* Fiber.join(userAction);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(
+            action === "interrupt"
+              ? ["task"]
+              : ["task", action === "user-turn" ? "new user task" : "continue"],
+          );
+          expect(yield* adapter.hasSession(threadId)).toBe(action !== "interrupt");
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
+
+  it("honors user cancellation while the recovery cancel notification is pending", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const entered = Effect.runSync(Deferred.make<void>());
+    const release = Effect.runSync(Deferred.make<void>());
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [() => Effect.never],
+      cancel: () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-wedge-cancel-notification");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+        yield* flushTimers();
+        factory.stderrTaps[0]!(STALL_WATCH_LINE);
+        yield* advanceTimers(100);
+        yield* Deferred.await(entered);
+        const cancelled = yield* adapter
+          .interruptTurn(threadId, turn.turnId)
+          .pipe(Effect.forkScoped);
+        yield* flushTimers();
+        yield* Deferred.succeed(release, undefined);
+        yield* advanceThroughRecovery();
+        yield* Fiber.join(cancelled);
+        expect(factory.stderrTaps).toHaveLength(1);
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+        expect((yield* adapter.listSessions())[0]?.status).toBe("ready");
+      }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+    );
+  });
+
   it("leaves no session when the recovery restart itself fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -585,13 +739,30 @@ describe("Devin wedge auto-recovery", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-wedge-restart-fail");
+        const events: Array<{
+          type: string;
+          turnId?: TurnId | undefined;
+          payload: Record<string, unknown>;
+        }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() =>
+              events.push({
+                type: event.type,
+                turnId: event.turnId,
+                payload: event.payload as Record<string, unknown>,
+              }),
+            ),
+          ),
+          Effect.forkScoped,
+        );
         yield* adapter.startSession({
           provider: "devin",
           threadId,
           runtimeMode: "full-access",
           cwd: process.cwd(),
         });
-        yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+        const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
         yield* flushTimers();
         factory.stderrTaps[0]!(STALL_WATCH_LINE);
         yield* advanceTimers(
@@ -600,7 +771,18 @@ describe("Devin wedge auto-recovery", () => {
         expect(
           (yield* adapter.listSessions()).find((s) => s.threadId === threadId),
         ).toBeUndefined();
-      }).pipe(Effect.provide(makeWedgeTestLayer(factory))),
+        expect(
+          events.filter((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+        ).toEqual([
+          expect.objectContaining({ payload: expect.objectContaining({ state: "cancelled" }) }),
+        ]);
+        expect(events.filter((event) => event.type === "runtime.error")).toEqual([
+          expect.objectContaining({
+            turnId: turn.turnId,
+            payload: expect.objectContaining({ message: expect.stringContaining("start failed") }),
+          }),
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
     );
   });
 });
