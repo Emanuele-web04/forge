@@ -9480,6 +9480,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         agents: [],
         autoCompactThreshold: 150_000,
         isAutoCompactEnabled: true,
+        apiUsage: {
+          input_tokens: 100,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
       });
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
