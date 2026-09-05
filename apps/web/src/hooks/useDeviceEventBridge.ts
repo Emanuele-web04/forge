@@ -1,7 +1,7 @@
 // FILE: useDeviceEventBridge.ts
-// Purpose: Route the server's device.event push into the device state store and the dock.
+// Purpose: Capture device events globally and deliver deferred pane requests to a chat surface.
 // Layer: Web event bridge hook
-// Exports: useDeviceEventBridge
+// Exports: useDeviceEventBridge, useDevicePaneOpenRequests
 // Depends on: nativeApi device.onEvent, deviceStateStore
 //
 // The browser pane gets its open requests over desktop IPC; the device engine
@@ -14,29 +14,37 @@ import { useEffect, useEffectEvent } from "react";
 import { ensureNativeApi } from "~/nativeApi";
 import { useDeviceStateStore } from "../deviceStateStore";
 
-export function useDeviceEventBridge(input: {
-  /** Null while the surface cannot host a device pane (non-macOS server). */
+/** Mounted once by EventRouter, including while settings or split view is open. */
+export function useDeviceEventBridge(): void {
+  useEffect(() => {
+    const unsubscribe = ensureNativeApi().device.onEvent((event) => {
+      const store = useDeviceStateStore.getState();
+      if (event.type === "device.thread-state") {
+        store.upsertThreadState(event.state);
+      } else {
+        // The server sends this once per thread/device. Retain it until a
+        // surface can honor it, even if automatic opening is currently off.
+        store.queueOpenRequest(event);
+      }
+    });
+    return unsubscribe;
+  }, []);
+}
+
+export function useDevicePaneOpenRequests(input: {
+  /** Null while automatic opening is disabled or the surface cannot host a device pane. */
   readonly onOpenPaneRequested: ((event: DeviceOpenPaneRequestedEvent) => void) | null;
 }): void {
-  const { onOpenPaneRequested } = input;
-  const handleOpen = useEffectEvent((event: DeviceOpenPaneRequestedEvent) =>
-    onOpenPaneRequested?.(event),
-  );
-  const openEnabled = onOpenPaneRequested !== null;
+  const pendingOpenRequests = useDeviceStateStore((store) => store.pendingOpenRequests);
+  const openEnabled = input.onOpenPaneRequested !== null;
+  const deliverPendingRequests = useEffectEvent(() => {
+    const onOpen = input.onOpenPaneRequested;
+    if (!onOpen) return;
+    // Consume before delivery so remounting or closing a pane never replays it.
+    for (const event of useDeviceStateStore.getState().takeOpenRequests()) onOpen(event);
+  });
 
   useEffect(() => {
-    // The state half of the subscription runs regardless of whether this surface
-    // can open panes: a pane on another thread still needs fresh state, and the
-    // store is version-gated so duplicate delivery is harmless.
-    const unsubscribe = ensureNativeApi().device.onEvent((event) => {
-      if (event.type === "device.thread-state") {
-        useDeviceStateStore.getState().upsertThreadState(event.state);
-        return;
-      }
-      if (openEnabled) handleOpen(event);
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [openEnabled]);
+    if (openEnabled) deliverPendingRequests();
+  }, [openEnabled, pendingOpenRequests]);
 }

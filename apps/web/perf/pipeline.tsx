@@ -303,7 +303,7 @@ function dispatchActivityBatch(count: number, batchIndex: number): number {
 }
 
 function readStreamedMessageText(): string | null {
-  const message = useStore.getState().messageByThreadId[THREAD_ID]?.[STREAM_MESSAGE_ID];
+  const message = useStore.getState().messageByThreadId?.[THREAD_ID]?.[STREAM_MESSAGE_ID];
   return message?.text ?? null;
 }
 
@@ -330,7 +330,7 @@ function debugStreamText() {
     storedAround: firstDiff >= 0 ? stored.slice(Math.max(0, firstDiff - 40), firstDiff + 40) : "",
     expectedAround:
       firstDiff >= 0 ? expected.slice(Math.max(0, firstDiff - 40), firstDiff + 40) : "",
-    message: useStore.getState().messageByThreadId[THREAD_ID]?.[STREAM_MESSAGE_ID] ?? null,
+    message: useStore.getState().messageByThreadId?.[THREAD_ID]?.[STREAM_MESSAGE_ID] ?? null,
   };
 }
 

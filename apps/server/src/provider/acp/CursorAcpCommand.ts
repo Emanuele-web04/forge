@@ -11,6 +11,11 @@ import * as path from "node:path";
 
 import { executableCandidates, executableNameCandidates } from "@synara/shared/executable";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import {
+  commandExistsOnPath,
+  type ProviderBinaryResolutionOptions,
+  resolveWindowsLocalAppDataBinary,
+} from "../providerBinaryResolution.ts";
 
 export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
 export const LEGACY_CURSOR_AGENT_BINARY = "agent";
@@ -53,6 +58,14 @@ interface CursorCommandPathParts {
 
 const POWERSHELL_EXECUTABLE = "powershell.exe";
 const WINDOWS_CURSOR_SIBLING_EXTENSIONS = [".exe", ".cmd", ".bat", ".ps1"] as const;
+const WINDOWS_CURSOR_AGENT_RELATIVE_PATHS = [
+  ["cursor-agent", "cursor-agent.exe"],
+  ["cursor-agent", "agent.exe"],
+  ["cursor-agent", "cursor-agent.cmd"],
+  ["cursor-agent", "agent.cmd"],
+  ["cursor-agent", "cursor-agent.ps1"],
+  ["cursor-agent", "agent.ps1"],
+] as const;
 
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const trimmed = command.trim();
@@ -223,11 +236,25 @@ function wrapPowerShellCommand(command: string, args: ReadonlyArray<string>): Cu
 }
 
 // Resolves persisted/default Cursor binary settings into the executable Synara should spawn.
-export function resolveCursorAgentBinaryPath(binaryPath: string | null | undefined): string {
+export function resolveCursorAgentBinaryPath(
+  binaryPath: string | null | undefined,
+  options: ProviderBinaryResolutionOptions = {},
+): string {
   const configuredBinaryPath = binaryPath?.trim();
-  return !configuredBinaryPath || configuredBinaryPath === LEGACY_CURSOR_AGENT_BINARY
-    ? DEFAULT_CURSOR_AGENT_BINARY
-    : configuredBinaryPath;
+  if (
+    configuredBinaryPath &&
+    configuredBinaryPath !== LEGACY_CURSOR_AGENT_BINARY &&
+    configuredBinaryPath !== DEFAULT_CURSOR_AGENT_BINARY
+  ) {
+    return configuredBinaryPath;
+  }
+  if (commandExistsOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
+    return DEFAULT_CURSOR_AGENT_BINARY;
+  }
+  return (
+    resolveWindowsLocalAppDataBinary(WINDOWS_CURSOR_AGENT_RELATIVE_PATHS, options) ??
+    DEFAULT_CURSOR_AGENT_BINARY
+  );
 }
 
 // Builds Cursor Agent invocations from either `cursor-agent` or the `cursor` editor launcher.
@@ -236,13 +263,13 @@ export function buildCursorAgentCommand(
   args: ReadonlyArray<string>,
   options: CursorAgentCommandOptions = {},
 ): CursorAgentCommand {
-  const command = resolveCursorAgentBinaryPath(binaryPath);
   const commandOptions = {
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform,
     pathExists: options.pathExists ?? existsSync,
     realpath: options.realpath ?? realpathSync.native,
   };
+  const command = resolveCursorAgentBinaryPath(binaryPath, commandOptions);
   const editorLauncher = resolveCursorEditorLauncherCommand(command, commandOptions);
   const resolvedCommand = editorLauncher
     ? { command: editorLauncher.command, args: [...editorLauncher.args, ...args] }

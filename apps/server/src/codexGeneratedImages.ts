@@ -279,19 +279,3 @@ export function generatedImagePathFromRuntimeEvent(
     : undefined;
   return artifact?.path;
 }
-
-/**
- * Returns true when the given assistant text contains only generated-image
- * markdown references (e.g. `![Generated image](...)`) and no other content.
- *
- * Used by ingestion to skip messages that exist solely to host an image when
- * deciding where to append a new generated-image reference.
- */
-export function isGeneratedImageOnlyMarkdown(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-  const withoutImages = trimmed.replace(/!\[[^\]]*]\((?:<[^>]+>|[^)]+)\)/g, "").trim();
-  return withoutImages.length === 0;
-}

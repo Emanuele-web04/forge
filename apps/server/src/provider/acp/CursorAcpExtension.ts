@@ -94,20 +94,3 @@ export function extractTodosAsPlan(params: typeof CursorUpdateTodosRequest.Type)
   });
   return { plan };
 }
-
-export function formatCursorPlanUpdateMarkdown(input: {
-  readonly explanation?: string | null;
-  readonly plan: ReadonlyArray<{
-    readonly step: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-}): string | undefined {
-  const steps = input.plan.map((entry) => entry.step.trim()).filter((step) => step.length > 0);
-  if (steps.length === 0) {
-    return undefined;
-  }
-
-  const explanation = input.explanation?.trim();
-  const body = steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
-  return explanation && explanation.length > 0 ? `${explanation}\n\n${body}` : body;
-}
