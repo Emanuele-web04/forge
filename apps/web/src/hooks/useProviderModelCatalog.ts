@@ -19,6 +19,7 @@ import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
+  providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
@@ -199,7 +200,19 @@ export function useProviderModelCatalog(input: {
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
   const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
 
-  const selectedProviderModelsQueryKey = modelQueryOptionsByProvider[selectedProvider].queryKey;
+  const [, , modelProvider, modelBinaryPath, modelApiEndpoint, modelAgentDir, modelCwd] =
+    modelQueryOptionsByProvider[selectedProvider].queryKey;
+  const selectedProviderModelsQueryKey = useMemo(
+    () =>
+      providerDiscoveryQueryKeys.models(
+        modelProvider,
+        modelBinaryPath,
+        modelApiEndpoint,
+        modelAgentDir,
+        modelCwd,
+      ),
+    [modelProvider, modelBinaryPath, modelApiEndpoint, modelAgentDir, modelCwd],
+  );
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
 
