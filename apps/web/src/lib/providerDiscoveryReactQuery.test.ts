@@ -398,10 +398,7 @@ describe("providerModelsQueryOptions", () => {
     );
     const interval = options.refetchInterval;
     if (typeof interval !== "function") throw new Error("Expected recovery polling");
-    const query = queryClient
-      .getQueryCache()
-      .find<ProviderListModelsResult>({ queryKey: options.queryKey, exact: true });
-    if (!query) throw new Error("Missing Devin query");
+    const query = queryClient.getQueryCache().build(queryClient, options);
     expect(interval(query)).toBe(30_000);
     listModels.mockResolvedValue(catalog);
     await queryClient.refetchQueries({ queryKey: options.queryKey });
