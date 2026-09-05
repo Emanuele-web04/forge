@@ -74,7 +74,7 @@ export function parsePiOpenCodeCatalog(catalog: unknown, inventory: unknown): Mo
 export async function refreshPiOpenCodeCatalog(
   runtime: ModelRuntime,
   options: {
-    signal?: AbortSignal;
+    signal?: AbortSignal | undefined;
     request?: typeof outboundHttp.request;
     timeoutMs?: number;
   } = {},
