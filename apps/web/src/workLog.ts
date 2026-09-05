@@ -17,7 +17,10 @@ import {
   approvalRequestKindFromRequestType,
   type ApprovalRequestKind,
 } from "@synara/shared/threadSummary";
-import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
+import {
+  stripTrailingToolExitCode,
+  summarizeToolRawOutput,
+} from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
@@ -2070,21 +2073,7 @@ function stripTrailingExitCode(value: string): {
   output: string | null;
   exitCode?: number | undefined;
 } {
-  const trimmed = value.trim();
-  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
-    trimmed,
-  );
-  if (!match?.groups) {
-    return {
-      output: trimmed.length > 0 ? trimmed : null,
-    };
-  }
-  const exitCode = Number.parseInt(match.groups.code ?? "", 10);
-  const normalizedOutput = match.groups.output?.trim() ?? "";
-  return {
-    output: normalizedOutput.length > 0 ? normalizedOutput : null,
-    ...(Number.isInteger(exitCode) ? { exitCode } : {}),
-  };
+  return stripTrailingToolExitCode(value.trim());
 }
 
 function extractDetailCollapseHint(detail: string | undefined): string {

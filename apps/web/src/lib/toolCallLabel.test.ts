@@ -59,6 +59,17 @@ describe("normalizeCompactToolLabel", () => {
     expect(normalizeCompactToolLabel("Ran command done")).toBe("Ran command");
     expect(normalizeCompactToolLabel("Ran command started")).toBe("Ran command");
   });
+
+  it.each([
+    ["  Tool\r\n\tCOMPLETED\n", "Tool"],
+    ["completed", "completed"],
+    [" completed ", ""],
+    ["Toolcompleted", "Toolcompleted"],
+    ["Tool completed later", "Tool completed later"],
+    ["Tool\u00a0done\u2028", "Tool"],
+  ])("preserves status-word boundaries in %j", (value, expected) => {
+    expect(normalizeCompactToolLabel(value)).toBe(expected);
+  });
 });
 
 describe("deriveSynaraMcpToolTitle", () => {
@@ -394,6 +405,15 @@ describe("deriveReadableToolTitle", () => {
 });
 
 describe("deriveReadableCommandDisplay", () => {
+  it.each(["|", " | ", "\t\r\n|\t"])("keeps the first command before a pipe: %j", (pipe) => {
+    const command = `cat src/result.ts${pipe}head -n 1`;
+    expect(deriveReadableCommandDisplay(command)).toEqual({
+      verb: "Read",
+      target: "src/result.ts",
+      fullCommand: command,
+    });
+  });
+
   it("extracts search targets without leaking the full shell wrapper inline", () => {
     expect(deriveReadableCommandDisplay(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toEqual({
       verb: "Searched",
