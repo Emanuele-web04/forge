@@ -2672,7 +2672,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(outcome.nativeResumeAttempted, true);
       assert.equal(outcome.nativeResumeSucceeded, false);
       assert.equal(outcome.priorTranscriptBootstrapPending, true);
-      assert.equal(binding?.runtimePayload?.priorTranscriptBootstrapPending, true);
+      assert.equal(
+        (binding?.runtimePayload as Record<string, unknown> | undefined)
+          ?.priorTranscriptBootstrapPending,
+        true,
+      );
       const { resumeCursor: _cursor, ...resumedInput } = devin.startSession.mock.calls[0]![0];
       assert.deepEqual(devin.startSession.mock.calls[1]![0], resumedInput);
     }),
