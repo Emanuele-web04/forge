@@ -1128,7 +1128,7 @@ describe("ProviderCommandReactor", () => {
         claimExpiresAt: new Date(Date.now() + (change === "succeeded" ? 5_000 : 300)).toISOString(),
       }),
     );
-    repository.getDelivery = (input) =>
+    const readSpy = vi.spyOn(repository, "getDelivery").mockImplementation((input) =>
       Effect.gen(function* () {
         if (input.eventSequence !== event.sequence) return yield* getDelivery(input);
         reads += 1;
@@ -1193,13 +1193,14 @@ describe("ProviderCommandReactor", () => {
           });
         }
         return yield* getDelivery(input);
-      });
+      }),
+    );
     try {
       const startedAt = Date.now();
       await harness.startReactor();
       if (change === "succeeded") expect(Date.now() - startedAt).toBeLessThan(4_000);
     } finally {
-      repository.getDelivery = getDelivery;
+      readSpy.mockRestore();
     }
     const delivery = Option.getOrThrow(await Effect.runPromise(getDelivery(key)));
     expect(delivery).toMatchObject({
