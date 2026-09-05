@@ -69,7 +69,7 @@ import {
 } from "../projectMetadataProjection.ts";
 import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
-import { settleTurnStateFromSession } from "../turnLifecycle.ts";
+import { maxIso, settleTurnStateFromSession } from "../turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
@@ -217,10 +217,6 @@ function shouldApplyPendingInteractionsProjection(event: OrchestrationEvent): bo
     (event.type === "thread.activity-appended" &&
       PENDING_INTERACTION_ACTIVITY_KINDS.has(event.payload.activity.kind))
   );
-}
-
-function maxIso(left: string | null, right: string): string {
-  return left === null || right > left ? right : left;
 }
 
 // Destructive history edits are rare and rebuild from bounded/indexed summary queries.
@@ -861,6 +857,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        // Turn completion must advance updated_at here too, or projection repair
+        // replay regresses it to the turn start (re-marks read chats unread).
+        // Monotonic: stale events (retries, imports) carry earlier occurredAt.
+        case "thread.session-set":
+        case "thread.turn-diff-completed":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
+          }));
+
         case "thread.deleted": {
           attachmentSideEffects.deletedThreadIds.add(event.payload.threadId);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
@@ -969,7 +975,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,
-              updatedAt: event.occurredAt,
+              updatedAt: maxIso(existingRow.value.updatedAt, event.occurredAt),
             },
             projectionThreadProposedPlanRepository,
           });
