@@ -1555,8 +1555,9 @@ describe("AgentGateway", () => {
                 }
               >
             ).claudeAgent!;
+            assert.property(construction.optionsByModel, model.value);
             assert.notInclude(
-              construction.optionsByModel[model.value]?.map((rule) => rule.key),
+              construction.optionsByModel[model.value]!.map((rule) => rule.key),
               "autoCompactWindow",
             );
             for (const key of ["autoCompactWindow", "contextWindow"]) {
