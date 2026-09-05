@@ -58,6 +58,8 @@ export function buildLocalImageUrl(input: {
   // optional `previewGrant: string | null | undefined` straight through under
   // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
   readonly grant?: string | null | undefined;
+  /** Changes the preview URL so an explicit reload bypasses browser caching. */
+  readonly cacheKey?: string | number | undefined;
 }): string {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
@@ -65,6 +67,9 @@ export function buildLocalImageUrl(input: {
   }
   if (input.grant) {
     params.set("grant", input.grant);
+  }
+  if (input.cacheKey !== undefined) {
+    params.set("v", String(input.cacheKey));
   }
   if (input.download) {
     params.set("download", "1");

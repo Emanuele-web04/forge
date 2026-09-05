@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { TESTIMONIALS } from "../src/data/testimonials.ts";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function read(relativePath) {
@@ -186,14 +188,12 @@ test("privacy copy states both the local workspace boundary and provider boundar
 });
 
 test("testimonial curation excludes identity-defense and volatile-version framing", () => {
-  const testimonials = read("src/components/Testimonials.tsx");
+  const testimonialIds = new Set(TESTIMONIALS.map((testimonial) => testimonial.id));
   const excludedIds = ["2071916101924262377", "2065178684537888877"];
 
   for (const id of excludedIds) {
-    assert.ok(testimonials.includes(`\"${id}\"`), `testimonial exclusion is missing ${id}`);
+    assert.equal(testimonialIds.has(id), false, `excluded testimonial remains: ${id}`);
   }
-  assert.ok(testimonials.includes("EXCLUDED_TESTIMONIAL_IDS"));
-  assert.match(testimonials, /filter\([\s\S]*EXCLUDED_TESTIMONIAL_IDS\.has\(card\.id\)/);
 });
 
 test("install and metadata surfaces share the new category", () => {

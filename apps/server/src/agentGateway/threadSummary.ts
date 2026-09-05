@@ -13,6 +13,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
 } from "@synara/contracts";
+import { splitsSurrogatePair, unicodeSafeEndOffset } from "@synara/shared/text";
 
 export type AgentThreadStatus =
   | "working"
@@ -219,24 +220,6 @@ function readMessageCoordinates(input: {
     messageId: input.messageId,
     messageVersion: input.messageVersion,
   };
-}
-
-function splitsSurrogatePair(text: string, offsetChars: number): boolean {
-  if (offsetChars <= 0 || offsetChars >= text.length) return false;
-  const previousCodeUnit = text.charCodeAt(offsetChars - 1);
-  const nextCodeUnit = text.charCodeAt(offsetChars);
-  return (
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    nextCodeUnit >= 0xdc00 &&
-    nextCodeUnit <= 0xdfff
-  );
-}
-
-function unicodeSafeEndOffset(text: string, requestedEndOffsetChars: number): number {
-  return splitsSurrogatePair(text, requestedEndOffsetChars)
-    ? requestedEndOffsetChars - 1
-    : requestedEndOffsetChars;
 }
 
 function paginateSingleMessage(input: {

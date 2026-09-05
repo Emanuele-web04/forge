@@ -183,11 +183,24 @@ export interface SelectionWithin {
   endColumn: number;
 }
 
+// Verbatim selection text ready to be quoted as a snippet reference: CRLF
+// collapsed to LF, blank edge lines and surrounding whitespace removed. Returns
+// null when nothing remains, so callers treat whitespace-only selections as
+// "no selection". Shared by every surface that references a selection by its
+// text rather than by source lines (diff rows, rendered markdown).
+export function normalizeSelectionSnippet(text: string): string | null {
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(/^\n+|\n+$/g, "")
+    .trim();
+  return normalized.length === 0 ? null : normalized;
+}
+
 // The current window selection scoped to `container`: null when collapsed,
 // reaching outside the container, or whitespace-only.
 function getSelectionRangeWithin(
   container: HTMLElement,
-): { range: Range; selectedText: string } | null {
+): { selection: Selection; range: Range; selectedText: string } | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
     return null;
@@ -200,7 +213,7 @@ function getSelectionRangeWithin(
   if (selectedText.trim().length === 0) {
     return null;
   }
-  return { range, selectedText };
+  return { selection, range, selectedText };
 }
 
 // Resolve the 1-based line+column span of the current selection inside
@@ -220,4 +233,20 @@ export function getSelectionWithin(container: HTMLElement): SelectionWithin | nu
     ...computeSelectionLineRange(prefixText, scoped.selectedText),
     ...computeSelectionColumns(prefixText, scoped.selectedText),
   };
+}
+
+// Snippet-only reference for the current selection inside `container`, for
+// surfaces whose DOM does not mirror the source lines 1:1 (rendered markdown):
+// the quoted text itself is the reference. Returns null when there is no
+// actionable selection.
+export function getSelectionSnippetWithin(container: HTMLElement): { snippet: string } | null {
+  const scoped = getSelectionRangeWithin(container);
+  if (!scoped) {
+    return null;
+  }
+  // `Selection.toString()` yields the text as laid out (a line break between
+  // block elements such as list items); `Range.toString()` would concatenate
+  // their text content with no separator.
+  const snippet = normalizeSelectionSnippet(scoped.selection.toString());
+  return snippet === null ? null : { snippet };
 }

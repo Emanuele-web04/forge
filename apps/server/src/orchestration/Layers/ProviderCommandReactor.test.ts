@@ -82,6 +82,7 @@ import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  awaitInflightClaimSettlement,
   classifyProviderAttemptOutcome,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
@@ -285,7 +286,8 @@ describe("ProviderCommandReactor", () => {
       const nativeResumeSucceeded =
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
-        outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+        (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+          (sessionInput.provider === "devin" && nativeResumeAttempted)) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -782,6 +784,7 @@ describe("ProviderCommandReactor", () => {
       setRuntimeSessionTurnState,
       startReactor,
       deliveryRepository,
+      sql,
       pendingInteractionRepository,
       reserveGatewayOperation: (operationId: string) =>
         runtime.runPromise(
@@ -952,7 +955,7 @@ describe("ProviderCommandReactor", () => {
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
       readonly eventId: string;
-      readonly provider: "opencode";
+      readonly provider: "opencode" | "devin";
       readonly type: "completed" | "aborted";
       readonly threadId?: ThreadId;
       readonly turnId?: TurnId;
@@ -1081,6 +1084,147 @@ describe("ProviderCommandReactor", () => {
       state: "succeeded",
       attemptCount: 2,
     });
+  });
+
+  it.each(
+    (["safe", "external"] as const).flatMap((kind) =>
+      (["succeeded", "retry", "missing", "new-owner", "read-failure"] as const).map((change) => ({
+        kind,
+        change,
+      })),
+    ),
+  )("reclassifies a $kind claim after $change during settlement wait", async ({ kind, change }) => {
+    const harness = await createHarness({ startReactor: false });
+    if (kind === "external") {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "claim-wait-turn",
+        text: "Send only if the delivery is retryable",
+        createdAt: new Date().toISOString(),
+      });
+    }
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const event = events.find(
+      (candidate) =>
+        candidate.type === (kind === "safe" ? "thread.created" : "thread.turn-start-requested"),
+    )!;
+    const key = { consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER, eventSequence: event.sequence };
+    const repository = harness.deliveryRepository;
+    const getDelivery = repository.getDelivery;
+    const changedOwner = change === "new-owner" || change === "read-failure";
+    let reads = 0;
+    let observedNewOwner = false;
+    const requeue = vi.spyOn(repository, "requeueExpired");
+    const terminal = vi.spyOn(repository, "markTerminalFailure");
+    await Effect.runPromise(
+      repository.claim({
+        ...key,
+        threadId: "thread-1",
+        claimOwner: "owner-a",
+        claimedAt: new Date().toISOString(),
+        claimExpiresAt: new Date(Date.now() + (change === "succeeded" ? 5_000 : 300)).toISOString(),
+      }),
+    );
+    const readSpy = vi.spyOn(repository, "getDelivery").mockImplementation((input) =>
+      Effect.gen(function* () {
+        if (input.eventSequence !== event.sequence) return yield* getDelivery(input);
+        reads += 1;
+        if (reads === 2 && changedOwner) {
+          // Exercise a real retry/reclaim, not a fabricated extended lease.
+          yield* repository.markRetryable({
+            ...key,
+            expectedClaimOwner: "owner-a",
+            error: "safe retry",
+            updatedAt: new Date().toISOString(),
+          });
+          yield* repository.claim({
+            ...key,
+            threadId: "thread-1",
+            claimOwner: "owner-b",
+            claimedAt: new Date().toISOString(),
+            claimExpiresAt: new Date(Date.now() + 5_000).toISOString(),
+          });
+        }
+        if (reads === 3 && change === "read-failure") {
+          return yield* Effect.fail(
+            new PersistenceSqlError({
+              operation: "OrchestrationEventDelivery.getDelivery",
+              detail: "injected read failure after observing owner-b",
+            }),
+          );
+        }
+        if (reads === 3 && !changedOwner) {
+          if (change === "succeeded") {
+            yield* repository.complete({
+              ...key,
+              claimOwner: "owner-a",
+              completedAt: new Date().toISOString(),
+            });
+          } else if (change === "retry") {
+            yield* repository.markRetryable({
+              ...key,
+              expectedClaimOwner: "owner-a",
+              error: "safe retry",
+              updatedAt: new Date().toISOString(),
+            });
+          } else {
+            // Missing records are defensive coverage; no normal deletion path is assumed.
+            yield* harness.sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${key.consumerName} AND event_sequence = ${key.eventSequence}`.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new PersistenceSqlError({
+                    operation: "test.deleteDelivery",
+                    detail: String(cause),
+                  }),
+              ),
+            );
+          }
+        }
+        if (reads === 4 && changedOwner) {
+          const current = yield* getDelivery(input);
+          expect(Option.getOrThrow(current)).toMatchObject({
+            state: "inflight",
+            claimOwner: "owner-b",
+          });
+          expect(requeue).not.toHaveBeenCalled();
+          expect(terminal).not.toHaveBeenCalled();
+          observedNewOwner = true;
+        }
+        if (reads === 5 && changedOwner) {
+          yield* repository.complete({
+            ...key,
+            claimOwner: "owner-b",
+            completedAt: new Date().toISOString(),
+          });
+        }
+        return yield* getDelivery(input);
+      }),
+    );
+    try {
+      const startedAt = Date.now();
+      await harness.startReactor();
+      if (change === "succeeded") expect(Date.now() - startedAt).toBeLessThan(4_000);
+    } finally {
+      readSpy.mockRestore();
+    }
+    const delivery = Option.getOrThrow(await Effect.runPromise(getDelivery(key)));
+    expect(delivery).toMatchObject({
+      state: "succeeded",
+      attemptCount: change === "retry" || changedOwner ? 2 : 1,
+    });
+    expect(requeue).not.toHaveBeenCalled();
+    expect(terminal).not.toHaveBeenCalled();
+    expect(observedNewOwner).toBe(changedOwner);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(
+      kind === "external" && (change === "retry" || change === "missing") ? 1 : 0,
+    );
+    const consumer = Option.getOrThrow(
+      await Effect.runPromise(repository.getConsumerState(key.consumerName)),
+    );
+    expect(consumer.lastAckedSequence).toBeGreaterThanOrEqual(event.sequence);
   });
 
   it("REL-01B gate: retries a transient queued-promotion enqueue before advancing", async () => {
@@ -3673,6 +3817,80 @@ describe("ProviderCommandReactor", () => {
     const followUpInput = harness.sendTurn.mock.calls[2]?.[0] as { input?: string } | undefined;
     expect(followUpInput?.input).not.toContain("<thread_context>");
     expect(followUpInput?.input).toBe("Continue after successful retry");
+  });
+
+  it("preserves the provider resume cursor when interrupt escalation stops the runtime", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-interrupt-escalation"),
+          role: "user",
+          text: "Start a turn that cannot be interrupted",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-interrupt-escalation"),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation"),
+        threadId,
+        turnId: asTurnId("turn-interrupt-escalation"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      threadId,
+      turnId: asTurnId("turn-interrupt-escalation"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "interrupt-escalation-follow-up",
+      text: "Continue after interrupt escalation",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.startSessionWithOutcome).toHaveBeenCalledTimes(2);
+    const sessions = await Effect.runPromise(harness.listSessions());
+    expect(sessions).toEqual([
+      expect.objectContaining({ threadId, resumeCursor: { opaque: "resume-1" } }),
+    ]);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+    const followUpInput = harness.sendTurn.mock.calls[1]?.[0];
+    expect(followUpInput?.input).toBe("Continue after interrupt escalation");
   });
 
   it("rolls back provider conversation state for message edits", async () => {
@@ -8763,7 +8981,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -8880,7 +9098,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -9121,7 +9339,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({
@@ -11070,6 +11288,52 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("pauses a goal on explicit session stop during a Devin recovery gap", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("goal-before-session-gap-stop"),
+        threadId,
+        goal: "Finish the work",
+        goalStartBehavior: "defer",
+      }),
+    );
+    // Recovery has already settled its old turn. No adapter terminal event remains.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("session-gap-before-stop"),
+        threadId,
+        session: {
+          threadId,
+          status: "interrupted",
+          providerName: "devin",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("session-gap-user-stop"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("reacts to thread.session.stop by stopping the runtime without deleting the binding", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -11500,5 +11764,69 @@ describe("ProviderCommandReactor", () => {
     });
     // With no active turn the same event applies by ensuring the session.
     expect(harness.startSession.mock.calls.length).toBe(1);
+  });
+});
+
+describe("awaitInflightClaimSettlement", () => {
+  it("returns immediately when the claim already settled", async () => {
+    let reads = 0;
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return { state: "succeeded", claimOwner: "owner-a", claimExpiresAt: null };
+          }),
+        deadlineMs: 5_000,
+        pollIntervalMs: 5,
+      }),
+    );
+    expect(result).toMatchObject({ state: "succeeded" });
+    expect(reads).toBe(1);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("waits out the deadline when the claim never settles", async () => {
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.succeed({
+            state: "inflight",
+            claimOwner: "owner-a",
+            claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          }),
+        deadlineMs: 60,
+        pollIntervalMs: 10,
+      }),
+    );
+    expect(result).toMatchObject({ state: "inflight" });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(40);
+  });
+
+  it("wakes early when the claim settles mid-wait", async () => {
+    let reads = 0;
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      awaitInflightClaimSettlement({
+        readClaim: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return reads < 3
+              ? {
+                  state: "inflight",
+                  claimOwner: "owner-a",
+                  claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+                }
+              : { state: "succeeded", claimOwner: "owner-a", claimExpiresAt: null };
+          }),
+        deadlineMs: 5_000,
+        pollIntervalMs: 5,
+      }),
+    );
+    expect(result).toMatchObject({ state: "succeeded" });
+    expect(reads).toBe(3);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 });

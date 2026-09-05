@@ -24,7 +24,7 @@ import { readEditorViewState, storeEditorViewState } from "../../editorViewState
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
-import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
+import { useDevicePaneOpenRequests } from "../../hooks/useDeviceEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
@@ -646,24 +646,18 @@ export function SingleChatSurface(props: {
     },
   });
 
-  useDeviceEventBridge({
-    onOpenPaneRequested: hasDeviceSupport
-      ? (event) => {
-          routeSingleDevicePaneOpenRequest({
-            currentThreadId: props.threadId,
-            requestedThreadId: event.threadId,
-            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
-            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
-            navigateToThread: (threadId) => {
-              void navigate({
-                to: "/$threadId",
-                params: { threadId },
-                replace: true,
-              });
-            },
-          });
-        }
-      : null,
+  useDevicePaneOpenRequests({
+    onOpenPaneRequested:
+      hasDeviceSupport && appSettings.autoOpenDevicePane
+        ? (event) => {
+            routeSingleDevicePaneOpenRequest({
+              currentThreadId: props.threadId,
+              requestedThreadId: event.threadId,
+              requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
+              openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+            });
+          }
+        : null,
   });
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
@@ -923,6 +917,7 @@ export function SingleChatSurface(props: {
             <DockExplorerPane
               threadId={props.threadId}
               workspaceRoot={workspaceRoot}
+              isVisible={context.isVisible}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
               onCommentInChat={handleCommentInChat}
@@ -935,6 +930,7 @@ export function SingleChatSurface(props: {
             <DockFilePane
               workspaceRoot={workspaceRoot}
               filePath={pane.filePath}
+              isVisible={context.isVisible}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
               onCommentInChat={handleCommentInChat}

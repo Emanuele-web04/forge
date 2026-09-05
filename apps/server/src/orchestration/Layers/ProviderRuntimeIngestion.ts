@@ -2284,7 +2284,14 @@ const make = Effect.gen(function* () {
             createdAt: now,
           });
 
-          if (isTerminalTurnEvent) {
+          // Recovery still settles the old turn and drains queued work, but
+          // its technical cancellation must not pause an autonomous goal.
+          const isDevinWedgeRecoveryCancellation =
+            event.provider === "devin" &&
+            event.type === "turn.completed" &&
+            event.payload.state === "cancelled" &&
+            event.payload.stopReason === "synara.devin.wedge-recovery";
+          if (isTerminalTurnEvent && !isDevinWedgeRecoveryCancellation) {
             // The command read model advances synchronously with goal tools.
             // Reading it here prevents a fast terminal provider event from
             // overtaking the projection of achieved/blocked/pause metadata.
@@ -2684,6 +2691,30 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+          // The old turn was technically cancelled, so only the failed
+          // recovery can now pause its goal. Never pause a different turn.
+          if (
+            event.provider === "devin" &&
+            asObject(event.payload.detail)?.reason === "synara.devin.wedge-recovery" &&
+            eventTurnId !== undefined &&
+            thread.latestTurn?.turnId === eventTurnId
+          ) {
+            const failedThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (candidate) => candidate.id === thread.id,
+            );
+            if (
+              failedThread &&
+              activeThreadGoal(failedThread)?.trim() &&
+              failedThread.goalPausedAt == null
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.meta.update",
+                commandId: providerCommandId(event, "goal-recovery-failed-pause", thread.id),
+                threadId: thread.id,
+                goalPaused: true,
+              });
+            }
+          }
         }
       }
 

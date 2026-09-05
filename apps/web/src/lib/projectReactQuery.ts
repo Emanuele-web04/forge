@@ -44,6 +44,66 @@ export const projectQueryKeys = {
     ["projects", "search-content", cwd, query, limit] as const,
 };
 
+interface ActiveProjectFileRefresh {
+  requestedGeneration: number;
+  promise: Promise<void>;
+}
+
+const activeProjectFileRefreshes = new WeakMap<
+  QueryClient,
+  Map<string, ActiveProjectFileRefresh>
+>();
+
+/**
+ * Revalidates one active file read from scratch. A watcher can emit while the
+ * initial read is still in flight; invalidation alone would join that older
+ * fetch and let pre-change contents become the new cache value.
+ */
+export function refetchFreshProjectFileQuery(
+  queryClient: QueryClient,
+  input: { readonly cwd: string | null; readonly relativePath: string | null },
+): Promise<void> {
+  const queryKey = projectQueryKeys.readFile(input.cwd, input.relativePath);
+  const refreshKey = JSON.stringify(queryKey);
+  let refreshes = activeProjectFileRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeProjectFileRefreshes.set(queryClient, refreshes);
+  }
+  const existing = refreshes.get(refreshKey);
+  if (existing) {
+    existing.requestedGeneration += 1;
+    void queryClient
+      .cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" })
+      .catch(() => undefined);
+    return existing.promise;
+  }
+
+  const entry: ActiveProjectFileRefresh = {
+    requestedGeneration: 1,
+    promise: Promise.resolve(),
+  };
+  refreshes.set(refreshKey, entry);
+  entry.promise = (async () => {
+    let completedGeneration = 0;
+    while (completedGeneration < entry.requestedGeneration) {
+      const targetGeneration = entry.requestedGeneration;
+      await queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+      await queryClient.cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" });
+      await queryClient.refetchQueries(
+        { queryKey, exact: true, type: "active" },
+        { cancelRefetch: true },
+      );
+      completedGeneration = targetGeneration;
+    }
+  })().finally(() => {
+    if (refreshes.get(refreshKey) === entry) {
+      refreshes.delete(refreshKey);
+    }
+  });
+  return entry.promise;
+}
+
 // Scope live file-change invalidations to one workspace so unrelated
 // project/worktree caches stay warm (mirrors invalidateGitQueriesForCwds).
 export function invalidateProjectFileQueriesForCwds(
