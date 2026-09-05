@@ -400,9 +400,12 @@ describe("providerModelsQueryOptions", () => {
     if (typeof interval !== "function") throw new Error("Expected recovery polling");
     const query = queryClient
       .getQueryCache()
-      .get<ProviderListModelsResult, Error, ProviderListModelsResult, typeof options.queryKey>(
-        hashKey(options.queryKey),
-      );
+      .get<
+        ProviderListModelsResult,
+        Error,
+        ProviderListModelsResult,
+        Parameters<typeof interval>[0]["queryKey"]
+      >(hashKey(options.queryKey));
     if (!query) throw new Error("Missing Devin query");
     expect(interval(query)).toBe(30_000);
     listModels.mockResolvedValue(catalog);
