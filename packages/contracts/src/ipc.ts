@@ -115,6 +115,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectFileChangeEvent,
+  ProjectWatchFileInput,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
   ProjectResolveWorkspaceFileReferencesInput,
@@ -693,6 +695,10 @@ export interface NativeApi {
       input: ProjectReadFileInput,
       options?: { readonly signal?: AbortSignal },
     ) => Promise<ProjectReadFileResult>;
+    onFileChange?: (
+      input: ProjectWatchFileInput,
+      callback: (event: ProjectFileChangeEvent) => void,
+    ) => () => void;
     resolveWorkspaceFileReferences: (
       input: ProjectResolveWorkspaceFileReferencesInput,
     ) => Promise<ProjectResolveWorkspaceFileReferencesResult>;

@@ -39,9 +39,10 @@ import {
   type ProjectNormalizationInput,
 } from "./storeNormalization";
 import {
+  forgetProjectState,
   projectCwdKey,
-  rememberProjectLocalNames,
-  rememberProjectUiState,
+  rememberProjectState,
+  resetStaleRememberedProjectState,
 } from "./storePersistence";
 import {
   EMPTY_ACTIVITY_BY_THREAD,
@@ -1085,6 +1086,11 @@ function removeProjectState(state: AppState, projectId: Project["id"]): AppState
     }
   }
 
+  const removedProject = state.projects.find((project) => project.id === projectId);
+  if (removedProject) {
+    forgetProjectState(removedProject.cwd);
+  }
+
   const nextProjects = state.projects.some((project) => project.id === projectId)
     ? state.projects.filter((project) => project.id !== projectId)
     : state.projects;
@@ -1247,8 +1253,7 @@ export function syncServerShellSnapshot(
   if (isStaleSnapshot(state, snapshot.snapshotSequence)) {
     return state;
   }
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
@@ -1259,8 +1264,14 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] === undefined,
   );
+  // The snapshot is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
+  resetStaleRememberedProjectState(
+    new Set(snapshotProjects.map((project) => projectCwdKey(project.workspaceRoot))),
+  );
   const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
+  rememberProjectState(projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
   // The retains below prune detail slices down to the snapshot's threads; any
   // resume cursor for a pruned thread must fall with its detail.
@@ -1399,8 +1410,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   if (isStaleSnapshot(state, readModel.snapshotSequence)) {
     return state;
   }
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   // Ids the server still reports as live at this snapshot sequence; anything else is either
@@ -1415,12 +1425,16 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     (readModel.spaces ?? []).filter((space) => space.deletedAt === null),
     state.spaces ?? [],
   );
-  const projects = mapProjects(
-    readModel.projects.filter(
-      (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
-    ),
-    state.projects,
+  const liveProjects = readModel.projects.filter(
+    (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
   );
+  // The read model is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
+  resetStaleRememberedProjectState(
+    new Set(liveProjects.map((project) => projectCwdKey(project.workspaceRoot))),
+  );
+  const projects = mapProjects(liveProjects, state.projects);
+  rememberProjectState(projects);
   const nextThreads = readModel.threads
     .filter(
       (thread) =>

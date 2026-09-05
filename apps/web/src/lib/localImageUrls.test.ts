@@ -47,6 +47,16 @@ describe("local image URL helpers", () => {
     ).toBe("/api/local-image?path=%2FUsers%2Fme%2FDownloads%2Fshot.png&grant=grant-token");
   });
 
+  it("cache-busts explicit preview reloads", () => {
+    expect(
+      buildLocalImageUrl({
+        src: "preview.png",
+        cwd: "/Users/me/project",
+        cacheKey: 3,
+      }),
+    ).toBe("/api/local-image?path=preview.png&cwd=%2FUsers%2Fme%2Fproject&v=3");
+  });
+
   it("forwards the desktop bridge legacy token so <img> requests stay authenticated", () => {
     (globalThis as unknown as { window: object }).window = {
       desktopBridge: { getWsUrl: () => "ws://127.0.0.1:51204/?token=secret-token-123" },

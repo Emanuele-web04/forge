@@ -119,6 +119,40 @@ export class ProviderStartupLifecycle {
   }
 }
 
+export interface ProviderStartupPhaseDurations {
+  readonly totalMs: number;
+  readonly byPhase: Readonly<Record<string, number>>;
+}
+
+/**
+ * Collapses a startup snapshot's transition timestamps into per-phase and
+ * total durations so a slow provider start is attributable from the
+ * `provider.session.started` log alone, without reproducing it.
+ */
+export function startupPhaseDurations(
+  snapshot: ProviderStartupSnapshot,
+): ProviderStartupPhaseDurations {
+  const byPhase: Record<string, number> = {};
+  const transitions = snapshot.transitions;
+  let previous: ProviderStartupTransition | undefined = transitions[0];
+  for (const current of transitions.slice(1)) {
+    if (previous !== undefined) {
+      const spentMs = Math.max(0, current.at - previous.at);
+      byPhase[previous.phase] = (byPhase[previous.phase] ?? 0) + spentMs;
+    }
+    previous = current;
+  }
+  const first = transitions[0];
+  const last = transitions[transitions.length - 1];
+  return {
+    totalMs:
+      first !== undefined && last !== undefined && transitions.length > 1
+        ? Math.max(0, last.at - first.at)
+        : 0,
+    byPhase,
+  };
+}
+
 function errnoCode(cause: unknown): string | undefined {
   return (cause as NodeJS.ErrnoException | undefined)?.code;
 }

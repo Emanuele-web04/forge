@@ -786,9 +786,15 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   ) {
     return undefined;
   }
+  // Session and turn projections converge independently. A single stale turn
+  // can therefore be observed first as interrupted, then as terminal or
+  // failed. Those settlement actions refine one recovery; a runtime
+  // realignment remains distinct because its live turn id identifies separate
+  // evidence.
+  const operation = action === "align-running-turn" ? action : "settle-running-turn";
   return `provider-runtime-reconcile:${JSON.stringify([
     provider,
-    action,
+    operation,
     projectedTurnId,
     runtimeTurnId ?? null,
   ])}`;
@@ -1004,7 +1010,8 @@ function collapseDerivedWorkLogEntries(
   // Older servers included the current observation sequence in recovery ids,
   // so the same repair could be persisted more than once while projections
   // converged. Preserve the first row for each semantic repair and hide only
-  // exact repeats; different turns/actions remain independently visible.
+  // exact repeats; different turns and runtime realignments remain independently
+  // visible.
   const seenRuntimeReconciliationKeys = new Set<string>();
   // Task-list snapshots (collapseKey "taskList:<turnId>") fold into one row per
   // turn: each update replaces the row's content while the row itself stays
