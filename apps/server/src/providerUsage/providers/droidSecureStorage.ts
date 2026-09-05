@@ -9,6 +9,8 @@ import type { ProviderUsageContext } from "../types";
 // This fixed script imports only the OS CredReadW/CredFree API; no profile or third-party module.
 const WINDOWS_KEY_READER = `
 $ErrorActionPreference = 'Stop'
+$PSModuleAutoLoadingPreference = 'None'
+Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
