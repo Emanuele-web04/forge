@@ -365,6 +365,54 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
+// Poll granularity while waiting out another worker's claim (see
+// processClaimedProviderIntent): re-checking lets a turn proceed the moment
+// the prior attempt settles instead of sleeping blindly to lease expiry.
+const PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS = 1_000;
+
+export interface ProviderCommandClaimSnapshot {
+  readonly state: string;
+  readonly claimOwner?: string | null;
+  readonly claimExpiresAt?: string | null;
+}
+
+/**
+ * Waits out another worker's claim on the same delivery, waking early when the
+ * record settles instead of sleeping to lease expiry. The wait never exceeds
+ * the caller's deadline and never steals work: it only observes, returning the
+ * latest snapshot for the caller to handle through the existing settled/
+ * expired paths. Failed reads keep waiting on the last known snapshot so a
+ * transient store error degrades to today's full-lease wait, not a wrong turn.
+ */
+export function awaitInflightClaimSettlement<TClaim extends ProviderCommandClaimSnapshot>(input: {
+  readonly readClaim: () => Effect.Effect<TClaim | undefined, never>;
+  readonly deadlineMs: number;
+  readonly pollIntervalMs?: number;
+}): Effect.Effect<TClaim | undefined> {
+  const pollIntervalMs = Math.max(
+    0,
+    input.pollIntervalMs ?? PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS,
+  );
+  const startedAt = Date.now();
+  const check = (): Effect.Effect<TClaim | undefined> =>
+    Effect.flatMap(input.readClaim(), (snapshot) => {
+      if (!snapshot || snapshot.state !== "inflight") {
+        return Effect.succeed(snapshot);
+      }
+      const expiresAt = Date.parse(snapshot.claimExpiresAt ?? "");
+      const recordRemainingMs = Number.isFinite(expiresAt) ? expiresAt - Date.now() : 0;
+      const budgetRemainingMs = input.deadlineMs - (Date.now() - startedAt);
+      const remainingMs = Math.min(Math.max(0, recordRemainingMs), Math.max(0, budgetRemainingMs));
+      if (remainingMs <= 0) {
+        return Effect.succeed(snapshot);
+      }
+      return Effect.flatMap(
+        Effect.sleep(Duration.millis(Math.min(remainingMs, pollIntervalMs))),
+        () => check(),
+      );
+    });
+  return check();
+}
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 /**
@@ -4807,11 +4855,11 @@ const make = Effect.gen(function* () {
       const threadId = event.payload.threadId;
       if (yield* skipQuarantinedSideEffect(event)) return;
 
-      const existing = yield* deliveryRepository.getDelivery({
+      let existing = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
       });
-      if (Option.isSome(existing)) {
+      while (Option.isSome(existing)) {
         if (existing.value.state === "succeeded") {
           yield* requireCursorAdvance(event);
           return;
@@ -4825,7 +4873,44 @@ const make = Effect.gen(function* () {
           const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
           const remainingMs = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
           if (remainingMs > 0) {
-            yield* Effect.sleep(Duration.millis(remainingMs));
+            const waitStartedAt = Date.now();
+            let lastKnown = Option.getOrUndefined(existing);
+            const latest = yield* awaitInflightClaimSettlement({
+              readClaim: () =>
+                deliveryRepository
+                  .getDelivery({
+                    consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                    eventSequence: event.sequence,
+                  })
+                  .pipe(
+                    Effect.map((record) => {
+                      lastKnown = Option.getOrUndefined(record);
+                      return Option.getOrUndefined(record);
+                    }),
+                    Effect.orElseSucceed(() => lastKnown),
+                  ),
+              deadlineMs: remainingMs,
+            });
+            if (latest?.state === "succeeded") {
+              const waitedMs = Date.now() - waitStartedAt;
+              yield* Effect.logDebug(
+                "provider command delivery settled while waiting out a prior claim",
+                {
+                  eventSequence: event.sequence,
+                  threadId,
+                  waitedMs,
+                  savedMs: Math.max(0, remainingMs - waitedMs),
+                },
+              );
+            }
+            // The wait budget is not a lease expiry. Re-read before classifying
+            // retry/missing records or another owner's renewed inflight claim.
+            // In particular, never settle from a cached snapshot after a failed read.
+            existing = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+            });
+            continue;
           }
           const expiredOwner = existing.value.claimOwner ?? "";
           if (!isReplaySafeClaimedProviderIntent(event)) {
@@ -4853,6 +4938,7 @@ const make = Effect.gen(function* () {
             );
           }
         }
+        break;
       }
 
       while (true) {
