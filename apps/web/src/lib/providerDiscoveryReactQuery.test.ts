@@ -74,22 +74,21 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
   });
 
-  it("fails fast only for cursor and droid; other providers retry once", () => {
-    // The server replays failures for ~30s, so more client retries could not
-    // reach the provider anyway — they would only keep the picker on a skeleton.
-    expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(1);
-    expect(providerModelsQueryOptions({ provider: "devin" }).retry).toBe(1);
+  it("fails fast only for cursor and droid, and devin uses the standard on-demand policy", () => {
+    expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
+    expect(providerModelsQueryOptions({ provider: "devin" }).retry).toBe(3);
+    expect(providerModelsQueryOptions({ provider: "devin" }).staleTime).toBe(30_000);
     expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(0);
+    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(5 * 60_000);
     expect(providerModelsQueryOptions({ provider: "cursor" }).retry).toBe(0);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(30_000);
   });
 
-  it("keeps every catalog cached for five minutes and ignores focus", () => {
-    for (const provider of ["codex", "cursor", "droid", "devin", "pi"] as const) {
-      const options = providerModelsQueryOptions({ provider });
-      expect(options.staleTime).toBe(5 * 60_000);
-      expect(options.refetchOnWindowFocus).toBe(false);
-      expect(options.gcTime).toBe(30 * 60_000);
-    }
+  it("keeps Droid discovery cached for five minutes and ignores focus", () => {
+    const options = providerModelsQueryOptions({ provider: "droid" });
+
+    expect(options.staleTime).toBe(5 * 60_000);
+    expect(options.refetchOnWindowFocus).toBe(false);
   });
 
   it("deduplicates concurrent catalog requests for the same provider key", async () => {

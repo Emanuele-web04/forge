@@ -61,7 +61,6 @@ export interface ProviderModelDiscoveryCache<E> {
 }
 
 interface CatalogEntry {
-  readonly key: ProviderModelDiscoveryCacheKey;
   readonly result: ProviderListModelsResult;
   readonly storedAt: number;
 }
@@ -87,10 +86,6 @@ export function providerModelDiscoveryCacheKey(
 
 const serializeKey = (key: ProviderModelDiscoveryCacheKey): string =>
   JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
-
-/** Entries that share everything but `cwd` describe the same installed runtime. */
-const serializeRuntimeKey = (key: ProviderModelDiscoveryCacheKey): string =>
-  JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir]);
 
 /**
  * Only a non-empty, error-free catalog is worth remembering as "good". Static
@@ -140,31 +135,11 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     return entry;
   };
 
-  /** Any retained catalog for the same runtime under a different cwd. */
-  const readRuntimeSibling = (
-    key: ProviderModelDiscoveryCacheKey,
-    at: number,
-  ): CatalogEntry | undefined => {
-    const runtimeKey = serializeRuntimeKey(key);
-    let best: CatalogEntry | undefined;
-    for (const entry of catalogs.values()) {
-      if (serializeRuntimeKey(entry.key) !== runtimeKey) continue;
-      if (at - entry.storedAt > staleTtlMs) continue;
-      if (best === undefined || entry.storedAt > best.storedAt) best = entry;
-    }
-    return best;
-  };
-
-  const storeCatalog = (
-    key: ProviderModelDiscoveryCacheKey,
-    serialized: string,
-    result: ProviderListModelsResult,
-    at: number,
-  ) => {
+  const storeCatalog = (serialized: string, result: ProviderListModelsResult, at: number) => {
     failures.delete(serialized);
     // Re-insert so Map iteration order doubles as an LRU order.
     catalogs.delete(serialized);
-    catalogs.set(serialized, { key, result: { ...result, cached: false }, storedAt: at });
+    catalogs.set(serialized, { result: { ...result, cached: false }, storedAt: at });
     while (catalogs.size > maxEntries) {
       const oldest = catalogs.keys().next().value;
       if (oldest === undefined) break;
@@ -185,15 +160,16 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     }
   };
 
-  const applyExit = (
-    key: ProviderModelDiscoveryCacheKey,
-    serialized: string,
-    exit: DiscoveryExit<E>,
-  ) => {
+  const applyExit = (serialized: string, exit: DiscoveryExit<E>) => {
     const at = now();
     if (Exit.isSuccess(exit) && isUsableCatalog(exit.value)) {
-      storeCatalog(key, serialized, exit.value, at);
+      storeCatalog(serialized, exit.value, at);
       return;
+    }
+    // An error-free empty response is authoritative: do not keep offering
+    // models the provider has removed. Replay it briefly before rediscovery.
+    if (Exit.isSuccess(exit) && exit.value.error === undefined) {
+      catalogs.delete(serialized);
     }
     storeFailure(serialized, exit, at);
   };
@@ -229,7 +205,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
         Effect.exit,
         Effect.flatMap((exit) => {
           inflight.delete(serialized);
-          applyExit(key, serialized, exit as DiscoveryExit<E>);
+          applyExit(serialized, exit as DiscoveryExit<E>);
           return Deferred.done(deferred, exit);
         }),
       );
@@ -250,26 +226,21 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       const serialized = serializeKey(key);
       const at = now();
       const entry = readCatalog(serialized, at);
+      const failure = readFailure(serialized, at);
       if (entry !== undefined) {
         if (at - entry.storedAt <= freshTtlMs) {
           return { ...entry.result, cached: true };
         }
         // Stale-while-revalidate: answer now, refresh behind the caller.
-        yield* startDiscovery(key, serialized, discover);
+        if (failure === undefined) {
+          yield* startDiscovery(key, serialized, discover);
+        }
         return { ...entry.result, cached: true };
       }
       const pending = inflight.get(serialized);
       if (pending !== undefined) {
         return yield* awaitDiscovery(pending);
       }
-      const sibling = readRuntimeSibling(key, at);
-      if (sibling !== undefined) {
-        // A new worktree/thread cwd must not cold-start discovery for a runtime
-        // we already know: serve the known catalog and refresh this cwd behind it.
-        yield* startDiscovery(key, serialized, discover);
-        return { ...sibling.result, cached: true };
-      }
-      const failure = readFailure(serialized, at);
       if (failure !== undefined) {
         return yield* failure.exit as DiscoveryExit<E>;
       }

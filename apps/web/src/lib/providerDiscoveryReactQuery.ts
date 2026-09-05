@@ -197,85 +197,14 @@ export function isInitialModelDiscoveryPending(query: {
   return query.isLoading || (query.isFetching && query.isPlaceholderData);
 }
 
-export interface ProviderModelsQueryInput {
+export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
   cwd?: string | null;
-}
-
-/** The app-settings fields that scope a provider's runtime model catalog. */
-export interface ProviderModelDiscoverySettings {
-  readonly claudeBinaryPath: string;
-  readonly cursorBinaryPath: string;
-  readonly cursorApiEndpoint: string;
-  readonly devinBinaryPath: string;
-  readonly antigravityBinaryPath: string;
-  readonly grokBinaryPath: string;
-  readonly droidBinaryPath: string;
-  readonly openCodeBinaryPath: string;
-  readonly piBinaryPath: string;
-  readonly piAgentDir: string;
-}
-
-/**
- * Single source for "which settings + cwd scope a provider's model catalog".
- * Every surface that reads or warms a catalog (composer picker, kanban dialog,
- * automations, settings, sidebar prefetch) must build its query from this so
- * they all land on the same cache key.
- */
-export function resolveProviderModelsQueryInput(input: {
-  provider: ProviderKind;
-  settings: ProviderModelDiscoverySettings;
-  cwd?: string | null;
-}): ProviderModelsQueryInput {
-  const { provider, settings } = input;
-  const cwd = input.cwd ?? null;
-  switch (provider) {
-    case "claudeAgent":
-      return { provider, binaryPath: settings.claudeBinaryPath || null };
-    case "codex":
-      return { provider };
-    case "cursor":
-      return {
-        provider,
-        binaryPath: settings.cursorBinaryPath || null,
-        apiEndpoint: settings.cursorApiEndpoint || null,
-      };
-    case "devin":
-      return { provider, binaryPath: settings.devinBinaryPath || null, cwd };
-    case "antigravity":
-      return { provider, binaryPath: settings.antigravityBinaryPath || null, cwd };
-    case "grok":
-      return { provider, binaryPath: settings.grokBinaryPath || null };
-    case "droid":
-      return { provider, binaryPath: settings.droidBinaryPath || null, cwd };
-    case "opencode":
-      return { provider, binaryPath: settings.openCodeBinaryPath || null, cwd };
-    case "pi":
-      return {
-        provider,
-        binaryPath: settings.piBinaryPath || null,
-        agentDir: settings.piAgentDir || null,
-        cwd,
-      };
-  }
-}
-
-/**
- * Client-side freshness for model catalogs. The server keeps the authoritative
- * cache (stale-while-revalidate + single-flight + failure replay in
- * ProviderDiscoveryService), so a client refetch is one cheap RPC that usually
- * returns `cached: true`; the client window only bounds how often that RPC runs.
- */
-export const PROVIDER_MODELS_STALE_TIME_MS = 5 * 60_000;
-/** Matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS (providerModelPrefetch.ts imports from here). */
-export const PROVIDER_MODELS_GC_TIME_MS = 30 * 60_000;
-
-export function providerModelsQueryOptions(
-  input: ProviderModelsQueryInput & { enabled?: boolean },
-) {
+  enabled?: boolean;
+}) {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.models(
       input.provider,
@@ -295,39 +224,17 @@ export function providerModelsQueryOptions(
       });
     },
     enabled: input.enabled ?? true,
-    // The server replays a failed discovery for ~30s, so client retries cannot
-    // reach the provider anyway; one retry covers a transport hiccup without
-    // parking the picker on a skeleton through three backoff rounds.
-    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 1,
-    staleTime: PROVIDER_MODELS_STALE_TIME_MS,
-    // Focus changes are not a signal that a CLI's model list changed; opening a
-    // picker after the stale window still refetches on mount.
-    refetchOnWindowFocus: false,
-    gcTime: PROVIDER_MODELS_GC_TIME_MS,
+    // Cached catalogs paint immediately while stale entries revalidate in the
+    // background. Droid discovery starts a disposable ACP session, so retain its
+    // longer cache and never repeat that work merely because the window regained focus.
+    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
+    staleTime: input.provider === "droid" ? 5 * 60_000 : 30_000,
+    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
+    // providerModelPrefetch.ts (not imported: that module imports from here).
+    gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
-}
-
-/** True once a catalog query holds a real runtime model list (not the empty placeholder). */
-export function hasResolvedModelCatalog(data: ProviderListModelsResult | undefined): boolean {
-  return data !== undefined && data.models.length > 0;
-}
-
-/**
- * The message a picker should show under a provider's list. Adapter-level
- * fallbacks report through `data.error`; a rejected query (transport timeout,
- * missing CLI) previously vanished behind the placeholder and left the static
- * list looking authoritative.
- */
-export function resolveModelDiscoveryError(query: {
-  readonly data: ProviderListModelsResult | undefined;
-  readonly error: unknown;
-}): string | undefined {
-  if (query.data?.error) return query.data.error;
-  if (query.error instanceof Error && query.error.message.trim() !== "") {
-    return query.error.message;
-  }
-  return undefined;
 }
 
 export function providerAgentsQueryOptions(input: {

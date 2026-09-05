@@ -1,6 +1,6 @@
 // FILE: providerModelDiscoveryCache.test.ts
 // Purpose: Locks the shared model discovery cache semantics: fresh hits,
-//          stale-while-revalidate, single-flight, cwd sibling reuse, failure
+//          stale-while-revalidate, single-flight, project isolation, failure
 //          replay, the timeout ceiling, and detachment from caller interrupts.
 // Layer: Server provider tests
 
@@ -117,21 +117,39 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(second.models).toEqual(CATALOG.models);
   });
 
-  it("serves a known runtime catalog for a new cwd while discovering that cwd", async () => {
+  it.each([false, true])("isolates a new cwd for concurrent callers (fails: %s)", async (fails) => {
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
+    await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
+    const gate = Deferred.makeUnsafe<void>();
+    const otherCatalog = { ...CATALOG, models: [{ slug: "project-b", name: "Project B" }] };
     let calls = 0;
-    const discover = Effect.sync(() => {
+    let completed = 0;
+    const discover = Effect.gen(function* () {
       calls += 1;
-      return CATALOG;
+      yield* Deferred.await(gate);
+      return yield* fails
+        ? Effect.fail(failure("project B unavailable"))
+        : Effect.succeed(otherCatalog);
     });
-
-    await Effect.runPromise(cache.lookup(KEY, discover));
-    const sibling = await Effect.runPromise(cache.lookup({ ...KEY, cwd: "/repo/b" }, discover));
+    const lookup = () =>
+      Effect.runPromiseExit(cache.lookup({ ...KEY, cwd: "/repo/b" }, discover)).then((exit) => {
+        completed += 1;
+        return exit;
+      });
+    const first = lookup();
     await flush();
+    const second = lookup();
+    await flush();
+    const completedBeforeDiscovery = completed;
+    Deferred.doneUnsafe(gate, Effect.void);
+    const results = await Promise.all([first, second]);
 
-    expect(sibling).toEqual({ ...CATALOG, cached: true });
-    expect(calls).toBe(2);
-    expect(cache.size()).toBe(2);
+    expect(completedBeforeDiscovery).toBe(0);
+    expect(calls).toBe(1);
+    for (const result of results) {
+      expect(Exit.isFailure(result)).toBe(fails);
+      if (Exit.isSuccess(result)) expect(result.value).toEqual(otherCatalog);
+    }
   });
 
   it("does not reuse a catalog from a different binary path", async () => {
@@ -173,7 +191,7 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(calls).toBe(2);
   });
 
-  it("treats empty or error-tagged catalogs as failures, not good entries", async () => {
+  it("replays error-tagged catalogs briefly before retrying", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
       now: clock.now,
@@ -203,26 +221,73 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(cache.size()).toBe(1);
   });
 
-  it("keeps serving the last good catalog after a background refresh fails", async () => {
+  it.each(["rejected", "degraded"])(
+    "honors cooldown after a %s refresh with a stale catalog",
+    async (kind) => {
+      const clock = makeClock();
+      const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+        now: clock.now,
+        freshTtlMs: 1_000,
+        failureTtlMs: 10_000,
+      });
+      let calls = 0;
+      const discover = Effect.suspend(() => {
+        calls += 1;
+        if (calls === 1) return Effect.succeed(CATALOG);
+        return kind === "rejected"
+          ? Effect.fail(failure("flaky"))
+          : Effect.succeed({ ...CATALOG, models: [], error: "flaky" });
+      });
+
+      await Effect.runPromise(cache.lookup(KEY, discover));
+      clock.advance(5_000);
+      await Effect.runPromise(cache.lookup(KEY, discover));
+      await flush();
+      const results = await Effect.runPromise(
+        Effect.all([cache.lookup(KEY, discover), cache.lookup(KEY, discover)], {
+          concurrency: "unbounded",
+        }),
+      );
+      await flush();
+      expect(results).toEqual(Array(2).fill({ ...CATALOG, cached: true }));
+      expect(calls).toBe(2);
+
+      clock.advance(10_001);
+      await Effect.runPromise(cache.lookup(KEY, discover));
+      await flush();
+      expect(calls).toBe(3);
+    },
+  );
+
+  it("replaces a stale catalog with an authoritative empty response and replays it briefly", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
       now: clock.now,
       freshTtlMs: 1_000,
+      failureTtlMs: 10_000,
     });
+    const empty = { ...CATALOG, models: [] };
     let calls = 0;
-    const discover = Effect.suspend(() => {
+    const discover = Effect.sync(() => {
       calls += 1;
-      return calls === 1 ? Effect.succeed(CATALOG) : Effect.fail(failure("flaky"));
+      return calls === 2 ? empty : CATALOG;
     });
-
     await Effect.runPromise(cache.lookup(KEY, discover));
     clock.advance(5_000);
     await Effect.runPromise(cache.lookup(KEY, discover));
     await flush();
-    const afterFailedRefresh = await Effect.runPromise(cache.lookup(KEY, discover));
+    const results = await Effect.runPromise(
+      Effect.all([cache.lookup(KEY, discover), cache.lookup(KEY, discover)], {
+        concurrency: "unbounded",
+      }),
+    );
+    expect(results).toEqual([empty, empty]);
+    expect(cache.size()).toBe(0);
+    expect(calls).toBe(2);
 
-    expect(afterFailedRefresh.models).toEqual(CATALOG.models);
-    expect(afterFailedRefresh.cached).toBe(true);
+    clock.advance(10_001);
+    expect(await Effect.runPromise(cache.lookup(KEY, discover))).toEqual(CATALOG);
+    expect(calls).toBe(3);
   });
 
   it("fails with a request error when discovery exceeds the timeout ceiling", async () => {

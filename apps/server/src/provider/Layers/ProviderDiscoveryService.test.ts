@@ -338,10 +338,12 @@ describe("ProviderDiscoveryService.listModels", () => {
       makeConfigLayer(),
       ServerSettingsService.layerTest(),
       makeRegistryLayer({
-        listModels: () => {
+        listModels: (input) => {
           adapterCalls += 1;
           return Effect.succeed({
-            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            models: [
+              { slug: input.cwd === cwd ? "project-a" : "project-b", name: "Project Model" },
+            ],
             source: "cursor.cli",
             cached: false,
           });
@@ -366,12 +368,9 @@ describe("ProviderDiscoveryService.listModels", () => {
 
     expect(results.first.cached).toBe(false);
     expect(results.second).toEqual({ ...results.first, cached: true });
-    // A new cwd reuses the known runtime catalog instead of cold-starting the picker.
-    expect(results.otherCwd.models).toEqual(results.first.models);
-    expect(results.otherCwd.cached).toBe(true);
-    // The sibling answer never blocks on the adapter; the cwd refresh runs detached.
-    expect(adapterCalls).toBe(1);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(results.otherCwd.models).toEqual([{ slug: "project-b", name: "Project Model" }]);
+    expect(results.first.models).toEqual([{ slug: "project-a", name: "Project Model" }]);
+    expect(results.otherCwd.cached).toBe(false);
     expect(adapterCalls).toBe(2);
   });
 
