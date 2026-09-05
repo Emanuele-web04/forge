@@ -19,7 +19,14 @@ import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { basenameOfPath } from "~/file-icons";
 import { useCopyFileContentsToClipboard, useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
+import {
+  ChevronRightIcon,
+  CodeIcon,
+  CopyIcon,
+  EllipsisIcon,
+  EyeOpenIcon,
+  RefreshCwIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -53,6 +60,9 @@ interface WorkspaceFilePreviewHeaderProps {
   dirty?: boolean;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
+  /** Re-fetches the current file without discarding a dirty edit buffer. */
+  onReload?: (() => void) | undefined;
+  reloading?: boolean;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -325,6 +335,20 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onReload ? (
+          <ChatHeaderIconButton
+            label="Reload file from disk"
+            title="Reload file from disk"
+            tone="plain"
+            onClick={props.onReload}
+          >
+            <RefreshCwIcon
+              aria-hidden="true"
+              className={cn("size-3.5", props.reloading && "animate-spin")}
+            />
+          </ChatHeaderIconButton>
         ) : null}
 
         <Menu>

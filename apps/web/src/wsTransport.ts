@@ -17,6 +17,7 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_PROJECT_FILE_WATCH_CAPABILITY,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   WsBootstrapNegotiateResult,
@@ -36,6 +37,8 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type ProjectFileChangeEvent,
+  type ProjectWatchFileInput,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -80,6 +83,15 @@ type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void
 type RpcClientEffect = typeof makeRpcClient;
 type RpcClientInstance =
   RpcClientEffect extends Effect.Effect<infer Client, any, any> ? Client : never;
+
+type ProjectFileChangeSubscription = {
+  readonly input: ProjectWatchFileInput;
+  readonly listeners: Set<(event: ProjectFileChangeEvent) => void>;
+};
+
+export function projectFileChangeStreamKey(input: ProjectWatchFileInput): string {
+  return `projects.file-change:${input.cwd.length}:${input.cwd}${input.relativePath}`;
+}
 
 class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
   readonly message: string;
@@ -351,6 +363,9 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "WS_NEGOTIATION_REQUIRED",
   "WS_PROTOCOL_INCOMPATIBLE",
   "WS_CAPABILITIES_INCOMPATIBLE",
+  // A local filesystem watcher failure is scoped to its optional panel
+  // subscription. Reconnecting every RPC stream cannot repair that path.
+  "PROJECT_FILE_WATCH_FAILED",
   // Snapshot-fence failures are a property of one stream's read model, not of
   // the socket. Tearing the whole transport down for them interrupts every
   // unrelated in-flight request while fixing nothing — the same fence is
@@ -454,6 +469,34 @@ const MAX_STREAM_CAPACITY_RETRY_MS = 10_000;
 const INITIAL_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 100;
 const MAX_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 5_000;
 const STABLE_STREAM_LIFETIME_MS = 10_000;
+const PROJECT_FILE_WATCH_FAILED_ERROR_CODE = "PROJECT_FILE_WATCH_FAILED";
+const INITIAL_PROJECT_FILE_WATCH_RETRY_MS = 500;
+const MAX_PROJECT_FILE_WATCH_RETRY_MS = 8_000;
+export const MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS = 5;
+
+/**
+ * A file watcher failure belongs to one optional visible panel, not the whole
+ * socket. Retry that subscription with bounded exponential backoff so a
+ * transient filesystem failure heals without reconnecting unrelated streams.
+ */
+export function getProjectFileWatchRetryDelayMs(
+  cause: Cause.Cause<unknown>,
+  previousAttempts: number,
+): number | null {
+  if (previousAttempts >= MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS) return null;
+  for (const reason of cause.reasons) {
+    if (!Cause.isFailReason(reason)) continue;
+    const error = reason.error;
+    if (!error || typeof error !== "object") continue;
+    const code = "code" in error ? error.code : undefined;
+    if (code !== PROJECT_FILE_WATCH_FAILED_ERROR_CODE) continue;
+    return Math.min(
+      INITIAL_PROJECT_FILE_WATCH_RETRY_MS * 2 ** previousAttempts,
+      MAX_PROJECT_FILE_WATCH_RETRY_MS,
+    );
+  }
+  return null;
+}
 
 /**
  * Infinite subscription streams should not complete successfully. A short,
@@ -729,6 +772,7 @@ export class WsTransport {
   private readonly streamDuplicateRetries = new Map<string, number>();
   private readonly streamThreadBootstrapRetries = new Map<string, number>();
   private readonly streamResnapshotRetries = new Map<string, number>();
+  private readonly projectFileWatchRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
   private readonly streamCompletionRetries = new Map<string, number>();
   private readonly streamCompletionRetryTimers = new Map<string, number>();
@@ -741,6 +785,7 @@ export class WsTransport {
   // is absorbed (bootstrap coalescing).
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
+  private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
   // Tracks the last server generation this transport observed so cross-restart
@@ -911,6 +956,38 @@ export class WsTransport {
     };
   }
 
+  subscribeProjectFileChange(
+    input: ProjectWatchFileInput,
+    listener: (event: ProjectFileChangeEvent) => void,
+  ): () => void {
+    const key = projectFileChangeStreamKey(input);
+    let subscription = this.projectFileSubscriptions.get(key);
+    const isNewSubscription = subscription === undefined;
+    if (!subscription) {
+      subscription = { input, listeners: new Set() };
+      this.projectFileSubscriptions.set(key, subscription);
+    }
+    subscription.listeners.add(listener);
+    const desiredSubscription = subscription;
+    if (isNewSubscription) {
+      void this.getClient()
+        .then((client) => this.startProjectFileChangeStream(client, key, desiredSubscription))
+        .catch(() => undefined);
+    }
+
+    return () => {
+      desiredSubscription.listeners.delete(listener);
+      if (
+        desiredSubscription.listeners.size > 0 ||
+        this.projectFileSubscriptions.get(key) !== desiredSubscription
+      ) {
+        return;
+      }
+      this.projectFileSubscriptions.delete(key);
+      void this.stopStream(key);
+    };
+  }
+
   getLatestPush<C extends WsPushChannel>(channel: C): WsPushMessage<C> | null {
     const latest = this.latestPushByChannel.get(channel);
     return latest ? (latest as WsPushMessage<C>) : null;
@@ -990,6 +1067,7 @@ export class WsTransport {
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
+    this.projectFileSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1227,6 +1305,7 @@ export class WsTransport {
     this.streamDuplicateRetries.delete(key);
     this.streamThreadBootstrapRetries.delete(key);
     this.streamResnapshotRetries.delete(key);
+    this.projectFileWatchRetries.delete(key);
   }
 
   private resetAllStreamCapacityRetries(): void {
@@ -1238,6 +1317,7 @@ export class WsTransport {
     this.streamDuplicateRetries.clear();
     this.streamThreadBootstrapRetries.clear();
     this.streamResnapshotRetries.clear();
+    this.projectFileWatchRetries.clear();
   }
 
   private clearStreamCompletionRetryTimer(key: string): void {
@@ -1355,6 +1435,9 @@ export class WsTransport {
           const input = this.refreshThreadSubscriptionInput(threadId);
           if (input === undefined) continue;
           await this.startThreadStream(client, threadId, input);
+        }
+        for (const [key, subscription] of this.projectFileSubscriptions) {
+          this.startProjectFileChangeStream(client, key, subscription);
         }
         this.reconnectFailures = 0;
         return client;
@@ -1638,6 +1721,41 @@ export class WsTransport {
     );
   }
 
+  private startProjectFileChangeStream(
+    client: RpcClientInstance,
+    key: string,
+    subscription: ProjectFileChangeSubscription,
+  ): void {
+    if (
+      this.disposed ||
+      this.projectFileSubscriptions.get(key) !== subscription ||
+      !this.compatibility?.capabilities.includes(WS_PROJECT_FILE_WATCH_CAPABILITY)
+    ) {
+      return;
+    }
+    const restart = () => {
+      if (this.projectFileSubscriptions.get(key) !== subscription) return;
+      void this.getClient()
+        .then((nextClient) => this.startProjectFileChangeStream(nextClient, key, subscription))
+        .catch(() => undefined);
+    };
+    this.startStream<ProjectFileChangeEvent>(
+      client,
+      key,
+      client[WS_METHODS.projectsSubscribeFileChange](subscription.input),
+      (event) => {
+        for (const subscribedListener of subscription.listeners) {
+          try {
+            subscribedListener(event);
+          } catch {
+            // One panel listener must not prevent another from revalidating.
+          }
+        }
+      },
+      restart,
+    );
+  }
+
   private startStream<T>(
     client: RpcClientInstance,
     key: string,
@@ -1746,6 +1864,28 @@ export class WsTransport {
               this.streamCapacityRetryTimers.set(key, timeoutId);
               return;
             }
+
+            const previousFileWatchAttempts =
+              performance.now() - streamStartedAt >= STABLE_STREAM_LIFETIME_MS
+                ? 0
+                : (this.projectFileWatchRetries.get(key) ?? 0);
+            const fileWatchRetryDelayMs = getProjectFileWatchRetryDelayMs(
+              exit.cause,
+              previousFileWatchAttempts,
+            );
+            if (fileWatchRetryDelayMs !== null) {
+              this.projectFileWatchRetries.set(key, previousFileWatchAttempts + 1);
+              this.clearStreamCapacityRetryTimer(key);
+              const timeoutId = window.setTimeout(() => {
+                if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                this.streamCapacityRetryTimers.delete(key);
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  restart();
+                }
+              }, fileWatchRetryDelayMs);
+              this.streamCapacityRetryTimers.set(key, timeoutId);
+              return;
+            }
           }
           if (restart && Exit.isFailure(exit) && shouldReconnectAfterStreamFailure(exit.cause)) {
             window.setTimeout(
@@ -1811,6 +1951,7 @@ export class WsTransport {
       this.streamDuplicateRetries.delete(key);
       this.streamThreadBootstrapRetries.delete(key);
       this.streamResnapshotRetries.delete(key);
+      this.projectFileWatchRetries.delete(key);
     }
     this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);

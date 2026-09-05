@@ -122,15 +122,6 @@ export function negotiateStaticEncodingPreference(
   };
 }
 
-/** Convenience wrapper for callers that only need the ranked sidecar codings. */
-export function negotiateStaticEncodings(
-  acceptEncoding: string | undefined,
-): readonly StaticEncodingCandidate[] {
-  return negotiateStaticEncodingPreference(acceptEncoding).candidates.filter(
-    (candidate): candidate is StaticEncodingCandidate => candidate !== null,
-  );
-}
-
 // Sidecars are a negotiation detail, never addressable resources: a direct
 // request for one would serve compressed bytes with identity encoding and a
 // misleading MIME type. Matched case-insensitively because case-insensitive

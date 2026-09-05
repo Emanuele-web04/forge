@@ -7,7 +7,6 @@ import type { ProviderRuntimeEvent } from "@synara/contracts";
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   generatedImagePathFromRuntimeEvent,
-  isGeneratedImageOnlyMarkdown,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
 } from "./codexGeneratedImages.ts";
@@ -106,26 +105,5 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     const roots = resolveCodexGeneratedImagesRoots(homePath);
     assert.ok(roots.length >= 1 && roots.length <= 2, `expected 1-2 roots, got ${roots.length}`);
     assert.ok(roots.includes(path.join(homePath, "generated_images")));
-  });
-});
-
-describe("isGeneratedImageOnlyMarkdown", () => {
-  it("returns true for messages containing only image references", () => {
-    assert.equal(isGeneratedImageOnlyMarkdown("![Generated image](/tmp/a.png)"), true);
-    assert.equal(
-      isGeneratedImageOnlyMarkdown("![first](/tmp/a.png)\n\n![second](/tmp/b.png)"),
-      true,
-    );
-    assert.equal(isGeneratedImageOnlyMarkdown("![Generated image](<path with spaces.png>)"), true);
-  });
-
-  it("returns false when there is non-image text", () => {
-    assert.equal(isGeneratedImageOnlyMarkdown("Hello\n\n![image](/tmp/a.png)"), false);
-    assert.equal(isGeneratedImageOnlyMarkdown("just text"), false);
-  });
-
-  it("returns false for empty/whitespace-only messages", () => {
-    assert.equal(isGeneratedImageOnlyMarkdown(""), false);
-    assert.equal(isGeneratedImageOnlyMarkdown("   \n  "), false);
   });
 });

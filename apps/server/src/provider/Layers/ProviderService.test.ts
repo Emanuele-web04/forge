@@ -45,6 +45,8 @@ import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  ProviderAdapterProcessError,
+  ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
@@ -117,6 +119,24 @@ function requireReleaseListSessions(release: ReleaseListSessions | undefined): R
 function withoutResumeCursor(session: ProviderSession): ProviderSession {
   const { resumeCursor: _omittedResumeCursor, ...rest } = session;
   return rest;
+}
+
+function makeSession(
+  threadId: ThreadId,
+  provider: ProviderKind,
+  resumeCursor: unknown,
+): ProviderSession {
+  const now = new Date().toISOString();
+  return {
+    provider,
+    status: "ready",
+    runtimeMode: "full-access",
+    threadId,
+    resumeCursor,
+    cwd: process.cwd(),
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function asRuntimePayloadRecord(value: unknown): Record<string, unknown> {
@@ -2571,6 +2591,441 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.provider, "claudeAgent");
         assert.equal(startPayload.cwd, "/tmp/project-claude");
       }
+    }),
+  );
+
+  it.effect("retries a stale Devin cursor once as a fresh start", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-devin-stale-cursor");
+      const staleCursor = { sessionId: "stale-devin-session" };
+      const freshCursor = { sessionId: "fresh-devin-session" };
+      const devin = makeFakeCodexAdapter("devin");
+      let live = false;
+      devin.hasSession.mockImplementation(() => Effect.succeed(live));
+      devin.startSession.mockImplementation((input) => {
+        if (input.resumeCursor !== undefined) {
+          return Effect.fail(
+            new ProviderAdapterProcessError({
+              provider: "devin",
+              threadId,
+              detail: "Failed to load session data",
+              reason: "resume-state-unavailable",
+            }),
+          );
+        }
+        live = true;
+        const now = new Date().toISOString();
+        return Effect.succeed({
+          provider: "devin",
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId,
+          resumeCursor: freshCursor,
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        });
+      });
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "devin"
+            ? Effect.succeed(devin.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["devin"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = Layer.merge(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(NodeServices.layer),
+        ),
+        directoryLayer,
+      );
+
+      const { outcome, binding } = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const outcome = yield* provider.startSessionWithOutcome!(threadId, {
+          provider: "devin",
+          threadId,
+          resumeCursor: staleCursor,
+          cwd: "/tmp/devin-stale-project",
+          runtimeMode: "full-access",
+        });
+        const directory = yield* ProviderSessionDirectory;
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        return { outcome, binding };
+      }).pipe(Effect.provide(layer));
+
+      assert.equal(devin.startSession.mock.calls.length, 2);
+      assert.deepEqual(devin.startSession.mock.calls[0]?.[0].resumeCursor, staleCursor);
+      assert.equal(devin.startSession.mock.calls[1]?.[0].resumeCursor, undefined);
+      assert.equal(devin.hasSession.mock.calls.length, 1);
+      assert.equal(devin.sendTurn.mock.calls.length, 0);
+      assert.deepEqual(outcome.session.resumeCursor, freshCursor);
+      assert.deepEqual(binding?.resumeCursor, freshCursor);
+      assert.equal(outcome.nativeResumeAttempted, true);
+      assert.equal(outcome.nativeResumeSucceeded, false);
+      assert.equal(outcome.priorTranscriptBootstrapPending, true);
+      assert.equal(
+        (binding?.runtimePayload as Record<string, unknown> | undefined)
+          ?.priorTranscriptBootstrapPending,
+        true,
+      );
+      const { resumeCursor: _cursor, ...resumedInput } = devin.startSession.mock.calls[0]![0];
+      assert.deepEqual(devin.startSession.mock.calls[1]![0], resumedInput);
+    }),
+  );
+
+  it.effect("leaves stale binding unchanged when Devin fresh retry fails", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-devin-fresh-retry-fails");
+      const staleCursor = { sessionId: "stale-retry-failure" };
+      const freshFailure = new ProviderAdapterProcessError({
+        provider: "devin",
+        threadId,
+        detail: "Failed to load session data",
+        reason: "resume-state-unavailable",
+      });
+      const devin = makeFakeCodexAdapter("devin");
+      let live = false;
+      devin.hasSession.mockImplementation(() => Effect.succeed(live));
+      devin.startSession.mockImplementation((input) =>
+        input.resumeCursor !== undefined
+          ? Effect.fail(
+              new ProviderAdapterProcessError({
+                provider: "devin",
+                threadId,
+                detail: "Failed to load session data",
+                reason: "resume-state-unavailable",
+              }),
+            )
+          : Effect.fail(freshFailure),
+      );
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: () => Effect.succeed(devin.adapter),
+        listProviders: () => Effect.succeed(["devin"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = Layer.merge(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(NodeServices.layer),
+        ),
+        directoryLayer,
+      );
+
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        yield* directory.upsert({
+          threadId,
+          provider: "devin",
+          runtimeMode: "full-access",
+          status: "stopped",
+          resumeCursor: staleCursor,
+        });
+      }).pipe(Effect.provide(directoryLayer));
+
+      const { exit, binding } = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const exit = yield* Effect.exit(
+          provider.startSession(threadId, {
+            provider: "devin",
+            threadId,
+            resumeCursor: staleCursor,
+            runtimeMode: "full-access",
+          }),
+        );
+        const directory = yield* ProviderSessionDirectory;
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        return { exit, binding };
+      }).pipe(Effect.provide(layer));
+
+      assert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        assert.equal(Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined), freshFailure);
+      }
+      assert.deepEqual(
+        devin.startSession.mock.calls.map(([input]) => input.resumeCursor),
+        [staleCursor, undefined],
+      );
+      assert.equal(devin.sendTurn.mock.calls.length, 0);
+      assert.deepEqual(binding?.resumeCursor, staleCursor);
+      assert.equal(live, false);
+      assert.equal(yield* devin.hasSession(threadId), false);
+    }),
+  );
+
+  it.effect("fails closed for non-stale Devin startup errors", () =>
+    Effect.gen(function* () {
+      const cases = [
+        { provider: "devin" as const, detail: "Failed to load session data" },
+        {
+          provider: "devin" as const,
+          detail: "Authentication failed: failed to load session data",
+        },
+        { provider: "devin" as const, detail: "Authentication failed while loading session" },
+        { provider: "devin" as const, detail: "Session startup timed out" },
+        { provider: "devin" as const, detail: "Failed to load user data" },
+        { provider: "devin" as const, detail: "Transport validation rejected session data" },
+        { provider: "codex" as const, detail: "Failed to load session data" },
+      ];
+
+      for (const [index, testCase] of cases.entries()) {
+        const threadId = asThreadId(`thread-devin-fail-closed-${index}`);
+        const adapter = makeFakeCodexAdapter(testCase.provider);
+        const failure = new ProviderAdapterProcessError({
+          provider: testCase.provider,
+          threadId,
+          detail: testCase.detail,
+        });
+        adapter.startSession.mockImplementation(() => Effect.fail(failure));
+        const registry: typeof ProviderAdapterRegistry.Service = {
+          getByProvider: (provider) =>
+            provider === testCase.provider
+              ? Effect.succeed(adapter.adapter)
+              : Effect.fail(new ProviderUnsupportedError({ provider })),
+          listProviders: () => Effect.succeed([testCase.provider]),
+        };
+        const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+          Layer.provide(SqlitePersistenceMemory),
+        );
+        const directoryLayer = ProviderSessionDirectoryLive.pipe(
+          Layer.provide(runtimeRepositoryLayer),
+        );
+        const layer = makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(NodeServices.layer),
+        );
+
+        const exit = yield* Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          return yield* Effect.exit(
+            provider.startSession(threadId, {
+              provider: testCase.provider,
+              threadId,
+              resumeCursor: { sessionId: "stale" },
+              runtimeMode: "full-access",
+            }),
+          );
+        }).pipe(Effect.provide(layer));
+
+        assert.equal(Exit.isFailure(exit), true);
+        if (Exit.isFailure(exit)) {
+          assert.equal(Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined), failure);
+        }
+        assert.equal(adapter.startSession.mock.calls.length, 1);
+        assert.equal(adapter.hasSession.mock.calls.length, 0);
+      }
+    }),
+  );
+
+  it.effect("does not retry the exact stale text from another error class", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-devin-wrong-error-class");
+      const devin = makeFakeCodexAdapter("devin");
+      const failure = new ProviderAdapterRequestError({
+        provider: "devin",
+        method: "session.start",
+        detail: "Failed to load session data",
+      });
+      devin.startSession.mockImplementation(() => Effect.fail(failure));
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: () => Effect.succeed(devin.adapter),
+        listProviders: () => Effect.succeed(["devin"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(NodeServices.layer),
+      );
+
+      const exit = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* Effect.exit(
+          provider.startSession(threadId, {
+            provider: "devin",
+            threadId,
+            resumeCursor: { sessionId: "stale" },
+            runtimeMode: "full-access",
+          }),
+        );
+      }).pipe(Effect.provide(layer));
+
+      assert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        assert.equal(Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined), failure);
+      }
+      assert.equal(devin.startSession.mock.calls.length, 1);
+      assert.equal(devin.hasSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("does not retry stale Devin load failure when startup left a live session", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-devin-stale-live");
+      const devin = makeFakeCodexAdapter("devin");
+      const failure = new ProviderAdapterProcessError({
+        provider: "devin",
+        threadId,
+        detail: "Failed to load session data",
+        reason: "resume-state-unavailable",
+      });
+      devin.startSession.mockImplementation(() => Effect.fail(failure));
+      devin.hasSession.mockImplementation(() => Effect.succeed(true));
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: () => Effect.succeed(devin.adapter),
+        listProviders: () => Effect.succeed(["devin"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(NodeServices.layer),
+      );
+
+      const exit = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* Effect.exit(
+          provider.startSession(threadId, {
+            provider: "devin",
+            threadId,
+            resumeCursor: { sessionId: "stale" },
+            runtimeMode: "full-access",
+          }),
+        );
+      }).pipe(Effect.provide(layer));
+
+      assert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        assert.equal(Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined), failure);
+      }
+      assert.equal(devin.startSession.mock.calls.length, 1);
+      assert.equal(devin.hasSession.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("does not silently replace stale history during concurrent prompt dispatch", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-devin-stale-concurrent");
+      const staleCursor = { sessionId: "stale-concurrent" };
+      const freshCursor = { sessionId: "fresh-concurrent" };
+      const staleStarted = yield* Deferred.make<void>();
+      const releaseStale = yield* Deferred.make<void>();
+      const devin = makeFakeCodexAdapter("devin");
+      let live = false;
+      const liveSession = makeSession(threadId, "devin", freshCursor);
+      const adoptedSessions: ProviderSession[] = [];
+      devin.hasSession.mockImplementation(() => Effect.succeed(live));
+      devin.sendTurn.mockImplementation((input) =>
+        live
+          ? Effect.sync(() => {
+              adoptedSessions.push(liveSession);
+              return { threadId: input.threadId, turnId: asTurnId(`turn-${input.input}`) };
+            })
+          : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: "devin", threadId })),
+      );
+      devin.listSessions.mockImplementation(() => Effect.succeed(live ? [liveSession] : []));
+      devin.startSession.mockImplementation((input) => {
+        if (input.resumeCursor !== undefined) {
+          return Deferred.succeed(staleStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseStale)),
+            Effect.andThen(
+              Effect.fail(
+                new ProviderAdapterProcessError({
+                  provider: "devin",
+                  threadId,
+                  detail: "Failed to load session data",
+                  reason: "resume-state-unavailable",
+                }),
+              ),
+            ),
+          );
+        }
+        live = true;
+        return Effect.succeed(liveSession);
+      });
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: () => Effect.succeed(devin.adapter),
+        listProviders: () => Effect.succeed(["devin"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = Layer.merge(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(NodeServices.layer),
+        ),
+        directoryLayer,
+      );
+
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        yield* directory.upsert({
+          threadId,
+          provider: "devin",
+          runtimeMode: "full-access",
+          status: "stopped",
+          resumeCursor: staleCursor,
+          runtimePayload: { cwd: "/tmp/devin-concurrent" },
+        });
+      }).pipe(Effect.provide(directoryLayer));
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const first = yield* provider
+          .sendTurn({ threadId, input: "first", attachments: [] })
+          .pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(staleStarted);
+        const second = yield* provider
+          .sendTurn({ threadId, input: "second", attachments: [] })
+          .pipe(Effect.exit, Effect.forkChild);
+        assert.equal(devin.sendTurn.mock.calls.length, 0);
+        yield* Deferred.succeed(releaseStale, undefined);
+        assert.equal(Exit.isFailure(yield* Fiber.join(first)), true);
+        assert.equal(Exit.isFailure(yield* Fiber.join(second)), true);
+      }).pipe(Effect.provide(layer));
+      const binding = yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        return Option.getOrUndefined(yield* directory.getBinding(threadId));
+      }).pipe(Effect.provide(directoryLayer));
+
+      assert.deepEqual(
+        devin.startSession.mock.calls.map(([input]) => input.resumeCursor),
+        [staleCursor, staleCursor],
+      );
+      assert.equal(devin.sendTurn.mock.calls.length, 0);
+      assert.deepEqual(adoptedSessions, []);
+      assert.deepEqual(binding?.resumeCursor, staleCursor);
+      assert.equal(devin.hasSession.mock.calls.length >= 2, true);
     }),
   );
 
