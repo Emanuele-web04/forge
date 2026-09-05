@@ -11,6 +11,7 @@ import {
   type ProviderModelDescriptor,
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
+import { getClaudeContextWindowSuffix } from "@synara/shared/model";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -97,7 +98,7 @@ type ProviderOptionValidation =
   | { readonly kind: "non-empty-string" };
 
 interface ProviderTargetOptionRuleSpec extends Omit<AgentGatewayTargetOptionRule, "key"> {
-  readonly advertised: boolean;
+  readonly advertised: boolean | "when-discovered";
   readonly validation: ProviderOptionValidation;
 }
 
@@ -130,7 +131,7 @@ function providerOptionRule(
   allowedValues: ReadonlyArray<AgentGatewayTargetOptionValue>,
   allowedValuesSource: AgentGatewayTargetOptionRule["allowedValuesSource"] = "provider-contract",
   options?: {
-    readonly advertised?: boolean;
+    readonly advertised?: boolean | "when-discovered";
     readonly validation?: ProviderOptionValidation;
     readonly allowsCustomValue?: boolean;
   },
@@ -199,7 +200,7 @@ const PROVIDER_TARGET_OPTION_RULES = {
         validation: { kind: "boolean-capability", capability: "supportsThinkingToggle" },
       }),
       autoCompactWindow: providerOptionRule("string", [], "model-discovery", {
-        advertised: false,
+        advertised: "when-discovered",
         validation: { kind: "context-window" },
       }),
       contextWindow: providerOptionRule("string", [], "model-discovery", {
@@ -317,7 +318,7 @@ function providerTargetOptionRules(
   provider: ProviderKind,
 ): ReadonlyArray<AgentGatewayTargetOptionRule> {
   return Object.entries(providerTargetOptionConfig(provider).options)
-    .filter(([, option]) => option.advertised)
+    .filter(([, option]) => option.advertised === true)
     .map(([key, { valueType, allowedValues, allowedValuesSource, allowsCustomValue }]) => ({
       key,
       valueType,
@@ -383,6 +384,15 @@ function modelTargetOptionRules(
   }
 
   for (const descriptor of model.optionDescriptors ?? []) {
+    const spec = providerOptionRuleSpec(provider, descriptor.id);
+    if (spec?.advertised === "when-discovered") {
+      rules.push({
+        key: spec.key,
+        valueType: spec.valueType,
+        allowedValues: [],
+        allowedValuesSource: "model-discovery",
+      });
+    }
     const rule = rules.find((candidate) => candidate.key === descriptor.id);
     if (!rule) continue;
     if (descriptor.type === "select") {
@@ -594,7 +604,13 @@ function validateKnownProviderOption(
     case "context-window": {
       const available = descriptor.contextWindowOptions?.map((entry) => entry.value) ?? [];
       if (available.includes(String(value))) return;
-      validateDiscoveredDescriptorOption(target, descriptor, rule.key, value);
+      const optionId =
+        target.provider === "claudeAgent" &&
+        rule.key === "contextWindow" &&
+        descriptor.optionDescriptors?.some((option) => option.id === "autoCompactWindow")
+          ? "autoCompactWindow"
+          : rule.key;
+      validateDiscoveredDescriptorOption(target, descriptor, optionId, value);
       return;
     }
     case "non-empty-string": {
@@ -701,6 +717,21 @@ export function resolveAgentGatewayTarget(input: {
     } catch (error) {
       if (error instanceof AgentGatewayTargetError) return yield* Effect.fail(error);
       throw error;
+    }
+    // Explicit Claude windows must reach the runtime with the same concrete model
+    // whose capabilities were discovered; custom SDK aliases have no static caps.
+    if (
+      input.target.provider === "claudeAgent" &&
+      (input.target.options?.autoCompactWindow !== undefined ||
+        input.target.options?.contextWindow !== undefined) &&
+      descriptor?.resolvedModel
+    ) {
+      const suffix =
+        getClaudeContextWindowSuffix(input.target.model) === "1m" &&
+        getClaudeContextWindowSuffix(descriptor.resolvedModel) === null
+          ? "[1m]"
+          : "";
+      return { ...input.target, model: `${descriptor.resolvedModel}${suffix}` };
     }
     return input.target;
   });

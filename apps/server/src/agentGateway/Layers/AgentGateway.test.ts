@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { ModelInfo, Options as ClaudeQueryOptions } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AutomationCreateInput,
   AutomationDefinition,
@@ -38,6 +39,12 @@ import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import {
+  ProjectionThread,
+  ProjectionThreadRepository,
+} from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import {
@@ -51,6 +58,10 @@ import type {
 } from "../../diagnostics/Services/ThreadDiagnosticsQuery.ts";
 import type { ProviderBlockingDeliveryEvidence } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
+import { ClaudeAdapter } from "../../provider/Services/ClaudeAdapter.ts";
+import { makeClaudeAdapterLive } from "../../provider/Layers/ClaudeAdapter.ts";
+import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -235,6 +246,7 @@ function makeHarnessLayer(
   threads: ReadonlyArray<OrchestrationThreadShell>,
   automationDefinitions: ReadonlyArray<AutomationDefinition> = [],
   options: {
+    readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
     readonly failDispatch?: (command: OrchestrationCommand) => boolean;
     readonly dispatchDelayMs?: number;
@@ -804,43 +816,45 @@ function makeHarnessLayer(
   } as unknown as (typeof GitManager)["Service"]);
 
   const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
-    listModels: ({ provider }: { provider: string }) => {
-      const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
-        codex: [
-          { slug: "gpt-5.5", name: "GPT-5.5" },
-          {
-            slug: "gpt-5.6-terra",
-            name: "GPT-5.6 Terra",
-            supportedReasoningEfforts: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-            ],
-          },
-        ],
-        claudeAgent: [
-          {
-            slug: "claude-sonnet-5",
-            name: "Claude Sonnet 5",
-          },
-        ],
-        cursor: [{ slug: "auto", name: "Auto" }],
-        antigravity: [
-          {
-            slug: "Gemini 3.5 Flash",
-            name: "Gemini 3.5 Flash",
-            supportedReasoningEfforts: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-            ],
-          },
-        ],
-        grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
-        droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
-        opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
-        pi: [{ slug: "test-pi", name: "Test Pi" }],
-      };
-      return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
-    },
+    listModels:
+      options.listModels ??
+      (({ provider }: { provider: string }) => {
+        const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
+          codex: [
+            { slug: "gpt-5.5", name: "GPT-5.5" },
+            {
+              slug: "gpt-5.6-terra",
+              name: "GPT-5.6 Terra",
+              supportedReasoningEfforts: [
+                { value: "low", label: "Low" },
+                { value: "high", label: "High" },
+              ],
+            },
+          ],
+          claudeAgent: [
+            {
+              slug: "claude-sonnet-5",
+              name: "Claude Sonnet 5",
+            },
+          ],
+          cursor: [{ slug: "auto", name: "Auto" }],
+          antigravity: [
+            {
+              slug: "Gemini 3.5 Flash",
+              name: "Gemini 3.5 Flash",
+              supportedReasoningEfforts: [
+                { value: "low", label: "Low" },
+                { value: "high", label: "High" },
+              ],
+            },
+          ],
+          grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
+          droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
+          opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
+          pi: [{ slug: "test-pi", name: "Test Pi" }],
+        };
+        return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
+      }),
   } as unknown as (typeof ProviderDiscoveryService)["Service"]);
 
   const providerKinds: ReadonlyArray<ProviderKind> = [
@@ -1253,12 +1267,322 @@ function toolErrorText(result: Record<string, unknown> | undefined): string {
   return content[0]?.text ?? "";
 }
 
+function makeClaudeGatewayRuntime(models: ModelInfo[]) {
+  const queries: Array<{
+    options: ClaudeQueryOptions;
+    modelChanges: Array<string | undefined>;
+    settingsChanges: Array<Record<string, unknown>>;
+  }> = [];
+  const layer = makeClaudeAdapterLive({
+    createQuery: ({ options }) => {
+      const captured = {
+        options,
+        modelChanges: [] as Array<string | undefined>,
+        settingsChanges: [] as Array<Record<string, unknown>>,
+      };
+      queries.push(captured);
+      const closed = Promise.withResolvers<void>();
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            await closed.promise;
+            return { done: true as const, value: undefined };
+          },
+        }),
+        close: () => closed.resolve(),
+        interrupt: async () => {},
+        stopTask: async () => {},
+        backgroundTasks: async () => false,
+        setModel: async (model) => {
+          captured.modelChanges.push(model);
+        },
+        setPermissionMode: async () => {},
+        setMaxThinkingTokens: async () => {},
+        applyFlagSettings: async (settings) => {
+          captured.settingsChanges.push(settings);
+        },
+        getContextUsage: async () => {
+          throw new Error("No live context usage in this test");
+        },
+        supportedCommands: async () => [],
+        supportedModels: async () => models,
+        supportedAgents: async () => [],
+      };
+    },
+  }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-gateway-test", "/tmp")),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return {
+    queries,
+    layer: ProviderDiscoveryServiceLive.pipe(
+      Layer.provideMerge(
+        Layer.effect(
+          ProviderAdapterRegistry,
+          Effect.gen(function* () {
+            const adapter = yield* ClaudeAdapter;
+            return {
+              getByProvider: () => Effect.succeed(adapter),
+              listProviders: () => Effect.succeed(["claudeAgent"] as const),
+            };
+          }),
+        ),
+      ),
+      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provideMerge(layer),
+    ),
+  };
+}
+
 describe("AgentGateway", () => {
   const baseThreads = [
     makeThreadShell("thread-parent"),
     makeThreadShell("thread-child", { parentThreadId: ThreadId.makeUnsafe("thread-parent") }),
     makeThreadShell("thread-archived", { archivedAt: NOW }),
   ];
+
+  for (const model of [
+    { value: "sonnet" },
+    { value: "fable" },
+    { value: "claude-sonnet-5" },
+    { value: "claude-fable-5" },
+    { value: "claude-fable-5-1[1m]" },
+    { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5" },
+    { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
+    { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
+    { value: "team-model", resolvedModel: "claude-fable-5-1" },
+  ]) {
+    it.effect(
+      `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
+      () => {
+        const runtime = makeClaudeGatewayRuntime([
+          { ...model, displayName: model.value, description: "SDK-discovered model" },
+        ]);
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const discovery = yield* ProviderDiscoveryService;
+          const threads = yield* ProjectionThreadRepository;
+          const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+            listModels: (input) =>
+              input.provider === "claudeAgent"
+                ? discovery.listModels(input)
+                : Effect.succeed({ models: [], source: "test" }),
+          });
+          yield* Effect.gen(function* () {
+            const harness = yield* makeHarness;
+            const capabilities = toolResultJson(
+              (yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_capabilities",
+                args: {},
+              })).result,
+            );
+            const construction = (
+              capabilities.targetConstruction as Record<
+                string,
+                {
+                  providerOptions: Array<{ key: string }>;
+                  optionsByModel: Record<string, Array<{ key: string; allowedValues: unknown[] }>>;
+                }
+              >
+            ).claudeAgent!;
+            assert.notInclude(
+              construction.providerOptions.map((rule) => rule.key),
+              "autoCompactWindow",
+            );
+            assert.deepEqual(
+              construction.optionsByModel[model.value]?.find(
+                (rule) => rule.key === "autoCompactWindow",
+              )?.allowedValues,
+              ["auto", "200k", "1m"],
+            );
+
+            // A rejected window must fail before creating a thread or starting a turn.
+            const invalid = yield* harness.callTool({
+              token: "token-parent",
+              name: "synara_create_thread",
+              args: {
+                requestId: "invalid-window",
+                prompt: "work",
+                target: {
+                  provider: "claudeAgent",
+                  model: model.value,
+                  options: { autoCompactWindow: "2m" },
+                },
+              },
+            });
+            assert.isTrue(isToolError(invalid.result));
+            assert.lengthOf(harness.dispatched, 0);
+
+            for (const options of [
+              undefined,
+              { autoCompactWindow: "auto" },
+              { autoCompactWindow: "200k" },
+              { autoCompactWindow: "1m" },
+              { contextWindow: "1m" },
+            ]) {
+              const parent = makeThreadDetail(baseThreads[0]!);
+              harness.setThreadDetail({
+                ...parent,
+                latestTurn: {
+                  ...parent.latestTurn!,
+                  turnId: TurnId.makeUnsafe(`parent-${JSON.stringify(options)}`),
+                },
+              });
+              const response = yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_create_thread",
+                args: {
+                  requestId: `window-${JSON.stringify(options)}`,
+                  prompt: "work",
+                  target: {
+                    provider: "claudeAgent",
+                    model: model.value,
+                    ...(options ? { options } : {}),
+                  },
+                },
+              });
+              assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+              const creates = harness.dispatched.filter(
+                (command) => command.type === "thread.create",
+              );
+              const turns = harness.dispatched.filter(
+                (command) => command.type === "thread.turn.start",
+              );
+              const create = creates.at(-1)!;
+              const turn = turns.at(-1)!;
+              assert.deepEqual(create.modelSelection.options, options);
+              assert.deepEqual(turn.modelSelection, create.modelSelection);
+              yield* threads.upsert(
+                Schema.decodeUnknownSync(ProjectionThread)({
+                  ...makeThreadDetail(makeThreadShell(create.threadId)),
+                  threadId: create.threadId,
+                  modelSelection: create.modelSelection,
+                  latestTurnId: null,
+                  notes: null,
+                  goal: null,
+                  pendingApprovalCount: 0,
+                  pendingUserInputCount: 0,
+                  hasActionableProposedPlan: 0,
+                }),
+              );
+              const saved = Option.getOrThrow(
+                yield* threads.getById({ threadId: create.threadId }),
+              );
+              assert.deepEqual(saved.modelSelection, create.modelSelection);
+              yield* adapter.startSession({
+                threadId: create.threadId,
+                provider: "claudeAgent",
+                runtimeMode: "full-access",
+                modelSelection: saved.modelSelection,
+              });
+              yield* adapter.sendTurn({
+                threadId: create.threadId,
+                input: turn.message.text,
+                modelSelection: turn.modelSelection,
+              });
+              const query = runtime.queries.at(-1)!;
+              const window = options?.autoCompactWindow ?? options?.contextWindow;
+              const expectedModel =
+                options && model.resolvedModel
+                  ? `${model.resolvedModel}${model.value.endsWith("[1m]") ? "[1m]" : ""}`
+                  : model.value;
+              assert.equal(
+                query.options.model,
+                window === "1m" && !expectedModel.endsWith("[1m]")
+                  ? `${expectedModel}[1m]`
+                  : expectedModel,
+              );
+              const settings = query.options.settings as { autoCompactWindow?: number };
+              assert.equal(
+                settings.autoCompactWindow,
+                window === "1m" ? 1_000_000 : window === "200k" ? 200_000 : undefined,
+              );
+              assert.deepEqual(query.modelChanges, []);
+              assert.deepEqual(query.settingsChanges, []);
+              yield* adapter.stopSession(create.threadId);
+            }
+          }).pipe(Effect.provide(gatewayLayer));
+        }).pipe(
+          Effect.provide(
+            Layer.merge(
+              runtime.layer,
+              ProjectionThreadRepositoryLive.pipe(
+                Layer.provide(SqlitePersistenceMemory),
+                Layer.provide(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  for (const model of [
+    { value: "claude-haiku-4-5" },
+    { value: "claude-opus-4-5" },
+    { value: "unknown-model" },
+    { value: "sonnet", resolvedModel: "claude-haiku-4-5" },
+  ]) {
+    it.effect(
+      `does not advertise or accept unsupported discovered Claude windows: ${model.value}`,
+      () => {
+        const runtime = makeClaudeGatewayRuntime([
+          { ...model, displayName: model.value, description: "SDK-discovered model" },
+        ]);
+        return Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+            listModels: (input) =>
+              input.provider === "claudeAgent"
+                ? discovery.listModels(input)
+                : Effect.succeed({ models: [] }),
+          });
+          yield* Effect.gen(function* () {
+            const harness = yield* makeHarness;
+            const capabilities = toolResultJson(
+              (yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_capabilities",
+                args: {},
+              })).result,
+            );
+            const construction = (
+              capabilities.targetConstruction as Record<
+                string,
+                {
+                  optionsByModel: Record<string, Array<{ key: string }>>;
+                }
+              >
+            ).claudeAgent!;
+            assert.notInclude(
+              construction.optionsByModel[model.value]?.map((rule) => rule.key),
+              "autoCompactWindow",
+            );
+            for (const key of ["autoCompactWindow", "contextWindow"]) {
+              const response = yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_create_thread",
+                args: {
+                  requestId: key,
+                  prompt: "work",
+                  target: {
+                    provider: "claudeAgent",
+                    model: model.value,
+                    options: { [key]: "1m" },
+                  },
+                },
+              });
+              assert.isTrue(isToolError(response.result));
+              assert.include(toolErrorText(response.result), "model_option_unavailable");
+            }
+            assert.lengthOf(harness.dispatched, 0);
+            assert.lengthOf(harness.worktreeCreates, 0);
+          }).pipe(Effect.provide(gatewayLayer));
+        }).pipe(Effect.provide(runtime.layer));
+      },
+    );
+  }
 
   it.effect("rejects requests without a valid bearer token", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
