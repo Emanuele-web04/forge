@@ -76,7 +76,8 @@ import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
-import { fetchOpenRouterModels } from "../OpenRouterDiscovery.ts";
+import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -1239,6 +1240,32 @@ export async function createPiModelRuntime(
   });
 }
 
+export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<void> {
+  // Explicit extension catalogs and custom endpoints own their model metadata.
+  if (
+    process.env.PI_OFFLINE !== undefined ||
+    runtime.getRegisteredProviderIds().includes("openrouter") ||
+    !runtime.hasConfiguredAuth("openrouter") ||
+    runtime.getProvider("openrouter")?.baseUrl !== OPENROUTER_BASE_URL
+  )
+    return;
+  const live = await fetchOpenRouterModels();
+  if (live.length === 0) return;
+  const base = openrouterProvider();
+  const models = new Map(base.getModels().map((model) => [model.id, model]));
+  for (const model of live) models.set(model.id, model);
+  // Native providers remain below models.json, preserving user model overrides.
+  runtime.registerNativeProvider({
+    ...base,
+    getModels: () => [...models.values()],
+    // Reuse the SDK store so a later session keeps discovered capacities offline.
+    refreshModels: async ({ store }) => {
+      await store.write({ models: live, lastModified: Date.now(), checkedAt: Date.now() });
+    },
+  });
+  await runtime.refresh({ allowNetwork: false });
+}
+
 function modelRegistryFacade(
   modelRuntime: ModelRuntime,
   piSdk: Pick<PiCodingAgentModule, "ModelRegistry">,
@@ -2112,6 +2139,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           modelRuntime,
         });
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
+        const requested = parseModelReference(input.modelId);
+        if (
+          requested?.provider === "openrouter" &&
+          !registry.find(requested.provider, requested.id)
+        ) {
+          await refreshPiOpenRouterModels(services.modelRuntime);
+        }
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
           throw new Error(
@@ -2756,6 +2790,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             agentDir,
             modelRuntime,
           });
+          await refreshPiOpenRouterModels(services.modelRuntime);
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
           const models = getPiDiscoverableModels(registry).flatMap((model) => {
@@ -2766,27 +2801,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             return descriptor ? [descriptor] : [];
           });
 
-          // Supplement with OpenRouter models fetched directly from their API.
-          // This ensures newly released OpenRouter models appear in the picker
-          // even when the Pi extension registry hasn't been updated yet.
-          const existingSlugs = new Set(models.map((m) => m.slug));
-          const openRouterModels = (await fetchOpenRouterModels()).filter(
-            (orModel) => !existingSlugs.has(orModel.slug),
-          );
-
-          const mergedModels =
-            openRouterModels.length > 0 ? [...models, ...openRouterModels] : models;
-
           return {
-            models: mergedModels,
-            source:
-              extensionCount > 0 && openRouterModels.length > 0
-                ? "pi.sdk+extensions+openrouter"
-                : extensionCount > 0
-                  ? "pi.sdk+extensions"
-                  : openRouterModels.length > 0
-                    ? "pi.sdk+openrouter"
-                    : "pi.sdk",
+            models,
+            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
             cached: false,
           } satisfies ProviderListModelsResult;
         },
