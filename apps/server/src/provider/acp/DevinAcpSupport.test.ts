@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule, Stream } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import * as OfficialAcp from "@agentclientprotocol/sdk";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AcpSessionRuntime,
   normalizeAcpIncomingJsonMessages,
+  runAcpChildStderrTap,
   type AcpSessionRuntimeOptions,
   type AcpSessionRuntimeShape,
 } from "./AcpSessionRuntime.ts";
@@ -142,6 +143,42 @@ function getOutputRequest(
 function requestArguments(message: Record<string, unknown>): Record<string, unknown> {
   return ((message.params as Record<string, unknown>).arguments ?? {}) as Record<string, unknown>;
 }
+
+describe("runAcpChildStderrTap", () => {
+  const tapStream = (chunks: ReadonlyArray<Uint8Array>) =>
+    Stream.fromIterable(chunks).pipe(
+      Stream.schedule(Schedule.spaced(1)),
+    ) as Stream.Stream<Uint8Array>;
+
+  it("delivers complete lines across chunk boundaries and drains without a tap", async () => {
+    const lines: Array<string> = [];
+    await Effect.runPromise(
+      runAcpChildStderrTap(
+        tapStream([
+          textEncoder.encode("2026-09-02T04:02:26Z  WARN affogato::stall_watch: waited_secs=30"),
+          textEncoder.encode(" what=emit(Subagent) to agent event channel\nnext line\n"),
+          textEncoder.encode("trailing without newline"),
+        ]),
+        (line) => lines.push(line),
+      ),
+    );
+    expect(lines).toEqual([
+      "2026-09-02T04:02:26Z  WARN affogato::stall_watch: waited_secs=30 what=emit(Subagent) to agent event channel",
+      "next line",
+    ]);
+  });
+
+  it("keeps draining when the tap throws", async () => {
+    const lines: Array<string> = [];
+    await Effect.runPromise(
+      runAcpChildStderrTap(tapStream([textEncoder.encode("first\nsecond\n")]), (line) => {
+        if (line === "first") throw new Error("tap exploded");
+        lines.push(line);
+      }),
+    );
+    expect(lines).toEqual(["second"]);
+  });
+});
 
 describe("AcpSessionRuntime Devin incoming byte transport normalization", () => {
   it("normalizes one get_output request split across byte chunks", async () => {

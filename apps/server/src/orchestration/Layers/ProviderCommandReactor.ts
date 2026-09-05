@@ -4325,9 +4325,20 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
-    processThreadSessionStop({
-      threadId: event.payload.threadId,
-      createdAt: event.payload.createdAt,
+    Effect.gen(function* () {
+      // Explicit stop must pause even in a recovery gap with no live turn left
+      // to emit a cancellation. Internal session exits do not use this path.
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (thread) {
+        yield* pauseActiveThreadGoal({
+          threadId: thread.id,
+          expectedGoalStartedAt: thread.goalStartedAt ?? null,
+        });
+      }
+      yield* processThreadSessionStop({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.createdAt,
+      });
     });
 
   const surfaceTimedOutTurnStart = Effect.fnUntraced(function* (
