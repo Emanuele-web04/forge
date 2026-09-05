@@ -22,14 +22,23 @@ it("watches only one parent, coalesces a burst at 100ms, and closes on cancellat
   workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "synara-watch-lifecycle-"));
   await fs.writeFile(path.join(workspaceRoot, "target.ts"), "contents");
   let notify: ((kind: string, filename: string | null) => void) | undefined;
-  const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+  class TestWatcher extends EventEmitter implements FSWatcher {
+    close = vi.fn();
+    ref(): this {
+      return this;
+    }
+    unref(): this {
+      return this;
+    }
+  }
+  const watcher = new TestWatcher();
   vi.mocked(watch).mockImplementation(((
     _directory: string,
     _options: unknown,
     callback: typeof notify,
   ) => {
     notify = callback;
-    return watcher as FSWatcher;
+    return watcher;
   }) as typeof watch);
   vi.useFakeTimers();
   const events: unknown[] = [];
