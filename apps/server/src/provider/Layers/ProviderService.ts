@@ -98,7 +98,7 @@ const isStaleDevinSessionLoadError = (
 ): error is ProviderAdapterProcessError =>
   provider === "devin" &&
   error instanceof ProviderAdapterProcessError &&
-  error.detail.toLowerCase().includes("failed to load session data");
+  error.reason === "resume-state-unavailable";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -1520,10 +1520,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
-            const { session: resumed } = yield* startAdapterWithStaleDevinFallback(
-              adapter,
-              resumeStartInput,
-            );
+            // Prompt construction has already happened here. Only explicit startup
+            // may replace lost native history and request a transcript recap.
+            const resumed = yield* adapter.startSession(resumeStartInput);
             if (resumed.provider !== adapter.provider) {
               return yield* toValidationError(
                 input.operation,
@@ -1850,6 +1849,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : false;
               const priorTranscriptBootstrapPending =
                 persistedPriorTranscriptBootstrapPending ||
+                staleDevinFallbackOccurred ||
                 (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
                   !nativeResumeSucceeded);
 

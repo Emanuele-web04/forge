@@ -2608,7 +2608,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
             new ProviderAdapterProcessError({
               provider: "devin",
               threadId,
-              detail: "FAILED TO LOAD SESSION DATA for persisted cursor",
+              detail: "Failed to load session data",
+              reason: "resume-state-unavailable",
             }),
           );
         }
@@ -2653,6 +2654,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: "devin",
           threadId,
           resumeCursor: staleCursor,
+          cwd: "/tmp/devin-stale-project",
           runtimeMode: "full-access",
         });
         const directory = yield* ProviderSessionDirectory;
@@ -2669,6 +2671,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(binding?.resumeCursor, freshCursor);
       assert.equal(outcome.nativeResumeAttempted, true);
       assert.equal(outcome.nativeResumeSucceeded, false);
+      assert.equal(outcome.priorTranscriptBootstrapPending, true);
+      assert.equal(binding?.runtimePayload?.priorTranscriptBootstrapPending, true);
+      const { resumeCursor: _cursor, ...resumedInput } = devin.startSession.mock.calls[0]![0];
+      assert.deepEqual(devin.startSession.mock.calls[1]![0], resumedInput);
     }),
   );
 
@@ -2679,7 +2685,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const freshFailure = new ProviderAdapterProcessError({
         provider: "devin",
         threadId,
-        detail: "Fresh Devin startup failed",
+        detail: "Failed to load session data",
+        reason: "resume-state-unavailable",
       });
       const devin = makeFakeCodexAdapter("devin");
       let live = false;
@@ -2691,6 +2698,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
                 provider: "devin",
                 threadId,
                 detail: "Failed to load session data",
+                reason: "resume-state-unavailable",
               }),
             )
           : Effect.fail(freshFailure),
@@ -2728,7 +2736,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const { exit, binding } = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
         const exit = yield* Effect.exit(
-          provider.sendTurn({ threadId, input: "must not dispatch", attachments: [] }),
+          provider.startSession(threadId, {
+            provider: "devin",
+            threadId,
+            resumeCursor: staleCursor,
+            runtimeMode: "full-access",
+          }),
         );
         const directory = yield* ProviderSessionDirectory;
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
@@ -2753,6 +2766,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("fails closed for non-stale Devin startup errors", () =>
     Effect.gen(function* () {
       const cases = [
+        { provider: "devin" as const, detail: "Failed to load session data" },
+        {
+          provider: "devin" as const,
+          detail: "Authentication failed: failed to load session data",
+        },
         { provider: "devin" as const, detail: "Authentication failed while loading session" },
         { provider: "devin" as const, detail: "Session startup timed out" },
         { provider: "devin" as const, detail: "Failed to load user data" },
@@ -2865,6 +2883,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: "devin",
         threadId,
         detail: "Failed to load session data",
+        reason: "resume-state-unavailable",
       });
       devin.startSession.mockImplementation(() => Effect.fail(failure));
       devin.hasSession.mockImplementation(() => Effect.succeed(true));
@@ -2905,7 +2924,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("serializes concurrent stale Devin recovery before sending turns", () =>
+  it.effect("does not silently replace stale history during concurrent prompt dispatch", () =>
     Effect.gen(function* () {
       const threadId = asThreadId("thread-devin-stale-concurrent");
       const staleCursor = { sessionId: "stale-concurrent" };
@@ -2936,6 +2955,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
                   provider: "devin",
                   threadId,
                   detail: "Failed to load session data",
+                  reason: "resume-state-unavailable",
                 }),
               ),
             ),
@@ -2979,15 +2999,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const provider = yield* ProviderService;
         const first = yield* provider
           .sendTurn({ threadId, input: "first", attachments: [] })
-          .pipe(Effect.forkChild);
+          .pipe(Effect.exit, Effect.forkChild);
         yield* Deferred.await(staleStarted);
         const second = yield* provider
           .sendTurn({ threadId, input: "second", attachments: [] })
-          .pipe(Effect.forkChild);
+          .pipe(Effect.exit, Effect.forkChild);
         assert.equal(devin.sendTurn.mock.calls.length, 0);
         yield* Deferred.succeed(releaseStale, undefined);
-        yield* Fiber.join(first);
-        yield* Fiber.join(second);
+        assert.equal(Exit.isFailure(yield* Fiber.join(first)), true);
+        assert.equal(Exit.isFailure(yield* Fiber.join(second)), true);
       }).pipe(Effect.provide(layer));
       const binding = yield* Effect.gen(function* () {
         const directory = yield* ProviderSessionDirectory;
@@ -2996,11 +3016,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.deepEqual(
         devin.startSession.mock.calls.map(([input]) => input.resumeCursor),
-        [staleCursor, undefined],
+        [staleCursor, staleCursor],
       );
-      assert.equal(devin.sendTurn.mock.calls.length, 2);
-      assert.deepEqual(adoptedSessions, [liveSession, liveSession]);
-      assert.deepEqual(binding?.resumeCursor, freshCursor);
+      assert.equal(devin.sendTurn.mock.calls.length, 0);
+      assert.deepEqual(adoptedSessions, []);
+      assert.deepEqual(binding?.resumeCursor, staleCursor);
       assert.equal(devin.hasSession.mock.calls.length >= 2, true);
     }),
   );

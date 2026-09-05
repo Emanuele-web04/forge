@@ -285,7 +285,8 @@ describe("ProviderCommandReactor", () => {
       const nativeResumeSucceeded =
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
-        outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+        (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+          (sessionInput.provider === "devin" && nativeResumeAttempted)) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -8763,7 +8764,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -8880,7 +8881,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -9121,7 +9122,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({
