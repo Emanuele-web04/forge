@@ -67,75 +67,22 @@ describe("resolvePreferredComposerModelSelection", () => {
     ).toEqual(cursorSelection);
   });
 
-  it("prefers the persisted default provider over a stale sticky draft on fresh bootstrap", () => {
+  it("restores the last-used selection for a fresh bootstrap ahead of project and global defaults", () => {
+    const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
     expect(
       resolvePreferredComposerModelSelection({
-        fresh: true,
         draft: {
-          modelSelectionByProvider: {
-            pi: modelSelection("pi", "pi-auto"),
-          },
-          activeProvider: "pi",
+          modelSelectionByProvider: { claudeAgent: lastUsed },
+          activeProvider: "claudeAgent",
         },
         threadModelSelection: null,
-        projectModelSelection: null,
-        defaultProvider: "devin",
+        projectModelSelection: modelSelection("codex", "gpt-5.5"),
+        defaultProvider: "codex",
       }),
-    ).toEqual(modelSelection("devin", "adaptive"));
+    ).toEqual(lastUsed);
   });
 
-  it("lets an explicit thread selection win over a stale sticky draft on fresh bootstrap", () => {
-    expect(
-      resolvePreferredComposerModelSelection({
-        fresh: true,
-        draft: {
-          modelSelectionByProvider: {
-            pi: modelSelection("pi", "pi-auto"),
-          },
-          activeProvider: "pi",
-        },
-        threadModelSelection: modelSelection("codex", "gpt-5"),
-        projectModelSelection: null,
-        defaultProvider: "devin",
-      }),
-    ).toEqual(modelSelection("codex", "gpt-5"));
-  });
-
-  it("lets an explicit project selection win over a stale sticky draft on fresh bootstrap", () => {
-    expect(
-      resolvePreferredComposerModelSelection({
-        fresh: true,
-        draft: {
-          modelSelectionByProvider: {
-            pi: modelSelection("pi", "pi-auto"),
-          },
-          activeProvider: "pi",
-        },
-        threadModelSelection: null,
-        projectModelSelection: modelSelection("codex", "gpt-5.4"),
-        defaultProvider: "devin",
-      }),
-    ).toEqual(modelSelection("codex", "gpt-5.4"));
-  });
-
-  it("prefers a same-provider project model over stale sticky state on fresh bootstrap", () => {
-    expect(
-      resolvePreferredComposerModelSelection({
-        fresh: true,
-        draft: {
-          modelSelectionByProvider: {
-            codex: modelSelection("codex", "gpt-5"),
-          },
-          activeProvider: "codex",
-        },
-        threadModelSelection: null,
-        projectModelSelection: modelSelection("codex", "gpt-5.4"),
-        defaultProvider: "devin",
-      }),
-    ).toEqual(modelSelection("codex", "gpt-5.4"));
-  });
-
-  it("keeps a non-fresh draft preference ahead of the persisted default", () => {
+  it("keeps the draft preference ahead of the persisted default", () => {
     expect(
       resolvePreferredComposerModelSelection({
         draft: {
