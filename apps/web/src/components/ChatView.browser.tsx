@@ -3542,6 +3542,317 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it.each([
+    "wheel near end",
+    "manual return",
+    "arrow",
+    "send",
+    "wheel down",
+    "wheel without movement",
+    "nested wheel",
+    "nested key",
+    "layout leave",
+    "keyboard PageUp",
+    "keyboard Home",
+    "keyboard ArrowUp",
+    "find",
+    "pointer click",
+    "thread switch",
+    "short transcript",
+  ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
+    const keyboardKey = action.startsWith("keyboard ") ? action.slice("keyboard ".length) : null;
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
+    if (action === "short transcript") {
+      snapshot = {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? { ...thread, messages: thread.messages.slice(0, 1) } : thread,
+        ),
+      };
+    }
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const messageId = MessageId.makeUnsafe("follow-live-response");
+    const turnId = TurnId.makeUnsafe("follow-live-turn");
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    const grow = () =>
+      syncThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, text: `${message.text}\n\n${"More streaming output. ".repeat(35)}` }
+            : message,
+        ),
+      }));
+    try {
+      let container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 350));
+      if (action === "send") {
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_ID, "Continue with a long streamed response");
+        (await waitForSendButton()).click();
+        const sent = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLElement>("[data-message-role='user']")).find(
+              (row) => row.textContent?.includes("Continue with a long streamed response"),
+            ) ?? null,
+          "Optimistic message did not appear.",
+        );
+        const sentId = MessageId.makeUnsafe(sent.dataset.messageId!);
+        syncThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: sentId,
+              role: "user",
+              source: "native",
+              turnId: null,
+              text: "Continue with a long streamed response",
+              createdAt: isoAt(1_200),
+              updatedAt: isoAt(1_200),
+              streaming: false,
+            },
+          ],
+        }));
+        // The slide emits real scroll events while the provider is starting.
+        await new Promise<void>((resolve) => setTimeout(resolve, 700));
+      }
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "running", activeTurnId: turnId }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: isoAt(1_200),
+          startedAt: isoAt(1_201),
+          completedAt: null,
+          assistantMessageId: messageId,
+        },
+        messages: [
+          ...thread.messages,
+          {
+            id: messageId,
+            role: "assistant",
+            source: "native",
+            text: "The response begins.",
+            turnId,
+            streaming: true,
+            createdAt: isoAt(1_202),
+            updatedAt: isoAt(1_202),
+          },
+        ],
+      }));
+      if (action === "short transcript") {
+        await waitForLayout();
+        expect(container.scrollHeight).toBeLessThanOrEqual(container.clientHeight + 1);
+        await userEvent.wheel(container, { delta: { y: -100 } });
+      }
+      for (let index = 0; index < 12; index += 1) {
+        grow();
+        await waitForLayout();
+      }
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+
+      if (action === "wheel down") {
+        await userEvent.wheel(container, { delta: { y: 100 } });
+      } else if (action === "layout leave") {
+        const height = container.clientHeight;
+        container.style.maxHeight = `${height - 180}px`;
+        await vi.waitFor(() => expect(container.clientHeight).toBeLessThan(height));
+        await waitForLayout();
+        await userEvent.wheel(container, { delta: { y: 100 } });
+      } else if (action === "wheel without movement") {
+        container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
+        grow();
+        container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
+        await waitForLayout();
+      } else if (action === "nested wheel" || action === "nested key") {
+        const nested = document.createElement("div");
+        const bounds = container.getBoundingClientRect();
+        nested.style.cssText = `position: fixed; left: ${bounds.left + 20}px; top: ${bounds.top + 20}px; width: 180px; height: 96px; overflow: auto; overscroll-behavior: contain; z-index: 100;`;
+        nested.textContent = "Nested scrollable content. ".repeat(100);
+        container.append(nested);
+        try {
+          nested.scrollTop = 100;
+          if (action === "nested key") {
+            nested.tabIndex = 0;
+            nested.focus();
+            await userEvent.keyboard("{ArrowUp}");
+          } else {
+            await userEvent.wheel(nested, { delta: { y: -30 } });
+          }
+          await vi.waitFor(() => expect(nested.scrollTop).toBeLessThan(100));
+          await waitForLayout();
+          await vi.waitFor(() =>
+            expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+          );
+        } finally {
+          nested.remove();
+        }
+      } else if (action === "pointer click") {
+        container.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        container.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      } else if (action !== "send" && action !== "short transcript") {
+        if (keyboardKey !== null) {
+          container.tabIndex = 0;
+          container.focus();
+          expect(document.activeElement).toBe(container);
+          const initialTop = container.scrollTop;
+          await userEvent.keyboard(`{${keyboardKey}}`);
+          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop - 1));
+          // A cancelled list jump can emit scrollend before native key scrolling
+          // finishes. Wait for an actual quiet viewport before recording its text.
+          let lastTop = container.scrollTop;
+          let stableSince = performance.now();
+          await vi.waitFor(
+            () => {
+              if (container.scrollTop !== lastTop) {
+                lastTop = container.scrollTop;
+                stableSince = performance.now();
+              }
+              expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+            },
+            { timeout: 3_000, interval: 20 },
+          );
+        } else if (action === "find") {
+          await dispatchConfiguredShortcutWhenReady(window, { key: "f" });
+          await page.getByLabelText("Find in thread").fill("assistant filler 0");
+          await vi.waitFor(() => {
+            const match = document.querySelector<HTMLElement>('[data-chat-find-match="active"]');
+            expect(match).not.toBeNull();
+            const bounds = match!.getBoundingClientRect();
+            const viewport = container.getBoundingClientRect();
+            expect(bounds.top).toBeGreaterThanOrEqual(viewport.top);
+            expect(bounds.bottom).toBeLessThanOrEqual(viewport.bottom);
+          });
+          await new Promise<void>((resolve) => setTimeout(resolve, 350));
+        } else {
+          await userEvent.wheel(container, {
+            delta: { y: action === "wheel near end" ? -12 : -350 },
+          });
+        }
+        await vi.waitFor(() =>
+          expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
+        );
+        await waitForLayout();
+        const viewport = container.getBoundingClientRect();
+        const readingAnchor = Array.from(
+          container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
+        ).find((paragraph) => {
+          const bounds = paragraph.getBoundingClientRect();
+          return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+        });
+        expect(readingAnchor, "Visible text must anchor the reader position").toBeDefined();
+        const anchorMessage = readingAnchor!.closest<HTMLElement>("[data-message-id]")!;
+        const anchorIndex = Array.from(anchorMessage.querySelectorAll("p, li")).indexOf(
+          readingAnchor!,
+        );
+        const anchorSelector = `[data-message-id='${CSS.escape(anchorMessage.dataset.messageId!)}']`;
+        const readAnchorTop = () =>
+          container
+            .querySelector(anchorSelector)!
+            .querySelectorAll("p, li")
+            [anchorIndex]!.getBoundingClientRect().top;
+        const detachedTop = readAnchorTop();
+        for (let index = 0; index < 3; index += 1) {
+          grow();
+          await waitForLayout();
+        }
+        if (keyboardKey !== null || action === "find") {
+          syncThread((thread) => ({
+            ...thread,
+            messages: [
+              ...thread.messages,
+              {
+                id: MessageId.makeUnsafe("remote-follow-message"),
+                role: "user",
+                source: "native",
+                turnId: null,
+                text: "Another message arrived while reading earlier output.",
+                streaming: false,
+                createdAt: isoAt(1_203),
+                updatedAt: isoAt(1_203),
+              },
+            ],
+          }));
+          await waitForLayout();
+        }
+        // The list may compensate scrollTop as estimated rows settle. The text
+        // the reader is looking at must remain at the same viewport position.
+        expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
+        if (action === "thread switch") {
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: OTHER_THREAD_ID },
+          });
+          await waitForLayout();
+          await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+          container = await waitForElement(
+            () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+            "Transcript did not remount.",
+          );
+          await waitForLayout();
+        } else if (action === "arrow" || keyboardKey !== null || action === "find") {
+          const arrow = await waitForElement(
+            () =>
+              document.querySelector<HTMLButtonElement>(
+                "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+              ),
+            "Scroll-to-bottom arrow did not appear.",
+          );
+          arrow.click();
+        } else {
+          container.scrollTop = container.scrollHeight;
+          container.dispatchEvent(new Event("scroll"));
+        }
+        await vi.waitFor(
+          () =>
+            expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
+              action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
+            ),
+          { timeout: 3_000 },
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+      for (let index = 0; index < 8; index += 1) {
+        grow();
+        await waitForLayout();
+      }
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
@@ -3601,7 +3912,28 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
+      await expect.element(page.getByText("Starting Codex…", { exact: true })).toBeInTheDocument();
       expect(scrollSpy.calls).toHaveLength(0);
+
+      for (const status of ["error", "starting", "ready"] as const) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          session: thread.session
+            ? {
+                ...thread.session,
+                status,
+                lastError: status === "error" ? "Provider connection failed" : null,
+              }
+            : null,
+        }));
+        await waitForLayout();
+        expect(scrollSpy.calls).toHaveLength(0);
+        if (status !== "starting") {
+          await expect
+            .element(page.getByText("Starting Codex…", { exact: true }))
+            .not.toBeInTheDocument();
+        }
+      }
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
       syncActiveThread((thread) => ({

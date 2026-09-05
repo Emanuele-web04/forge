@@ -141,6 +141,86 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("preserves large Unicode responses and segment boundaries through completion", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-large-response");
+    const messageId = asMessageId("message-large-response");
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("large-project"),
+          projectId: asProjectId("large-project"),
+          title: "Large response",
+          workspaceRoot: "/tmp/large-response",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("large-thread"),
+          threadId,
+          projectId: asProjectId("large-project"),
+          title: "Large response",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      // Each delta fits the journal budget, but their combined text exceeds
+      // 512 KiB. Later output includes a surrogate pair split across deltas.
+      const chunks = [
+        "é漢😀".repeat(30_000),
+        `${"é漢😀".repeat(30_000)}\nSecond segment \ud83d`,
+        "\ude80 done",
+      ];
+      for (const [index, delta] of chunks.entries()) {
+        await system.run(
+          engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: CommandId.makeUnsafe(`large-delta-${index}`),
+            threadId,
+            messageId,
+            delta,
+            ...(index < 2 ? { segmentStartedAt: createdAt, segmentSequence: index + 1 } : {}),
+            createdAt,
+          }),
+        );
+      }
+      await system.run(
+        engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.makeUnsafe("large-complete"),
+          threadId,
+          messageId,
+          createdAt,
+        }),
+      );
+      const expected = chunks.join("");
+      const events = await system.run(Stream.runCollect(engine.readEvents(0)));
+      const completed = Array.from(events).findLast(
+        (event) => event.type === "thread.message-sent",
+      );
+      expect(completed?.payload).toMatchObject({ streaming: false, text: expected });
+      const model = await system.run(engine.getReadModel());
+      const message = model.threads.find((thread) => thread.id === threadId)?.messages[0];
+      expect(message?.text).toBe(expected);
+      expect(message?.textSegments?.map((segment) => segment.text)).toEqual([
+        chunks[0],
+        chunks.slice(1).join(""),
+      ]);
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("quiesces normal admission while draining reserved lifecycle commands", async () => {
     const system = await createOrchestrationSystem();
     const createdAt = now();
