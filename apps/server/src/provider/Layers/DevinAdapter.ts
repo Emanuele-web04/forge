@@ -80,6 +80,7 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { AcpRequestError } from "../acp/AcpErrors.ts";
 import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
@@ -1878,7 +1879,21 @@ export function makeDevinAdapter(
               ),
             );
 
-            return yield* acp.start().pipe(Effect.mapError(acpToAdapterError(input.threadId)));
+            return yield* acp.start().pipe(
+              Effect.mapError((cause) =>
+                resumeSessionId !== undefined &&
+                cause instanceof AcpRequestError &&
+                cause.errorMessage.trim().toLowerCase() === "failed to load session data"
+                  ? new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: cause.message,
+                      reason: "resume-state-unavailable",
+                      cause,
+                    })
+                  : acpToAdapterError(input.threadId)(cause),
+              ),
+            );
           });
 
           const resumeReplayReady =

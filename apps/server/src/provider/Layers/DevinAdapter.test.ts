@@ -9,6 +9,8 @@ import { ThreadId, TurnId } from "@synara/contracts";
 import { Deferred, Effect, Exit, Layer, Queue, Scope, Semaphore, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AcpRequestError, AcpTransportError } from "../acp/AcpErrors.ts";
+import { ProviderAdapterProcessError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import type { AcpParsedSessionEvent } from "../acp/AcpRuntimeModel.ts";
@@ -1155,5 +1157,75 @@ describe("closeDevinSessionResources", () => {
 
     expect(calls).toEqual(["scope", "config"]);
     expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
+  });
+});
+
+describe("Devin stale resume classification", () => {
+  it.each([
+    {
+      name: "exact resume rejection",
+      resume: true,
+      message: "Failed to load session data",
+      recoverable: true,
+    },
+    {
+      name: "normalized resume rejection",
+      resume: true,
+      message: " FAILED TO LOAD SESSION DATA ",
+      recoverable: true,
+    },
+    {
+      name: "fresh startup failure",
+      resume: false,
+      message: "Failed to load session data",
+      recoverable: false,
+    },
+    {
+      name: "auth error containing the phrase",
+      resume: true,
+      message: "Authentication failed: failed to load session data",
+      recoverable: false,
+    },
+    {
+      name: "unknown suffixed error",
+      resume: true,
+      message: "Failed to load session data: permission denied",
+      recoverable: false,
+    },
+    {
+      name: "transport failure",
+      resume: true,
+      message: "Failed to load session data",
+      transport: true,
+      recoverable: false,
+    },
+  ])("classifies $name without leaving a live session", async (testCase) => {
+    const cause = testCase.transport
+      ? new AcpTransportError({ detail: testCase.message, cause: new Error(testCase.message) })
+      : new AcpRequestError({ code: -32603, errorMessage: testCase.message });
+    const runtime = { ...makeLifecycleAcpRuntime(), start: () => Effect.fail(cause) };
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-classify-stale");
+        const error = yield* adapter
+          .startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+            ...(testCase.resume
+              ? { resumeCursor: { schemaVersion: 1, sessionId: "old-session" } }
+              : {}),
+          })
+          .pipe(Effect.flip);
+        expect(error).toBeInstanceOf(ProviderAdapterProcessError);
+        expect(error).toMatchObject({ cause });
+        expect((error as ProviderAdapterProcessError).reason).toBe(
+          testCase.recoverable ? "resume-state-unavailable" : undefined,
+        );
+        expect(yield* adapter.hasSession(threadId)).toBe(false);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime))),
+    );
   });
 });

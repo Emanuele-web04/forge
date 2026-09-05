@@ -1846,7 +1846,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        preferredProvider === "opencode" &&
+        (preferredProvider === "opencode" || preferredProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -2343,28 +2343,25 @@ const make = Effect.gen(function* () {
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
-      const tracksOpenCodeCompatibleContextAcceptance =
-        selectedProvider === "opencode" &&
+      const tracksDurableContextAcceptance =
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
       pendingContextBootstrapAttempt =
-        tracksDroidContextAcceptance || tracksOpenCodeCompatibleContextAcceptance
+        tracksDroidContextAcceptance || tracksDurableContextAcceptance
           ? {
               clearSidechat:
                 sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
               clearFreshSessionTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  hasPendingFreshSessionTranscriptBootstrap),
+                (tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap),
               clearRollbackTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  priorTranscriptBootstrapRetiresOnAcceptedTurn),
+                (tracksDurableContextAcceptance && priorTranscriptBootstrapRetiresOnAcceptedTurn),
               completeDurablePriorTranscript:
-                tracksOpenCodeCompatibleContextAcceptance &&
-                hasPendingFreshSessionTranscriptBootstrap,
+                tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap,
               lifecycleEvidence: providerContextLifecycleEvidence,
               lifecycleEvidenceCreatedAt: input.createdAt,
             }
@@ -2555,7 +2552,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        selectedProvider === "opencode" &&
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -4190,7 +4187,10 @@ const make = Effect.gen(function* () {
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
       : thread.modelSelection.provider;
-    if (stoppedProvider === "opencode" && providerService.completePriorTranscriptBootstrap) {
+    if (
+      (stoppedProvider === "opencode" || stoppedProvider === "devin") &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
