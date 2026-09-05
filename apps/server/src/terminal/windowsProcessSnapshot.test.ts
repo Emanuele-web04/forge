@@ -52,6 +52,21 @@ describe("Windows process snapshots", () => {
     expect(parseWindowsProcessSnapshotLine("42\t7\tnot-base64")).toBeNull();
   });
 
+  it("accepts the Windows System Idle Process row", () => {
+    const idleProcess = "System Idle Process";
+    const startedAt = "20260903100453.000000+120";
+    expect(
+      parseWindowsProcessSnapshotLine(
+        `0\t0\t${startedAt}\t${Buffer.from(idleProcess, "utf8").toString("base64")}`,
+      ),
+    ).toEqual({
+      pid: 0,
+      ppid: 0,
+      command: idleProcess,
+      startedAt,
+    });
+  });
+
   it("coalesces concurrent terminal requests and reuses one worker across snapshots", async () => {
     const firstCapture = deferred<ProcessChildrenMap>();
     const firstSnapshot = snapshot([

@@ -18,11 +18,16 @@ import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderValidationError } from "../Errors.ts";
+import type { ProviderDiscoveryError } from "../Services/ProviderDiscoveryService.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import {
   ProviderDiscoveryService,
   type ProviderDiscoveryServiceShape,
 } from "../Services/ProviderDiscoveryService.ts";
+import {
+  makeProviderModelDiscoveryCache,
+  providerModelDiscoveryCacheKey,
+} from "../providerModelDiscoveryCache.ts";
 import {
   discoverSkillsCatalog,
   filterDisabledSkills,
@@ -89,6 +94,11 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
+  // One catalog cache for every provider: adapters that spawn a CLI/ACP process
+  // per listModels call (cursor, grok, antigravity, opencode, pi) get the same
+  // stale-while-revalidate, single-flight, and failure-replay behaviour that
+  // codex/claude implement privately.
+  const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],
   ) {
@@ -281,11 +291,16 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      const result = yield* adapter.listModels(parsed);
-      return yield* isolateMalformedModelDescriptors({
-        provider: parsed.provider,
-        result,
-      });
+      const listModelsFromAdapter = adapter.listModels;
+      return yield* modelDiscoveryCache.lookup(
+        providerModelDiscoveryCacheKey(parsed),
+        // Suspend so the adapter is only touched when the cache actually misses.
+        Effect.suspend(() => listModelsFromAdapter(parsed)).pipe(
+          Effect.flatMap((result) =>
+            isolateMalformedModelDescriptors({ provider: parsed.provider, result }),
+          ),
+        ),
+      );
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

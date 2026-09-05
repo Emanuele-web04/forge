@@ -332,6 +332,48 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(1);
   });
 
+  it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
+    let adapterCalls = 0;
+    const baseLayer = Layer.mergeAll(
+      makeConfigLayer(),
+      ServerSettingsService.layerTest(),
+      makeRegistryLayer({
+        listModels: (input) => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [
+              { slug: input.cwd === cwd ? "project-a" : "project-b", name: "Project Model" },
+            ],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      }),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+    const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const first = yield* discovery.listModels({ provider: "cursor", cwd });
+        const second = yield* discovery.listModels({ provider: "cursor", cwd });
+        const otherCwd = yield* discovery.listModels({ provider: "cursor", cwd: homeDir });
+        return { first, second, otherCwd };
+      }).pipe(Effect.provide(testLayer)) as Effect.Effect<
+        Record<"first" | "second" | "otherCwd", ProviderListModelsResult>,
+        never,
+        never
+      >,
+    );
+
+    expect(results.first.cached).toBe(false);
+    expect(results.second).toEqual({ ...results.first, cached: true });
+    expect(results.otherCwd.models).toEqual([{ slug: "project-b", name: "Project Model" }]);
+    expect(results.first.models).toEqual([{ slug: "project-a", name: "Project Model" }]);
+    expect(results.otherCwd.cached).toBe(false);
+    expect(adapterCalls).toBe(2);
+  });
+
   it("omits malformed model descriptors while preserving valid entries", async () => {
     const result = await runListModels({
       adapter: {

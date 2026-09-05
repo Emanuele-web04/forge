@@ -38,7 +38,11 @@ import {
 import { basenameOfPath } from "~/file-icons";
 import { useTheme } from "~/hooks/useTheme";
 import { useProjectFileChangeSubscription } from "~/hooks/useProjectFileChangeSubscription";
-import { getSelectionWithin, type ChatFileReference } from "~/lib/chatReferences";
+import {
+  getSelectionSnippetWithin,
+  getSelectionWithin,
+  type ChatFileReference,
+} from "~/lib/chatReferences";
 import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
@@ -709,23 +713,21 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       });
   };
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
-  // was selected, mirroring the transcript flow. This is offered only in the
-  // source view, where the DOM mirrors the file's lines/columns 1:1 so a
-  // selection resolves to an exact `line 12:5-12` span. The rendered-markdown
-  // view restructures the source (paragraphs, lists, headings), so a selection
-  // there cannot map back to an exact range — referencing a single word on a
-  // 3000-word line would pull in the whole line. The rendered view therefore
-  // stays read-only for references (browsing + task-list toggles only); use the
-  // Source toggle in the header to get a precise selection reference.
+  // was selected, mirroring the transcript flow. In the source view the DOM
+  // mirrors the file's lines/columns 1:1, so a selection resolves to an exact
+  // `line 12:5-12` span. The rendered-markdown view restructures the source
+  // (paragraphs, lists, headings), so a selection there cannot map back to a
+  // line range; it references the selected text verbatim instead, the same
+  // snippet shape the diff view uses.
   const readPreviewSelection = (container: HTMLElement): Omit<ChatFileReference, "path"> | null =>
-    showMarkdownPreview ? null : getSelectionWithin(container);
+    showMarkdownPreview ? getSelectionSnippetWithin(container) : getSelectionWithin(container);
   const commitPreviewSelection = (selection: Omit<ChatFileReference, "path">) => {
     if (filePath) {
       onReferenceInChat?.({ path: filePath, ...selection });
     }
   };
   const previewSelectionAction = useCodeSelectionAction({
-    enabled: Boolean(onReferenceInChat && filePath) && !showMarkdownPreview && !editableDocument,
+    enabled: Boolean(onReferenceInChat && filePath) && (showMarkdownPreview || !editableDocument),
     readSelection: readPreviewSelection,
     onCommit: commitPreviewSelection,
   });
@@ -746,10 +748,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       onCommentInChat?.({ path: filePath, ...selection });
     }
   };
-  // Right-click references the selected line range in the source view,
-  // otherwise the whole file. The rendered-markdown view yields no selection
-  // (readPreviewSelection returns null there), so it always falls back to the
-  // whole-file reference.
+  // Right-click references the selection (line range in the source view,
+  // quoted snippet in the rendered-markdown view), otherwise the whole file.
   const handleContentsContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!filePath) {
       return;

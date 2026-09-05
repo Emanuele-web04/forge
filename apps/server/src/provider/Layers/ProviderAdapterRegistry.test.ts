@@ -1,4 +1,5 @@
 import type { ProviderKind } from "@synara/contracts";
+import { expect } from "vitest";
 import { it, assert, vi } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 
@@ -175,12 +176,12 @@ const fakeAntigravityAdapter: AntigravityAdapterShape = {
   streamEvents: Stream.empty,
 };
 
-const layer = it.layer(
+const registryLayer = (codexAdapter = fakeCodexAdapter) =>
   Layer.mergeAll(
     Layer.provide(
       ProviderAdapterRegistryLive,
       Layer.mergeAll(
-        Layer.succeed(CodexAdapter, fakeCodexAdapter),
+        Layer.succeed(CodexAdapter, codexAdapter),
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
         Layer.succeed(DevinAdapter, fakeDevinAdapter),
@@ -192,8 +193,9 @@ const layer = it.layer(
       ),
     ),
     NodeServices.layer,
-  ),
-);
+  );
+
+const layer = it.layer(registryLayer());
 
 layer("ProviderAdapterRegistryLive", (it) => {
   it.effect("resolves a registered provider adapter", () =>
@@ -240,4 +242,22 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assertFailure(adapter, new ProviderUnsupportedError({ provider: "unknown" }));
     }),
   );
+});
+
+it("rejects missing required methods while constructing the registry", async () => {
+  const malformed = { ...fakeCodexAdapter };
+  Reflect.deleteProperty(malformed, "stopAll");
+
+  await expect(
+    Effect.runPromise(Effect.provide(Effect.void, registryLayer(malformed))),
+  ).rejects.toThrow("required method stopAll() is missing");
+});
+
+it("rejects duplicate provider identities while constructing the registry", async () => {
+  const duplicate = { ...fakeCodexAdapter };
+  Reflect.set(duplicate, "provider", "claudeAgent");
+
+  await expect(
+    Effect.runPromise(Effect.provide(Effect.void, registryLayer(duplicate))),
+  ).rejects.toThrow("Duplicate provider adapter registrations: claudeAgent at index 1.");
 });
