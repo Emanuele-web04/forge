@@ -16,14 +16,7 @@ describe("makeEffectProcessCommand", () => {
     expect(command).toMatchObject({
       _tag: "StandardCommand",
       command: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      args: [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "cursor-agent.ps1",
-        "--version",
-      ],
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "cursor-agent.ps1", "--version"],
       options: {
         shell: false,
         windowsHide: true,
