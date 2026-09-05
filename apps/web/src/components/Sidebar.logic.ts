@@ -576,12 +576,20 @@ export function pruneProjectThreadListExtraPagesById(input: {
 export function resolveThreadRowTrailingReserveClass(input: {
   metaChipCount: number;
   hasTrailingGlyph: boolean;
+  /** Keys in the visible ⌘N jump hint (0 when hidden). Each `Kbd` is ≥20px, far wider than a status dot. */
+  jumpLabelPartCount?: number;
 }): string {
   // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
   // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
     "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
   const { metaChipCount, hasTrailingGlyph } = input;
+  const jumpLabelPartCount = input.jumpLabelPartCount ?? 0;
+  if (jumpLabelPartCount > 0) {
+    // The jump hint replaces the status glyph in the trailing slot, so the title
+    // must give up the room the kbd group actually takes instead of the glyph's.
+    return cn(resolveJumpHintReserveClass(metaChipCount, jumpLabelPartCount), hoverReserve);
+  }
   if (metaChipCount <= 0) {
     return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
   }
@@ -595,6 +603,23 @@ export function resolveThreadRowTrailingReserveClass(input: {
     return cn(hasTrailingGlyph ? "pr-[4.75rem]" : "pr-[3.75rem]", hoverReserve);
   }
   return cn(hasTrailingGlyph ? "pr-[5.75rem]" : "pr-[4.5rem]", hoverReserve);
+}
+
+// Tailwind only emits classes it can see, so the reserve is a static table:
+// rows = kbd count (≤2 covers "⌘1"; 3 covers "⇧⌘1" / "Ctrl+Shift+1"), columns =
+// meta chips (18px each). Widths include the 6px right offset of the cluster.
+const JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT: Record<
+  number,
+  readonly [string, string, string, string]
+> = {
+  2: ["pr-[3.75rem]", "pr-[4.75rem]", "pr-[6rem]", "pr-[7rem]"],
+  3: ["pr-[5.25rem]", "pr-[6.25rem]", "pr-[7.5rem]", "pr-[8.5rem]"],
+  4: ["pr-[6.75rem]", "pr-[7.75rem]", "pr-[9rem]", "pr-[10rem]"],
+};
+
+function resolveJumpHintReserveClass(metaChipCount: number, jumpLabelPartCount: number): string {
+  const row = JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT[Math.min(Math.max(jumpLabelPartCount, 2), 4)]!;
+  return row[Math.min(Math.max(metaChipCount, 0), 3)]!;
 }
 
 export function resolveThreadRowClassName(input: {

@@ -52,6 +52,7 @@ import {
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusTrailingIndicator,
   isUrgentThreadStatusPill,
   type ThreadStatusPill,
@@ -1312,6 +1313,64 @@ describe("isUrgentThreadStatusPill", () => {
     expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
+  });
+});
+
+describe("resolveThreadRowTrailingReserveClass", () => {
+  const reservePx = (className: string) => {
+    const match = /(?:^|\s)pr-\[([\d.]+)rem\]/.exec(className);
+    return match ? Number(match[1]) * 16 : null;
+  };
+
+  it("reserves more room for the ⌘N jump hint than for a status dot", () => {
+    const glyphOnly = resolveThreadRowTrailingReserveClass({
+      metaChipCount: 0,
+      hasTrailingGlyph: true,
+    });
+    const withJumpHint = resolveThreadRowTrailingReserveClass({
+      metaChipCount: 0,
+      hasTrailingGlyph: true,
+      jumpLabelPartCount: 2,
+    });
+    // Two 20px kbd + 4px gap + 6px right offset must fit without covering the title.
+    expect(reservePx(withJumpHint)).toBeGreaterThanOrEqual(50);
+    expect(reservePx(withJumpHint)!).toBeGreaterThan(reservePx(glyphOnly)!);
+  });
+
+  it("grows the jump-hint reserve with meta chips and extra modifier keys", () => {
+    const base = reservePx(
+      resolveThreadRowTrailingReserveClass({
+        metaChipCount: 0,
+        hasTrailingGlyph: true,
+        jumpLabelPartCount: 2,
+      }),
+    )!;
+    const withChip = reservePx(
+      resolveThreadRowTrailingReserveClass({
+        metaChipCount: 1,
+        hasTrailingGlyph: true,
+        jumpLabelPartCount: 2,
+      }),
+    )!;
+    const withModifier = reservePx(
+      resolveThreadRowTrailingReserveClass({
+        metaChipCount: 0,
+        hasTrailingGlyph: true,
+        jumpLabelPartCount: 3,
+      }),
+    )!;
+    expect(withChip).toBeGreaterThan(base);
+    expect(withModifier).toBeGreaterThan(base);
+  });
+
+  it("ignores the jump hint reserve when the hint is hidden", () => {
+    expect(
+      resolveThreadRowTrailingReserveClass({
+        metaChipCount: 0,
+        hasTrailingGlyph: false,
+        jumpLabelPartCount: 0,
+      }),
+    ).toBe(resolveThreadRowTrailingReserveClass({ metaChipCount: 0, hasTrailingGlyph: false }));
   });
 });
 

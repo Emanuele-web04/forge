@@ -5222,6 +5222,7 @@ export default function Sidebar() {
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
                 hasTrailingGlyph: hasTrailingStatusGlyph,
+                jumpLabelPartCount: threadJumpLabelParts.length,
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
@@ -5396,6 +5397,7 @@ export default function Sidebar() {
                     : resolveThreadRowTrailingReserveClass({
                         metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
                         hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
+                        jumpLabelPartCount: threadJumpLabelParts.length,
                       }),
                 )}
                 draggable
