@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppSettings } from "../appSettings";
 import {
   goBackInAppHistory,
   goForwardInAppHistory,
@@ -204,6 +205,7 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
+  const { settings } = useAppSettings();
   const isStudioRoute = useLocation({
     select: (location) => location.pathname.startsWith("/studio"),
   });
@@ -464,20 +466,16 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
-      // Falls back to the most recent project when none is focused (e.g. the landing
-      // view) so the primary "new thread" chord always creates a thread; on that
-      // fallback the active branch/worktree context belongs to the absent project, so
-      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      // Match the project sidebar button: use the new-thread preference instead
+      // of inheriting the active thread's branch or existing worktree.
+      // Fall back to the most recent project when none is focused.
       const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
       if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(
-        target.projectId,
-        target.inheritContext
-          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-          : undefined,
-      );
+      void handleNewThread(target.projectId, {
+        envMode: settings.defaultThreadEnvMode,
+      });
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
@@ -501,6 +499,7 @@ function ChatRouteGlobalShortcuts() {
     refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
+    settings.defaultThreadEnvMode,
     terminalOpen,
     terminalWorkspaceOpen,
     toggleSidebar,
