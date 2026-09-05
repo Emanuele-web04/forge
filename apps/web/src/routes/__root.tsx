@@ -123,6 +123,7 @@ import {
   runEmptyRouteRestoreRefresh,
 } from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useDeviceEventBridge } from "../hooks/useDeviceEventBridge";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
   useProviderAuthRefreshOnFocus,
@@ -1061,6 +1062,7 @@ function releaseOrphanedThreadDetail(input: {
 }
 
 function EventRouter() {
+  useDeviceEventBridge();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);

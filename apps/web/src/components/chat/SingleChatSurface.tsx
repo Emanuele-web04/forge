@@ -24,7 +24,7 @@ import { readEditorViewState, storeEditorViewState } from "../../editorViewState
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
-import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
+import { useDevicePaneOpenRequests } from "../../hooks/useDeviceEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
@@ -646,18 +646,18 @@ export function SingleChatSurface(props: {
     },
   });
 
-  useDeviceEventBridge({
-    onOpenPaneRequested: hasDeviceSupport
-      ? (event) => {
-          routeSingleDevicePaneOpenRequest({
-            autoOpenDevicePane: appSettings.autoOpenDevicePane,
-            currentThreadId: props.threadId,
-            requestedThreadId: event.threadId,
-            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
-            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
-          });
-        }
-      : null,
+  useDevicePaneOpenRequests({
+    onOpenPaneRequested:
+      hasDeviceSupport && appSettings.autoOpenDevicePane
+        ? (event) => {
+            routeSingleDevicePaneOpenRequest({
+              currentThreadId: props.threadId,
+              requestedThreadId: event.threadId,
+              requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
+              openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+            });
+          }
+        : null,
   });
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);

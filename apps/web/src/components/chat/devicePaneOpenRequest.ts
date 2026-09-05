@@ -1,7 +1,6 @@
 import type { ThreadId } from "@synara/contracts";
 
 interface SingleDevicePaneOpenRequestInput {
-  readonly autoOpenDevicePane: boolean;
   readonly currentThreadId: ThreadId;
   readonly requestedThreadId: ThreadId;
   readonly requestImmediateDeviceHydration: () => void;
@@ -13,10 +12,6 @@ interface SingleDevicePaneOpenRequestInput {
  * changes the user's current chat. The device runtime stays attached server-side.
  */
 export function routeSingleDevicePaneOpenRequest(input: SingleDevicePaneOpenRequestInput): void {
-  if (!input.autoOpenDevicePane) {
-    return;
-  }
-
   if (input.requestedThreadId === input.currentThreadId) {
     // Only hydrate the visible thread. Same-thread requests must not wait for
     // rAF, which Chromium suspends for backgrounded windows.
