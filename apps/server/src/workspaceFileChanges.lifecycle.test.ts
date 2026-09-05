@@ -8,7 +8,8 @@ import { Effect, Stream } from "effect";
 import { afterEach, expect, it, vi } from "vitest";
 import { watchWorkspaceFile } from "./workspaceFileChanges";
 
-vi.mock("node:fs", () => ({ watch: vi.fn() }));
+const { watchMock } = vi.hoisted(() => ({ watchMock: vi.fn() }));
+vi.mock("node:fs", () => ({ watch: watchMock }));
 
 let workspaceRoot: string | undefined;
 afterEach(async () => {
@@ -32,14 +33,10 @@ it("watches only one parent, coalesces a burst at 100ms, and closes on cancellat
     }
   }
   const watcher = new TestWatcher();
-  vi.mocked(watch).mockImplementation(((
-    _directory: string,
-    _options: unknown,
-    callback: typeof notify,
-  ) => {
+  watchMock.mockImplementation((_directory: string, _options: unknown, callback: typeof notify) => {
     notify = callback;
     return watcher;
-  }) as typeof watch);
+  });
   vi.useFakeTimers();
   const events: unknown[] = [];
   const controller = new AbortController();
