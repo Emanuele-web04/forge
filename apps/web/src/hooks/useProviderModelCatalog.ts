@@ -138,32 +138,27 @@ export function useProviderModelCatalog(input: {
       provider: "claudeAgent",
       binaryPath: settings.claudeBinaryPath || null,
       enabled: claudeModelDiscoveryEnabled,
-      priority: selectedProvider === "claudeAgent" ? "foreground" : "background",
     }),
     codex: providerModelsQueryOptions({
       provider: "codex",
       enabled: codexModelDiscoveryEnabled,
-      priority: selectedProvider === "codex" ? "foreground" : "background",
     }),
     cursor: providerModelsQueryOptions({
       provider: "cursor",
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: cursorModelDiscoveryEnabled,
-      priority: selectedProvider === "cursor" ? "foreground" : "background",
     }),
     antigravity: providerModelsQueryOptions({
       provider: "antigravity",
       binaryPath: settings.antigravityBinaryPath || null,
       cwd: discoveryCwd,
       enabled: antigravityModelDiscoveryEnabled,
-      priority: selectedProvider === "antigravity" ? "foreground" : "background",
     }),
     grok: providerModelsQueryOptions({
       provider: "grok",
       binaryPath: settings.grokBinaryPath || null,
       enabled: grokModelDiscoveryEnabled,
-      priority: selectedProvider === "grok" ? "foreground" : "background",
     }),
     droid: providerModelsQueryOptions({
       provider: "droid",
@@ -172,14 +167,12 @@ export function useProviderModelCatalog(input: {
       // Droid probes every model through a disposable ACP session. Keep it
       // provider-scoped instead of warming it from unrelated picker/settings UI.
       enabled: droidModelDiscoveryEnabled,
-      priority: selectedProvider === "droid" ? "foreground" : "background",
     }),
     opencode: providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
-      priority: selectedProvider === "opencode" ? "foreground" : "background",
     }),
     pi: providerModelsQueryOptions({
       provider: "pi",
@@ -187,14 +180,12 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
-      priority: selectedProvider === "pi" ? "foreground" : "background",
     }),
     devin: providerModelsQueryOptions({
       provider: "devin",
       binaryPath: settings.devinBinaryPath || null,
       cwd: discoveryCwd,
       enabled: devinModelDiscoveryEnabled,
-      priority: selectedProvider === "devin" ? "foreground" : "background",
     }),
   } as const;
 
@@ -212,6 +203,8 @@ export function useProviderModelCatalog(input: {
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
 
+  // Keep foreground ownership out of queryFn options: retries can outlive
+  // the selection that started them. The effect owns the current priority.
   useEffect(() => {
     if (!selectedProviderModelsEnabled) return;
     return prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
