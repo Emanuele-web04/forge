@@ -342,6 +342,9 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
+      ? ["Automatically open simulator"]
+      : []),
     ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
     ...(!sameAppSnapShortcut(settings.appSnapShortcut, defaults.appSnapShortcut)
       ? ["AppSnap shortcut"]
@@ -1146,6 +1149,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "autoOpenDevicePane",
+          title: "Automatically open simulator",
+          description:
+            "Open the iOS Simulator pane when an agent uses a device. Turn this off to use Simulator.app without the mirrored pane reopening. You can still open the pane manually.",
+          resetLabel: "automatically open simulator",
+          ariaLabel: "Automatically open simulator",
         })}
       </SettingsSection>
 

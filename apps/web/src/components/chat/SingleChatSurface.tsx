@@ -650,6 +650,7 @@ export function SingleChatSurface(props: {
     onOpenPaneRequested: hasDeviceSupport
       ? (event) => {
           routeSingleDevicePaneOpenRequest({
+            autoOpenDevicePane: appSettings.autoOpenDevicePane,
             currentThreadId: props.threadId,
             requestedThreadId: event.threadId,
             requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),

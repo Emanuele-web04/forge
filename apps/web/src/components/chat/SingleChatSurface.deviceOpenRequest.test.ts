@@ -11,6 +11,7 @@ describe("routeSingleDevicePaneOpenRequest", () => {
     const calls: string[] = [];
 
     routeSingleDevicePaneOpenRequest({
+      autoOpenDevicePane: true,
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: CURRENT_THREAD_ID,
       requestImmediateDeviceHydration: () => calls.push("hydrate"),
@@ -24,6 +25,7 @@ describe("routeSingleDevicePaneOpenRequest", () => {
     const calls: string[] = [];
 
     routeSingleDevicePaneOpenRequest({
+      autoOpenDevicePane: true,
       currentThreadId: CURRENT_THREAD_ID,
       requestedThreadId: REQUESTED_THREAD_ID,
       requestImmediateDeviceHydration: () => calls.push("hydrate"),
@@ -32,4 +34,21 @@ describe("routeSingleDevicePaneOpenRequest", () => {
 
     expect(calls).toEqual([`open:${REQUESTED_THREAD_ID}`]);
   });
+
+  it.each([CURRENT_THREAD_ID, REQUESTED_THREAD_ID])(
+    "does not reopen or remember a pane for %s when automatic opening is disabled",
+    (requestedThreadId) => {
+      const calls: string[] = [];
+
+      routeSingleDevicePaneOpenRequest({
+        autoOpenDevicePane: false,
+        currentThreadId: CURRENT_THREAD_ID,
+        requestedThreadId,
+        requestImmediateDeviceHydration: () => calls.push("hydrate"),
+        openDevicePane: (threadId) => calls.push(`open:${threadId}`),
+      });
+
+      expect(calls).toEqual([]);
+    },
+  );
 });
