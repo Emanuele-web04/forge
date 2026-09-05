@@ -33,14 +33,18 @@ describe("ProviderStartupLifecycle", () => {
 
   it("attributes elapsed time to each phase and totals the span", () => {
     let now = 1_000;
-    const lifecycle = new ProviderStartupLifecycle({ now: () => (now += 250) });
+    const lifecycle = new ProviderStartupLifecycle({ now: () => now });
+    now += 100;
     lifecycle.transition("starting");
+    now += 250;
     lifecycle.transition("handshaking");
+    now += 600;
     lifecycle.transition("ready");
+    now += 50;
     lifecycle.transition("running");
     expect(startupPhaseDurations(lifecycle.snapshot())).toEqual({
       totalMs: 1_000,
-      byPhase: { starting: 250, handshaking: 250, ready: 250, running: 250 },
+      byPhase: { discovering: 100, starting: 250, handshaking: 600, ready: 50 },
     });
   });
 

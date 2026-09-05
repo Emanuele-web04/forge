@@ -138,7 +138,7 @@ export function startupPhaseDurations(
   for (const current of transitions.slice(1)) {
     if (previous !== undefined) {
       const spentMs = Math.max(0, current.at - previous.at);
-      byPhase[current.phase] = (byPhase[current.phase] ?? 0) + spentMs;
+      byPhase[previous.phase] = (byPhase[previous.phase] ?? 0) + spentMs;
     }
     previous = current;
   }

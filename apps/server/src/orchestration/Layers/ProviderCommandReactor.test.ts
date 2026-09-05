@@ -784,6 +784,7 @@ describe("ProviderCommandReactor", () => {
       setRuntimeSessionTurnState,
       startReactor,
       deliveryRepository,
+      sql,
       pendingInteractionRepository,
       reserveGatewayOperation: (operationId: string) =>
         runtime.runPromise(
@@ -1083,6 +1084,138 @@ describe("ProviderCommandReactor", () => {
       state: "succeeded",
       attemptCount: 2,
     });
+  });
+
+  it.each(
+    (["safe", "external"] as const).flatMap((kind) =>
+      (["succeeded", "retry", "missing", "new-owner", "read-failure"] as const).map((change) => ({
+        kind,
+        change,
+      })),
+    ),
+  )("reclassifies a $kind claim after $change during settlement wait", async ({ kind, change }) => {
+    const harness = await createHarness({ startReactor: false });
+    if (kind === "external") {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "claim-wait-turn",
+        text: "Send only if the delivery is retryable",
+        createdAt: new Date().toISOString(),
+      });
+    }
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const event = events.find(
+      (candidate) =>
+        candidate.type === (kind === "safe" ? "thread.created" : "thread.turn-start-requested"),
+    )!;
+    const key = { consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER, eventSequence: event.sequence };
+    const repository = harness.deliveryRepository;
+    const getDelivery = repository.getDelivery;
+    const changedOwner = change === "new-owner" || change === "read-failure";
+    let reads = 0;
+    let observedNewOwner = false;
+    const requeue = vi.spyOn(repository, "requeueExpired");
+    const terminal = vi.spyOn(repository, "markTerminalFailure");
+    await Effect.runPromise(
+      repository.claim({
+        ...key,
+        threadId: "thread-1",
+        claimOwner: "owner-a",
+        claimedAt: new Date().toISOString(),
+        claimExpiresAt: new Date(Date.now() + (change === "succeeded" ? 5_000 : 300)).toISOString(),
+      }),
+    );
+    repository.getDelivery = (input) =>
+      Effect.gen(function* () {
+        if (input.eventSequence !== event.sequence) return yield* getDelivery(input);
+        reads += 1;
+        if (reads === 2 && changedOwner) {
+          // Exercise a real retry/reclaim, not a fabricated extended lease.
+          yield* repository.markRetryable({
+            ...key,
+            expectedClaimOwner: "owner-a",
+            error: "safe retry",
+            updatedAt: new Date().toISOString(),
+          });
+          yield* repository.claim({
+            ...key,
+            threadId: "thread-1",
+            claimOwner: "owner-b",
+            claimedAt: new Date().toISOString(),
+            claimExpiresAt: new Date(Date.now() + 5_000).toISOString(),
+          });
+        }
+        if (reads === 3 && change === "read-failure") {
+          return yield* Effect.fail(
+            new PersistenceSqlError({
+              operation: "OrchestrationEventDelivery.getDelivery",
+              detail: "injected read failure after observing owner-b",
+            }),
+          );
+        }
+        if (reads === 3 && !changedOwner) {
+          if (change === "succeeded") {
+            yield* repository.complete({
+              ...key,
+              claimOwner: "owner-a",
+              completedAt: new Date().toISOString(),
+            });
+          } else if (change === "retry") {
+            yield* repository.markRetryable({
+              ...key,
+              expectedClaimOwner: "owner-a",
+              error: "safe retry",
+              updatedAt: new Date().toISOString(),
+            });
+          } else {
+            // Missing records are defensive coverage; no normal deletion path is assumed.
+            yield* harness.sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${key.consumerName} AND event_sequence = ${key.eventSequence}`;
+          }
+        }
+        if (reads === 4 && changedOwner) {
+          const current = yield* getDelivery(input);
+          expect(Option.getOrThrow(current)).toMatchObject({
+            state: "inflight",
+            claimOwner: "owner-b",
+          });
+          expect(requeue).not.toHaveBeenCalled();
+          expect(terminal).not.toHaveBeenCalled();
+          observedNewOwner = true;
+        }
+        if (reads === 5 && changedOwner) {
+          yield* repository.complete({
+            ...key,
+            claimOwner: "owner-b",
+            completedAt: new Date().toISOString(),
+          });
+        }
+        return yield* getDelivery(input);
+      });
+    try {
+      const startedAt = Date.now();
+      await harness.startReactor();
+      if (change === "succeeded") expect(Date.now() - startedAt).toBeLessThan(4_000);
+    } finally {
+      repository.getDelivery = getDelivery;
+    }
+    const delivery = Option.getOrThrow(await Effect.runPromise(getDelivery(key)));
+    expect(delivery).toMatchObject({
+      state: "succeeded",
+      attemptCount: change === "retry" || changedOwner ? 2 : 1,
+    });
+    expect(requeue).not.toHaveBeenCalled();
+    expect(terminal).not.toHaveBeenCalled();
+    expect(observedNewOwner).toBe(changedOwner);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(
+      kind === "external" && (change === "retry" || change === "missing") ? 1 : 0,
+    );
+    const consumer = Option.getOrThrow(
+      await Effect.runPromise(repository.getConsumerState(key.consumerName)),
+    );
+    expect(consumer.lastAckedSequence).toBeGreaterThanOrEqual(event.sequence);
   });
 
   it("REL-01B gate: retries a transient queued-promotion enqueue before advancing", async () => {

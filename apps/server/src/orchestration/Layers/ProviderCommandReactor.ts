@@ -4855,11 +4855,11 @@ const make = Effect.gen(function* () {
       const threadId = event.payload.threadId;
       if (yield* skipQuarantinedSideEffect(event)) return;
 
-      const existing = yield* deliveryRepository.getDelivery({
+      let existing = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
       });
-      if (Option.isSome(existing)) {
+      while (Option.isSome(existing)) {
         if (existing.value.state === "succeeded") {
           yield* requireCursorAdvance(event);
           return;
@@ -4872,10 +4872,10 @@ const make = Effect.gen(function* () {
         if (existing.value.state === "inflight") {
           const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
           const remainingMs = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
-          let expiredOwner = existing.value.claimOwner ?? "";
           if (remainingMs > 0) {
             const waitStartedAt = Date.now();
-            const latest = yield* awaitInflightClaimSettlement<ProviderCommandClaimSnapshot>({
+            let lastKnown = Option.getOrUndefined(existing);
+            const latest = yield* awaitInflightClaimSettlement({
               readClaim: () =>
                 deliveryRepository
                   .getDelivery({
@@ -4883,22 +4883,11 @@ const make = Effect.gen(function* () {
                     eventSequence: event.sequence,
                   })
                   .pipe(
-                    Effect.map((record) =>
-                      Option.isSome(record)
-                        ? {
-                            state: record.value.state,
-                            claimOwner: record.value.claimOwner,
-                            claimExpiresAt: record.value.claimExpiresAt,
-                          }
-                        : undefined,
-                    ),
-                    // A transient store error must not settle or steal the turn:
-                    // keep waiting on the last known snapshot up to the deadline.
-                    Effect.orElseSucceed(() => ({
-                      state: existing.value.state,
-                      claimOwner: existing.value.claimOwner,
-                      claimExpiresAt: existing.value.claimExpiresAt,
-                    })),
+                    Effect.map((record) => {
+                      lastKnown = Option.getOrUndefined(record);
+                      return Option.getOrUndefined(record);
+                    }),
+                    Effect.orElseSucceed(() => lastKnown),
                   ),
               deadlineMs: remainingMs,
             });
@@ -4913,16 +4902,17 @@ const make = Effect.gen(function* () {
                   savedMs: Math.max(0, remainingMs - waitedMs),
                 },
               );
-              yield* requireCursorAdvance(event);
-              return;
             }
-            if (latest?.state === "dead" || latest?.state === "uncertain") {
-              quarantinedThreads.add(threadId);
-              yield* requireCursorAdvance(event);
-              return;
-            }
-            expiredOwner = latest?.claimOwner ?? expiredOwner;
+            // The wait budget is not a lease expiry. Re-read before classifying
+            // retry/missing records or another owner's renewed inflight claim.
+            // In particular, never settle from a cached snapshot after a failed read.
+            existing = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+            });
+            continue;
           }
+          const expiredOwner = existing.value.claimOwner ?? "";
           if (!isReplaySafeClaimedProviderIntent(event)) {
             yield* settleTerminalFailure({
               event,
@@ -4948,6 +4938,7 @@ const make = Effect.gen(function* () {
             );
           }
         }
+        break;
       }
 
       while (true) {
