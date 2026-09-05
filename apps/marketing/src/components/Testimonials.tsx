@@ -6,15 +6,6 @@ import { SiX } from "react-icons/si";
 import { FiHeart, FiGlobe } from "react-icons/fi";
 import { loadTestimonialCards, type TestimonialCard } from "@/lib/tweets";
 
-const EXCLUDED_TESTIMONIAL_IDS = new Set([
-  // Frames the product defensively around an earlier fork identity instead of
-  // describing a durable user outcome.
-  "2071916101924262377",
-  // Compares short-lived model/version labels. The underlying experience may
-  // be valid, but the homepage should not age with provider release names.
-  "2065178684537888877",
-]);
-
 const LANGUAGE_NAMES: Record<string, string> = {
   zh: "Chinese",
   ja: "Japanese",
@@ -150,9 +141,7 @@ function TestimonialCardItem({ card }: { card: TestimonialCard }) {
 }
 
 export default async function Testimonials() {
-  const cards = (await loadTestimonialCards()).filter(
-    (card) => !EXCLUDED_TESTIMONIAL_IDS.has(card.id),
-  );
+  const cards = await loadTestimonialCards();
   if (cards.length === 0) return null;
 
   return (

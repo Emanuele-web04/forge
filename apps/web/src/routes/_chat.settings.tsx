@@ -448,7 +448,7 @@ function SettingsRouteView() {
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
-          description="Choose the provider used for new chats."
+          description="Provider used for new chats until you pick a model. New chats then reuse your most recent model and options."
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton

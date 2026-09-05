@@ -1122,6 +1122,8 @@ describe("orchestration projector", () => {
       completedAt,
       assistantMessageId: null,
     });
+    // The stale event's earlier occurredAt must not regress the thread stamp.
+    expect(afterStaleRunningSession.threads[0]?.updatedAt).toBe(completedAt);
   });
 
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {

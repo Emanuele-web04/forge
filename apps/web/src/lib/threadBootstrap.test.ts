@@ -373,24 +373,22 @@ describe("threadBootstrap", () => {
     });
   });
 
-  it("prefers the persisted default provider over a stale sticky draft on a fresh bootstrap", () => {
+  it("restores the last-used model and options for a fresh bootstrap ahead of project and global defaults", () => {
+    const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
     expect(
       resolveTerminalThreadCreationState({
         activeDraftThread: null,
         activeThread: null,
-        defaultProvider: "devin",
+        defaultProvider: "codex",
         draftComposerState: makeComposerDraftState({
-          modelSelectionByProvider: {
-            pi: modelSelection("pi", "pi-auto"),
-          },
-          activeProvider: "pi",
+          modelSelectionByProvider: { claudeAgent: lastUsed },
+          activeProvider: "claudeAgent",
         }),
         draftThread: makeDraftThread(),
         options: undefined,
-        fresh: true,
-        projectDefaultModelSelection: null,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.5"),
         projectId: PROJECT_ID,
       }).modelSelection,
-    ).toEqual(modelSelection("devin", "adaptive"));
+    ).toEqual(lastUsed);
   });
 });
