@@ -5,11 +5,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  DeviceFrameEncodeError,
-  decodeDeviceFrame,
-  encodeDeviceFrame,
-} from "./deviceFrame";
+import { DeviceFrameEncodeError, decodeDeviceFrame, encodeDeviceFrame } from "./deviceFrame";
 
 const header = {
   deviceId: "A1B2C3D4-1111-2222-3333-444455556666",

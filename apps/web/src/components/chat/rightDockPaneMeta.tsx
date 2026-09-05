@@ -19,10 +19,7 @@ import {
   SidechatIcon,
   TerminalIcon,
 } from "~/lib/icons";
-import {
-  type RightDockPane,
-  type RightDockPaneKind,
-} from "~/rightDockStore.logic";
+import { type RightDockPane, type RightDockPaneKind } from "~/rightDockStore.logic";
 import { CHAT_SURFACE_CHIP_ICON_CLASS_NAME, SurfaceChipIcon } from "./chatHeaderControls";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { pullRequestPaneTabLabel } from "../pullRequest/pullRequestDetail.logic";

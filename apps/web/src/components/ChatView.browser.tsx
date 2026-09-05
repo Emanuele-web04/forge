@@ -2358,7 +2358,9 @@ describe("ChatView transcript geometry (full app)", () => {
         const lineHeightPx = Number.parseFloat(getComputedStyle(text).lineHeight);
         expect(lineHeightPx).toBeGreaterThan(0);
         expect(clamp.scrollHeight).toBeGreaterThan(clamp.clientHeight);
-        expect(Math.abs(clamp.getBoundingClientRect().height - 12 * lineHeightPx)).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(clamp.getBoundingClientRect().height - 12 * lineHeightPx),
+        ).toBeLessThanOrEqual(1);
         expect(row.querySelector('button[aria-expanded="false"]')?.textContent).toBe("Show more");
       } finally {
         await mounted.cleanup();

@@ -1,10 +1,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import {
-  ServerLifecycleEvents,
-  ServerLifecycleEventsLive,
-} from "./serverLifecycleEvents";
+import { ServerLifecycleEvents, ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 
 const runWithLifecycle = <A, E>(effect: Effect.Effect<A, E, ServerLifecycleEvents>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ServerLifecycleEventsLive)));

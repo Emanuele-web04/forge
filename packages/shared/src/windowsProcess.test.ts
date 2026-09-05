@@ -78,7 +78,6 @@ describe("windowsProcess", () => {
   });
 
   it("keeps explicit path-like Windows executables without resolving", () => {
-
     expect(
       resolveWindowsCommandPath("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd", {
         platform: "win32",
@@ -267,7 +266,6 @@ describe("windowsProcess", () => {
   });
 
   it("keeps a configured native Codex executable path intact", () => {
-
     expect(
       prepareWindowsSafeProcess(
         "C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",

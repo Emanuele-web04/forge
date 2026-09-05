@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
 
-import {
-  absoluteUrl,
-  OG_IMAGE,
-  SITE_NAME,
-  SITE_URL,
-  X_PROFILE_URL,
-} from "@/lib/seo";
+import { absoluteUrl, OG_IMAGE, SITE_NAME, SITE_URL, X_PROFILE_URL } from "@/lib/seo";
 
 /** Search and user-directed retrieval agents that affect answer visibility. */
 export const AI_DISCOVERY_USER_AGENTS = [

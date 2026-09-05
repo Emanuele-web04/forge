@@ -25,7 +25,6 @@ describe("Antigravity CLI identity", () => {
       cliKind: "antigravity",
       iconKey: "antigravity",
     });
-
   });
 
   it("normalizes persisted Antigravity CLI metadata", () => {

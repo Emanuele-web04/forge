@@ -16,7 +16,9 @@ type ParsedPatches = ReturnType<PierreDiffsModule["parsePatchFiles"]>;
 // it on first parse instead; later parses reuse the same module namespace.
 const loadPierreDiffs: () => Promise<PierreDiffsModule> = lazyModule(() => import("@pierre/diffs"));
 
-function checkpointKindFromParsedFile(type: ParsedPatches[number]["files"][number]["type"]): string {
+function checkpointKindFromParsedFile(
+  type: ParsedPatches[number]["files"][number]["type"],
+): string {
   switch (type) {
     case "deleted":
       return "deleted";
@@ -46,7 +48,9 @@ function summarizeParsedPatches(parsedPatches: ParsedPatches): OrchestrationChec
     }
   }
 
-  return Array.from(filesByPath.values()).toSorted((left, right) => left.path.localeCompare(right.path));
+  return Array.from(filesByPath.values()).toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  );
 }
 
 /**

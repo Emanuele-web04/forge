@@ -63,7 +63,6 @@ export interface ProjectionCheckpointRepositoryShape {
   readonly getByThreadAndTurnCount: (
     input: GetByThreadAndTurnCountInput,
   ) => Effect.Effect<Option.Option<ProjectionCheckpoint>, ProjectionRepositoryError>;
-
 }
 
 /**
