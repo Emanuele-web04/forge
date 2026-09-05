@@ -453,8 +453,9 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
-  { value: "200k", label: "200k", isDefault: true },
-  { value: "1m", label: "1M (model default)" },
+  { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+  { value: "200k", label: "200k" },
+  { value: "1m", label: "1M" },
 ];
 
 function claudeApiEffortOption(
