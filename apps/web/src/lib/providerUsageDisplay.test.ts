@@ -124,12 +124,7 @@ describe("providerUsageDisplay", () => {
       },
     ]);
 
-    expect(rows.map((row) => row.label)).toEqual([
-      "5h",
-      "Weekly",
-      "Core 5h",
-      "Core Weekly",
-    ]);
+    expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly", "Core 5h", "Core Weekly"]);
     expect(rows.find((row) => row.label === "Core 5h")?.resetText).toContain("Resets in");
   });
 });
