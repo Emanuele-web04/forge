@@ -16,14 +16,14 @@ describe("resolvePreferredComposerModelSelection", () => {
   it("preserves a case-insensitive 1M Claude model variant during normalization", () => {
     expect(
       normalizeModelSelection({ provider: "claudeAgent", model: "claude-fable-5-1[1M]" }),
-    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1", { autoCompactWindow: "1m" }));
+    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1[1m]"));
     expect(
       normalizeModelSelection({
         provider: "claudeAgent",
         model: "claude-fable-5-1[1m]",
         options: { autoCompactWindow: "200k" },
       }),
-    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1", { autoCompactWindow: "200k" }));
+    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1[1m]", { autoCompactWindow: "200k" }));
   });
 
   it("prefers the active draft provider selection over thread and project defaults", () => {

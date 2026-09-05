@@ -683,12 +683,12 @@ describe("getComposerProviderState", () => {
   });
 
   it.each([
-    ["claude-fable-5-1", "1m"],
-    ["claude-opus-5", "1m"],
-    ["claude-opus-4-8", "1m"],
-    ["claude-sonnet-5", "1m"],
-    ["claude-opus-4-6", "200k"],
-    ["claude-sonnet-4-6", "200k"],
+    ["claude-fable-5-1", "auto"],
+    ["claude-opus-5", "auto"],
+    ["claude-opus-4-8", "auto"],
+    ["claude-sonnet-5", "auto"],
+    ["claude-opus-4-6", "auto"],
+    ["claude-sonnet-4-6", "auto"],
   ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
     const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
 
@@ -699,7 +699,7 @@ describe("getComposerProviderState", () => {
     ).toBe(true);
   });
 
-  it("shows 1M as the default auto-compact window for a 1M Claude suffix", () => {
+  it("shows Auto as the default auto-compact window for a 1M Claude suffix", () => {
     const defaults = getComposerTraitSelection(
       "claudeAgent",
       "claude-fable-5-1[1M]",
@@ -710,11 +710,12 @@ describe("getComposerProviderState", () => {
       autoCompactWindow: "200k",
     });
 
-    expect(defaults.defaultContextWindow).toBe("1m");
-    expect(defaults.contextWindow).toBe("1m");
+    expect(defaults.defaultContextWindow).toBe("auto");
+    expect(defaults.contextWindow).toBe("auto");
     expect(defaults.contextWindowOptions).toEqual([
+      { value: "auto", label: "Auto (Claude Code)", isDefault: true },
       { value: "200k", label: "200k" },
-      { value: "1m", label: "1M", isDefault: true },
+      { value: "1m", label: "1M" },
     ]);
     expect(explicit200k.contextWindow).toBe("200k");
   });
@@ -727,7 +728,7 @@ describe("getComposerProviderState", () => {
         prompt: "",
         modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
       }).modelOptionsForDispatch,
-    ).toBeUndefined();
+    ).toEqual({ autoCompactWindow: "1m" });
     expect(
       getComposerProviderState({
         provider: "claudeAgent",

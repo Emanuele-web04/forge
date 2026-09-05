@@ -164,8 +164,11 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
   if (!apiModelId) {
     return undefined;
   }
+  // Bootstrap estimate only: the live SDK response takes precedence.
+  // Opus/Sonnet 4.6 need extended-context opt-in; capacity remains 1M.
   return (
     claudeContextWindowTokensForOption(getClaudeContextWindowSuffix(apiModelId)) ??
+    (/^claude-(?:opus|sonnet)-4-6$/u.test(apiModelId) ? 200_000 : undefined) ??
     positiveFiniteNumber(
       getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
         .contextWindowTokens,
@@ -183,7 +186,7 @@ export function resolveSelectedClaudeAutoCompactWindow(
   // Claude Code's own resolution (server tuning, settings.json, env override).
   if (
     !selected ||
-    selected === getDefaultAutoCompactWindow(caps, model) ||
+    selected === getDefaultAutoCompactWindow(caps) ||
     !hasAutoCompactWindowOption(caps, selected)
   ) {
     return undefined;

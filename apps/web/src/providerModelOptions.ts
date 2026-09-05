@@ -2,7 +2,6 @@ import {
   formatModelDisplayName,
   humanizeModelSlug,
   normalizeModelSlug,
-  stripClaudeContextWindowSuffix,
 } from "@synara/shared/model";
 import {
   MODEL_OPTIONS_BY_PROVIDER,
@@ -95,7 +94,7 @@ export function formatProviderModelOptionName(input: {
 
 function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
   if (provider === "claudeAgent") {
-    const withoutContextSuffix = stripClaudeContextWindowSuffix(slug);
+    const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
     return normalizeModelSlug(withoutContextSuffix, provider) ?? withoutContextSuffix;
   }
   if (provider === "grok") {

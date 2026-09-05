@@ -651,45 +651,44 @@ describe("provider option descriptor helpers", () => {
     expect(descriptors[0]).toMatchObject({ id: "reasoningDepth", currentValue: "deep" });
   });
 
-  it("marks 1M as the default auto-compact option for a 1M Claude variant", () => {
+  it("marks Auto as the default auto-compact option for a 1M Claude variant", () => {
     const caps = getModelCapabilities("claudeAgent", "claude-fable-5-1[1m]");
     const defaultDescriptor = getProviderOptionDescriptors({
       provider: "claudeAgent",
-      model: "claude-fable-5-1[1m]",
       caps,
     }).find((descriptor) => descriptor.id === "autoCompactWindow");
     const explicitDescriptor = getProviderOptionDescriptors({
       provider: "claudeAgent",
-      model: "claude-fable-5-1[1M]",
       caps,
       selections: { autoCompactWindow: "200k" },
     }).find((descriptor) => descriptor.id === "autoCompactWindow");
 
     expect(defaultDescriptor).toMatchObject({
       type: "select",
-      currentValue: "1m",
+      currentValue: "auto",
       options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
         { id: "200k", label: "200k" },
-        { id: "1m", label: "1M", isDefault: true },
+        { id: "1m", label: "1M" },
       ],
     });
     expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
   });
 
-  it("marks 1M as the default auto-compact option for native 1M Claude models", () => {
+  it("marks Auto as the default auto-compact option for native 1M Claude models", () => {
     const model = "claude-fable-5-1";
     const descriptor = getProviderOptionDescriptors({
       provider: "claudeAgent",
-      model,
       caps: getModelCapabilities("claudeAgent", model),
     }).find((candidate) => candidate.id === "autoCompactWindow");
 
     expect(descriptor).toMatchObject({
       type: "select",
-      currentValue: "1m",
+      currentValue: "auto",
       options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
         { id: "200k", label: "200k" },
-        { id: "1m", label: "1M", isDefault: true },
+        { id: "1m", label: "1M" },
       ],
     });
   });
@@ -699,19 +698,17 @@ describe("context window helpers", () => {
   it("separates Claude's real context capacity from its auto-compact budget", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
     expect(getDefaultContextWindow(opusCaps)).toBeNull();
-    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6")).toBe("200k");
-    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1m]")).toBe("1m");
-    expect(getDefaultAutoCompactWindow(opusCaps, "claude-opus-4-6[1M]")).toBe("1m");
-    expect(opusCaps.contextWindowTokens).toBe(200_000);
+    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("auto");
+    expect(opusCaps.contextWindowTokens).toBe(1_000_000);
     expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
       200_000,
     );
     const opus5Caps = getModelCapabilities("claudeAgent", "claude-opus-5");
     expect(opus5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(opus5Caps, "claude-opus-5")).toBe("1m");
+    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("auto");
     const sonnet5Caps = getModelCapabilities("claudeAgent", "claude-sonnet-5");
     expect(sonnet5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(sonnet5Caps, "claude-sonnet-5")).toBe("1m");
+    expect(getDefaultAutoCompactWindow(sonnet5Caps)).toBe("auto");
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
   });
 
@@ -768,7 +765,7 @@ describe("normalizeClaudeModelOptions", () => {
       normalizeClaudeModelOptions("claude-opus-4-6", {
         effort: "high",
         fastMode: false,
-        autoCompactWindow: "200k",
+        autoCompactWindow: "auto",
       }),
     ).toBeUndefined();
   });
@@ -783,12 +780,12 @@ describe("normalizeClaudeModelOptions", () => {
     });
   });
 
-  it("strips Claude auto-compact budgets relative to the model variant default", () => {
+  it("preserves explicit Claude budgets even on native 1M models", () => {
     expect(
       normalizeClaudeModelOptions("claude-fable-5-1[1m]", {
         autoCompactWindow: "1m",
       }),
-    ).toBeUndefined();
+    ).toEqual({ autoCompactWindow: "1m" });
     expect(
       normalizeClaudeModelOptions("claude-fable-5-1[1M]", {
         autoCompactWindow: "200k",
@@ -798,7 +795,7 @@ describe("normalizeClaudeModelOptions", () => {
       normalizeClaudeModelOptions("claude-fable-5-1", {
         autoCompactWindow: "1m",
       }),
-    ).toBeUndefined();
+    ).toEqual({ autoCompactWindow: "1m" });
     expect(
       normalizeClaudeModelOptions("claude-fable-5-1", {
         autoCompactWindow: "200k",
@@ -869,21 +866,21 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
-  it("keeps native-1M Claude model ids unchanged", () => {
+  it("selects extended context for explicit 1M budgets", () => {
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-opus-4-6");
+    ).toBe("claude-opus-4-6[1m]");
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-sonnet-5",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-sonnet-5");
+    ).toBe("claude-sonnet-5[1m]");
   });
 
   it("leaves Claude models unchanged for the default context window", () => {

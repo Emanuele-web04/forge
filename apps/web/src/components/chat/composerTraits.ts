@@ -106,7 +106,6 @@ export function getComposerTraitSelection(
   const descriptors = getProviderOptionDescriptors({
     provider,
     caps,
-    model,
     selections: modelOptions as Record<string, unknown> | undefined,
   });
   const primarySelectDescriptor = primaryTraitSelectDescriptor(descriptors);

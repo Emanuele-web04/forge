@@ -1,4 +1,5 @@
 import { BROWSER_TOOL_NAMES, utf8ByteLength } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +14,8 @@ import {
   READ_ONLY_LOCAL,
   READ_ONLY_OPEN_WORLD,
   stableJsonStringify,
+  projectBrowserToolDefinitions,
+  compactToolInputSchema,
 } from "./browserAutomationCatalogue";
 
 describe("browser automation catalogue projection", () => {
@@ -23,6 +26,38 @@ describe("browser automation catalogue projection", () => {
       expect(tool.outputSchema).toBeTruthy();
       expect(JSON.stringify(tool.inputSchema)).not.toMatch(/"(?:examples|title)":/u);
     }
+  });
+
+  it("preserves parameter names, referenced definitions, descriptions and required fields", () => {
+    const input = Schema.Struct({
+      title: Schema.String.annotate({ identifier: "title", description: "Visible title text" }),
+      examples: Schema.Array(Schema.String),
+    });
+    const definition = { ...BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_open, input, output: input };
+    const [projected] = projectBrowserToolDefinitions([definition]);
+    expect(projected?.inputSchema).toMatchObject({
+      properties: { title: { $ref: "#/$defs/title" }, examples: { type: "array" } },
+      required: ["title", "examples"],
+      $defs: { title: { type: "string", description: "Visible title text" } },
+      additionalProperties: false,
+    });
+  });
+
+  it("keeps const/enum payloads and object closure scoped to their original schemas", () => {
+    const literal = { title: "A", examples: ["B"] };
+    const schema = {
+      type: "object",
+      properties: {
+        choice: { enum: [literal], description: "Literal payload" },
+        fixed: { const: literal },
+        nested: {
+          additionalProperties: false,
+          allOf: [{ type: "object", properties: { value: { type: "string" } } }],
+        },
+      },
+      required: ["choice", "fixed"],
+    };
+    expect(compactToolInputSchema(schema)).toEqual(schema);
   });
 
   it("keeps operational annotations and agent guidance canonical", () => {

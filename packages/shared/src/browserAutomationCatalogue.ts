@@ -501,12 +501,21 @@ function unwrapSingleAllOf(schema: Record<string, unknown>): Record<string, unkn
   if (!Array.isArray(schema.allOf) || schema.allOf.length !== 1) return schema;
   const [onlyBranch] = schema.allOf;
   if (!isJsonObject(onlyBranch)) return schema;
+  // Moving object keywords across an allOf changes the scope of closure.
+  const objectKeywords = [
+    "properties",
+    "patternProperties",
+    "additionalProperties",
+    "unevaluatedProperties",
+  ];
+  if (objectKeywords.some((key) => Object.hasOwn(schema, key) || Object.hasOwn(onlyBranch, key)))
+    return schema;
   const { allOf: _allOf, ...outer } = schema;
   const hasConflictingKey = Object.keys(onlyBranch).some((key) => Object.hasOwn(outer, key));
   return hasConflictingKey ? schema : { ...outer, ...onlyBranch };
 }
 
-function compactToolInputSchema(value: unknown): unknown {
+export function compactToolInputSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(compactToolInputSchema);
   if (!isJsonObject(value)) return value;
 
@@ -515,11 +524,15 @@ function compactToolInputSchema(value: unknown): unknown {
     .map(([key, child]) => [
       key,
       // Keys under `properties` are parameter names, not schema keywords.
-      key === "properties" && isJsonObject(child)
+      ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"].includes(
+        key,
+      ) && isJsonObject(child)
         ? Object.fromEntries(
             Object.entries(child).map(([name, schema]) => [name, compactToolInputSchema(schema)]),
           )
-        : compactToolInputSchema(child),
+        : ["enum", "const", "default", "required", "dependentRequired"].includes(key)
+          ? child
+          : compactToolInputSchema(child),
     ]);
   const compacted = unwrapSingleAllOf(Object.fromEntries(compactedEntries));
   if (!Array.isArray(compacted.anyOf)) return compacted;

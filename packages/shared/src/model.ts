@@ -255,16 +255,7 @@ export function stripClaudeContextWindowSuffix(model: string): string {
   return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
 }
 
-export function getDefaultAutoCompactWindow(
-  caps: ModelCapabilities,
-  model: string | null | undefined,
-): string | null {
-  const usesMillionTokenContext =
-    getClaudeContextWindowSuffix(model) === "1m" ||
-    (caps.contextWindowTokens !== undefined && caps.contextWindowTokens >= 1_000_000);
-  if (usesMillionTokenContext && hasAutoCompactWindowOption(caps, "1m")) {
-    return "1m";
-  }
+export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
 
@@ -454,45 +445,20 @@ function legacyCapabilityDescriptors(
   return descriptors;
 }
 
-function withModelAwareAutoCompactDefault(
-  descriptor: ProviderOptionDescriptor,
-  caps: ModelCapabilities,
-  model: string | null | undefined,
-): ProviderOptionDescriptor {
-  if (descriptor.type !== "select" || descriptor.id !== "autoCompactWindow") {
-    return descriptor;
-  }
-  const defaultValue = getDefaultAutoCompactWindow(caps, model);
-  return {
-    ...descriptor,
-    options: descriptor.options.map(({ isDefault: _isDefault, ...option }) => ({
-      ...option,
-      ...(option.id === defaultValue ? { isDefault: true as const } : {}),
-    })),
-    ...(defaultValue ? { currentValue: defaultValue } : {}),
-  };
-}
-
 export function getProviderOptionDescriptors(input: {
   provider: ProviderKind;
   caps: ModelCapabilities;
-  model?: string | null | undefined;
   selections?: ProviderOptionSelectionsInput;
 }): ReadonlyArray<ProviderOptionDescriptor> {
   const descriptors =
     input.caps.optionDescriptors?.map(cloneProviderOptionDescriptor) ??
     legacyCapabilityDescriptors(input.provider, input.caps);
-  return descriptors.map((descriptor) => {
-    const modelAwareDescriptor = withModelAwareAutoCompactDefault(
+  return descriptors.map((descriptor) =>
+    withProviderOptionCurrentValue(
       descriptor,
-      input.caps,
-      input.model,
-    );
-    return withProviderOptionCurrentValue(
-      modelAwareDescriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
-    );
-  });
+    ),
+  );
 }
 
 export function getProviderOptionCurrentValue(
@@ -513,7 +479,11 @@ export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
 ): ModelCapabilities {
-  const slug = normalizeModelSlug(model, provider);
+  const normalizedSlug = normalizeModelSlug(model, provider);
+  const slug =
+    provider === "claudeAgent" && normalizedSlug
+      ? stripClaudeContextWindowSuffix(normalizedSlug)
+      : normalizedSlug;
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
@@ -596,7 +566,12 @@ export function normalizeModelSlug(
   const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
     ? aliases[aliasKey]
     : undefined;
-  return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
+  const normalized = typeof aliased === "string" ? aliased : providerScopedModel;
+  return (
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(trimmed) === "1m"
+      ? `${normalized}[1m]`
+      : normalized
+  ) as ModelSlug;
 }
 
 export function resolveSelectableModel(
@@ -636,7 +611,11 @@ export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
-  const normalized = normalizeModelSlug(model, provider);
+  const normalizedModel = normalizeModelSlug(model, provider);
+  const normalized =
+    provider === "claudeAgent" && normalizedModel
+      ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
+      : normalizedModel;
   if (provider === "devin" || provider === "pi") {
     return normalized;
   }
@@ -667,14 +646,13 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
  * window stays unset so Claude Code can apply server tuning, settings.json,
  * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
  */
-
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
 ): ClaudeModelOptions | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
-  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps, model);
+  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
   const resolvedAutoCompactWindow =
     trimOrNull(modelOptions?.autoCompactWindow) ?? trimOrNull(modelOptions?.contextWindow);
@@ -705,6 +683,14 @@ export function normalizeClaudeModelOptions(
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
+  if (
+    modelSelection.provider === "claudeAgent" &&
+    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
+    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    getClaudeContextWindowSuffix(modelSelection.model) === null
+  ) {
+    return `${modelSelection.model}[1m]`;
+  }
   return modelSelection.model;
 }
 

@@ -453,7 +453,8 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
-  { value: "200k", label: "200k", isDefault: true },
+  { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+  { value: "200k", label: "200k" },
   { value: "1m", label: "1M" },
 ];
 
@@ -537,14 +538,10 @@ const CLAUDE_EXTENDED_THINKING_CAPABILITIES: ModelCapabilities = {
     claudeApiEffortOption("max", "Max"),
     claudePromptModeOption("ultrathink", "Ultrathink"),
   ],
-  contextWindowTokens: 200_000,
 };
 
 // Sonnet 5 adds xhigh for long agentic work, while staying in the Sonnet no-fast-mode lane.
-const CLAUDE_SONNET_5_CAPABILITIES: ModelCapabilities = {
-  ...CLAUDE_NO_FAST_XHIGH_CAPABILITIES,
-  contextWindowTokens: 1_000_000,
-};
+const CLAUDE_SONNET_5_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
 type ModelDefinition = {
   readonly slug: string;
