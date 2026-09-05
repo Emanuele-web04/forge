@@ -5249,6 +5249,7 @@ export default function ChatView({
   }, []);
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, animated = false) => {
+      cancelPendingWheelRelease();
       autoFollowThreadIdRef.current = targetThreadId;
       animateNextAutoFollowScrollRef.current = animated;
       isAtEndRef.current = true;
@@ -5256,7 +5257,7 @@ export default function ChatView({
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     },
-    [setTranscriptScrollDetached],
+    [cancelPendingWheelRelease, setTranscriptScrollDetached],
   );
   const clearTranscriptAutoFollow = useCallback(() => {
     cancelPendingWheelRelease();
@@ -11010,6 +11011,7 @@ export default function ChatView({
     setExpandedImage(preview);
   }, []);
   const onScrollToBottom = useCallback(() => {
+    cancelPendingWheelRelease();
     tailAnchorScrollInFlightRef.current = false;
     setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
@@ -11049,7 +11051,7 @@ export default function ChatView({
           settledScrollInFlightRef.current = false;
         }
       });
-  }, [setTranscriptScrollDetached]);
+  }, [cancelPendingWheelRelease, setTranscriptScrollDetached]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
