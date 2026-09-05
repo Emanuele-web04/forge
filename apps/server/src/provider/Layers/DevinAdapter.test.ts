@@ -6,18 +6,24 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ThreadId, TurnId } from "@synara/contracts";
-import { Deferred, Effect, Exit, Layer, Queue, Scope, Semaphore, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Semaphore, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AcpRequestError, AcpTransportError } from "../acp/AcpErrors.ts";
+import { ProviderAdapterProcessError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
+import * as AcpErrors from "../acp/AcpErrors.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import type { DevinAcpRuntimeInput } from "../acp/DevinAcpSupport.ts";
 import type { AcpParsedSessionEvent } from "../acp/AcpRuntimeModel.ts";
 import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import {
   applyDevinSessionConfiguration,
   buildDevinPromptMeta,
   buildDevinStaticModelDescriptors,
+  canRecoverDevinWedge,
   closeDevinSessionResources,
+  evaluateDevinWedgeSignal,
   makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
   makeDevinAdapterLive,
@@ -25,6 +31,8 @@ import {
   pruneDevinToolCallTurnIds,
   resolveDevinAdapterTimeouts,
   resolveDevinEffectiveModel,
+  resolveDevinOptionalTimeoutMs,
+  resolveDevinWedgeRecoveryOptions,
   resolveDevinStartModel,
   resolveDevinToolCallUpdatedTurnId,
   resolveRequestedModeId,
@@ -174,13 +182,109 @@ function makeDevinAdapterTestLayer(
   runtime: AcpSessionRuntimeShape,
   onSessionUpdateProcessed?: () => void,
   timeouts: { turnIdleMs: number; toolIdleMs: number } = { turnIdleMs: 30, toolIdleMs: 60 },
+  wedgeRecovery?: {
+    stallFuseMs: number;
+    spawnStallTimeoutMs: number;
+    checkIntervalMs: number;
+    maxPerThread: number;
+    windowMs: number;
+  },
 ) {
   return makeDevinAdapterLive(
     {},
     {
       makeAcpRuntime: () => Effect.succeed(runtime),
       timeouts,
+      ...(wedgeRecovery ? { wedgeRecovery } : {}),
       ...(onSessionUpdateProcessed ? { onSessionUpdateProcessed } : {}),
+    },
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+interface WedgeRuntimePlan {
+  /** Prompt behavior per prompt CALL (task, continuation, task, ...), in order. Last entry repeats. */
+  readonly prompts: ReadonlyArray<AcpSessionRuntimeShape["prompt"]>;
+  /** When present, the makeAcpRuntime call at this index fails instead. */
+  readonly failStartAtIndex?: number;
+  readonly beforeCreate?: (index: number) => Effect.Effect<void>;
+  readonly cancel?: (index: number) => Effect.Effect<void>;
+}
+
+function makeWedgeRuntimeFactory(plan: WedgeRuntimePlan) {
+  const promptInputs: Array<string> = [];
+  const stderrTaps: Array<(line: string) => void> = [];
+  let callIndex = 0;
+  let promptCallIndex = 0;
+  let current: ReturnType<typeof makeEventAcpRuntime> | undefined;
+  const makeAcpRuntime = (input: DevinAcpRuntimeInput) => {
+    const index = callIndex++;
+    if (plan.failStartAtIndex === index) {
+      return Effect.fail(
+        new AcpErrors.AcpSpawnError({ command: "devin", cause: new Error("start failed") }),
+      );
+    }
+    const handles = makeEventAcpRuntime((params) => {
+      promptInputs.push(
+        (params.prompt ?? [])
+          .map((part: { type: string; text?: string }) => (part.type === "text" ? part.text : ""))
+          .join(""),
+      );
+      const behavior = plan.prompts[Math.min(promptCallIndex, plan.prompts.length - 1)]!;
+      promptCallIndex++;
+      return behavior(params);
+    });
+    if (input.onChildStderrLine) stderrTaps.push(input.onChildStderrLine);
+    current = handles;
+    return (plan.beforeCreate?.(index) ?? Effect.void).pipe(
+      Effect.as({ ...handles.runtime, cancel: plan.cancel?.(index) ?? handles.runtime.cancel }),
+    );
+  };
+  return {
+    makeAcpRuntime,
+    promptInputs,
+    stderrTaps,
+    emitToolCall: (...args: Parameters<ReturnType<typeof makeEventAcpRuntime>["emitToolCall"]>) =>
+      current!.emitToolCall(...args),
+    completeProcessedEvent: () => current!.completeProcessedEvent(),
+  };
+}
+
+const WEDGE_TEST_OPTIONS = {
+  stallFuseMs: 90,
+  spawnStallTimeoutMs: 30,
+  checkIntervalMs: 5,
+  maxPerThread: 3,
+  windowMs: 60_000,
+};
+
+const STALL_WATCH_LINE =
+  "2026-09-02T04:02:26.184938Z  WARN affogato::stall_watch: waited_secs=30 what=emit(Subagent) to agent event channel Agent pipeline await still pending";
+const SPAWN_START_LINE =
+  "2026-09-02T04:43:31.297484Z  INFO toolbox::tools::exec::session_manager: session_id=abc123 [create_session] starting";
+const SPAWN_READY_LINE =
+  "2026-09-02T04:43:31.297623Z  INFO toolbox::tools::exec::session_manager: session_id=abc123 [create_session] waiting for shell ready";
+
+const stripHarnessPrefix = (text: string): string =>
+  text.replace(/^<synara_host_context>[\s\S]*?<\/synara_host_context>/, "");
+
+/** Advance past the supervisor tick, the fuse, and the recovery's resume-replay gate. */
+function advanceThroughRecovery(): Effect.Effect<void> {
+  return advanceTimers(
+    WEDGE_TEST_OPTIONS.stallFuseMs + WEDGE_TEST_OPTIONS.checkIntervalMs * 2 + 2_000,
+  );
+}
+
+function makeWedgeTestLayer(factory: ReturnType<typeof makeWedgeRuntimeFactory>) {
+  return makeDevinAdapterLive(
+    {},
+    {
+      makeAcpRuntime: factory.makeAcpRuntime,
+      onSessionUpdateProcessed: factory.completeProcessedEvent,
+      timeouts: { turnIdleMs: 3_600_000, toolIdleMs: 3_600_000 },
+      wedgeRecovery: WEDGE_TEST_OPTIONS,
     },
   ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
@@ -203,6 +307,511 @@ describe("resolveDevinAdapterTimeouts", () => {
         SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS: "5678",
       }),
     ).toEqual({ turnIdleMs: 1234, toolIdleMs: 5678 });
+  });
+});
+
+describe("resolveDevinOptionalTimeoutMs", () => {
+  it("falls back to the default when unset or invalid", () => {
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: {} })).toBe(100);
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "   " } })).toBe(
+      100,
+    );
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "abc" } })).toBe(
+      100,
+    );
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "-5" } })).toBe(
+      100,
+    );
+  });
+
+  it("treats zero as an explicit disable and passes positive values through", () => {
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "0" } })).toBe(0);
+    expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "250" } })).toBe(
+      250,
+    );
+  });
+
+  it("resolves the production wedge defaults", () => {
+    expect(resolveDevinWedgeRecoveryOptions({})).toMatchObject({
+      stallFuseMs: 90_000,
+      spawnStallTimeoutMs: 30_000,
+      maxPerThread: 3,
+    });
+  });
+});
+
+describe("evaluateDevinWedgeSignal", () => {
+  const base = {
+    activeTurnId: "turn-1",
+    awaitingHuman: false,
+    stallWatchDetectedAt: undefined,
+    spawnStalls: new Map<string, number>(),
+    now: 10_000,
+    stallFuseMs: 90,
+    spawnStallTimeoutMs: 30,
+  };
+
+  it("is silent without an active turn or while awaiting a human", () => {
+    expect(evaluateDevinWedgeSignal({ ...base, activeTurnId: undefined })).toBeUndefined();
+    expect(evaluateDevinWedgeSignal({ ...base, awaitingHuman: true })).toBeUndefined();
+  });
+
+  it("fires the stall-watch signal only after the fuse elapses", () => {
+    expect(evaluateDevinWedgeSignal({ ...base, stallWatchDetectedAt: 9_990 })).toBeUndefined();
+    expect(evaluateDevinWedgeSignal({ ...base, stallWatchDetectedAt: 9_000 })).toEqual({
+      kind: "stall-watch",
+      silentMs: 1_000,
+    });
+  });
+
+  it("ignores the stall-watch path when the fuse is disabled", () => {
+    expect(
+      evaluateDevinWedgeSignal({ ...base, stallWatchDetectedAt: 0, stallFuseMs: 0 }),
+    ).toBeUndefined();
+  });
+
+  it("fires the spawn-stall signal for the oldest un-ready spawn", () => {
+    const spawnStalls = new Map([
+      ["aaa", 9_000],
+      ["bbb", 9_990],
+    ]);
+    expect(evaluateDevinWedgeSignal({ ...base, spawnStalls })).toEqual({
+      kind: "spawn-stall",
+      spawnSessionId: "aaa",
+      stalledMs: 1_000,
+    });
+  });
+
+  it("ignores spawns inside the budget and respects the disable flag", () => {
+    expect(
+      evaluateDevinWedgeSignal({ ...base, spawnStalls: new Map([["aaa", 9_990]]) }),
+    ).toBeUndefined();
+    expect(
+      evaluateDevinWedgeSignal({
+        ...base,
+        spawnStalls: new Map([["aaa", 0]]),
+        spawnStallTimeoutMs: 0,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("canRecoverDevinWedge", () => {
+  const base = { now: 100_000, maxPerWindow: 3, windowMs: 30_000 };
+
+  it("allows recoveries inside the budget and blocks beyond it", () => {
+    expect(canRecoverDevinWedge({ ...base, recoveryAt: [] })).toBe(true);
+    expect(canRecoverDevinWedge({ ...base, recoveryAt: [90_000, 95_000] })).toBe(true);
+    expect(canRecoverDevinWedge({ ...base, recoveryAt: [80_000, 90_000, 95_000] })).toBe(false);
+  });
+
+  it("forgets recoveries that fell out of the rolling window", () => {
+    expect(canRecoverDevinWedge({ ...base, recoveryAt: [0, 1_000, 2_000] })).toBe(true);
+  });
+});
+
+describe("Devin wedge auto-recovery", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each(["fiber-interrupt", "cancel-response"] as const)(
+    "recovers a stall-watch wedge with %s: cancels the turn, restarts, and continues",
+    async (settlement) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const cancelledResponse = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [
+          () =>
+            settlement === "cancel-response" ? Deferred.await(cancelledResponse) : Effect.never,
+          () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+        ],
+        cancel: () =>
+          settlement === "cancel-response"
+            ? Deferred.succeed(cancelledResponse, {
+                stopReason: "cancelled",
+              } as Acp.PromptResponse).pipe(Effect.andThen(flushTimers()))
+            : Effect.void,
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-devin-wedge-stall");
+          const runtimeEvents: Array<{
+            type: string;
+            turnId?: string | undefined;
+            payload?: Record<string, unknown> | undefined;
+          }> = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() =>
+                runtimeEvents.push({
+                  type: event.type,
+                  ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
+                  payload: event.payload as Record<string, unknown> | undefined,
+                }),
+              ),
+            ),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+          });
+          const wedgedTurn = yield* adapter.sendTurn({
+            threadId,
+            input: "do the task",
+            attachments: [],
+          });
+          yield* flushTimers();
+          expect(factory.stderrTaps.length).toBe(1);
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceThroughRecovery();
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["do the task", "continue"]);
+          expect(factory.stderrTaps.length).toBe(2);
+          const session = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(session?.status).toBe("ready");
+          const warning = runtimeEvents.find((event) => event.type === "runtime.warning");
+          expect(String(warning?.payload?.message)).toContain(
+            "restarting this session automatically",
+          );
+          const settled = runtimeEvents.find(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.turnId === String(wedgedTurn.turnId) &&
+              event.payload?.state === "cancelled",
+          );
+          expect(settled?.payload?.stopReason).toBe("synara.devin.wedge-recovery");
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
+
+  it("recovers a spawn-stall wedge when a command never reaches shell-ready", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [
+        () => Effect.never,
+        () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+      ],
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-wedge-spawn");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "run it", attachments: [] });
+        yield* flushTimers();
+        factory.stderrTaps[0]!(SPAWN_START_LINE);
+        yield* advanceTimers(WEDGE_TEST_OPTIONS.checkIntervalMs);
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["run it"]);
+        yield* advanceThroughRecovery();
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["run it", "continue"]);
+      }).pipe(Effect.provide(makeWedgeTestLayer(factory))),
+    );
+  });
+
+  it("does not recover when the spawn reaches shell-ready or progress resumes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [() => Effect.never],
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-wedge-quiet");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
+        yield* flushTimers();
+        factory.stderrTaps[0]!(SPAWN_START_LINE);
+        factory.stderrTaps[0]!(SPAWN_READY_LINE);
+        yield* advanceTimers(10_000);
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["work"]);
+        expect(factory.stderrTaps.length).toBe(1);
+        factory.stderrTaps[0]!(STALL_WATCH_LINE);
+        yield* factory.emitToolCall("tool-1", "inProgress");
+        factory.completeProcessedEvent();
+        yield* advanceTimers(10_000);
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["work"]);
+      }).pipe(Effect.provide(makeWedgeTestLayer(factory))),
+    );
+  });
+
+  it("fails the turn instead of recovering once the thread budget is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const wedged = () => Effect.never;
+    const healthy = () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse);
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [wedged, healthy, wedged, healthy, wedged, healthy, wedged],
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-wedge-budget");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        for (let wedge = 0; wedge < 4; wedge++) {
+          yield* adapter.sendTurn({ threadId, input: `task ${wedge}`, attachments: [] });
+          yield* flushTimers();
+          factory.stderrTaps[factory.stderrTaps.length - 1]!(STALL_WATCH_LINE);
+          yield* advanceThroughRecovery();
+        }
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual([
+          "task 0",
+          "continue",
+          "task 1",
+          "continue",
+          "task 2",
+          "continue",
+          "task 3",
+        ]);
+        const session = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+        expect(session?.status).toBe("error");
+      }).pipe(Effect.provide(makeWedgeTestLayer(factory))),
+    );
+  });
+
+  it.each(["interrupt", "interrupt-current", "stop", "stop-all", "restart"] as const)(
+    "honors %s while recovery is waiting to create the replacement session",
+    async (action) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const entered = Effect.runSync(Deferred.make<void>());
+      const release = Effect.runSync(Deferred.make<void>());
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [() => Effect.never],
+        beforeCreate: (index) =>
+          index === 1
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe(`thread-wedge-cancel-${action}`);
+          const input = {
+            provider: "devin" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: process.cwd(),
+          };
+          const events: Array<{ type: string }> = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession(input);
+          const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+          yield* flushTimers();
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceTimers(100);
+          yield* Deferred.await(entered);
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+          const actionFiber = yield* (
+            action === "stop-all"
+              ? adapter.stopAll()
+              : action === "stop"
+                ? adapter.stopSession(threadId)
+                : action === "restart"
+                  ? adapter.startSession(input).pipe(Effect.asVoid)
+                  : adapter.interruptTurn(
+                      threadId,
+                      action === "interrupt" ? turn.turnId : undefined,
+                    )
+          ).pipe(Effect.forkScoped);
+          yield* flushTimers();
+          yield* Deferred.succeed(release, undefined);
+          yield* advanceThroughRecovery();
+          yield* Fiber.join(actionFiber);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+          expect(yield* adapter.hasSession(threadId)).toBe(action === "restart");
+          expect(events.filter((event) => event.type === "runtime.error")).toEqual([]);
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
+
+  it.each(["user-turn", "stale-interrupt", "interrupt"] as const)(
+    "preserves %s ownership while the replacement is draining resume replay",
+    async (action) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const factory = makeWedgeRuntimeFactory({
+        prompts: [
+          () => Effect.never,
+          () => Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+        ],
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe(`thread-wedge-replay-${action}`);
+          yield* adapter.startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+          });
+          const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+          yield* flushTimers();
+          factory.stderrTaps[0]!(STALL_WATCH_LINE);
+          yield* advanceTimers(100);
+          expect(factory.stderrTaps).toHaveLength(2);
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+          const userAction = yield* (
+            action === "user-turn"
+              ? adapter
+                  .sendTurn({ threadId, input: "new user task", attachments: [] })
+                  .pipe(Effect.asVoid)
+              : adapter.interruptTurn(
+                  threadId,
+                  action === "interrupt" ? turn.turnId : asTurnId("unrelated-turn"),
+                )
+          ).pipe(Effect.forkScoped);
+          yield* advanceThroughRecovery();
+          yield* Fiber.join(userAction);
+          expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(
+            action === "interrupt"
+              ? ["task"]
+              : ["task", action === "user-turn" ? "new user task" : "continue"],
+          );
+          expect(yield* adapter.hasSession(threadId)).toBe(action !== "interrupt");
+        }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+      );
+    },
+  );
+
+  it("honors user cancellation while the recovery cancel notification is pending", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const entered = Effect.runSync(Deferred.make<void>());
+    const release = Effect.runSync(Deferred.make<void>());
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [() => Effect.never],
+      cancel: () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const completions: Array<unknown> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              if (event.type === "turn.completed") completions.push(event.payload);
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        const threadId = ThreadId.makeUnsafe("thread-wedge-cancel-notification");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+        yield* flushTimers();
+        factory.stderrTaps[0]!(STALL_WATCH_LINE);
+        yield* advanceTimers(100);
+        yield* Deferred.await(entered);
+        const cancelled = yield* adapter
+          .interruptTurn(threadId, turn.turnId)
+          .pipe(Effect.forkScoped);
+        yield* flushTimers();
+        yield* Deferred.succeed(release, undefined);
+        yield* advanceThroughRecovery();
+        yield* Fiber.join(cancelled);
+        expect(completions).toEqual([
+          expect.objectContaining({ state: "cancelled", stopReason: "cancelled" }),
+        ]);
+        expect(factory.stderrTaps).toHaveLength(1);
+        expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
+        expect((yield* adapter.listSessions())[0]?.status).toBe("ready");
+      }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+    );
+  });
+
+  it("leaves no session when the recovery restart itself fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const factory = makeWedgeRuntimeFactory({
+      prompts: [() => Effect.never],
+      failStartAtIndex: 1,
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-wedge-restart-fail");
+        const events: Array<{
+          type: string;
+          turnId?: TurnId | undefined;
+          payload: Record<string, unknown>;
+        }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() =>
+              events.push({
+                type: event.type,
+                turnId: event.turnId,
+                payload: event.payload as Record<string, unknown>,
+              }),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
+        yield* flushTimers();
+        factory.stderrTaps[0]!(STALL_WATCH_LINE);
+        yield* advanceTimers(
+          WEDGE_TEST_OPTIONS.stallFuseMs + WEDGE_TEST_OPTIONS.checkIntervalMs * 2,
+        );
+        expect(
+          (yield* adapter.listSessions()).find((s) => s.threadId === threadId),
+        ).toBeUndefined();
+        expect(
+          events.filter((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+        ).toEqual([
+          expect.objectContaining({ payload: expect.objectContaining({ state: "cancelled" }) }),
+        ]);
+        expect(events.filter((event) => event.type === "runtime.error")).toEqual([
+          expect.objectContaining({
+            turnId: turn.turnId,
+            payload: expect.objectContaining({
+              message: expect.stringContaining("start failed"),
+              detail: { reason: "synara.devin.wedge-recovery" },
+            }),
+          }),
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(makeWedgeTestLayer(factory))),
+    );
   });
 });
 
@@ -1155,5 +1764,75 @@ describe("closeDevinSessionResources", () => {
 
     expect(calls).toEqual(["scope", "config"]);
     expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
+  });
+});
+
+describe("Devin stale resume classification", () => {
+  it.each([
+    {
+      name: "exact resume rejection",
+      resume: true,
+      message: "Failed to load session data",
+      recoverable: true,
+    },
+    {
+      name: "normalized resume rejection",
+      resume: true,
+      message: " FAILED TO LOAD SESSION DATA ",
+      recoverable: true,
+    },
+    {
+      name: "fresh startup failure",
+      resume: false,
+      message: "Failed to load session data",
+      recoverable: false,
+    },
+    {
+      name: "auth error containing the phrase",
+      resume: true,
+      message: "Authentication failed: failed to load session data",
+      recoverable: false,
+    },
+    {
+      name: "unknown suffixed error",
+      resume: true,
+      message: "Failed to load session data: permission denied",
+      recoverable: false,
+    },
+    {
+      name: "transport failure",
+      resume: true,
+      message: "Failed to load session data",
+      transport: true,
+      recoverable: false,
+    },
+  ])("classifies $name without leaving a live session", async (testCase) => {
+    const cause = testCase.transport
+      ? new AcpTransportError({ detail: testCase.message, cause: new Error(testCase.message) })
+      : new AcpRequestError({ code: -32603, errorMessage: testCase.message });
+    const runtime = { ...makeLifecycleAcpRuntime(), start: () => Effect.fail(cause) };
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-classify-stale");
+        const error = yield* adapter
+          .startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+            ...(testCase.resume
+              ? { resumeCursor: { schemaVersion: 1, sessionId: "old-session" } }
+              : {}),
+          })
+          .pipe(Effect.flip);
+        expect(error).toBeInstanceOf(ProviderAdapterProcessError);
+        expect(error).toMatchObject({ cause });
+        expect((error as ProviderAdapterProcessError).reason).toBe(
+          testCase.recoverable ? "resume-state-unavailable" : undefined,
+        );
+        expect(yield* adapter.hasSession(threadId)).toBe(false);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime))),
+    );
   });
 });

@@ -178,35 +178,6 @@ describe("computeMessageDurationStart", () => {
   it("returns empty map for empty input", () => {
     expect(computeMessageDurationStart([])).toEqual(new Map());
   });
-
-  it("anchors every assistant to the nearest preceding user message when not advancing on completed assistant", () => {
-    const result = computeMessageDurationStart(
-      [
-        { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
-        {
-          id: "a1",
-          role: "assistant",
-          createdAt: "2026-01-01T00:00:30Z",
-          completedAt: "2026-01-01T00:00:30Z",
-        },
-        {
-          id: "a2",
-          role: "assistant",
-          createdAt: "2026-01-01T00:00:55Z",
-          completedAt: "2026-01-01T00:00:55Z",
-        },
-      ],
-      { advanceOnCompletedAssistant: false },
-    );
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-        ["a2", "2026-01-01T00:00:00Z"],
-      ]),
-    );
-  });
 });
 
 describe("normalizeCompactToolLabel", () => {
@@ -1171,50 +1142,6 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal).toBeDefined();
     expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
     expect(terminal!.collapsedWorkElapsed).toBe("23m");
-  });
-
-  it("keeps the settled duration stable after the active turn leaves running", () => {
-    const entries = [
-      userEntry("u1", "2026-01-01T00:00:00Z"),
-      workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
-      assistantEntry("a1", "2026-01-01T00:00:20Z", {
-        turnId: "t1",
-        text: "The provider run failed",
-        completedAt: "2026-01-01T00:00:20Z",
-      }),
-      workEntry("w2", "2026-01-01T00:00:30Z", "retry work"),
-      assistantEntry("a2", "2026-01-01T00:01:00Z", {
-        turnId: "t2",
-        text: "All done",
-        completedAt: "2026-01-01T00:01:00Z",
-      }),
-    ];
-
-    const live = deriveMessagesTimelineRows({
-      ...baseInput,
-      isWorking: true,
-      activeTurnInProgress: true,
-      activeTurnId: TurnId.makeUnsafe("t2"),
-      timelineEntries: entries,
-    });
-
-    const settled = deriveMessagesTimelineRows({
-      ...baseInput,
-      isWorking: false,
-      activeTurnInProgress: false,
-      timelineEntries: entries,
-    });
-
-    expect(messageRow(live, "a2")).toBeDefined();
-    expect(messageRow(settled, "a2")!.collapsedWorkElapsed).toBe("1m");
-
-    const recomputed = deriveMessagesTimelineRows({
-      ...baseInput,
-      isWorking: false,
-      activeTurnInProgress: false,
-      timelineEntries: entries,
-    });
-    expect(messageRow(recomputed, "a2")!.collapsedWorkElapsed).toBe("1m");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {

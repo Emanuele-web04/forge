@@ -94,6 +94,20 @@ it.effect("accepts project script discovery requests", () =>
   }),
 );
 
+it.effect("accepts bounded project file watch requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-project-file-watch-1",
+      body: {
+        _tag: WS_METHODS.projectsSubscribeFileChange,
+        cwd: "/repo",
+        relativePath: "src/app.ts",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.projectsSubscribeFileChange);
+  }),
+);
+
 it.effect("accepts automation create requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

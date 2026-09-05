@@ -365,6 +365,54 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
+// Poll granularity while waiting out another worker's claim (see
+// processClaimedProviderIntent): re-checking lets a turn proceed the moment
+// the prior attempt settles instead of sleeping blindly to lease expiry.
+const PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS = 1_000;
+
+export interface ProviderCommandClaimSnapshot {
+  readonly state: string;
+  readonly claimOwner?: string | null;
+  readonly claimExpiresAt?: string | null;
+}
+
+/**
+ * Waits out another worker's claim on the same delivery, waking early when the
+ * record settles instead of sleeping to lease expiry. The wait never exceeds
+ * the caller's deadline and never steals work: it only observes, returning the
+ * latest snapshot for the caller to handle through the existing settled/
+ * expired paths. Failed reads keep waiting on the last known snapshot so a
+ * transient store error degrades to today's full-lease wait, not a wrong turn.
+ */
+export function awaitInflightClaimSettlement<TClaim extends ProviderCommandClaimSnapshot>(input: {
+  readonly readClaim: () => Effect.Effect<TClaim | undefined, never>;
+  readonly deadlineMs: number;
+  readonly pollIntervalMs?: number;
+}): Effect.Effect<TClaim | undefined> {
+  const pollIntervalMs = Math.max(
+    0,
+    input.pollIntervalMs ?? PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS,
+  );
+  const startedAt = Date.now();
+  const check = (): Effect.Effect<TClaim | undefined> =>
+    Effect.flatMap(input.readClaim(), (snapshot) => {
+      if (!snapshot || snapshot.state !== "inflight") {
+        return Effect.succeed(snapshot);
+      }
+      const expiresAt = Date.parse(snapshot.claimExpiresAt ?? "");
+      const recordRemainingMs = Number.isFinite(expiresAt) ? expiresAt - Date.now() : 0;
+      const budgetRemainingMs = input.deadlineMs - (Date.now() - startedAt);
+      const remainingMs = Math.min(Math.max(0, recordRemainingMs), Math.max(0, budgetRemainingMs));
+      if (remainingMs <= 0) {
+        return Effect.succeed(snapshot);
+      }
+      return Effect.flatMap(
+        Effect.sleep(Duration.millis(Math.min(remainingMs, pollIntervalMs))),
+        () => check(),
+      );
+    });
+  return check();
+}
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 /**
@@ -1846,7 +1894,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        preferredProvider === "opencode" &&
+        (preferredProvider === "opencode" || preferredProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -2343,28 +2391,25 @@ const make = Effect.gen(function* () {
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
-      const tracksOpenCodeCompatibleContextAcceptance =
-        selectedProvider === "opencode" &&
+      const tracksDurableContextAcceptance =
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
       pendingContextBootstrapAttempt =
-        tracksDroidContextAcceptance || tracksOpenCodeCompatibleContextAcceptance
+        tracksDroidContextAcceptance || tracksDurableContextAcceptance
           ? {
               clearSidechat:
                 sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
               clearFreshSessionTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  hasPendingFreshSessionTranscriptBootstrap),
+                (tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap),
               clearRollbackTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  priorTranscriptBootstrapRetiresOnAcceptedTurn),
+                (tracksDurableContextAcceptance && priorTranscriptBootstrapRetiresOnAcceptedTurn),
               completeDurablePriorTranscript:
-                tracksOpenCodeCompatibleContextAcceptance &&
-                hasPendingFreshSessionTranscriptBootstrap,
+                tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap,
               lifecycleEvidence: providerContextLifecycleEvidence,
               lifecycleEvidenceCreatedAt: input.createdAt,
             }
@@ -2555,7 +2600,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        selectedProvider === "opencode" &&
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -4190,7 +4235,10 @@ const make = Effect.gen(function* () {
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
       : thread.modelSelection.provider;
-    if (stoppedProvider === "opencode" && providerService.completePriorTranscriptBootstrap) {
+    if (
+      (stoppedProvider === "opencode" || stoppedProvider === "devin") &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -4325,9 +4373,20 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
-    processThreadSessionStop({
-      threadId: event.payload.threadId,
-      createdAt: event.payload.createdAt,
+    Effect.gen(function* () {
+      // Explicit stop must pause even in a recovery gap with no live turn left
+      // to emit a cancellation. Internal session exits do not use this path.
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (thread) {
+        yield* pauseActiveThreadGoal({
+          threadId: thread.id,
+          expectedGoalStartedAt: thread.goalStartedAt ?? null,
+        });
+      }
+      yield* processThreadSessionStop({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.createdAt,
+      });
     });
 
   const surfaceTimedOutTurnStart = Effect.fnUntraced(function* (
@@ -4796,11 +4855,11 @@ const make = Effect.gen(function* () {
       const threadId = event.payload.threadId;
       if (yield* skipQuarantinedSideEffect(event)) return;
 
-      const existing = yield* deliveryRepository.getDelivery({
+      let existing = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
       });
-      if (Option.isSome(existing)) {
+      while (Option.isSome(existing)) {
         if (existing.value.state === "succeeded") {
           yield* requireCursorAdvance(event);
           return;
@@ -4814,7 +4873,44 @@ const make = Effect.gen(function* () {
           const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
           const remainingMs = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
           if (remainingMs > 0) {
-            yield* Effect.sleep(Duration.millis(remainingMs));
+            const waitStartedAt = Date.now();
+            let lastKnown = Option.getOrUndefined(existing);
+            const latest = yield* awaitInflightClaimSettlement({
+              readClaim: () =>
+                deliveryRepository
+                  .getDelivery({
+                    consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                    eventSequence: event.sequence,
+                  })
+                  .pipe(
+                    Effect.map((record) => {
+                      lastKnown = Option.getOrUndefined(record);
+                      return Option.getOrUndefined(record);
+                    }),
+                    Effect.orElseSucceed(() => lastKnown),
+                  ),
+              deadlineMs: remainingMs,
+            });
+            if (latest?.state === "succeeded") {
+              const waitedMs = Date.now() - waitStartedAt;
+              yield* Effect.logDebug(
+                "provider command delivery settled while waiting out a prior claim",
+                {
+                  eventSequence: event.sequence,
+                  threadId,
+                  waitedMs,
+                  savedMs: Math.max(0, remainingMs - waitedMs),
+                },
+              );
+            }
+            // The wait budget is not a lease expiry. Re-read before classifying
+            // retry/missing records or another owner's renewed inflight claim.
+            // In particular, never settle from a cached snapshot after a failed read.
+            existing = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+            });
+            continue;
           }
           const expiredOwner = existing.value.claimOwner ?? "";
           if (!isReplaySafeClaimedProviderIntent(event)) {
@@ -4842,6 +4938,7 @@ const make = Effect.gen(function* () {
             );
           }
         }
+        break;
       }
 
       while (true) {

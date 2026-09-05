@@ -73,6 +73,7 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type WheelEvent,
   type ReactNode,
 } from "react";
 import { GoTasklist } from "react-icons/go";
@@ -3624,9 +3625,7 @@ export default function ChatView({
     timelineEntries.length === 0 &&
     !activeThread?.parentThreadId &&
     !isEditorRail &&
-    threadDetailHydration === "ready" &&
-    localDispatch === null &&
-    optimisticUserMessages.length === 0;
+    threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
@@ -5221,6 +5220,10 @@ export default function ChatView({
   // are immediate; state updates project into the `followLiveOutput` prop.
   const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
   const isUserScrollDetachedRef = useRef(isUserScrollDetached);
+  const setTranscriptScrollDetached = useCallback((detached: boolean) => {
+    isUserScrollDetachedRef.current = detached;
+    setIsUserScrollDetached(detached);
+  }, []);
   // The arrow's smooth jump is followed by one exact settle after LegendList
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
@@ -5231,15 +5234,17 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
-  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId, animated = false) => {
-    autoFollowThreadIdRef.current = targetThreadId;
-    animateNextAutoFollowScrollRef.current = animated;
-    isAtEndRef.current = true;
-    isUserScrollDetachedRef.current = false;
-    setIsUserScrollDetached(false);
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
-  }, []);
+  const armTranscriptAutoFollow = useCallback(
+    (targetThreadId: ThreadId, animated = false) => {
+      autoFollowThreadIdRef.current = targetThreadId;
+      animateNextAutoFollowScrollRef.current = animated;
+      isAtEndRef.current = true;
+      setTranscriptScrollDetached(false);
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+    },
+    [setTranscriptScrollDetached],
+  );
   const clearTranscriptAutoFollow = useCallback(() => {
     const settledScrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
     autoFollowThreadIdRef.current = null;
@@ -5249,12 +5254,14 @@ export default function ChatView({
     programmaticScrollUntilRef.current = 0;
     // A user scroll gesture takes over from any in-flight tail-anchor slide.
     tailAnchorScrollInFlightRef.current = false;
-    isUserScrollDetachedRef.current = true;
-    setIsUserScrollDetached(true);
+    const container = legendListRef.current?.getScrollableNode();
+    setTranscriptScrollDetached(
+      container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1,
+    );
     if (settledScrollTarget) {
       void stopTranscriptScrollAtCurrentOffset(settledScrollTarget);
     }
-  }, []);
+  }, [setTranscriptScrollDetached]);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -5273,34 +5280,40 @@ export default function ChatView({
     messageCount: transcriptMessageCount,
     tailKey: transcriptTailKey,
   });
-  const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
-    if (isAtEndRef.current === isAtEnd) return;
-    if (
-      !isAtEnd &&
-      (settledScrollInFlightRef.current || performance.now() < programmaticScrollUntilRef.current)
-    ) {
-      return;
-    }
-    isAtEndRef.current = isAtEnd;
-    if (isAtEnd) {
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      isUserScrollDetachedRef.current = false;
-      setIsUserScrollDetached(false);
-    } else {
-      // Keyboard (Page-Up, arrows), scrollbar drags, and trackpad scrolling fire
-      // onScroll without any wheel/touch/pointer gesture, so scroll ownership
-      // has to move here too: leaving the end detaches follow mode until the
-      // user scrolls back (the isAtEnd branch above reattaches). The
-      // tail-anchor slide keeps ownership — these events can be the slide's own
-      // scroll output, and the hook clears that flag itself when it finishes.
-      autoFollowThreadIdRef.current = null;
-      animateNextAutoFollowScrollRef.current = false;
-      isUserScrollDetachedRef.current = true;
-      setIsUserScrollDetached(true);
-      showScrollDebouncer.current.maybeExecute();
-    }
-  }, []);
+  const onIsAtEndChange = useCallback(
+    (isAtEnd: boolean) => {
+      if (
+        !isAtEnd &&
+        (tailAnchorScrollInFlightRef.current ||
+          settledScrollInFlightRef.current ||
+          performance.now() < programmaticScrollUntilRef.current)
+      ) {
+        return;
+      }
+      // The list can report its content end while the viewport is still inside
+      // the bottom inset. A detached reader resumes only at the actual bottom.
+      const container = legendListRef.current?.getScrollableNode();
+      const atEnd =
+        isAtEnd &&
+        (!isUserScrollDetachedRef.current ||
+          !(container instanceof HTMLElement) ||
+          isScrollContainerNearBottom(container, 1));
+      if (atEnd === isAtEndRef.current && isUserScrollDetachedRef.current === !atEnd) return;
+      // A gesture can detach without changing the previous edge notification.
+      if (atEnd) {
+        setTranscriptScrollDetached(false);
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+      } else {
+        autoFollowThreadIdRef.current = null;
+        animateNextAutoFollowScrollRef.current = false;
+        setTranscriptScrollDetached(true);
+        showScrollDebouncer.current.maybeExecute();
+      }
+      isAtEndRef.current = atEnd;
+    },
+    [setTranscriptScrollDetached],
+  );
   const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
     const pendingFrame = pendingInteractionAnchorFrameRef.current;
     if (pendingFrame === null) return;
@@ -5341,28 +5354,35 @@ export default function ChatView({
     },
     [cancelPendingInteractionAnchorAdjustment],
   );
-  const onMessagesPointerCancelBase = useCallback(() => {
-    clearTranscriptAutoFollow();
-  }, [clearTranscriptAutoFollow]);
   const onMessagesPointerDownBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
-  const onMessagesPointerUpBase = useCallback(() => {}, []);
+  const releaseTranscriptScrollGesture = useCallback(() => {
+    const state = legendListRef.current?.getState();
+    if (state) onIsAtEndChange(state.isAtEnd);
+  }, [onIsAtEndChange]);
+  const onMessagesPointerCancelBase = releaseTranscriptScrollGesture;
+  const onMessagesPointerUpBase = releaseTranscriptScrollGesture;
   const onMessagesScrollBase = useCallback(() => {}, []);
-  const onMessagesTouchEndBase = useCallback(() => {}, []);
+  const onMessagesTouchEndBase = releaseTranscriptScrollGesture;
   const onMessagesTouchMoveBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   const onMessagesTouchStartBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
-  const onMessagesWheelBase = useCallback(() => {
-    clearTranscriptAutoFollow();
-  }, [clearTranscriptAutoFollow]);
+  const onMessagesWheelBase = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      // Horizontal scroll, zoom, and scrolling down at the end do not leave it.
+      if (event.ctrlKey || event.deltaY === 0 || (event.deltaY > 0 && isAtEndRef.current)) return;
+      clearTranscriptAutoFollow();
+    },
+    [clearTranscriptAutoFollow],
+  );
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
-    if (!isAtEndRef.current && !shouldFollowPendingTurn) {
+    if (isUserScrollDetachedRef.current || (!isAtEndRef.current && !shouldFollowPendingTurn)) {
       return;
     }
     // Re-apply the bottom stick only for real transcript messages; tool/work
@@ -5371,7 +5391,7 @@ export default function ChatView({
       // The tail-anchor slide owns the scroll after a send; a re-snap here
       // would hard-jump past the smooth slide mid-flight. Once the anchor
       // settles the spacer keeps the end position exact, so nothing is missed.
-      if (tailAnchorScrollInFlightRef.current) {
+      if (tailAnchorScrollInFlightRef.current || isUserScrollDetachedRef.current) {
         return;
       }
       const shouldAnimate = animateNextAutoFollowScrollRef.current;
@@ -5626,8 +5646,7 @@ export default function ChatView({
     settledScrollRequestRef.current += 1;
     settledScrollInFlightRef.current = false;
     programmaticScrollUntilRef.current = 0;
-    isUserScrollDetachedRef.current = false;
-    setIsUserScrollDetached(false);
+    setTranscriptScrollDetached(false);
     showScrollDebouncer.current.cancel();
     // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
     // in render->commit order); defer only the setState so this thread-change reset
@@ -5642,7 +5661,7 @@ export default function ChatView({
       setPlanSidebarOpen(openPlanSidebar);
     }, 0);
     return () => window.clearTimeout(settle);
-  }, [activeThread?.id]);
+  }, [activeThread?.id, setTranscriptScrollDetached]);
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -10939,6 +10958,8 @@ export default function ChatView({
     setExpandedImage(preview);
   }, []);
   const onScrollToBottom = useCallback(() => {
+    tailAnchorScrollInFlightRef.current = false;
+    setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
@@ -10976,7 +10997,7 @@ export default function ChatView({
           settledScrollInFlightRef.current = false;
         }
       });
-  }, []);
+  }, [setTranscriptScrollDetached]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {

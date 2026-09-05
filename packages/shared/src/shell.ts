@@ -5,8 +5,6 @@
 import * as OS from "node:os";
 import { execFileSync } from "node:child_process";
 
-const PATH_CAPTURE_START = "__SYNARA_PATH_START__";
-const PATH_CAPTURE_END = "__SYNARA_PATH_END__";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 
 type ExecFileSyncLike = (
@@ -95,18 +93,6 @@ export function resolveLoginShell(
   shell: string | undefined,
 ): string | undefined {
   return listLoginShellCandidates(platform, shell)[0];
-}
-
-export function extractPathFromShellOutput(output: string): string | null {
-  const startIndex = output.indexOf(PATH_CAPTURE_START);
-  if (startIndex === -1) return null;
-
-  const valueStartIndex = startIndex + PATH_CAPTURE_START.length;
-  const endIndex = output.indexOf(PATH_CAPTURE_END, valueStartIndex);
-  if (endIndex === -1) return null;
-
-  const pathValue = output.slice(valueStartIndex, endIndex).trim();
-  return pathValue.length > 0 ? pathValue : null;
 }
 
 export function readPathFromLoginShell(

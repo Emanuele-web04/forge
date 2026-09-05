@@ -24,7 +24,7 @@ export function shouldInvalidateProviderQueriesForEvent(event: OrchestrationEven
 }
 
 export function shouldInvalidateGitQueriesForEvent(event: OrchestrationEvent): boolean {
-  if (FILE_CHANGE_EVENT_TYPES.has(event.type)) {
+  if (FILE_CHANGE_EVENT_TYPES.has(event.type) || isPotentiallyFileMutatingToolCompletion(event)) {
     return true;
   }
 
@@ -46,6 +46,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function activityItemType(event: OrchestrationEvent): unknown {
+  if (event.type !== "thread.activity-appended") {
+    return null;
+  }
+  const payload = isRecord(event.payload.activity.payload) ? event.payload.activity.payload : null;
+  const data = payload && isRecord(payload.data) ? payload.data : null;
+  const item = data && isRecord(data.item) ? data.item : null;
+  return payload?.itemType ?? data?.itemType ?? item?.type ?? item?.kind;
+}
+
+function isPotentiallyFileMutatingToolCompletion(event: OrchestrationEvent): boolean {
+  if (
+    event.type !== "thread.activity-appended" ||
+    event.payload.activity.kind !== "tool.completed"
+  ) {
+    return false;
+  }
+  // Known read-only tools should not trigger expensive file/diff reads. Every
+  // other completed tool can write through a shell, MCP, subagent, script, or
+  // provider-specific payload, including older payloads with no itemType.
+  const itemType = activityItemType(event);
+  return itemType !== "web_search" && itemType !== "image_view";
+}
+
 // Activities stream while a turn is still running; file-change tool calls are the
 // earliest signal that workspace files were touched. Invalidating the project
 // file queries on them lets the editor file tree and open file preview refresh
@@ -53,6 +77,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function getProjectFileInvalidationThreadIdForEvent(
   event: OrchestrationEvent,
 ): ThreadId | null {
+  if (FILE_CHANGE_EVENT_TYPES.has(event.type)) {
+    return "threadId" in event.payload ? (event.payload.threadId as ThreadId) : null;
+  }
   if (event.type !== "thread.activity-appended") {
     return null;
   }
@@ -60,10 +87,11 @@ export function getProjectFileInvalidationThreadIdForEvent(
   if (!payload) {
     return null;
   }
-  const data = isRecord(payload.data) ? payload.data : null;
-  const item = data && isRecord(data.item) ? data.item : null;
-  const itemType = payload.itemType ?? data?.itemType ?? item?.type ?? item?.kind;
-  if (payload.requestKind === "file-change" || itemType === "file_change") {
+  if (
+    payload.requestKind === "file-change" ||
+    activityItemType(event) === "file_change" ||
+    isPotentiallyFileMutatingToolCompletion(event)
+  ) {
     return event.payload.threadId;
   }
   return null;

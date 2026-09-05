@@ -71,8 +71,6 @@ interface HarnessHandle {
   showWorkingHeader: () => void;
   finishTurn: () => void;
   clearAnchor: () => void;
-  /** Simulate the user taking ownership of the scroll mid-slide. */
-  detach: () => void;
   listRef: React.RefObject<LegendListRef | null>;
 }
 
@@ -83,7 +81,6 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   const [followLiveOutput, setFollowLiveOutput] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [activeTurnStartedAt, setActiveTurnStartedAt] = useState<string | null>(null);
-  const tailAnchorScrollInFlightRef = useRef(false);
 
   handleRef.current = {
     listRef,
@@ -128,10 +125,6 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
     clearAnchor: () => {
       setTailAnchorMessageId(null);
     },
-    detach: () => {
-      tailAnchorScrollInFlightRef.current = false;
-      setFollowLiveOutput(false);
-    },
   };
 
   return (
@@ -143,7 +136,6 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
         activeTurnStartedAt={activeTurnStartedAt}
         listRef={listRef}
         tailAnchorMessageId={tailAnchorMessageId}
-        tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
         followLiveOutput={followLiveOutput}
         timelineEntries={entries}
         turnDiffSummaryByAssistantMessageId={new Map()}
@@ -324,7 +316,7 @@ describe("MessagesTimeline tail anchor", () => {
       // 5) A new send re-anchors, and an overflowing response hands off to
       // follow-the-tail with the reserve back at zero.
       handle().send(SECOND_SENT_MESSAGE_ID);
-      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+      void handle().listRef.current?.scrollToEnd?.({ animated: true });
       await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
 
       // Streamed in chunks, the way a real turn arrives: the transcript has to
@@ -341,41 +333,6 @@ describe("MessagesTimeline tail anchor", () => {
       // The anchored message has scrolled up and out of the way of the live tail.
       const overflowOffset = anchorTopOffsetPx(handle(), SECOND_SENT_MESSAGE_ID);
       expect(overflowOffset === null || overflowOffset < 0).toBe(true);
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("stops the tail-anchor slide and does not follow the live tail after user scroll takes over", async () => {
-    const handleRef: { current: HarnessHandle | null } = { current: null };
-    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
-
-    try {
-      const handle = () => {
-        if (!handleRef.current) throw new Error("harness not mounted");
-        return handleRef.current;
-      };
-
-      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
-      await settleFrames(3);
-      void handle().listRef.current?.scrollToEnd?.({ animated: false });
-      await expect
-        .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
-
-      handle().send(FIRST_SENT_MESSAGE_ID);
-      await settleFrames(3);
-
-      handle().detach();
-      const distanceAfterDetach = distanceFromBottomPx(handle());
-
-      handle().growStream(FIRST_STREAMING_MESSAGE_ID, 10);
-      for (let frame = 0; frame < 24; frame += 1) {
-        await settleFrames(1);
-        expect(distanceFromBottomPx(handle())).toBeGreaterThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX / 2);
-      }
-
-      expect(distanceFromBottomPx(handle())).toBeGreaterThan(distanceAfterDetach);
     } finally {
       await screen.unmount();
     }

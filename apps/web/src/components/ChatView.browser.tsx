@@ -49,6 +49,7 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
+import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -113,6 +114,7 @@ interface WsRequestEnvelope {
 interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
+  providerStatusesSnapshot: ServerConfig["providers"] | null;
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
 }
@@ -495,6 +497,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    providerStatusesSnapshot: null,
     gitBranchByCwd: {},
     welcome: {
       cwd: "/repo/project",
@@ -1200,6 +1203,12 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.providerListModels) {
+    // Keep the full-app fixture contract-valid and neutral. Returning the
+    // generic `{}` fallback makes real discovery retry malformed responses,
+    // which leaks unrelated retry pressure across this file's many mounts.
+    return { models: [], source: "unsupported", cached: false };
+  }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
   }
@@ -1422,8 +1431,15 @@ const worker = setupWorker(
         });
         return;
       }
+      if (method === WS_METHODS.subscribeServerProviderStatuses) {
+        if (fixture.providerStatusesSnapshot) {
+          sendEffectRpcChunk(client, parsed.request.id, {
+            providers: fixture.providerStatusesSnapshot,
+          });
+        }
+        return;
+      }
       if (
-        method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
@@ -3526,6 +3542,195 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it.each([
+    "wheel near end",
+    "manual return",
+    "arrow",
+    "send",
+    "wheel down",
+    "pointer click",
+    "thread switch",
+    "short transcript",
+  ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
+    if (action === "short transcript") {
+      snapshot = {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? { ...thread, messages: thread.messages.slice(0, 1) } : thread,
+        ),
+      };
+    }
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const messageId = MessageId.makeUnsafe("follow-live-response");
+    const turnId = TurnId.makeUnsafe("follow-live-turn");
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    const grow = () =>
+      syncThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, text: `${message.text}\n\n${"More streaming output. ".repeat(35)}` }
+            : message,
+        ),
+      }));
+    try {
+      let container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 350));
+      if (action === "send") {
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_ID, "Continue with a long streamed response");
+        (await waitForSendButton()).click();
+        const sent = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLElement>("[data-message-role='user']")).find(
+              (row) => row.textContent?.includes("Continue with a long streamed response"),
+            ) ?? null,
+          "Optimistic message did not appear.",
+        );
+        const sentId = MessageId.makeUnsafe(sent.dataset.messageId!);
+        syncThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: sentId,
+              role: "user",
+              text: "Continue with a long streamed response",
+              createdAt: isoAt(1_200),
+              updatedAt: isoAt(1_200),
+              streaming: false,
+            },
+          ],
+        }));
+        // The slide emits real scroll events while the provider is starting.
+        await new Promise<void>((resolve) => setTimeout(resolve, 700));
+      }
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "running", activeTurnId: turnId }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: isoAt(1_200),
+          startedAt: isoAt(1_201),
+          completedAt: null,
+          assistantMessageId: messageId,
+        },
+        messages: [
+          ...thread.messages,
+          {
+            id: messageId,
+            role: "assistant",
+            text: "The response begins.",
+            turnId,
+            streaming: true,
+            createdAt: isoAt(1_202),
+            updatedAt: isoAt(1_202),
+          },
+        ],
+      }));
+      if (action === "short transcript") {
+        await waitForLayout();
+        expect(container.scrollHeight).toBeLessThanOrEqual(container.clientHeight + 1);
+        await userEvent.wheel(container, { delta: { y: -100 } });
+      }
+      for (let index = 0; index < 12; index += 1) {
+        grow();
+        await waitForLayout();
+      }
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+
+      if (action === "wheel down") {
+        await userEvent.wheel(container, { delta: { y: 100 } });
+      } else if (action === "pointer click") {
+        container.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        container.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      } else if (action !== "send" && action !== "short transcript") {
+        await userEvent.wheel(container, {
+          delta: { y: action === "wheel near end" ? -12 : -350 },
+        });
+        await vi.waitFor(() =>
+          expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
+        );
+        await waitForLayout();
+        const detached = container.scrollTop;
+        for (let index = 0; index < 3; index += 1) {
+          grow();
+          await waitForLayout();
+        }
+        expect(container.scrollTop).toBeCloseTo(detached, 0);
+        if (action === "thread switch") {
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: OTHER_THREAD_ID },
+          });
+          await waitForLayout();
+          await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+          container = await waitForElement(
+            () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+            "Transcript did not remount.",
+          );
+          await waitForLayout();
+        } else if (action === "arrow") {
+          const arrow = await waitForElement(
+            () =>
+              document.querySelector<HTMLButtonElement>(
+                "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+              ),
+            "Scroll-to-bottom arrow did not appear.",
+          );
+          arrow.click();
+        } else {
+          container.scrollTop = container.scrollHeight;
+          container.dispatchEvent(new Event("scroll"));
+        }
+        await vi.waitFor(() =>
+          expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
+            action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
+          ),
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+      for (let index = 0; index < 8; index += 1) {
+        grow();
+        await waitForLayout();
+      }
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
@@ -3585,7 +3790,28 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
+      await expect.element(page.getByText("Starting Codex…", { exact: true })).toBeInTheDocument();
       expect(scrollSpy.calls).toHaveLength(0);
+
+      for (const status of ["error", "starting", "ready"] as const) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          session: thread.session
+            ? {
+                ...thread.session,
+                status,
+                lastError: status === "error" ? "Provider connection failed" : null,
+              }
+            : null,
+        }));
+        await waitForLayout();
+        expect(scrollSpy.calls).toHaveLength(0);
+        if (status !== "starting") {
+          await expect
+            .element(page.getByText("Starting Codex…", { exact: true }))
+            .not.toBeInTheDocument();
+        }
+      }
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
       syncActiveThread((thread) => ({
@@ -6788,7 +7014,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("applies the project model over sticky codex settings on a new thread", async () => {
+  it("restores the sticky codex model on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
@@ -6828,7 +7054,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
           },
         },
         activeProvider: "codex",
@@ -6838,7 +7064,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("does not inherit sticky codex options onto a fresh project default", async () => {
+  it("restores sticky codex options on a new thread", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
@@ -6878,17 +7104,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
+            options: {
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
           },
         },
         activeProvider: "codex",
       });
-      // The fresh project default must not inherit the sticky codex fastMode or
-      // reasoningEffort options through same-provider option preservation.
-      expect(
-        useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.modelSelectionByProvider
-          .codex,
-      ).not.toHaveProperty("options");
     } finally {
       await mounted.cleanup();
     }
@@ -7322,7 +7546,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("prefers the project model over a sticky claude model on fresh chat", async () => {
+  it("restores a usable sticky claude model on fresh chat", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         claudeAgent: {
@@ -7343,9 +7567,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetMessageId: "msg-user-sticky-claude-model-test" as MessageId,
         targetText: "sticky claude model test",
       }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers,
+        };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
     });
 
     try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
       const newThreadButton = page.getByTestId("new-thread-button");
       await expect.element(newThreadButton).toBeInTheDocument();
 
@@ -7355,6 +7601,82 @@ describe("ChatView timeline estimator parity (full app)", () => {
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new sticky claude draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
+        modelSelectionByProvider: {
+          claudeAgent: {
+            provider: "claudeAgent",
+            model: "claude-opus-4-6",
+            options: {
+              effort: "max",
+              fastMode: true,
+            },
+          },
+        },
+        activeProvider: "claudeAgent",
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("falls back from an unauthenticated sticky provider on fresh chat", async () => {
+    useComposerDraftStore.setState({
+      stickyModelSelectionByProvider: {
+        claudeAgent: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: {
+            effort: "max",
+            fastMode: true,
+          },
+        },
+      },
+      stickyActiveProvider: "claudeAgent",
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-unavailable-sticky-claude-test" as MessageId,
+        targetText: "unavailable sticky claude test",
+      }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unauthenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers,
+        };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          hasReconciledServerProviderStatuses(mounted.router.options.context.queryClient),
+        ).toBe(true);
+      });
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a healthy fallback draft thread UUID.",
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
@@ -7372,7 +7694,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("materializes the project default when no sticky composer settings exist", async () => {
+  it("leaves the project default implicit when no sticky composer settings exist", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -7394,15 +7716,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
-        modelSelectionByProvider: {
-          codex: {
-            provider: "codex",
-            model: "gpt-5",
-          },
-        },
-        activeProvider: "codex",
-      });
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toBeUndefined();
     } finally {
       await mounted.cleanup();
     }
@@ -7448,7 +7762,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             provider: "codex",
-            model: "gpt-5",
+            model: "gpt-5.3-codex",
+            options: {
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
           },
         },
         activeProvider: "codex",
@@ -8787,141 +9105,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(document.body.textContent).toContain("Worked for");
       expect(transitionFrames).toBe(0);
     } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("does not flash the empty home landing while the first send is in flight", async () => {
-    const restoreNativeApi = installDeterministicSendNativeApi();
-    const baseSnapshot = withHomeChatProject(createDraftOnlySnapshot());
-    useComposerDraftStore.setState({
-      draftsByThreadId: {},
-      draftThreadsByThreadId: {
-        [THREAD_ID]: {
-          projectId: HOME_PROJECT_ID,
-          createdAt: NOW_ISO,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          entryPoint: "chat",
-          branch: null,
-          worktreePath: null,
-          envMode: "local",
-        },
-      },
-      projectDraftThreadIdByProjectId: {
-        [HOME_PROJECT_ID]: THREAD_ID,
-      },
-    });
-
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: baseSnapshot,
-      configureFixture: (nextFixture) => {
-        nextFixture.welcome = {
-          ...nextFixture.welcome,
-          homeDir: "/Users/tester",
-          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-        };
-      },
-    });
-
-    try {
-      const landingHeading = page.getByText("What should we work on?");
-      await expect.element(landingHeading).toBeInTheDocument();
-
-      const prompt = "first send landing regression";
-      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
-      const sendButton = await waitForSendButton();
-      expect(sendButton.disabled).toBe(false);
-
-      sendButton.click();
-
-      let sentMessageId: string | null = null;
-
-      await vi.waitFor(
-        () => {
-          const text = document.body.textContent ?? "";
-          expect(text).not.toContain("What should we work on?");
-          const userRow = document.querySelector<HTMLElement>(
-            "[data-message-id][data-message-role='user']",
-          );
-          expect(userRow).not.toBeNull();
-          expect(userRow?.textContent ?? "").toContain(prompt);
-          sentMessageId = userRow?.dataset.messageId ?? null;
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      expect(sentMessageId, "sent user row did not render before the delayed echo").not.toBeNull();
-
-      const pollStartedAt = performance.now();
-      while (performance.now() - pollStartedAt < 300) {
-        expect(document.body.textContent ?? "").not.toContain("What should we work on?");
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-      }
-
-      const echoedSnapshot: OrchestrationReadModel = {
-        ...baseSnapshot,
-        snapshotSequence: baseSnapshot.snapshotSequence + 1,
-        updatedAt: isoAt(1_200),
-        threads: [
-          {
-            id: THREAD_ID,
-            projectId: HOME_PROJECT_ID,
-            title: "Home thread",
-            modelSelection: {
-              provider: "codex",
-              model: "gpt-5",
-            },
-            interactionMode: "default",
-            runtimeMode: "full-access",
-            envMode: "local",
-            branch: null,
-            worktreePath: null,
-            latestTurn: null,
-            createdAt: NOW_ISO,
-            updatedAt: isoAt(1_200),
-            deletedAt: null,
-            handoff: null,
-            messages: [
-              {
-                id: MessageId.makeUnsafe(sentMessageId!),
-                role: "user",
-                text: prompt,
-                turnId: null,
-                streaming: false,
-                source: "native",
-                createdAt: isoAt(1_100),
-                updatedAt: isoAt(1_100),
-              },
-            ],
-            activities: [],
-            proposedPlans: [],
-            checkpoints: [],
-            session: {
-              threadId: THREAD_ID,
-              status: "ready",
-              providerName: "codex",
-              runtimeMode: "full-access",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: isoAt(1_100),
-            },
-          },
-        ],
-      };
-
-      useStore.getState().syncServerReadModel(echoedSnapshot);
-
-      await vi.waitFor(
-        () => {
-          expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).not.toContain("What should we work on?");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      restoreNativeApi();
       await mounted.cleanup();
     }
   });

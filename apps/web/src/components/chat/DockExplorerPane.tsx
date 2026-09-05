@@ -26,6 +26,7 @@ const DOCK_EXPLORER_SIDEBAR_CLASS =
 export const DockExplorerPane = function DockExplorerPane(props: {
   threadId: ThreadId;
   workspaceRoot: string | null;
+  isVisible: boolean;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
@@ -86,6 +87,7 @@ export const DockExplorerPane = function DockExplorerPane(props: {
         <WorkspaceFilePreview
           workspaceRoot={props.workspaceRoot}
           filePath={selectedFilePath}
+          liveRevalidationEnabled={props.isVisible}
           editable
           emptyState={
             <PanelStateMessage density="compact" fill="flex">

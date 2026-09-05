@@ -2,12 +2,13 @@ diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
 index ff15212e4..e7cf12c4d 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -314,7 +314,8 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+@@ -314,7 +314,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
 -            shell: cmd.options.shell
 +            shell: cmd.options.shell,
++            windowsHide: cmd.options.windowsHide,
 +            windowsVerbatimArguments: cmd.options.windowsVerbatimArguments
            }), Effect.fnUntraced(function* ([childProcess, exitSignal]) {
              const exited = yield* Deferred.isDone(exitSignal);
@@ -16,12 +17,17 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
 index dc53bafb7..fe867fbfc 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
-@@ -430,7 +430,12 @@ const make = Effect.gen(function*() {
+@@ -430,7 +430,17 @@ const make = Effect.gen(function*() {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
 -            shell: cmd.options.shell
 +            shell: cmd.options.shell,
++            windowsHide: (
++              cmd.options as ChildProcess.CommandOptions & {
++                readonly windowsHide?: boolean | undefined
++              }
++            ).windowsHide,
 +            windowsVerbatimArguments: (
 +              cmd.options as ChildProcess.CommandOptions & {
 +                readonly windowsVerbatimArguments?: boolean | undefined

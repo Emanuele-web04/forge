@@ -56,79 +56,13 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
-import { settleTurnStateFromSession } from "./turnLifecycle.ts";
+import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
-
-// Cap per-message text in the in-memory read model at the same 512 KB limit as
-// the durable provider runtime event journal. Ordinary messages are untouched.
-const MAX_IN_MEMORY_MESSAGE_TEXT_BYTES = 512 * 1024;
-// UTF-8 encodes at most 3 bytes per UTF-16 code unit, so text at or below a
-// third of the byte cap cannot exceed it. This cheap length check keeps the
-// per-delta streaming hot path from re-encoding the whole string just to
-// confirm it is small; only text that could actually be over the cap pays for
-// the encode/decode pass.
-const MAX_IN_MEMORY_MESSAGE_TEXT_UTF16_UNITS = Math.floor(MAX_IN_MEMORY_MESSAGE_TEXT_BYTES / 3);
-
-const messageTextEncoder = new TextEncoder();
-const messageTextDecoder = new TextDecoder("utf-8", { fatal: true });
-
-function compactInMemoryMessageText(text: string): string {
-  if (text.length <= MAX_IN_MEMORY_MESSAGE_TEXT_UTF16_UNITS) {
-    return text;
-  }
-  const bytes = messageTextEncoder.encode(text);
-  if (bytes.length <= MAX_IN_MEMORY_MESSAGE_TEXT_BYTES) {
-    return text;
-  }
-
-  const marker = `\n\n[synara: message text truncated; original ${bytes.length} bytes]`;
-  const markerBytes = messageTextEncoder.encode(marker);
-  const target = Math.max(0, MAX_IN_MEMORY_MESSAGE_TEXT_BYTES - markerBytes.length);
-
-  // Find the longest valid UTF-8 prefix that fits under the byte budget.
-  let low = 0;
-  let high = target;
-  while (low < high) {
-    const mid = Math.floor((low + high + 1) / 2);
-    try {
-      messageTextDecoder.decode(bytes.subarray(0, mid));
-      low = mid;
-    } catch {
-      high = mid - 1;
-    }
-  }
-
-  const prefix = messageTextDecoder.decode(bytes.subarray(0, low));
-  return `${prefix}${marker}`;
-}
-
-function compactMessageTextSegments(
-  segments: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
-  compactedText: string,
-): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
-  if (segments === undefined || segments.length === 0) {
-    return undefined;
-  }
-
-  const joined = segments.map((segment) => segment.text).join("");
-  if (joined === compactedText) {
-    return segments;
-  }
-
-  return [
-    {
-      sequence: segments[0]!.sequence,
-      startedAt: segments[0]!.startedAt,
-      endedAt: segments.at(-1)!.endedAt,
-      text: compactedText,
-    },
-  ];
-}
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -1107,14 +1041,12 @@ export function projectEvent(
         let cappedMessages: ReadonlyArray<OrchestrationMessage>;
         if (existingIndex >= 0) {
           const entry = thread.messages[existingIndex]!;
-          const resolvedText = compactInMemoryMessageText(
-            message.streaming
-              ? `${entry.text}${message.text}`
-              : message.text.length > 0
-                ? message.text
-                : entry.text,
-          );
-          const rawSegments =
+          const resolvedText = message.streaming
+            ? `${entry.text}${message.text}`
+            : message.text.length > 0
+              ? message.text
+              : entry.text;
+          const nextSegments =
             message.role === "assistant"
               ? deriveNextMessageTextSegments(entry.textSegments, {
                   // For streaming deltas the segment owns only this delta's
@@ -1127,7 +1059,6 @@ export function projectEvent(
                   updatedAt: payload.updatedAt,
                 })
               : undefined;
-          const nextSegments = compactMessageTextSegments(rawSegments, resolvedText);
           const nextMessages = thread.messages.slice();
           const entryWithoutTextSegments = { ...entry };
           delete entryWithoutTextSegments.textSegments;
@@ -1148,11 +1079,10 @@ export function projectEvent(
           };
           cappedMessages = nextMessages;
         } else {
-          const resolvedText = compactInMemoryMessageText(message.text);
-          const rawSegments =
+          const nextSegments =
             message.role === "assistant"
               ? deriveNextMessageTextSegments(undefined, {
-                  text: resolvedText,
+                  text: message.text,
                   streaming: message.streaming,
                   segmentStartedAt: payload.segmentStartedAt,
                   sequence: payload.segmentSequence ?? event.sequence,
@@ -1160,19 +1090,22 @@ export function projectEvent(
                   updatedAt: payload.updatedAt,
                 })
               : undefined;
-          const nextSegments = compactMessageTextSegments(rawSegments, resolvedText);
-          const compactedMessage = {
-            ...message,
-            text: resolvedText,
-            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
-          };
           cappedMessages =
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  compactedMessage,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
                 ]
-              : [...thread.messages, compactedMessage];
+              : [
+                  ...thread.messages,
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
+                ];
         }
 
         return {
@@ -1234,7 +1167,7 @@ export function projectEvent(
                           : null,
                     }
                 : settleLatestTurnForSessionStatus(thread.latestTurn, session),
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1363,7 +1296,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });

@@ -31,18 +31,20 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
   });
 
   it("keeps successful upstream refreshes warm for 15 seconds", () => {
-    expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed")))).toBe(15_000);
+    expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), cacheKey()))).toBe(
+      15_000,
+    );
   });
 
   it("caches handled failures for 30 seconds instead of Duration.zero", () => {
     const failed = Exit.succeed("failed" as const);
     // A zero TTL re-ran fetch on every git.status for unreachable remotes.
-    expect(Duration.toMillis(policy.timeToLive(failed))).toBe(30_000);
+    expect(Duration.toMillis(policy.timeToLive(failed, cacheKey()))).toBe(30_000);
   });
 
   it("throttles failures at least as long as successes", () => {
-    const successMs = Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed")));
-    const failureMs = Duration.toMillis(policy.timeToLive(Exit.succeed("failed")));
+    const successMs = Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), cacheKey()));
+    const failureMs = Duration.toMillis(policy.timeToLive(Exit.succeed("failed"), cacheKey()));
     expect(failureMs).toBeGreaterThanOrEqual(successMs);
   });
 
@@ -100,6 +102,19 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
     // A success in repo A only resets repo A's backoff.
     expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), repoAKey))).toBe(15_000);
     expect(Duration.toMillis(policy.timeToLive(failed, repoBKey))).toBe(60_000);
+  });
+
+  it("bounds failure bookkeeping and keeps recently retried repositories", () => {
+    const failed = Exit.succeed("failed" as const);
+    const oldest = cacheKey({ cwd: "/repo-0" });
+    for (let index = 0; index < 2_048; index += 1) {
+      policy.timeToLive(failed, cacheKey({ cwd: `/repo-${index}` }));
+    }
+    policy.timeToLive(failed, oldest);
+    policy.timeToLive(failed, cacheKey({ cwd: "/repo-new" }));
+    expect(policy.getFailureCount(oldest)).toBe(2);
+    expect(policy.getFailureCount(cacheKey({ cwd: "/repo-1" }))).toBe(0);
+    expect(policy.getFailureCount(cacheKey({ cwd: "/repo-new" }))).toBe(1);
   });
 
   it("resets a remote's backoff after a successful refresh", () => {

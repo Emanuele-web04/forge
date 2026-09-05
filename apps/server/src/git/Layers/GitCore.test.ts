@@ -11,6 +11,7 @@ import { it } from "@effect/vitest";
 import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
+import { TestClock } from "effect/testing";
 
 import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
@@ -2565,6 +2566,60 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(details.branch).toBe(initialBranch);
           expect(details.aheadCount).toBe(0);
           expect(details.behindCount).toBe(1);
+        }),
+    );
+
+    it.effect(
+      "backs off failed upstream fetches and resumes the normal interval after recovery",
+      () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
+          yield* initRepoWithCommit(source);
+          const realCore = yield* GitCore;
+          const branch = (yield* realCore.listBranches({ cwd: source })).branches.find(
+            (entry) => entry.current,
+          )!.name;
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", branch]);
+          let fetches = 0;
+          let recovered = false;
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.args[0] !== "fetch") return realCore.execute(input);
+            fetches += 1;
+            return Effect.succeed({
+              code: recovered ? 0 : 1,
+              stdout: "",
+              stderr: recovered ? "" : "unreachable",
+            });
+          });
+          yield* core.statusDetails(source);
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("29 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          yield* TestClock.adjust("59 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          recovered = true;
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(3);
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(4);
+          recovered = false;
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(5);
+          yield* TestClock.adjust("30 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(6);
         }),
     );
 

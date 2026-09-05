@@ -76,43 +76,35 @@ function statusUpstreamRefreshBackoffMapKey(key: StatusUpstreamRefreshCacheKeyFi
   return `${key.cwd}\u0000${key.upstreamRef}\u0000${key.remoteName}\u0000${key.upstreamBranch}`;
 }
 
-/**
- * Exponential backoff for failed `git fetch` upstream refreshes, keyed by the
- * full status cache key (cwd + upstreamRef + remoteName + upstreamBranch) so a
- * failing remote in one repository never inflates the backoff of a same-named
- * remote in another repository. The failure count lives inside this factory so
- * each `Cache` instance owns its own state; the returned `timeToLive` updates
- * the count on every failure and resets it on the first successful refresh.
- */
+/** Failure state is scoped and bounded like the upstream refresh cache itself. */
 export function makeStatusUpstreamRefreshCacheTimeToLive() {
   const consecutiveFailures = new Map<string, number>();
-
   return {
     getFailureCount(key: StatusUpstreamRefreshCacheKeyFields): number {
       return consecutiveFailures.get(statusUpstreamRefreshBackoffMapKey(key)) ?? 0;
     },
     timeToLive(
       exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
-      key?: StatusUpstreamRefreshCacheKeyFields,
+      key: StatusUpstreamRefreshCacheKeyFields,
     ): Duration.Duration {
+      const mapKey = statusUpstreamRefreshBackoffMapKey(key);
       if (Exit.isSuccess(exit) && exit.value === "refreshed") {
-        if (key !== undefined) {
-          consecutiveFailures.delete(statusUpstreamRefreshBackoffMapKey(key));
-        }
+        consecutiveFailures.delete(mapKey);
         return STATUS_UPSTREAM_REFRESH_INTERVAL;
       }
-      const failures =
-        key !== undefined
-          ? (consecutiveFailures.get(statusUpstreamRefreshBackoffMapKey(key)) ?? 0)
-          : 0;
-      if (key !== undefined) {
-        consecutiveFailures.set(statusUpstreamRefreshBackoffMapKey(key), failures + 1);
+      const failures = consecutiveFailures.get(mapKey) ?? 0;
+      // Refresh insertion order so active repositories retain their backoff.
+      consecutiveFailures.delete(mapKey);
+      consecutiveFailures.set(mapKey, Math.min(failures + 1, 5));
+      if (consecutiveFailures.size > STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY) {
+        consecutiveFailures.delete(consecutiveFailures.keys().next().value!);
       }
-      const backoff = Math.min(
-        Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
-        Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
+      return Duration.millis(
+        Math.min(
+          Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
+          Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
+        ),
       );
-      return Duration.millis(backoff);
     },
   };
 }
@@ -1089,8 +1081,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }),
         ),
       // Keep successful refreshes warm; cache failures with exponential backoff
-      // per remote so unreachable remotes neither re-fetch nor re-log every
-      // git.status (#515, quick noise wins).
+      // per upstream so unreachable remotes do not re-fetch on every git.status.
       timeToLive: upstreamRefreshPolicy.timeToLive,
     });
 

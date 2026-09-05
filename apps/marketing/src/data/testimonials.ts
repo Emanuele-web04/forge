@@ -66,14 +66,6 @@ export const TESTIMONIALS: TestimonialSeed[] = [
     fallbackUrl: "https://x.com/maboroshidev/status/2065191018635329877",
   },
   {
-    id: "2065178684537888877",
-    tier: 1,
-    fallbackHandle: "domhfr",
-    fallbackText:
-      "Really disappointed with the speed of GPT-5.4-Mini in Codex when building swift code. Switched to Synara and Composer 2.5 and it's literally flying!!",
-    fallbackUrl: "https://x.com/domhfr/status/2065178684537888877",
-  },
-  {
     id: "2066574154741027134",
     tier: 1,
     fallbackHandle: "alpes_aux_andes",

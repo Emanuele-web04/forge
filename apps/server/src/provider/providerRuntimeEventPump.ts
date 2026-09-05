@@ -82,20 +82,6 @@ function shouldLogRetry(attempt: number): boolean {
   return attempt === 1 || (attempt & (attempt - 1)) === 0;
 }
 
-function sanitizeRuntimeEvent(event: ProviderRuntimeEvent): ProviderRuntimeEvent {
-  if (event.type === "request.opened") {
-    const detail = event.payload.detail?.trim() || undefined;
-    if (event.payload.detail === detail) return event;
-    return { ...event, payload: { ...event.payload, detail } };
-  }
-  if (event.type === "event.unmapped") {
-    const detail = event.payload.detail?.trim() || undefined;
-    if (event.payload.detail === detail) return event;
-    return { ...event, payload: { ...event.payload, detail } };
-  }
-  return event;
-}
-
 function health(input: {
   readonly provider: ProviderKind;
   readonly status: ProviderRuntimeEventPumpStatus;
@@ -218,12 +204,11 @@ export function runProviderRuntimeEventPump<R>(
     });
 
   const processEventReliably = (
-    rawEvent: ProviderRuntimeEvent,
+    event: ProviderRuntimeEvent,
     attempt = 1,
   ): Effect.Effect<void, never, R> =>
-    Effect.suspend(() => {
-      const event = sanitizeRuntimeEvent(rawEvent);
-      return options.processEvent(event).pipe(
+    Effect.suspend(() =>
+      options.processEvent(event).pipe(
         Effect.tap(() =>
           Effect.suspend(() => {
             lastEventAt = event.createdAt;
@@ -287,8 +272,8 @@ export function runProviderRuntimeEventPump<R>(
             Effect.andThen(processEventReliably(event, attempt + 1)),
           );
         }),
-      );
-    });
+      ),
+    );
 
   const runStreamOnce = () => Stream.runForEach(options.stream, processEventReliably);
 
