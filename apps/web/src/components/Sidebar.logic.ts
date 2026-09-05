@@ -617,7 +617,11 @@ const JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT: Record<
   4: ["pr-[6.75rem]", "pr-[7.75rem]", "pr-[9rem]", "pr-[10rem]"],
 };
 
-function resolveJumpHintReserveClass(metaChipCount: number, jumpLabelPartCount: number): string {
+/** Trailing padding a row needs so the absolute ⌘N kbd group never covers its title. */
+export function resolveJumpHintReserveClass(
+  metaChipCount: number,
+  jumpLabelPartCount: number,
+): string {
   const row = JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT[Math.min(Math.max(jumpLabelPartCount, 2), 4)]!;
   return row[Math.min(Math.max(metaChipCount, 0), 3)]!;
 }
