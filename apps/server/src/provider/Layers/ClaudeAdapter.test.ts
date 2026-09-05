@@ -5441,18 +5441,34 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         provider: "claudeAgent",
         cwd: "/tmp/project",
       });
-      assert.deepEqual(discovered, {
-        models: [
-          {
-            slug: "claude-fable-5[1m]",
-            resolvedModel: "claude-fable-5[1m]",
-            name: "Fable",
-            supportsAutoMode: true,
-          },
-        ],
-        source: "sdk",
-        cached: false,
+      assert.equal(discovered.source, "sdk");
+      assert.equal(discovered.cached, false);
+      assert.lengthOf(discovered.models, 1);
+      const { optionDescriptors, ...model } = discovered.models[0]!;
+      assert.deepEqual(model, {
+        slug: "claude-fable-5[1m]",
+        resolvedModel: "claude-fable-5[1m]",
+        name: "Fable",
+        supportsAutoMode: true,
       });
+      assert.deepEqual(
+        optionDescriptors?.map((option) => option.id),
+        ["effort", "autoCompactWindow"],
+      );
+      assert.deepEqual(
+        optionDescriptors?.find((option) => option.id === "autoCompactWindow"),
+        {
+          id: "autoCompactWindow",
+          label: "Auto-compact",
+          type: "select",
+          currentValue: "auto",
+          options: [
+            { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+            { id: "200k", label: "200k" },
+            { id: "1m", label: "1M" },
+          ],
+        },
+      );
       assert.equal(query.closeCalls, 1);
       assert.equal(createQueryCalls, 1);
 

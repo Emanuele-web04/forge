@@ -67,6 +67,7 @@ import {
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
+  getProviderOptionDescriptors,
   hasEffortLevel,
   resolveApiModelId,
   stripClaudeContextWindowSuffix,
@@ -897,10 +898,15 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+  const optionDescriptors = getProviderOptionDescriptors({
+    provider: PROVIDER,
+    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+  });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
+    ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
       : {}),
